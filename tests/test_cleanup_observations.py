@@ -181,6 +181,18 @@ class SelectedObservationTests(unittest.TestCase):
         self.assertIsNone(row["delete_argv"])
         self.assertIn("creation by this objective is unproven", row["reasons"])
 
+    def test_missing_recorded_branch_cannot_associate_a_branch_literally_named_none(self):
+        case = self.source.case
+        plans.git(case.project, "branch", "None")
+        self.addCleanup(plans.git, case.project, "branch", "-D", "None")
+        from pod.ledger import read
+        state = read(case.project, "objective")
+        state["checkpoint"]["worktree"]["branch"] = None
+        with patch("pod.cleanup.read", return_value=state):
+            row = self.source.row(objective="objective", name="refs/heads/None")
+        self.assertEqual(row["identity"]["provenance"]["status"], "unavailable")
+        self.assertIsNone(row["delete_argv"])
+
     def test_worktree_selected_identity_has_exact_table_and_native_effect_remains_unknown(self):
         row = self.source.row(kind="worktree", name=str(self.source.case.child))
         self.assertEqual(set(row["identity"]), {"path", "branch", "tip", "terminals", "shared_with", "git", "worker",
@@ -205,14 +217,13 @@ class SelectedObservationTests(unittest.TestCase):
                     self.assertEqual(row["archives"], [])
                     self.assertFalse(row["archive_verified"])
 
-    def test_verified_consolidated_archive_is_preservation_only_in_project_only_mode(self):
+    def test_verified_branch_archive_is_preservation_only_in_project_only_mode(self):
         case = self.source.case
         path = case.root / "project-only.bundle"
         self.addCleanup(path.unlink)
         plans.git(case.project, "bundle", "create", str(path), self.source.ref, "refs/stash")
         refs = {ref: oid for oid, ref in (line.split() for line in plans.git(case.project, "bundle", "list-heads", str(path)).splitlines())}
-        row = self.source.row(archives=[{"path": str(path), "ref": self.source.ref, "tip": case.base,
-                                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "recovery_refs": refs}])
+        row = self.source.row(archives=[{"path": str(path), "ref": self.source.ref, "tip": case.base}])
         self.assertTrue(row["archive_verified"], row["archives"])
         self.assertIsNone(row["delete_argv"])
         self.assertIsNone(row["archive_argv"])

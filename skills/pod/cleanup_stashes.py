@@ -18,6 +18,7 @@ from .gitio import worktree_inventory, worktree_rows
 from .util import digest
 
 PROFILE = "git-local-ref-delete/v1"
+WORKTREE_PROFILE = "git-worktree-remove/v1"
 MAX_HOLDER_REFS = 100_000
 REASONS = frozenset({"snapshot_unavailable", "snapshot_incomplete", "malformed_stash", "stash_changed",
     "resource_identity_unavailable", "resource_changed", "storage_unavailable", "storage_overlap",
@@ -37,6 +38,13 @@ def local_argv(project: Path, ref: str, oid: str) -> list[str]:
     return ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
             "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", str(project),
             "update-ref", "--no-deref", "-d", ref, oid]
+
+
+def worktree_argv(project: Path, path: str) -> list[str]:
+    # One force permits completed-task workfiles, never a locked worktree's extra force.
+    return ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
+            "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", str(project),
+            "worktree", "remove", "--force", path]
 
 
 def _retaining(project: Path, repository: dict, *, deadline=None) -> tuple[dict, list[str], dict]:
@@ -76,14 +84,6 @@ def _retaining(project: Path, repository: dict, *, deadline=None) -> tuple[dict,
         result["witnesses"] = [observations.witness("filesystem_read", "stash_storage_read", storage,
                                                      status="UNAVAILABLE", reference="reflog")]
     return result, roots, storage
-
-
-def retaining_roots(project: Path, repository: dict) -> list[str]:
-    """The archive basis includes direct retaining and every nonzero old/new log root."""
-    result, roots, _ = _retaining(project, repository)
-    if result["status"] == "unavailable":
-        raise archives.Unavailable("Stash retaining reference or complete log is unavailable")
-    return roots
 
 
 def _context(project: Path, repository: dict) -> dict:
@@ -167,12 +167,12 @@ def snapshot(project: Path, repository: dict) -> dict:
     return result
 
 
-def _executor(project: Path, ref: str | None, tip: str | None, kind: str, context: dict | None) -> dict:
+def _executor(project: Path, ref: str | None, tip: str | None, kind: str, context: dict | None, *, worktree_path=None) -> dict:
     result = _unknown(("kind", "runtime", "version", "profile", "artifacts", "source_binding_sha256"),
                       "executor_binding_unavailable", operation="primitive_binding", kind="source_correspondence")
     result["kind"] = {"worktree": "orca_worktree_remove", "local_branch": "git_local_ref_delete",
-                       "remote_branch": "git_remote_ref_delete"}.get(kind)
-    if kind != "local_branch" or not ref or not tip or context is None:
+                       "remote_branch": "git_remote_ref_delete", "git_worktree": "git_worktree_remove"}.get(kind)
+    if kind not in {"local_branch", "git_worktree"} or not ref or not tip or context is None:
         return result
     try:
         executable = shutil.which("git")
@@ -188,9 +188,11 @@ def _executor(project: Path, ref: str | None, tip: str | None, kind: str, contex
             raise archives.Unavailable("Git version is unsupported")
         artifact = {"kind": "member", "sha256": hashed, "reference": str(path)}
         source = hashlib.sha256(archives._bytes(Path(__file__))).hexdigest()
-        binding = digest({"profile": PROFILE, "argv": local_argv(project, ref, tip), "artifact": artifact,
+        profile = WORKTREE_PROFILE if kind == "git_worktree" else PROFILE
+        argv = worktree_argv(project, worktree_path) if kind == "git_worktree" else local_argv(project, ref, tip)
+        binding = digest({"profile": profile, "argv": argv, "artifact": artifact,
                           "source": source, "context": context})
-        result.update(status="observed", version=version, profile=PROFILE, artifacts=[artifact],
+        result.update(status="observed", version=version, profile=profile, artifacts=[artifact],
                       source_binding_sha256=binding, reasons=[],
                       witnesses=[observations.witness("source_correspondence", "primitive_binding", binding,
                                                        reference="executor.source_binding_sha256")])
@@ -256,6 +258,41 @@ def _footprint(project: Path, ref: str | None, tip: str | None, kind: str, stora
     return result
 
 
+def _worktree_footprint(facts: dict, context: dict | None) -> dict:
+    result = _unknown(("paths", "refs", "config", "native", "opaque", "sha256"),
+                      "effect_footprint_unavailable", operation="primitive_footprint", kind="source_correspondence")
+    result["opaque"] = ["effect_footprint_unavailable"]
+    try:
+        if not context or not facts.get("complete"):
+            raise archives.Unavailable("Current Git worktree material is incomplete")
+        paths = []
+        common = Path(context["common"]["path"])
+        admin = Path(facts["git_dir"]["path"])
+        # Git's linked-worktree phase must never remove the common repository.
+        if admin.parent != common / "worktrees" or Path(facts["directory"]["path"]) == common:
+            raise archives.Unavailable("Linked worktree layout is unsupported")
+        for key in ("directory", "git_dir"):
+            path = Path(facts[key]["path"])
+            current = observations.filesystem(path)
+            if not observations.reliable(current):
+                raise archives.Unavailable("Worktree identity is unavailable")
+            paths.append({"path": str(path), "identity": current, "operation": "remove_tree"})
+        # Submodule removal has additional worktree/config semantics outside this profile.
+        index = archives._run(Path(facts["observation_path"]), ["ls-files", "--stage", "-z"])
+        if any(entry.startswith(b"160000 ") for entry in index.split(b"\0")):
+            raise archives.Unavailable("Submodule effects are unsupported")
+        refs = [{"name": "worktrees/" + admin.name + "/" + name, "scope": "exact", "operation": "delete",
+                 "expected_oid": oid, "resolution": ["worktrees/" + admin.name + "/" + name]}
+                for name, oid in sorted(facts["private_refs"].items())]
+        result.update(status="observed", paths=paths, refs=refs, config=[], native=[], opaque=[], reasons=[])
+        result["sha256"] = digest({key: result[key] for key in ("paths", "refs", "config", "native", "opaque")})
+        result["witnesses"] = [observations.witness("source_correspondence", "primitive_footprint", result["sha256"],
+                                                    reference="footprint.sha256")]
+    except (archives.Unavailable, OSError, KeyError, ValueError):
+        pass
+    return result
+
+
 def _holder_refs(path: Path, common: Path, admin: Path, deadline: float) -> list[dict]:
     output = archives._text(path, ["for-each-ref", "--format=%(refname) %(objectname) %(objecttype) %(symref)"], deadline=deadline)
     catalog = {}
@@ -293,7 +330,7 @@ def _holder_refs(path: Path, common: Path, admin: Path, deadline: float) -> list
 def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, context: dict | None) -> tuple[dict, list[dict]]:
     result = _unknown(("observations",), "holder_unavailable", operation="holder_read", kind="native_read")
     refs = []
-    if kind != "local_branch" or context is None:
+    if kind not in {"local_branch", "git_worktree"} or context is None:
         return result, refs
     try:
         deadline, read_count = time.monotonic() + 30, 0
@@ -304,13 +341,18 @@ def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, co
                 raise archives.Unavailable("Native holder inspection exceeded its bound")
             read_count += 1
             return orca_reader(argv, timeout=min(10, remaining))
-        rows = []
+        rows, paths_seen = [], set()
         with worktree_inventory(project) as inventory:
             for row in worktree_rows(inventory):
+                path = row.get("worktree")
+                if path in paths_seen:
+                    raise archives.Unavailable("Holder inventory repeats a worktree")
+                paths_seen.add(path)
                 rows.append(row)
                 if len(rows) > observations.MAX_ITEMS:
                     raise archives.Unavailable("Holder inventory exceeds its bound")
         holders, facts = [], []
+        uncertain = False
         for row in rows:
             path, branch = row.get("worktree"), row.get("branch")
             if not isinstance(path, str) or not isinstance(branch, str):
@@ -332,14 +374,22 @@ def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, co
                     or native.get("branch") != git.get("branch")
                     or "refs/heads/" + str(git.get("branch")).removeprefix("refs/heads/") != branch
                     or native.get("isBare") is not False or git.get("isBare") is not False
-                    or listed["result"].get("truncated") is not False or not isinstance(terminals, list)):
+                    or listed["result"].get("truncated") is not False or not isinstance(terminals, list)
+                    or len(terminals) > observations.MAX_ITEMS
+                    or listed["result"].get("page") is not None
+                    and (not isinstance(listed["result"]["page"], dict)
+                         or listed["result"]["page"].get("hasMore") is not False)):
                 raise archives.Unavailable("Native holder inventory is incomplete")
             refs.append({"name": branch, "status": "present", "oid": row["HEAD"],
                          "object_type": "commit", "symref": None, "resolution": [branch]})
             facts.append({"path": path, "branch": branch, "oid": row["HEAD"], "runtime": shown["runtime"],
                           "worktree_id": native.get("id"), "terminals": []})
+            handles = set()
             for terminal in terminals:
                 handle = terminal.get("handle")
+                if not isinstance(handle, str) or handle in handles:
+                    raise archives.Unavailable("Holder terminal inventory is repeated or incomplete")
+                handles.add(handle)
                 if (terminal.get("worktreePath") != path or not isinstance(handle, str)
                         or terminal.get("worktreeId") != native.get("id") or native.get("id") is None):
                     raise archives.Unavailable("Holder terminal binding is incomplete")
@@ -361,18 +411,18 @@ def _holders(project: Path, selected_ref: str | None, kind: str, orca_reader, co
                 safe = {"binding": binding, "liveness": liveness}
                 facts[-1]["terminals"].append(safe)
                 role = native.get("role")
+                uncertain = True
                 holders.append({"binding_sha256": digest(binding), "resource_path": path,
                                 "role": role if role in {"coordinator", "worker", "setup", "role"} else "unknown",
                                 "liveness": liveness, "dependency": "inside" if branch == selected_ref else "unknown",
                                 "source_sha256": digest(safe)})
-        # Existing native metadata binds current placement/liveness. It supplies
-        # no complete needed-name/dependency set, including terminal-less holders.
-        # A different branch/path cannot manufacture that indispensable exclusion.
-        result.update(observations=holders or None, reasons=["holder_unavailable"],
+        result.update(status="unavailable" if uncertain else "observed", observations=holders,
+                      reasons=["holder_unavailable"] if uncertain else [],
                       witnesses=[observations.witness("native_read", "holder_read", facts,
-                                                       reference="holders.observations"),
-                                 observations.witness("native_read", "holder_read", status="UNAVAILABLE",
-                                                      reference="holders.current_dependencies")])
+                                                       reference="holders.observations")])
+        if uncertain:
+            result["witnesses"].append(observations.witness("native_read", "holder_read", status="UNAVAILABLE",
+                                                            reference="holders.current_dependencies"))
     except (archives.Unavailable, PodError, OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
         result["reasons"] = sorted(set(result["reasons"] + [observations.reason(exc)]))
     return result, refs
@@ -385,6 +435,8 @@ def _worktree_stamp(facts: dict) -> dict:
     directories = archives._text(path, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"]).splitlines()
     if directories != [str(admin), facts["common_dir"]["path"], str(path)]:
         raise archives.Unavailable("Resource administrative binding changed")
+    if archives._workfile_changes(path) != facts["workfiles"]:
+        raise archives.Unavailable("Resource current workfile bytes changed")
     for key, current_path in (("directory", path), ("git_dir", admin), ("common_dir", Path(directories[1]))):
         if archives._directory(current_path) != facts[key]:
             raise archives.Unavailable("Resource directory incarnation changed")
@@ -455,7 +507,7 @@ def _resource(project: Path, row: dict, context: dict | None) -> dict:
         if kind == "worktree" and not facts.get("complete"):
             raise archives.Unavailable("Current worktree identity is incomplete")
         stamp = _worktree_stamp(facts) if kind == "worktree" else None
-        if kind == "worktree":
+        if kind == "worktree" and row.get("delete_argv") != worktree_argv(project, str(path)):
             from .cleanup import _dirt
             dirty, unavailable = _dirt(path)
             if dirty or unavailable:
@@ -465,9 +517,10 @@ def _resource(project: Path, row: dict, context: dict | None) -> dict:
                  if kind == "worktree" else context["admin"])
         refs = []
         for name, oid in facts.get("private_refs", {}).items():
-            refs.append({"name": name, "status": "present", "oid": oid,
+            qualified = "worktrees/" + Path(facts["git_dir"]["path"]).name + "/" + name
+            refs.append({"name": qualified, "status": "present", "oid": oid,
                          "object_type": facts.get("required_objects", {}).get(oid),
-                         "symref": None, "resolution": [name]})
+                         "symref": None, "resolution": [qualified]})
         if not observations.reliable(identity) or not observations.reliable(admin):
             raise archives.Unavailable("Resource incarnation or mount identity is unavailable")
         head = facts.get("head", context["head"])
@@ -500,6 +553,8 @@ def _storage_exclusion(footprint: dict, support: dict, reflog: dict, stash_stora
         for effect in footprint["paths"]:
             try:
                 coordinate = archives._outside(Path(effect["path"]), [Path(value["path"]) for value in protected])
+                for value in protected:
+                    archives._outside(Path(value["path"]), [Path(effect["path"])])
             except archives.Unavailable as exc:
                 if "inside a removable" in str(exc):
                     footprint["reasons"].append("storage_overlap")
@@ -526,9 +581,12 @@ def _once(project: Path, row: dict, repository: dict, saved: dict, orca_reader) 
     ref, tip = resource["ref"], resource["tip"]
     storage = (observations.storage_once(project, ref, repository)[0]
                if kind == "local_branch" and ref else None)
-    executor = _executor(project, ref, tip, kind, context)
-    footprint = _footprint(project, ref, tip, kind, storage, context)
-    holders, holder_refs = _holders(project, ref, kind, orca_reader, context) if saved["snapshot"] else (
+    primitive = ("git_worktree" if kind == "worktree"
+                 and row.get("delete_argv") == worktree_argv(project, identity.get("path")) else kind)
+    executor = _executor(project, ref, tip, primitive, context, worktree_path=identity.get("path"))
+    footprint = (_worktree_footprint(identity.get("git") or {}, context) if primitive == "git_worktree"
+                 else _footprint(project, ref, tip, kind, storage, context))
+    holders, holder_refs = _holders(project, ref, primitive, orca_reader, context) if saved["snapshot"] else (
         _unknown(("observations",), "holder_unavailable", operation="holder_read", kind="native_read"), [])
     support = _unknown(("object_format", "object_dirs", "alternates", "refs", "reflog_sha256", "closure",
                         "git_context_sha256", "config_sha256", "unsupported"),
@@ -765,11 +823,16 @@ def relations(record: dict) -> list[dict]:
         if not fresh["stable"] or not fresh["before_sha256"] or fresh["before_sha256"] != fresh["after_sha256"]:
             unknown.update(fresh["reasons"] or ["stash_changed"])
         executor, footprint, support = record["executor"], record["footprint"], record["support"]
-        if executor["kind"] != "git_local_ref_delete" or executor["profile"] != PROFILE or not executor["source_binding_sha256"]:
+        local = executor["kind"] == "git_local_ref_delete" and executor["profile"] == PROFILE
+        worktree = executor["kind"] == "git_worktree_remove" and executor["profile"] == WORKTREE_PROFILE
+        if not (local or worktree) or not executor["source_binding_sha256"]:
             unknown.add("executor_binding_unavailable")
         expected = {"name": record["resource"]["ref"], "scope": "exact", "operation": "delete",
                     "expected_oid": record["resource"]["tip"], "resolution": [record["resource"]["ref"]]}
-        if (footprint["refs"] != [expected] or footprint["config"] != [] or footprint["native"] != []
+        expected_refs = [expected] if local else [
+            {"name": ref["name"], "scope": "exact", "operation": "delete", "expected_oid": ref["oid"],
+             "resolution": ref["resolution"]} for ref in record["resource"]["local_refs"] or []]
+        if (footprint["refs"] != expected_refs or footprint["config"] != [] or footprint["native"] != []
                 or footprint["opaque"] != []):
             unknown.add("effect_footprint_unavailable")
         if not support["closure"] or support["closure"]["integrity"] != "verified":
@@ -810,7 +873,8 @@ def relations(record: dict) -> list[dict]:
         for ref in support["refs"] or []:
             if ref["status"] == "unavailable" or not ref["resolution"]:
                 unknown.add("ref_identity_unavailable")
-            if ref["status"] == "present" and expected["name"] in (ref["resolution"] or []):
+            if ref["status"] == "present" and any(effect["name"] in (ref["resolution"] or [])
+                                                      for effect in expected_refs):
                 overlaps.add("ref_alias_overlap")
         for holder in record["holders"]["observations"] or []:
             if (holder["dependency"] == "unknown" or holder["liveness"] == "unverifiable"

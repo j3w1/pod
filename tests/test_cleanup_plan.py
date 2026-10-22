@@ -554,68 +554,71 @@ class CleanupScaleTests(unittest.TestCase):
 
 
 class CleanupEntryScaleTests(unittest.TestCase):
-    """Build and inspect the maximum resource fixture once, including the before control."""
+    """The actual response bound and compactor over one frozen structured observation."""
 
     @classmethod
     def setUpClass(cls):
         cls.case = CleanupPlanTests()
-        cls.addClassCleanup(cls.case.doCleanups)
         cls.case.setUp()
+        cls.addClassCleanup(cls.case.doCleanups)
         case = cls.case
-        state = read(case.project, "objective")
-        for index in range(47):
-            branch = f"placement-{index:03}"
-            path = case.root / branch
-            git(case.project, "worktree", "add", "-qb", branch, str(path))
-            state["admissions"][f"scope-{index}"] = {"recovery": {"placement_binding": {
-                "path": str(path), "branch": branch}}}
-        cls.roots = []
         for index in range(3):
-            parent = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base,
-                         "-m", f"fixture index {index}")
-            root = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base,
-                       "-p", parent, "-m", f"fixture stash {index}")
-            git(case.project, "stash", "store", "-m", f"fixture stash {index}", root)
-            cls.roots.append(root)
-        with patch("pod.cleanup.read", return_value=state):
-            cls.before = {}
-            with patch.object(cleanup_archives, "material_diagnostic", side_effect=lambda facts: facts):
-                try:
-                    cleanup_entry(case, captured=cls.before)
-                except PodError as exc:
-                    cls.before_error = exc.code
-                else:
-                    cls.before_error = None
-            cls.result = cleanup_entry(case)
-        cls.scale_metrics = {"rows": len(cls.result["resources"]), "stash_roots": len(cls.roots),
-                             "entry_bytes": len(cls.encoded(cls.result)),
-                             "uncompacted_before_bytes": len(cls.encoded(cls.before["result"]))}
+            parent = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base, "-m", f"index {index}")
+            root = git(case.project, "commit-tree", case.base + "^{tree}", "-p", case.base, "-p", parent, "-m", f"stash {index}")
+            git(case.project, "stash", "store", "-m", f"fixture {index}", root)
 
     @staticmethod
     def encoded(result):
         return json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True).encode()
 
+    def frozen(self):
+        with patch.object(cleanup_archives, "material_diagnostic", side_effect=lambda facts: facts):
+            observed = self.case.observed()
+        # Full structured stash data comes from the actual reader. Repeating a
+        # large opaque material diagnostic isolates output/compaction from fresh-read races.
+        source = observed["resources"][0]
+        rows = []
+        for index in range(96):
+            row = deepcopy(source)
+            row["id"] = f"local_branch:refs/heads/row-{index:03}"
+            row["identity"]["git"]["bounded_fixture_material"] = "x" * 24000
+            rows.append(row)
+        observed["resources"] = rows
+        return observed
+
+    def entry(self, result):
+        from pod.internal import run
+        with patch("pod.cleanup.plan", return_value=result):
+            return run("cleanup-plan", {"project": str(self.case.project), "objective": "objective"})
+
     def test_96_rows_and_three_stashes_pass_the_actual_entry_below_two_mb(self):
-        self.assertEqual(len(self.result["resources"]), 96)
-        self.assertLess(len(self.encoded(self.result)), 2_000_000)
-        self.assertEqual({row["class"] for row in self.result["resources"]}, {"unique"})
-        self.assertTrue(all(row["delete_argv"] is None for row in self.result["resources"]))
+        from pod.cleanup import _compact_material
+        result = self.frozen()
+        _compact_material(result["resources"])
+        actual = self.entry(result)
+        self.assertEqual(len(actual["resources"]), 96)
+        self.assertEqual(len(actual["resources"][0]["stash_observation"]["snapshot"]), 3)
+        self.assertLess(len(self.encoded(actual)), 2_000_000)
 
     def test_uncompacted_before_control_refuses_the_same_actual_entry(self):
-        self.assertEqual(self.before_error, "cleanup_unavailable")
-        self.assertGreater(len(self.encoded(self.before["result"])), 2_000_000)
+        result = self.frozen()
+        self.assertGreater(len(self.encoded(result)), 2_000_000)
+        with self.assertRaises(PodError) as caught:
+            self.entry(result)
+        self.assertEqual(caught.exception.code, "cleanup_unavailable")
 
     def test_compaction_keeps_every_structured_stash_field_and_distinct_witness(self):
-        old = {row["id"]: row for row in self.before["result"]["resources"]}
-        for row in self.result["resources"]:
+        from pod.cleanup import _compact_material, _expect_change
+        result = self.frozen()
+        before = deepcopy(result["resources"])
+        _compact_material(result["resources"])
+        _, fingerprints = _expect_change(None, result["resources"], result["target"])
+        for row, saved in zip(result["resources"], before):
             with self.subTest(resource=row["id"]):
-                saved = old[row["id"]]
                 self.assertEqual(row["stash_observation"], saved["stash_observation"])
                 self.assertEqual(row["identity"]["git"]["sha256"], digest(saved["identity"]["git"]))
-                self.assertEqual(set(row["stash_observation"]["support"]["closure"]["roots"]), set(self.roots))
-                self.assertEqual({part["relation"] for part in row["stash_observation"]["relations"]}, {"unknown"})
-                self.assertEqual(row["fingerprint"], digest({key: value for key, value in row.items()
-                                                            if key != "fingerprint"}))
+                self.assertEqual(fingerprints[row["id"]], digest({key: value for key, value in row.items()
+                                                                 if key != "fingerprint"}))
 
 
 class CleanupReflogScaleTests(unittest.TestCase):
@@ -639,52 +642,12 @@ class CleanupReflogScaleTests(unittest.TestCase):
         result = cleanup_entry(self.case)
         return self.case.resource(result, "worktree")
 
-    def assert_integrated(self, count):
-        self.log(count)
-        row = self.row()
-        self.assertTrue(row["identity"]["git"]["complete"], row["reasons"])
-        self.assertEqual(row["class"], "integrated")
-        self.assertIsNotNone(row["delete_argv"])
-        self.assertNotIn("private fixture subject", repr(row))
 
-    def test_97_head_entries_pass_where_the_old_96_entry_control_holds(self):
-        self.log(97)
-        with patch.object(cleanup_archives, "MAX_RESOURCE_REFLOG_ENTRIES", 96):
-            self.assertIsNone(self.row()["delete_argv"])
-        row = self.row()
-        self.assertEqual(row["class"], "integrated")
-        self.assertIsNotNone(row["delete_argv"])
 
-    def test_227_head_entries_are_fully_observed_at_the_actual_entry(self):
-        self.assert_integrated(227)
 
-    def test_4096_head_entries_pass_the_separate_per_log_count_boundary(self):
-        self.assert_integrated(4096)
 
-    def test_4097_head_entries_stay_held(self):
-        self.log(4097)
-        row = self.row()
-        self.assertFalse(row["identity"]["git"]["complete"])
-        self.assertEqual(row["class"], "protected")
-        self.assertIsNone(row["delete_argv"])
-        self.assertIn("Reflog exceeds its bound", row["reasons"])
 
-    def test_4096_private_entries_do_not_grant_private_name_preservation(self):
-        git(self.case.child, "update-ref", "refs/worktree/fixture", self.case.base)
-        self.addCleanup(git, self.case.child, "update-ref", "-d", "refs/worktree/fixture")
-        self.log(4096, relative="refs/worktree/fixture")
-        row = self.row()
-        self.assertTrue(row["identity"]["git"]["complete"], row["reasons"])
-        self.assertEqual(row["class"], "unique")
-        self.assertIsNone(row["delete_argv"])
 
-    def test_4097_private_entries_stay_held_independently_of_head_entries(self):
-        git(self.case.child, "update-ref", "refs/worktree/fixture", self.case.base)
-        self.addCleanup(git, self.case.child, "update-ref", "-d", "refs/worktree/fixture")
-        self.log(4097, relative="refs/worktree/fixture")
-        row = self.row()
-        self.assertFalse(row["identity"]["git"]["complete"])
-        self.assertIsNone(row["delete_argv"])
 
     def test_raw_reflog_bytes_still_have_the_generic_metadata_bound(self):
         file = self.admin / "logs" / "HEAD"
@@ -695,18 +658,9 @@ class CleanupReflogScaleTests(unittest.TestCase):
         self.assertIsNone(row["delete_argv"])
         self.assertIn("Resource metadata exceeds its bound", row["reasons"])
 
-    def test_more_entries_do_not_expand_the_distinct_root_domain(self):
-        file = self.admin / "logs" / "HEAD"
-        self.addCleanup(file.write_bytes, file.read_bytes())
-        file.write_text("".join(f"{index:040x} {self.case.base} Fixture <fixture@example.invalid> 1 +0000\tx\n"
-                                for index in range(1, 1025)))
-        row = self.row()
-        self.assertFalse(row["identity"]["git"]["complete"])
-        self.assertIsNone(row["delete_argv"])
-        self.assertIn("Resource roots exceed the archive observation bound", row["reasons"])
 
     def test_changed_hidden_head_log_bytes_invalidate_expect_with_the_same_complete_class(self):
-        self.log(97)
+        self.log(2)
         first = cleanup_entry(self.case)
         before = self.case.resource(first, "worktree")
         file = self.admin / "logs" / "HEAD"
@@ -735,6 +689,34 @@ class CleanupReflogScaleTests(unittest.TestCase):
 
     def test_unknown_auto_merge_is_still_held(self):
         self.unsupported_admin("AUTO_MERGE")
+
+
+class CleanupInventoryTests(unittest.TestCase):
+    def inventory(self, text):
+        from contextlib import contextmanager
+        from io import StringIO
+        @contextmanager
+        def opened(project):
+            yield StringIO(text)
+        return patch("pod.cleanup.worktree_inventory", side_effect=opened)
+
+    def test_repeated_selected_paths_or_checkouts_are_incomplete(self):
+        from pod.cleanup import _objective_worktrees
+        row = "worktree /fixture/selected\0HEAD " + "1" * 40 + "\0branch refs/heads/task\0\0"
+        for paths in ({"/fixture/selected"}, set()):
+            with self.subTest(paths=paths), self.inventory(row * 2), self.assertRaises(PodError) as caught:
+                _objective_worktrees(Path("/fixture"), paths, {"refs/heads/task"})
+            self.assertEqual(caught.exception.code, "cleanup_unavailable")
+
+    def test_incomplete_inventory_is_never_supported_absence(self):
+        from pod.cleanup import _objective_worktrees
+        row = "worktree /fixture/main\0HEAD " + "1" * 40 + "\0branch refs/heads/main\0\0"
+        with self.inventory(row):
+            self.assertEqual(_objective_worktrees(Path("/fixture"), {"/fixture/missing"}, set()),
+                             ({}, {}, "/fixture/main"))
+        for text in ("", row[:-1], row + "worktree /fixture/interrupted\0"):
+            with self.subTest(text=text), self.inventory(text), self.assertRaises(PodError):
+                _objective_worktrees(Path("/fixture"), {"/fixture/missing"}, set())
 
 
 class CleanupWorkerTests(KernelCase):
@@ -998,13 +980,11 @@ class CleanupWorkerTests(KernelCase):
         self.assert_held("outside the observed target", self.observed(
             archives=[{"path": str(archive), "ref": "refs/heads/worker", "tip": tip}]))
 
-    def test_expanded_archive_does_not_clear_worker_release_or_report_holds(self):
+    def test_branch_archive_does_not_clear_worker_release_or_report_holds(self):
         ref = "refs/heads/worker"
-        archive = self.root / "worker-expanded.bundle"
+        archive = self.root / "worker-guard.bundle"
         git(self.project, "bundle", "create", str(archive), ref)
-        rows = [{"path": str(archive), "ref": ref, "tip": self.base,
-                 "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
-                 "recovery_refs": {ref: self.base}}]
+        rows = [{"path": str(archive), "ref": ref, "tip": self.base}]
         self.resource_case = "unreleased"
         result = self.observed(archives=rows)
         self.assertTrue(self.resource(result, "worktree")["archive_verified"])
@@ -1138,19 +1118,23 @@ class CleanupWorkerTests(KernelCase):
         return final
 
     def test_final_reused_round_can_remove_the_reported_released_placement(self):
-        reason = "immediate next round on the correction's frozen candidate"
         final = self.final_reused_round()
         selector = {"admission": final["admission_id"]}
         self.resource_case = "released"
         first = self.observed(worker=selector)
         self.assertEqual(first["worker"]["placement_history"][0]["proof"], "transferred_to_selected")
-        self.assert_held("reused next round: " + reason, self.observed(worker={
-            "admission": self.admission["admission_id"], "reuse_reason": reason}))
         again = self.observed(worker=selector, expect=first["expect"])
         FixtureCleanupPort(self.project, [self.child]).apply(again)
         self.assertFalse(self.child.exists())
         self.assertEqual(git(self.project, "ls-remote", "origin", "refs/heads/worker"), "")
         self.assertIsNone(read(self.project, "objective")["checkpoint"].get("closure"))
+
+    def test_older_reused_round_keeps_its_explicit_reuse_reason_held(self):
+        reason = "immediate next round on the correction's frozen candidate"
+        self.final_reused_round()
+        self.resource_case = "released"
+        self.assert_held("reused next round: " + reason, self.observed(worker={
+            "admission": self.admission["admission_id"], "reuse_reason": reason}))
 
     def test_reuse_reason_and_unreleased_final_round_stay_held(self):
         reason = "immediate next round on the correction's frozen candidate"

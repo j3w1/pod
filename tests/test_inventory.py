@@ -92,6 +92,23 @@ def spec_inventory(root: Path):
     return requirements, scenarios
 
 
+def assert_scenario_allocation(test, scenario_ids, withdrawn):
+    """Every allocated ID is active or explicitly withdrawn, never both or reused."""
+    test.assertIsInstance(withdrawn, list)
+    reserved = []
+    for row in withdrawn:
+        test.assertEqual(set(row), {"id", "reason"})
+        test.assertRegex(row["id"], r"^A[0-9]{2,3}$")
+        test.assertIsInstance(row["reason"], str)
+        test.assertTrue(row["reason"].strip())
+        reserved.append(row["id"])
+    test.assertEqual(len(set(reserved)), len(reserved))
+    test.assertFalse(set(reserved) & set(scenario_ids), "withdrawn IDs cannot be reused")
+    allocated = scenario_ids + reserved
+    test.assertEqual(sorted(allocated, key=lambda value: int(value[1:])),
+                     [f"A{number:02}" for number in range(1, len(allocated) + 1)])
+
+
 def markdown_anchors(text: str) -> set[str]:
     anchors = set(re.findall(r'<a id="([^"]+)"', text))
     for heading in re.findall(r"^#{1,6} (.+)$", text, flags=re.M):
@@ -140,8 +157,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         scenario_ids = [id for _, id in scenarios]
         self.assertEqual(sorted(ids, key=lambda id: int(id[1:])),
                          [f"R{i:02}" for i in range(1, len(ids) + 1)])
-        self.assertEqual(sorted(scenario_ids, key=lambda id: int(id[1:])),
-                         [f"A{i:02}" for i in range(1, len(scenario_ids) + 1)])
+        assert_scenario_allocation(self, scenario_ids, coverage["withdrawn_scenarios"])
         self.assertEqual([anchor for anchor, id in scenarios], [id.lower() for id in scenario_ids])
         self.assertEqual(sorted(row["id"] for row in coverage["scenarios"]), sorted(scenario_ids))
         for _, kind, _ in requirements:
@@ -150,6 +166,15 @@ class InventoryIntegrityTests(unittest.TestCase):
             with self.subTest(row=row["id"]):
                 self.assertTrue(row["required_evidence"])
                 self.assertIn(row["status"], ("NOT_RUN", "PASS"))
+
+    def test_withdrawn_scenario_ids_preserve_allocation_and_never_reuse_or_fill_silent_gaps(self):
+        withdrawn = [{"id": "A02", "reason": "requirement removed"}]
+        assert_scenario_allocation(self, ["A01", "A03"], withdrawn)
+        for active, reserved in ((["A01", "A02", "A03"], withdrawn), (["A01", "A03"], []),
+                                 (["A01", "A03"], withdrawn * 2),
+                                 (["A01", "A03"], [{"id": "A02", "reason": ""}])):
+            with self.subTest(active=active, withdrawn=reserved), self.assertRaises(AssertionError):
+                assert_scenario_allocation(self, active, reserved)
 
     def test_requirement_scenario_references_resolve(self):
         root = Path(__file__).resolve().parents[1]

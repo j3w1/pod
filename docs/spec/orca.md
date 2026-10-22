@@ -58,7 +58,7 @@ After a genuinely corrected recoverable no-start prerequisite, optional admissio
 
 Type: B,H · Scenarios: [A22](models/preferences.md#a22), [A26](#a26), [A96](#a96)
 
-Worker reuse, retention, release and terminal/resource disposition are explicit Orca operations outside Pod's mutation adapter. Pod records no cleanup state and never infers or initiates release. Exact assignment settlement, not terminal release, frees the objective's logical slot. Never kill work or delete uncommitted work/evidence.
+Worker reuse, retention, release and terminal/resource disposition are explicit Orca operations outside Pod's mutation adapter. Pod records no cleanup state and never infers or initiates release. Exact assignment settlement, not terminal release, frees the objective's logical slot. Never kill live work or delete uncommitted work/evidence outside R94's completed-task cleanup condition.
 
 The display-only finished-tab projection and new-write closure check are R125–R127; they relay commands and record no lifecycle state.
 

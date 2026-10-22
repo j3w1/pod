@@ -289,7 +289,8 @@ def _provenance(kind: str, name: str, objective: str | None, state: dict | None,
     checkpoint = state.get("checkpoint") or {}
     bound = checkpoint.get("worktree") or {}
     if (kind == "worktree" and bound.get("path") == name
-            or kind == "local_branch" and "refs/heads/" + str(bound.get("branch")) == name):
+            or kind == "local_branch" and isinstance(bound.get("branch"), str)
+            and "refs/heads/" + bound["branch"] == name):
         return {"status": "observed", "source": "objective_checkpoint", "reference": objective}
     candidates = []
     for admission in state.get("admissions", {}).values():
@@ -298,7 +299,8 @@ def _provenance(kind: str, name: str, objective: str | None, state: dict | None,
         placement = (admission.get("recovery") or {}).get("placement_binding") or {}
         binding = admission.get("native_binding") or {}
         if (kind == "worktree" and placement.get("path") == name
-                or kind == "local_branch" and "refs/heads/" + str(placement.get("branch")) == name
+                or kind == "local_branch" and isinstance(placement.get("branch"), str)
+                and "refs/heads/" + placement["branch"] == name
                 or kind == "native" and binding.get("dispatchId") == name):
             candidates.append(admission["admission_id"])
     if len(candidates) == 1:
@@ -306,7 +308,8 @@ def _provenance(kind: str, name: str, objective: str | None, state: dict | None,
     candidates = []
     for unit, row in journal.get("units", {}).items():
         branch = row.get("branch") or {}
-        if (kind == "local_branch" and "refs/heads/" + str(branch.get("branch")) == name
+        if (kind == "local_branch" and isinstance(branch.get("branch"), str)
+                and "refs/heads/" + branch["branch"] == name
                 or kind == "remote_branch" and name in row.get("published", {})):
             candidates.append(unit)
     if len(candidates) == 1:
@@ -321,7 +324,8 @@ def _worker_scope(selected: dict | None, observe: dict, remote_names: set[str]) 
     binding = selected.get("native_binding") or {}
     kind, name = observe["kind"], observe["name"]
     return bool(kind == "worktree" and name == placement.get("path")
-                or kind == "local_branch" and name == "refs/heads/" + str(placement.get("branch"))
+                or kind == "local_branch" and isinstance(placement.get("branch"), str)
+                and name == "refs/heads/" + placement["branch"]
                 or kind == "remote_branch" and name in remote_names
                 or kind == "native" and name == binding.get("dispatchId"))
 
@@ -332,6 +336,7 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
     kind, name = observe["kind"], observe["name"]
     current = {"status": "unavailable", "path": None, "ref": None, "oid": None}
     git, worker = (base or {}).get("identity", {}).get("git"), None
+    completion = (git or {}).get("objective_completion")
     row = deepcopy(base) if base is not None else cleanup._resource(kind, name, {}, "protected", [])
     row.pop("fingerprint", None)
     row["identity"] = {}
@@ -422,6 +427,8 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
             row["identity"] = {"path": name, "filesystem": None, **common}
         else:
             row["identity"] = {"dispatch": name, "native": None, **common}
+    if completion is not None and isinstance(row["identity"].get("git"), dict):
+        row["identity"]["git"]["objective_completion"] = completion
     if current["status"] != "present":
         row["class"] = "unique" if row["class"] == "unique" else "protected"
         row["delete_argv"] = row["archive_argv"] = None
@@ -500,21 +507,27 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
     tip = row["identity"].get("tip")
     integrated = bool(tip and target["commit"] and cleanup.is_ancestor(project, tip, target["commit"]) is True)
     cleanup_stashes.apply(row, observation, branch_integrated=integrated)
-    if any("worktree_archive" in item for item in rows):
-        from . import cleanup_reversible
-        cleanup_reversible.apply(project, row, rows, repository, saved, excluded=excluded)
     if observe["kind"] in {"cache", "native"} or objective is None:
         row["delete_argv"] = row["archive_argv"] = None
     if observe["kind"] in {"cache", "native"}:
         row.update(archives=[], archive_verified=False)
     row["reasons"] = sorted(set(row["reasons"]))
+    completion = (row["identity"].get("git") or {}).get("objective_completion")
+    if completion is not None:
+        _, fresh_completion = cleanup._completion(project, objective, cleanup.read(project, objective) or {}, older=False)
+        if fresh_completion != completion:
+            raise PodError("cleanup_changed", "Objective completion changed during selected observation")
     cleanup._compact_material([row])
     plan_hash, fingerprints = cleanup._expect_change(expect, [row], target)
     row["fingerprint"] = fingerprints[row["id"]]
     result = {"schema": "pod-cleanup-plan/v1", "objective": objective,
               "closure_basis": (ordinary or {}).get("closure_basis"),
               "record_class": (ordinary or {}).get("record_class", "current") if objective is not None else "unavailable",
-              "standing_authorization": cleanup_projection(state, [row]) if state else {
+              "standing_authorization": ({**ordinary["standing_authorization"],
+                  "covers": [name for name in ordinary["standing_authorization"]["covers"]
+                             if name == row["id"] and row["delete_argv"] is not None],
+                  "asks": [name for name in ordinary["standing_authorization"]["asks"] if name == row["id"]]}
+                  if ordinary and base is not None else cleanup_projection(state, [row])) if state else {
                   "mode": "normal", "decision": None, "covers": [], "asks": [row["id"]]},
               "target": target, "resources": [row], "digest": plan_hash,
               "expect": {"plan": plan_hash, "resources": fingerprints},

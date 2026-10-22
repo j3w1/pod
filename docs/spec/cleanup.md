@@ -89,7 +89,7 @@ The plan digest hashes the sorted id/fingerprint pairs and target. `expect.plan`
 equals the digest and `expect.resources` contains the exact id/fingerprint map.
 Selected `identity.observation_scope` therefore binds mode and objective name even
 when all other protected facts are identical. Top-level context alone is not hashed.
-Snapshot, proof, holder, ref, archive and unknown observations all participate.
+Snapshot, proof, holder, ref, archive, completion and unknown observations all participate.
 
 Recheck immediately before an effect. Changed facts refuse `cleanup_changed`. After
 a worktree disappears, derive a **new current remaining-resource** expect; the old
@@ -151,262 +151,116 @@ unrelated requires complete stable material, identity, storage, full-footprint a
 current-holder exclusion for the exact primitive. Shared base/history, branch or
 display labels, archive validity and complete map keys establish none of that.
 
-The source-described positive primitive is the hardened direct local-ref deletion:
+The recognized local-ref primitive is internally constructed:
 
 ```text
 git --no-optional-locks --no-replace-objects -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 -C PROJECT update-ref --no-deref -d FULL_REF CURRENT_OID
 ```
 
-Its current profile is conservative about packed storage, pending locks and the
-observing HEAD's extra reflog effect. It clears no branch-config, worktree, cache,
-remote or Orca action. Current holder observations always retain `holder_unavailable`; no production
-stash-positive plan emits a removal command. Worktrees still become UNIQUE on any
-repository stash and existing expanded worktree recovery requires every repository stash
-root. Remote branches, including merged remote heads, also hold because their full
-executor/footprint is unavailable. Post-worktree bookkeeping supplies no missing
-creator/lifecycle/admission predicate, so the local-ref substitution has no
-admissible production path. The controlled live-reader material/Git fixture is not
-a positive production command or native removal. The separate reversible data below
-does not replace this unavailable proof. Wider Orca/fallback/async/plugin/context/completion facts remain
-unavailable. Verified empty ordinary plans retain their independent existing guards.
+Its `git-local-ref-delete/v1` profile is conservative about packed storage, pending
+locks and the observing HEAD's additional reflog effect. A complete current checkout
+or symbolic/private alias depending on the deleted name remains a dependency.
+Terminal-less native inventories prove only their own current absence, never a
+privileged process scan or earlier exit/release. A present terminal with unknown
+needed-name/dependency facts holds; placement or branch difference alone proves none.
+
+The completed-task worktree path internally builds the same hardened Git prefix
+with `worktree remove --force EXACT_PATH`, under `git-worktree-remove/v1`. One force
+permits completed-task files; locked worktrees never receive a second force.
+Its footprint is the exact linked checkout/private administrative directory and
+qualified private refs, excluding common objects and stash retaining ref/log slots
+in both containment directions and through current physical coordinates. Common
+source branches survive this phase. Submodule, unsupported administrative, aliased,
+missing or changing effects hold. Ordinary Orca worktree removal remains opaque;
+completion cannot make that effect known or make a stash unrelated. Remote effects
+with unproved full footprints stay unknown when a stash is present.
+
+Complete terminal inventories and Git reference observations are bounded and fresh.
+A successful terminal-less inventory supplies no arbitrary process dependency claim;
+CE's current privileged process and association/exclusion guards still precede every
+effect. No producer observation passes those checks for the executor.
+
+## Completion and execution handoff
+
+R94's default uses validated coordinator closure, current quiet supported public
+status and actual live source agreement with every current mapped/proven PoD.
+No checkbox-only, empty or missing tick set, retirement, continuation or evidence
+closure supplies this condition. The complete internal material includes the
+observed record/status/source/completion facts before its opaque Git digest is
+computed, and a second read checks the condition in the same call. A stale `expect`
+therefore cannot cross a completion or source change.
+
+The exact task association comes from current supported checkpoint placement,
+admission placement and actual Governor publications. A missing checkout's null
+branch cannot associate a remaining ref. Selected remaining-ref mode still observes
+current ref/storage and stash facts with unavailable authority where appropriate.
+CE alone retains its original finite scope and committed phase outcomes, checks
+current process/attachment/reservation/role/default/shared facts and performs known
+Git phases. Complete checkout absence and atomic expected-OID no-deref deletion
+remain required. Remote origin, policy, open-PR and lease checks remain required.
+New facts, matching names/OIDs or absence never repair unknown earlier effects.
+
+Pod has no supported ordinary scratch inventory or cache/native removal primitive.
+CE uses its existing current registered task/scratch/native association or holds the
+missing fact. After the Git worktree/ref phases, inspect public Orca absence or
+retain a persistent entry. There is no metadata-only forget, broad Orca fallback,
+raw directory removal or recreated-path recipe. No proof API, registry, certificate,
+journal or caller completion/provenance flag is added.
 
 ## Inspection and output bounds
 
-Count, byte, content and time limits apply together. A legal count does not promise
-that arbitrary names or combined material fit the byte budget. Ordinary plans have
-at most 96 resource rows; input archives have at most 96 rows. The complete CLI
-response and each stash observation remain bounded to 2,000,000 encoded bytes.
-Regressions exercise the production entry with 96 rows and three stash roots, and
-with complete 4096-entry maps whose names are 60 characters. Longer combined maps
-that exceed the response budget still refuse; no field or distinct witness is
-truncated, paginated or replaced with a caller assertion.
+Count, byte and time limits apply together. Ordinary plans have at most 96 resource
+rows and archive input has at most 96 rows. The whole CLI response and each complete
+stash observation remain bounded to 2,000,000 encoded bytes. Count-legal combined
+overflow refuses; structured fields and distinct witnesses are never truncated.
+Compaction replaces only the opaque Git diagnostic with a canonical digest of all
+actual internal material. Current unavailable facts participate in that digest too.
 
-Surviving reachability, stash closure and restored archive coverage use one bounded
-OID walker. Its separate traversal domain permits at most 100,000 total valid
-records **and** 100,000 distinct objects, in fixed reads of at most 65,536 bytes.
-The aggregate OID-output ceiling is 6,500,000 bytes for SHA256 and exactly 4,100,000
-for SHA1. One absolute 30-second deadline covers format inspection and traversal;
-chunks do not reset it. Duplicate, malformed, wrong-format, incomplete, missing-root,
-over-count, over-byte, failed or expired observations hold. Arbitrary tree/blob
-roots are compared with the complete closure; negative commit subtraction cannot
-prove their coverage. Enclosing resource and archive freshness checks still hold
-concurrent changes. The walker retains validated OIDs, never a raw-output spool.
+Complete Git worktree inventory is streamed under its existing contract, retaining
+all checkouts of the selected refs without imposing a new repository-size limit.
+Native worker pages retain exact Run/runtime scope and require explicit boolean
+continuation, nonempty advancing pages, unique Dispatch identities and bounded
+cursors; at most 100 pages of 100 rows are consumed. A missing/interrupted/duplicate,
+changed or truncated page holds. Display retains its independent 1000-row complete
+worktree-list/host-scope contract. No native pagination capability is invented.
 
-Generic metadata input/output, including stderr, remains bounded to 2,000,000 bytes
-per process. Complete type checks use bounded batches of at most 4096 objects under
-those ordinary limits, sharing one absolute 30-second deadline for the entire type
-operation. There is no separate typed-output stream or extra per-chunk time budget.
-Traversal and restored-content object limits are independent domains. Git children
-retain the existing nonraising address-space/file-size limits and service caps.
+OID closure traversal permits at most 100,000 valid records and distinct objects,
+in fixed reads of at most 65,536 bytes. OID-output ceilings stay 6,500,000 bytes for
+SHA256 and 4,100,000 for SHA1. One absolute 30-second deadline covers format and
+traversal. Duplicates, malformed/wrong-format/incomplete records, missing roots,
+count/byte overflow, failure, change or expiration hold. Arbitrary tree/blob roots
+are checked against the complete surviving closure, not negative commit subtraction.
+The reader retains validated OIDs and never a raw-output spool.
 
-Each eligible resource HEAD or private reflog may contain at most 4096 complete
-entries, independently of the 96 resource/ref count. Raw metadata bytes, distinct
-required roots/objects, private ref and administrative-name counts, incarnation and
-time limits still apply. Repeated entries do not create provenance. Unknown
-`REBASE_HEAD`, `AUTO_MERGE` and other unsupported administrative roots still hold.
-Selected reference-storage logs, including the stash retaining log, keep their
-existing 2048-entry limit; 2049 entries hold. The stash snapshot limit remains
-independent.
+Generic metadata input/output, including stderr, remains 2,000,000 bytes per process.
+Complete type queries use batches of at most 4096 under one absolute 30-second
+deadline. Git children never raise tighter inherited address-space/file-size limits
+or service caps. Current workfile freshness reads only Git's complete bounded
+changed/ignored/untracked list, with at most 4096 names, 4096 UTF-8 bytes per path,
+2,000,000 bytes per file read and 128 MiB aggregate content under 30 seconds.
+Unsupported/redirected file facts hold. Only digests/identity enter the opaque
+material diagnostic; no file capture or restoration artifact is created.
 
-## Archives and consumer handoff
+Selected ref-storage logs, including the stash retaining log, keep their existing
+2048-entry limit; 2049 holds. Ordinary private resource metadata keeps its existing
+ref/name/root/raw-byte/time limits and its independent 4096-entry per-log ceiling.
+These current readers establish no earlier worktree creator, release or transfer.
+Unknown operation roots such as `REBASE_HEAD` and `AUTO_MERGE` remain unsupported.
 
-Branch-only rows are exactly `{path, ref, tip}` and prove only their original narrow
-coverage. Expanded rows pair `sha256` and `recovery_refs`: the actual current source
-ref/tip is distinct from restoration aliases. Verify the complete actual advertised
-map, every target/type and required closure through self-contained restoration in an
-empty isolated repository. Extra aliases may exist and all must verify, including a
-stale source-name advertisement beside a correct current alias; none expands scope
-or permission. Unsupported advertisement classes, thin/partial/corrupt/stale/missing
-or swapped bundles hold. No production bundle rewrite or duplicate recovery registry
-is required.
+## Ordinary branch preservation
 
-### Optional whole-worktree recovery data
+Ordinary `archives` rows remain exactly `{path, ref, tip}`. Their verified-and-covering
+Git meaning stays separate from UNIQUE truth, authority and lifecycle guards.
+A branch-only proof does not preserve uncommitted files or otherwise-lost private
+names/roots. It supplies no stash provenance. Complete actual advertisements and
+required types are checked through self-contained restoration in an empty isolated
+repository; source objects cannot fill a thin/incomplete artifact. Corrupt, stale,
+missing, swapped or unsupported artifacts hold. Extra advertisements grant no wider
+selection or permission. Expanded recovery-map/file references are unsupported.
 
-Only expanded rows may additionally carry `worktree_archive: {path, sha256}`.
-Both fields are strings: the path is normalized absolute text without NUL or parent
-traversal, at most 4096 UTF-8 bytes; the digest is exactly 64 lowercase hexadecimal
-characters. Extra keys, caller phases, verdicts, footprints and authority refuse.
-Without this reference the wire shapes and Git-only root-coverage meanings remain
-unchanged. The known-objective placement restriction below also applies to Git-only
-objective-selected requests without a file recovery reference.
-
-Matching Git resources gain exactly one `reversible_eligibility` record. Its schema
-is `pod-reversible-eligibility/v1`, and its exact fields are:
-
-| Field | Meaning |
-| --- | --- |
-| `schema`, `status`, `phases` | Status is `data_eligible`, `held` or `unavailable`, describing data only. Internally derived phases are drawn from `git_worktree_remove`, `git_local_ref_delete`, `git_tracking_ref_delete`, `git_remote_ref_delete`. |
-| `archive_verified` | Combined Git/file/admin integrity and recovery coverage; separate from the unchanged existing Git-only row field, current freshness and authority. |
-| `git_recovery` | Exactly `verified_covering`, `archive_sha256s`; complete declared and actual maps remain in existing archive observations. |
-| `file_recovery` | Exactly `status`, `path`, `sha256`, `manifest_sha256`, `entries`, `bytes`, `restore_verified`, `current_match`, `reasons`. Status is `verified`, `held` or `unavailable`; actual current comparison is true, false or null. Unavailable digests/counts are null. |
-| `admin_recovery` | Exactly `status`, `reasons`, using the same recovery status vocabulary. |
-| `stash_noninterference` | Exactly `status`, `snapshot_sha256`, `support_sha256`, `footprint_sha256`, `reasons`. Status is `preserved_by_known_git_phases`, `overlap` or `unavailable`. |
-| `executor_checks_required`, `reasons` | Required executor checks, never pass flags, and bounded reason codes. |
-
-The new Git basis copies the tip, private roots and otherwise-unretained recovery
-roots that the known phases destroy. Retained live stash roots remain fully observed
-and fingerprinted, including roots retained only by the complete common stash log.
-Their exact retaining/log storage identities, bytes and complete surviving closure
-participate in reobservation; their presence creates no new copying obligation. Destroyed
-private ref names still require recovery even when a surviving ref/log retains their bytes. Every extra
-advertised recovery ref and type still verifies. Noninterference compares actual
-current immutable stash material, retaining names/logs/object storage and physical
-identities with the exact Git effects, in both containment directions. Missing,
-changing, aliased or overlapping facts hold. It neither revises existing relations nor
-claims complete future dependencies or earlier ownership. The direct-ref profile
-still holds packed, pending-lock and observing-HEAD effects, and checks complete
-current checkout absence. The remote-server effect profile remains unavailable.
-
-The local-ref phase also destroys the selected common ref's own reflog. Require every
-otherwise-lost nonzero old/new root from its complete current log, within the existing
-2048-entry, raw-byte, required-root, type, closure and time limits. Preserve the exact
-raw log bytes as an ordinary advertised Git blob in the existing complete recovery
-map, without prescribing an alias name. Pod derives the literal blob OID using the
-actual SHA1/SHA256 object format, restores the bundle in isolation and compares the
-recovered blob bytes with the fresh bounded current log. It writes no source Git
-object or ref. A source object, alias, digest or root list without actual restored
-bytes is insufficient. Successful positive log absence needs no empty blob; unavailable,
-changed, malformed, mismatched or over-bound observations hold. No transport field,
-additional archive root or metadata-backup receipt substitutes for these bytes.
-Both Git and file/admin recovery require complete known-phase reference material
-and an actually observed selected-log fact, including positively observed absence.
-Missing, malformed or incomplete reference evidence, including an unavailable
-retained closure, cannot produce verified file/admin recovery or a verified restore.
-
-The private file artifact is an **uncompressed POSIX pax tar**, with the first
-regular member `pod-worktree-archive.json` and payload roots `worktree` and `admin`.
-The manifest has exactly `schema`, `source`, `status_sha256`, `entries`; schema is
-`pod-worktree-archive/v1`. Source has exactly `path`, `ref`, `tip`, `common_git_dir`,
-`git_admin_dir`, `worktree_identity`, `admin_identity`. Identities use the existing
-filesystem identity fields. A worktree request binds them to its actual selected
-path/private admin, and every kind binds to the actual common repository. An equal
-ref/tip in a sibling or foreign repository is insufficient. The status digest covers
-exact hardened `status --porcelain=v1 -z --untracked-files=all --ignored` bytes.
-
-Each entry has exactly `name`, `type`, `size`, `sha256`, `link`, `exec`, `source_stat`.
-Stat has exactly `dev`, `ino`, `mode`, `nlink`, `size`, `mtime_ns`, `ctime_ns`, all
-nonnegative integers. Names are normalized relative payload paths, without duplicate,
-missing-parent or symlink-ancestor members. Types are file/directory/symlink/hardlink,
-spelled `file`, `dir`, `symlink`, `hardlink`. Directories have zero size and null
-digest/link; regular files have a byte digest and null link; symlinks hash the target
-bytes. Only normalized relative symlinks without parent traversal and earlier regular
-hardlink targets within the same prefix are supported. Hardlinks agree on data/stat,
-and all current aliases must be included. Unsupported links hold.
-
-The complete no-follow current walk must equal the manifest, including ignored and
-untracked data, stat identities and all safe `0777` permission bits. `exec` must equal
-`bool(source_stat.mode & 0o111)`. Validate every header/member before any extraction;
-use the standard-library data filter in empty private scratch, restore validated
-file/directory modes after extraction, and compare types, bytes, sizes, targets and
-every permission bit. Symlink mode follows Linux semantics and is never chmodded
-through. Special files, unsafe special mode bits, ACLs/xattrs, unknown/GNU extensions,
-mounts, external aliases and unavailable metadata hold. The source and archive are
-never chmodded. Artifact/file/ancestor inode, birth and mount identity, stable bytes,
-private containing directory and placement outside removable worktree/admin/common
-Git paths bind the existing material diagnostic and expect. Private manifest names,
-raw status, config and log bytes never enter public output.
-
-The admin is a distinct linked-worktree directory. Allowed roots are exactly `HEAD`,
-`gitdir`, `commondir`, `index`, `config.worktree`, `logs`, `refs`, `ORIG_HEAD`,
-`FETCH_HEAD`, `COMMIT_EDITMSG`; the first three and the regular worktree `.git` marker
-are required and their actual control correspondence is checked. Capture every
-existing allowlisted entry. Private refs are nonsymbolic files only in `refs/bisect/`,
-`refs/worktree/`, `refs/rewritten/`; logs are `HEAD` or corresponding private namespaces,
-including old logs with absent current refs. Intermediate directories must belong to
-those namespaces. Physical enumeration must equal current Git logical/private-log
-observations. Admin links, unknown roots/namespaces, locks and operation state hold.
-Existing 96 admin-name/ref, 2,000,000 aggregate raw-metadata-byte, 4096 entries per
-HEAD/private log and 1024 distinct-root limits apply together. No additional pseudoref
-or operation root is admitted.
-
-Raw `.git`, admin and configuration are recovered **as data** only. A separate empty
-Git repository restores the verified bundle, regenerates linked-worktree registration
-and index, restores workfiles without replacing those regenerated control pointers,
-and compares recovered bytes/modes/status. Any nested worktree `.git` file, directory
-or link is unsupported and rejected before extraction. Gitlinks in the recovery tip
-are rejected before recovery worktree creation; an index containing gitlinks also
-holds. The archived index remains raw data, never the recovery index. Recovery Git
-disables submodule recursion and ignores submodules when comparing status. These
-constraints do not suppress ordinary live dirty/submodule checks. No archived config is loaded or executed,
-and no historic native or metadata identity is claimed restored.
-
-Verified file/admin integrity is separate from the live source comparison and its
-retained-material recheck. A current walk or recheck failure, including recursion
-exhaustion, retains verified recovery, reports null `current_match` with
-`file_current_unavailable` and holds eligibility. Archive validation, extraction and
-restored-walk failures still invalidate integrity. Final
-artifact identity, placement and byte checks still run; actual artifact tamper
-invalidates integrity. Current unsupported links, mounts, metadata or file types
-remain holds even when the immutable archive still verifies.
-
-File verification has conjunctive ceilings: 128 MiB artifact, per-file and aggregate
-payload bytes; 4096 payload entries; 2,000,000 manifest bytes; 4096 UTF-8 bytes per
-path/link; and one absolute 30-second deadline covering opening, hashing, parsing,
-extraction, recovery and current comparison. Existing physical/process, Git-object,
-metadata and final-response caps still apply and are never raised. Exhaustion holds.
-
-The executor must still perform exactly the named checks:
-`authenticated_finite_owner_scope`, `current_inode_process_scan`,
-`no_attached_orca_terminal`, `no_open_live_keep_reuse_role_default_or_shared_binding`,
-`current_source_bytes_status_tip_identity`, `current_checkout_elsewhere`,
-`remote_origin_lease_policy_open_pr`, `new_operation_archive_scope_phase_continuity`,
-`native_public_absence_or_hold`. Pod supplies no privileged process scan, global
-association registry, authority service, journal or execution API. Existing guards,
-UNIQUE truth, unavailable history and null commands remain unchanged. Dirty, untracked,
-staged and locked worktrees remain held; ignored data requires complete recovery.
-
-Ordinary objective plans pass every selected worktree, private admin and common Git
-directory exclusion to both artifact verifiers and their final placement rechecks.
-An objective-selected observation retains all those known ordinary boundaries.
-This includes a Git-only selection outside the ordinary resource list with no file
-recovery reference: its bundle inside another known objective checkout holds; an
-equivalent bundle outside the known set retains its narrow Git coverage. This is an
-intentional conservative compatibility restriction of the earlier selected-only
-placement domain. It changes no wire key, Git-only boolean meaning, root-copy policy,
-classification, relation or command authority.
-Project-only selection knows only the selected resource/common boundary. Neither
-projection establishes the executor's whole finite removal scope: the executor must
-verify both original artifacts outside every resource/admin/common path in that
-authenticated finite scope before each effect.
-
-After actual worktree absence, immutable recovery integrity may remain verified while
-`current_match` is null. A new remaining-ref expect binds actual current ref/tip/storage
-and archive facts, without proving any earlier phase. Only the executor validates its
-ORIGINAL authenticated finite scope, unchanged artifacts and committed phases of this
-new operation. Missing/unknown old phases cannot be replayed or backfilled. Local-ref
-deletion requires complete fresh checkout exclusion plus atomic expected-OID
-`update-ref --no-deref -d`; branch config is a separately backed-up phase or leftover.
-The executor creates and freezes the original selected-log blob/root recovery and
-file artifacts before any worktree phase, then rechecks current log identity/bytes
-and remaining-ref expect at the branch boundary. Existing archives are not rewritten
-by Pod, and absent old phases are never manufactured from a new artifact.
-Remote origin/policy/open-PR/lease checks stay required. Observe public Orca absence
-after known Git phases; a persistent entry is retained and reported held. There is
-no proved metadata-only forget and no broad `orca worktree rm` or recreated-path recipe
-for this route. Current closure/retirement observations and supported coordinator
-reports remain the reconciliation interface.
-
-Both the declared `recovery_refs` map and the complete actual `recovery_refs` map
-remain in every archive observation. The optional repeated `recovery_types`
-diagnostic is omitted to fit the combined byte budget; every advertised target and
-required object type is still independently and completely verified.
-
-Resource/archive-row count remains 96; advertised/expected recovery maps are bounded
-to 4096 entries. Compressed input remains 128 MiB, with separate bounded logical
-restoration/object/count controls and the conjunctive inspection/output bounds above.
-Git inspection never raises tighter inherited soft/hard process limits.
-Archives must remain outside removable resource/admin paths with stable bytes,
-identity and mount placement. Git artifact and ancestor descriptor mount IDs, plus
-relevant placement mount/parent IDs, bind the existing diagnostic and expect alongside
-physical coordinates, no-follow aliases and birth identity. Unavailable mount
-incarnation holds; an ID-only change invalidates old expect. Volatile-media crash durability is not established by
-the outside-removal check. A verified Git archive preserves Git data; it grants no integration,
-unique-work discard, release, live-work clearance or uncommitted-file preservation.
-
-An existing engine independently rechecks its actual **original** admitted
-scope/archive/resource/ref identity, committed phase outcomes and continuity, then
-fresh current facts and its full wider operation before each mutation, including
-fetch/fallback/async effects. It retains its existing journal; Pod adds none. An
-absent path, same name/OID, matched intent or new expect cannot supply missing
-originals or successful removal/release. Old runs missing indispensable facts stay
-held. Project-only protected/null output is data, never deletion clearance.
+The existing 128 MiB input, 4096 advertised-ref, restored object/count/byte and
+process limits stay conjunctive. Stable no-follow bytes/identities and placement
+outside every known objective checkout/private/common directory bind verification
+and expect. Project-only placement knows only its selected/common boundary; an
+executor still checks its entire authenticated finite scope. A valid narrower
+per-archive observation never becomes covering evidence by a boolean assertion.

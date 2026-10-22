@@ -384,6 +384,25 @@ class OrcaAdapterTests(unittest.TestCase):
         with patch('pod.orca.read_command',side_effect=[valid,later]), self.assertRaises(PodError):
             worker_rows('run')
 
+    def test_worker_pages_need_explicit_completion_and_unique_rows(self):
+        valid = {'runtime': 'runtime', 'result': {'scope': {'source': 'flag', 'run': 'run'},
+                 'workers': [{'dispatchId': 'one'}], 'page': {'hasMore': False}}}
+        for changes in ({'page': None}, {'page': {}}, {'page': {'hasMore': None}},
+                        {'page': {'hasMore': 0}}, {'truncated': True},
+                        {'workers': [{'dispatchId': 'one'}, {'dispatchId': 'one'}]},
+                        {'workers': [{}]}, {'workers': [None]}):
+            with self.subTest(changes=changes), patch('pod.orca.read_command', return_value={
+                    **valid, 'result': {**valid['result'], **changes}}), self.assertRaises(PodError):
+                worker_rows('run')
+
+    def test_worker_repeated_cursor_page_or_interrupted_sequence_is_not_empty_success(self):
+        page = {'runtime': 'runtime', 'result': {'scope': {'source': 'flag', 'run': 'run'},
+                'workers': [{'dispatchId': 'one'}], 'page': {'hasMore': True, 'nextCursor': 'next'}}}
+        for second in (page, PodError('orca_read_failed', 'interrupted'),
+                       {**page, 'result': {**page['result'], 'workers': [], 'page': {'hasMore': True, 'nextCursor': 'third'}}}):
+            with self.subTest(second=second), patch('pod.orca.read_command', side_effect=[page, second]), self.assertRaises(PodError):
+                worker_rows('run')
+
     def test_contract_needs_runtime_status_not_version_only(self):
         with patch('pod.orca.read_command',side_effect=[
                 {'version':ORCA_VERSION,'executable':'/fixture/orca'},

@@ -1,4 +1,4 @@
-"""Exact recovery and expect boundaries over disposable, independently restored Git bundles."""
+"""Ordinary branch preservation and bounded current Git readers in disposable projects."""
 
 from __future__ import annotations
 
@@ -26,13 +26,8 @@ def _git_input(path, argv, data):
                           check=True).stdout.decode().strip()
 
 
-def _archive(path, ref, tip, *, expanded=True):
-    row = {"path": str(path), "ref": ref, "tip": tip}
-    if expanded:
-        advertised = plans.git(path.parent, "bundle", "list-heads", str(path))
-        row.update(sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                   recovery_refs={name: oid for oid, name in (line.split() for line in advertised.splitlines())})
-    return row
+def _archive(path, ref, tip):
+    return {"path": str(path), "ref": ref, "tip": tip}
 
 
 @contextmanager
@@ -74,7 +69,7 @@ class ArchiveBranchTests(unittest.TestCase):
         compressed = _git_input(case.project, ["hash-object", "-w", "--stdin"], b"a" * 32768)
         plans.git(case.project, "update-ref", "refs/recovery/compressed", compressed)
         file = case.root / "compressed.bundle"
-        plans.git(case.project, "bundle", "create", str(file), cls.alias, "refs/recovery/compressed")
+        plans.git(case.project, "bundle", "create", str(file), cls.ref, "refs/recovery/compressed")
         cls.bundles["compressed"] = file.read_bytes()
         cls.admin = Path(plans.git(case.child, "rev-parse", "--absolute-git-dir"))
 
@@ -83,7 +78,7 @@ class ArchiveBranchTests(unittest.TestCase):
         self.directory = self.case.root / self._testMethodName
         self.directory.mkdir()
         self.bundle = self.directory / "saved.bundle"
-        self.bundle.write_bytes(self.bundles["alias"])
+        self.bundle.write_bytes(self.bundles["branch_only"])
 
     def observed(self, row=None, **kwargs):
         row = row if row is not None else _archive(self.bundle, self.ref, self.tip)
@@ -105,39 +100,16 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertIn("worktree:" + str(self.case.child), changed.exception.detail["changed"])
         return next(resource for resource in captured if resource["kind"] == "worktree")
 
-    def test_exact_alias_recovers_current_source_and_preserves_unique_authority(self):
-        before = plans.git(self.case.project, "show-ref")
-        result = self.observed()
-        row = self.worktree(result)
-        self.assertEqual(row["class"], "unique")
-        self.assertTrue(row["archive_verified"], row["archives"])
-        self.assertTrue(row["archives"][0]["covers_resource"])
-        self.assertEqual(row["archives"][0]["recovery_refs"], {self.alias: self.tip})
-        self.assertNotIn(self.ref, row["archives"][0]["recovery_refs"])
-        self.assertIsNotNone(row["delete_argv"])
-        self.assertIn(row["id"], result["standing_authorization"]["asks"])
-        self.assertNotIn(row["id"], result["standing_authorization"]["covers"])
-        self.assertEqual(plans.git(self.case.project, "show-ref"), before)
-        self.assertEqual(self.bundle.read_bytes(), self.bundles["alias"])
-        self.assertEqual(self.observed(expect=result["expect"])["digest"], result["digest"])
 
     def test_branch_only_requires_original_exact_advertisement_and_stays_branch_only(self):
-        branch_only = _archive(self.bundle, self.ref, self.tip, expanded=False)
+        branch_only = _archive(self.bundle, self.ref, self.tip)
+        self.bundle.write_bytes(self.bundles["alias"])
         self.rejected(branch_only)
         self.bundle.write_bytes(self.bundles["branch_only"])
         row = self.worktree(self.observed(branch_only))
         self.assertTrue(row["archive_verified"], row["archives"])
         self.assertEqual(row["archives"][0]["mode"], "branch_only")
 
-    def test_paired_fields_and_duplicate_source_rows_refuse(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        missing_digest, missing_map = dict(row), dict(row)
-        missing_digest.pop("sha256")
-        missing_map.pop("recovery_refs")
-        for rows in ([missing_digest], [missing_map], [row, deepcopy(row)], [row] * 97):
-            with self.subTest(rows=rows), self.assertRaises(PodError) as refused:
-                self.case.observed(archives=rows)
-            self.assertEqual(refused.exception.code, "invalid_cleanup_archives")
 
     def test_caller_relation_profile_and_required_roots_are_not_inputs(self):
         from pod.internal import run
@@ -147,23 +119,10 @@ class ArchiveBranchTests(unittest.TestCase):
                 run("cleanup-plan", {**request, name: {}})
             self.assertEqual(refused.exception.code, "invalid_request")
 
-    def test_invalid_expanded_map_digest_and_bounds_refuse(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        for update in ({"sha256": "x" * 64}, {"recovery_refs": {}},
-                       {"recovery_refs": {f"refs/recovery/{i}": self.tip for i in range(4097)}}):
-            with self.subTest(update=update), self.assertRaises(PodError) as refused:
-                self.observed({**row, **update})
-            self.assertEqual(refused.exception.code, "invalid_cleanup_archives")
 
-    def test_missing_and_digest_corrupt_archives_fail_closed(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        self.bundle.unlink()
-        self.rejected(row)
-        self.bundle.write_bytes(self.bundles["alias"] + b"changed")
-        self.assertIn("SHA256", " ".join(self.rejected(row)["holds"]))
 
     def test_corrupt_and_truncated_pack_with_matching_digest_fail_closed(self):
-        original = self.bundles["alias"]
+        original = self.bundles["branch_only"]
         for data in (original[:-32], original[:-21] + bytes([original[-21] ^ 1]) + original[-20:]):
             with self.subTest(size=len(data)):
                 self.bundle.write_bytes(data)
@@ -195,7 +154,7 @@ class ArchiveBranchTests(unittest.TestCase):
         self.bundle.write_bytes(self.bundles["compressed"])
         with patch.object(cleanup_archives, "MAX_OBJECT_BYTES", 32767):
             self.assertIn("content bounds", " ".join(self.rejected()["holds"]))
-        header, pack = self.bundles["alias"].split(b"\n\n", 1)
+        header, pack = self.bundles["branch_only"].split(b"\n\n", 1)
         count = (cleanup_archives.MAX_RESTORED_OBJECTS + 1).to_bytes(4, "big")
         self.bundle.write_bytes(header + b"\n\n" + pack[:8] + count + pack[12:])
         original = cleanup_archives._run
@@ -205,34 +164,9 @@ class ArchiveBranchTests(unittest.TestCase):
         with patch.object(cleanup_archives, "_run", side_effect=run):
             self.assertIn("pack object count", " ".join(self.rejected()["holds"]))
 
-    def test_incomplete_extra_and_wrong_recovery_maps_fail_closed(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        for refs in ({self.alias: self.case.base}, {self.alias: self.tip, "refs/recovery/extra": self.tip}):
-            with self.subTest(refs=refs):
-                observed = self.rejected({**row, "recovery_refs": refs})
-                self.assertEqual(observed["recovery_refs"], {self.alias: self.tip})
 
-    def test_current_tip_and_actual_source_identity_are_independent_of_map(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        self.rejected({**row, "tip": self.case.base})
-        original = (self.admin / "HEAD").read_bytes()
-        (self.admin / "HEAD").write_text(self.case.base + "\n")
-        self.addCleanup((self.admin / "HEAD").write_bytes, original)
-        result = self.worktree(self.observed(row))
-        self.assertIsNone(result["delete_argv"])
-        self.assertFalse(result["archive_verified"])
 
-    def test_same_validity_different_bundle_and_map_invalidates_expect(self):
-        first = self.observed()
-        self.bundle.write_bytes(self.bundles["branch_only"])
-        current = _archive(self.bundle, self.ref, self.tip)
-        self.assertTrue(self.assert_changed(first["expect"], current)["archive_verified"])
 
-    def test_changed_supplied_tip_or_map_invalidates_expect(self):
-        first = self.observed()
-        row = _archive(self.bundle, self.ref, self.tip)
-        self.assert_changed(first["expect"], {**row, "tip": self.case.base})
-        self.assert_changed(first["expect"], {**row, "recovery_refs": {self.alias: self.case.base}})
 
     def test_same_bytes_at_a_different_path_invalidates_expect(self):
         first = self.observed()
@@ -257,50 +191,8 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertTrue(current["archive_verified"])
         self.assertEqual(current["archives"][0]["sha256"], first["resources"][-1]["archives"][0]["sha256"])
 
-    def test_recycled_ancestor_inode_with_retained_leaf_identity_invalidates_expect(self):
-        ancestor = self.directory / "ancestor"
-        retained = ancestor / "retained"
-        retained.mkdir(parents=True)
-        self.bundle.rename(retained / self.bundle.name)
-        self.bundle = retained / self.bundle.name
-        first = self.observed()
-        previous, leaf = ancestor.stat(), self.bundle.stat()
-        parked = self.directory / "parked"
-        retained.rename(parked)
-        ancestor.rmdir()
-        ancestor.mkdir()
-        parked.rename(retained)
-        self.assertNotEqual(ancestor.stat().st_ctime_ns, previous.st_ctime_ns)
-        self.assertEqual(cleanup_archives._identity(self.bundle.stat()), cleanup_archives._identity(leaf))
-        original = os.fstat
-        def recycled(descriptor):
-            observed = original(descriptor)
-            if os.readlink(f"/proc/self/fd/{descriptor}") == str(ancestor):
-                fields = {key: getattr(observed, key) for key in dir(observed) if key.startswith("st_")}
-                fields["st_ino"] = previous.st_ino
-                return SimpleNamespace(**fields)
-            return observed
-        # Only inode reuse is modeled; birth/ctime and the retained leaf are real.
-        with patch.object(cleanup_archives.os, "fstat", side_effect=recycled):
-            self.assertTrue(self.assert_changed(first["expect"])["archive_verified"])
 
-    def test_unknown_directory_incarnation_cannot_supply_a_preservation_proof(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        with patch.object(cleanup_archives, "_incarnation",
-                          side_effect=cleanup_archives.Unavailable("Directory incarnation is unavailable")):
-            found = self.rejected(row)
-        self.assertIn("incarnation", " ".join(found["holds"]))
 
-    def test_consolidated_stale_source_label_keeps_exact_alias_and_all_extra_advertisements(self):
-        header, pack = self.bundles["alias"].split(b"\n\n", 1)
-        self.bundle.write_bytes(header + f"\n{self.case.base} {self.ref}\n\n".encode() + pack)
-        result = self.observed()
-        worktree = self.worktree(result)
-        self.assertTrue(worktree["archive_verified"], worktree["archives"])
-        self.assertEqual(worktree["archives"][0]["recovery_refs"],
-                         {self.ref: self.case.base, self.alias: self.tip})
-        self.assertEqual(len(result["resources"]), 2)
-        self.assertIn(worktree["id"], result["standing_authorization"]["asks"])
 
     def test_synthetic_sensitive_metadata_never_enters_output_or_a_disk_spool(self):
         marker = b"synthetic-nonsecret-credential-fixture"
@@ -430,7 +322,7 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertEqual(row["class"], "protected")
         self.assertIsNone(row["delete_argv"])
 
-    def test_older_head_reflog_root_needs_expanded_preservation(self):
+    def test_older_head_reflog_root_keeps_narrow_archive_insufficient(self):
         log = self.admin / "logs" / "HEAD"
         original = log.read_bytes()
         self.addCleanup(log.write_bytes, original)
@@ -441,7 +333,7 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertIn(older, self.case.material(row)["required_objects"])
         self.assertFalse(row["archive_verified"])
         self.bundle.write_bytes(self.bundles["branch_only"])
-        branch_only = _archive(self.bundle, self.ref, self.tip, expanded=False)
+        branch_only = _archive(self.bundle, self.ref, self.tip)
         row = self.worktree(self.observed(branch_only))
         self.assertTrue(row["archives"][0]["verified"])
         self.assertFalse(row["archive_verified"])
@@ -456,7 +348,7 @@ class ArchiveBranchTests(unittest.TestCase):
         plans.git(self.case.child, "checkout", "-q", "--detach", older)
         plans.git(self.case.child, "checkout", "-q", "objective")
         self.bundle.write_bytes(self.bundles["branch_only"])
-        row = _archive(self.bundle, self.ref, self.tip, expanded=False)
+        row = _archive(self.bundle, self.ref, self.tip)
         result = self.observed(row)
         worktree, branch = self.worktree(result), self.case.resource(result, "local_branch")
         self.assertIsNot(worktree["archives"], branch["archives"])
@@ -481,16 +373,16 @@ class ArchiveBranchTests(unittest.TestCase):
         self.assertEqual(row["class"], "protected")
         self.assertIsNone(row["delete_argv"])
 
-    def test_complete_map_cannot_hide_duplicate_or_missing_advertised_targets(self):
-        original = self.bundles["alias"]
+    def test_branch_bundle_cannot_hide_duplicate_or_missing_advertised_targets(self):
+        original = self.bundles["branch_only"]
         header, pack = original.split(b"\n\n", 1)
-        for extra in (f"{self.tip} {self.alias}", f"{'f' * 40} refs/recovery/missing"):
+        for extra in (f"{self.tip} {self.ref}", f"{'f' * 40} refs/recovery/missing"):
             with self.subTest(extra=extra):
                 self.bundle.write_bytes(header + b"\n" + extra.encode() + b"\n\n" + pack)
                 self.rejected()
 
     def test_head_and_worktree_qualified_advertisements_are_explicitly_refused(self):
-        header, pack = self.bundles["alias"].split(b"\n\n", 1)
+        header, pack = self.bundles["branch_only"].split(b"\n\n", 1)
         for name in ("HEAD", "worktrees/selected/HEAD"):
             with self.subTest(name=name):
                 self.bundle.write_bytes(header + f"\n{self.tip} {name}\n\n".encode() + pack)
@@ -499,162 +391,6 @@ class ArchiveBranchTests(unittest.TestCase):
                 self.assertIn("Unsupported bundle advertisement", " ".join(result["holds"]))
 
 
-class ArchiveRootTests(unittest.TestCase):
-    """One graph with two stash entries and independently rooted private objects."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.case = plans.CleanupPlanTests()
-        cls.addClassCleanup(cls.case.doCleanups)
-        cls.case.setUp()
-        case = cls.case
-        (case.child / "README.md").write_text("unique tip\n")
-        plans.git(case.child, "commit", "-qam", "unique tip")
-        cls.tip = plans.git(case.child, "rev-parse", "HEAD")
-        cls.ref = "refs/heads/objective"
-        cls.stashes = []
-        for index in range(2):
-            (case.child / "README.md").write_text(f"index {index}\n")
-            plans.git(case.child, "add", "README.md")
-            (case.child / "README.md").write_text(f"worktree {index}\n")
-            (case.child / "untracked.txt").write_text(f"untracked {index}\n")
-            plans.git(case.child, "stash", "push", "-uqm", f"entry {index}")
-            cls.stashes.append(plans.git(case.child, "rev-parse", "refs/stash"))
-        blob = _git_input(case.project, ["hash-object", "-w", "--stdin"], b"private rooted blob\n")
-        base_blob = plans.git(case.project, "rev-parse", cls.tip + ":README.md")
-        tree = _git_input(case.project, ["mktree"], f"100644 blob {base_blob}\tprivate.txt\n".encode())
-        commit = plans.git(case.project, "commit-tree", cls.tip + "^{tree}", "-m", "independent private commit")
-        plans.git(case.project, "tag", "-am", "private annotation", "private-tag", commit)
-        tag = plans.git(case.project, "rev-parse", "refs/tags/private-tag")
-        cls.private = {"commit": commit, "tree": tree, "blob": blob, "tag": tag}
-        for name, oid in cls.private.items():
-            plans.git(case.child, "update-ref", "refs/worktree/" + name, oid)
-        aliases = {"refs/recovery/selected": cls.tip}
-        aliases.update({f"refs/recovery/stash-{i}": oid for i, oid in enumerate(cls.stashes)})
-        aliases.update({"refs/recovery/" + name: oid for name, oid in cls.private.items()})
-        for name, oid in aliases.items():
-            plans.git(case.project, "update-ref", name, oid)
-        cls.bundles = {}
-        variants = {"full": list(aliases), "branch": [cls.ref],
-                    "latest": [name for name in aliases if name != "refs/recovery/stash-0"],
-                    "no-blob": [name for name in aliases if name != "refs/recovery/blob"],
-                    "no-tree": [name for name in aliases if name != "refs/recovery/tree"]}
-        for name, refs in variants.items():
-            file = case.root / (name + ".bundle")
-            plans.git(case.project, "bundle", "create", str(file), *refs)
-            cls.bundles[name] = file.read_bytes()
-
-    def setUp(self):
-        self.case.terminals = []
-        directory = self.case.root / self._testMethodName
-        directory.mkdir()
-        self.bundle = directory / "saved.bundle"
-        self.bundle.write_bytes(self.bundles["full"])
-
-    def observed(self, *, expanded=True, **kwargs):
-        return self.case.observed(archives=[_archive(self.bundle, self.ref, self.tip, expanded=expanded)], **kwargs)
-
-    def worktree(self, result):
-        return self.case.resource(result, "worktree")
-
-    def preserve_stash_metadata(self):
-        for relative in ("refs/stash", "logs/refs/stash"):
-            file = self.case.project / ".git" / relative
-            self.addCleanup(file.write_bytes, file.read_bytes())
-
-    def test_full_recovery_verifies_stash_index_untracked_and_all_private_object_types(self):
-        stash_before = plans.git(self.case.project, "stash", "list", "--format=%gd:%H")
-        with observed_types() as checks:
-            row = self.worktree(self.observed())
-        self.assertTrue(row["archive_verified"], row["archives"])
-        self.assertTrue(row["archives"][0]["covers_resource"])
-        facts = self.case.material(row)
-        for oid in self.stashes:
-            self.assertEqual(len(facts["commits"][oid]["parents"]), 3)
-            for commit in [oid, *facts["commits"][oid]["parents"]]:
-                self.assertEqual(facts["required_objects"][commit], "commit")
-                self.assertEqual(facts["required_objects"][facts["commits"][commit]["tree"]], "tree")
-        self.assertIn({oid: kind for kind, oid in self.private.items()} | {self.tip: "commit"}
-                      | {oid: "commit" for oid in self.stashes}, checks)
-        self.assertEqual(row["class"], "unique")
-        self.assertIsNone(row["delete_argv"])
-        self.assertIn("repository stash is present", row["reasons"])
-        self.assertEqual(plans.git(self.case.project, "stash", "list", "--format=%gd:%H"), stash_before)
-
-    def test_branch_only_expanded_bundle_cannot_claim_stash_or_private_roots(self):
-        self.bundle.write_bytes(self.bundles["branch"])
-        row = self.worktree(self.observed())
-        self.assertFalse(row["archive_verified"], row["archives"])
-        self.assertIsNone(row["delete_argv"])
-
-    def test_full_private_recovery_without_stashes_still_needs_unique_authority(self):
-        self.preserve_stash_metadata()
-        plans.git(self.case.project, "update-ref", "-d", "refs/stash")
-        result = self.observed()
-        row = self.worktree(result)
-        self.assertTrue(row["archive_verified"], row["archives"])
-        self.assertEqual(row["class"], "unique")
-        self.assertIsNotNone(row["delete_argv"])
-        self.assertIn(row["id"], result["standing_authorization"]["asks"])
-        self.assertNotIn(row["id"], result["standing_authorization"]["covers"])
-
-    def test_changed_stash_oid_invalidates_expect_while_full_archive_stays_valid(self):
-        self.preserve_stash_metadata()
-        first = self.observed()
-        plans.git(self.case.project, "stash", "drop", "-q", "stash@{0}")
-        with plans.current_resources() as captured, self.assertRaises(PodError) as changed:
-            self.observed(expect=first["expect"])
-        self.assertEqual(changed.exception.code, "cleanup_changed")
-        row = self.worktree({"resources": captured})
-        self.assertTrue(row["archive_verified"], row["archives"])
-        self.assertIsNone(row["delete_argv"])
-
-    def test_branch_only_branch_proof_never_becomes_full_root_preservation(self):
-        self.bundle.write_bytes(self.bundles["branch"])
-        row = self.worktree(self.observed(expanded=False))
-        self.assertTrue(row["archives"][0]["verified"], row["archives"])
-        self.assertFalse(row["archive_verified"])
-        self.assertFalse(row["archives"][0]["covers_resource"])
-        self.assertIsNone(row["delete_argv"])
-
-    def test_latest_stash_recovery_does_not_cover_older_reflog_root(self):
-        self.bundle.write_bytes(self.bundles["latest"])
-        row = self.worktree(self.observed())
-        self.assertFalse(row["archive_verified"], row["archives"])
-        self.assertIn("missing", " ".join(row["archives"][0]["holds"]))
-        self.assertEqual(self.case.material(row)["repository"]["stash_roots"], list(reversed(self.stashes)))
-
-    def test_commit_stash_recovery_does_not_cover_independent_noncommit_roots(self):
-        for variant in ("no-blob", "no-tree"):
-            with self.subTest(variant=variant):
-                self.bundle.write_bytes(self.bundles[variant])
-                row = self.worktree(self.observed())
-                self.assertFalse(row["archive_verified"], row["archives"])
-                self.assertEqual(set(self.case.material(row)["private_refs"].values()), set(self.private.values()))
-
-    def test_unadvertised_dangling_pack_objects_do_not_supply_recovery_roots(self):
-        header, pack = self.bundles["full"].split(b"\n\n", 1)
-        lines = [line for line in header.split(b"\n") if not line.endswith(b" refs/recovery/blob")]
-        self.bundle.write_bytes(b"\n".join(lines) + b"\n\n" + pack)
-        row = self.worktree(self.observed())
-        self.assertFalse(row["archive_verified"])
-        self.assertIn("outside the advertised recovery closure", " ".join(row["archives"][0]["holds"]))
-
-    def test_stash_read_unknown_and_foreign_live_holder_remain_held(self):
-        real = plans.plan.__globals__["_git"]
-        def read(path, argv):
-            return None if argv[:2] == ["stash", "list"] else real(path, argv)
-        with patch("pod.cleanup._git", side_effect=read):
-            row = self.worktree(self.observed())
-        self.assertTrue(row["archive_verified"])
-        self.assertEqual(row["class"], "protected")
-        self.assertIsNone(row["delete_argv"])
-
-    def test_foreign_live_holder_remains_held_with_full_stash_recovery(self):
-        self.case.terminals = [{"handle": "live-foreign", "worktreePath": str(self.case.child)}]
-        row = self.worktree(self.observed())
-        self.assertTrue(row["archive_verified"])
-        self.assertIsNone(row["delete_argv"])
 
 
 class ArchiveObjectFormatTests(unittest.TestCase):
@@ -682,106 +418,6 @@ class ArchiveObjectFormatTests(unittest.TestCase):
         self.assertEqual(self.case.material(worktree)["repository"]["object_format"], "sha256")
 
 
-class ArchiveConsolidatedTests(unittest.TestCase):
-    """Real complete maps, including every distinct target, built once in Git."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.case = plans.CleanupPlanTests()
-        cls.addClassCleanup(cls.case.doCleanups)
-        cls.case.setUp()
-        case = cls.case
-        cls.ref, cls.tip = "refs/heads/objective", case.base
-        targets = [cls.tip]
-        for index in range(1024):
-            targets.append(_git_input(case.project, ["hash-object", "-w", "--stdin"],
-                                      f"consolidated unrelated recovery object {index}\n".encode()))
-        refs = {f"refs/recovery/entry-{index:04}": targets[index % len(targets)] for index in range(4096)}
-        _git_input(case.project, ["update-ref", "--stdin"],
-                   "".join(f"create {ref} {oid}\n" for ref, oid in refs.items()).encode())
-        cls.bundles = {}
-        for count in (165, 4096):
-            file = case.root / f"consolidated-{count}.bundle"
-            plans.git(case.project, "bundle", "create", str(file), *list(refs)[:count])
-            cls.bundles[count] = file.read_bytes()
-        cls.repository = cleanup_archives.repository_observation(case.project)
-        cls.resource = cleanup_archives.reference_observation(case.project, cls.ref, cls.tip, cls.repository)
-        cls.excluded = [case.child, case.project / ".git"]
-
-    def setUp(self):
-        directory = self.case.root / self._testMethodName
-        directory.mkdir()
-        self.bundle = directory / "saved.bundle"
-        self.bundle.write_bytes(self.bundles[165])
-
-    def verify(self, row=None):
-        return cleanup_archives.verify(self.case.project, row or _archive(self.bundle, self.ref, self.tip),
-                                       self.resource, self.excluded)
-
-    def test_complete_165_ref_consolidated_archive_verifies_every_distinct_target(self):
-        with observed_types() as checks:
-            result = self.case.observed(archives=[_archive(self.bundle, self.ref, self.tip)])
-        worktree = self.case.resource(result, "worktree")
-        found = worktree["archives"][0]
-        self.assertTrue(worktree["archive_verified"], found)
-        self.assertEqual(len(found["recovery_refs"]), 165)
-        self.assertIn({oid: "commit" if oid == self.tip else "blob"
-                       for oid in found["recovery_refs"].values()}, checks)
-        self.assertEqual(len(result["resources"]), 2)
-        self.assertEqual(worktree["class"], "integrated")
-        self.assertEqual(self.case.material(worktree)["additional_roots"], [])
-
-    def test_complete_4096_ref_boundary_verifies_without_increasing_resource_scope(self):
-        self.bundle.write_bytes(self.bundles[4096])
-        row = _archive(self.bundle, self.ref, self.tip)
-        self.assertEqual(len(cleanup_archives.archive_rows([row])[0]["recovery_refs"]), 4096)
-        self.assertGreater(len(set(row["recovery_refs"].values())), cleanup_archives.MAX_OBJECTS)
-        with observed_types() as checks:
-            found = self.verify(row)
-        self.assertTrue(found["verified"] and found["covers_resource"], found)
-        self.assertIn({oid: "commit" if oid == self.tip else "blob"
-                       for oid in row["recovery_refs"].values()}, checks)
-        self.assertEqual(found["recovery_refs"], row["recovery_refs"])
-
-    def test_consolidated_subset_or_extra_expected_map_cannot_hide_an_advertisement(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        subset, extra = dict(row["recovery_refs"]), dict(row["recovery_refs"])
-        subset.pop(next(reversed(subset)))
-        extra["refs/recovery/not-advertised"] = self.tip
-        for refs in (subset, extra):
-            with self.subTest(refs=len(refs)):
-                found = self.verify({**row, "recovery_refs": refs})
-                self.assertFalse(found["verified"])
-                self.assertEqual(found["recovery_refs"], row["recovery_refs"])
-
-    def test_consolidated_malformed_or_stale_last_target_cannot_escape_validation(self):
-        row = _archive(self.bundle, self.ref, self.tip)
-        name = next(reversed(row["recovery_refs"]))
-        for oid in ("not-an-oid", self.tip):
-            changed = {**row, "recovery_refs": {**row["recovery_refs"], name: oid}}
-            with self.subTest(oid=oid):
-                if oid == "not-an-oid":
-                    with self.assertRaises(PodError):
-                        cleanup_archives.archive_rows([changed])
-                else:
-                    self.assertFalse(self.verify(changed)["verified"])
-
-    def test_missing_last_consolidated_advertised_target_cannot_escape_restoration(self):
-        header, pack = self.bundles[165].split(b"\n\n", 1)
-        lines = header.split(b"\n")
-        _, name = lines[-1].split(b" ")
-        lines[-1] = b"f" * len(self.tip) + b" " + name
-        self.bundle.write_bytes(b"\n".join(lines) + b"\n\n" + pack)
-        found = self.verify()
-        self.assertFalse(found["verified"])
-        self.assertIn("missing", " ".join(found["holds"]))
-
-    def test_actual_4097_advertisements_refuse_independently_of_the_input_map(self):
-        header, pack = self.bundles[4096].split(b"\n\n", 1)
-        self.bundle.write_bytes(header + f"\n{self.tip} refs/recovery/over-bound\n\n".encode() + pack)
-        found = self.verify(_archive(self.bundle, self.ref, self.tip, expanded=False))
-        self.assertFalse(found["verified"])
-        self.assertIn("over their bound", " ".join(found["holds"]))
 
 
 class ArchiveInheritedLimitTests(unittest.TestCase):
@@ -840,95 +476,6 @@ print(json.dumps({'before':before,'child':child}))
                                           [cleanup_archives.MAX_BUNDLE, 256 * mib]])
 
 
-class ArchiveEntryScaleTests(unittest.TestCase):
-    """The complete wire maps, restoration and combined-byte controls use the real entry."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.case = plans.CleanupPlanTests()
-        cls.addClassCleanup(cls.case.doCleanups)
-        cls.case.setUp()
-        case = cls.case
-        cls.rows, cls.results, cls.rejected = {}, {}, {}
-        cls.type_checks = {}
-        for width in (60, 120):
-            stem = "refs/recovery/" + "x" * (width - len("refs/recovery/") - 5)
-            refs = {f"{stem}-{index:04}": case.base for index in range(4096)}
-            _git_input(case.project, ["update-ref", "--stdin"],
-                       "".join(f"create {name} {oid}\n" for name, oid in refs.items()).encode())
-            bundle = case.root / f"width-{width}.bundle"
-            plans.git(case.project, "bundle", "create", str(bundle), *refs)
-            cls.rows[width] = _archive(bundle, "refs/heads/objective", case.base)
-            _git_input(case.project, ["update-ref", "--stdin"],
-                       "".join(f"delete {name}\n" for name in refs).encode())
-        for width in (60, 120):
-            captured = {}
-            with observed_types() as checks:
-                try:
-                    cls.results[width] = plans.cleanup_entry(case, archives=[cls.rows[width]], captured=captured)
-                except PodError as exc:
-                    cls.rejected[width] = exc.code, str(exc), captured["result"]
-            cls.type_checks[width] = checks
-        cls.selected = plans.cleanup_entry(case, archives=[cls.rows[60]],
-                                          observe={"kind": "local_branch", "name": "refs/heads/objective"})
-        # Reconstruct the previously optional repeated diagnostic from verified
-        # types. Even after opaque compaction it exhausts the fixed entry bound.
-        before = deepcopy(cls.results[60])
-        for row in before["resources"]:
-            for archive in row["archives"]:
-                archive["recovery_types"] = {name: "commit" for name in archive["recovery_refs"]}
-        with patch("pod.cleanup.plan", return_value=before):
-            try:
-                from pod.internal import run
-                run("cleanup-plan", {"project": str(case.project), "objective": "objective"})
-            except PodError as exc:
-                cls.before_error = exc.code
-            else:
-                cls.before_error = None
-        cls.before = before
-        cls.scale_metrics = {"entry_4096_name60_bytes": len(plans.CleanupEntryScaleTests.encoded(cls.results[60])),
-                             "entry_4096_name120_bytes": len(plans.CleanupEntryScaleTests.encoded(cls.rejected[120][2])),
-                             "repeated_types_before_bytes": len(plans.CleanupEntryScaleTests.encoded(before))}
-
-    def test_4096_complete_60_character_maps_fit_the_actual_entry(self):
-        result = self.results[60]
-        self.assertLess(len(plans.CleanupEntryScaleTests.encoded(result)), 2_000_000)
-        self.assertEqual(len(result["resources"]), 2)
-        expected = self.rows[60]["recovery_refs"]
-        self.assertEqual(len(expected), 4096)
-        self.assertEqual({len(name) for name in expected}, {60})
-        for row in result["resources"]:
-            self.assertTrue(row["archive_verified"], row["archives"])
-            self.assertEqual(row["archives"][0]["declared"], self.rows[60])
-            self.assertEqual(row["archives"][0]["recovery_refs"], expected)
-            self.assertNotIn("recovery_types", row["archives"][0])
-        self.assertIn({self.case.base: "commit"}, self.type_checks[60])
-
-    def test_optional_repeated_type_map_before_control_still_refuses_two_mb(self):
-        self.assertEqual(self.before_error, "cleanup_unavailable")
-        self.assertGreater(len(plans.CleanupEntryScaleTests.encoded(self.before)), 2_000_000)
-
-    def test_count_legal_longer_combined_maps_remain_an_explicit_byte_negative(self):
-        code, message, result = self.rejected[120]
-        self.assertEqual(code, "cleanup_unavailable")
-        self.assertIn("output bound", message)
-        self.assertGreater(len(plans.CleanupEntryScaleTests.encoded(result)), 2_000_000)
-        for row in result["resources"]:
-            self.assertTrue(row["archive_verified"])
-            self.assertEqual(len(row["archives"][0]["declared"]["recovery_refs"]), 4096)
-            self.assertEqual(row["archives"][0]["recovery_refs"], self.rows[120]["recovery_refs"])
-
-    def test_selected_entry_retains_full_maps_and_observation_contract(self):
-        result = self.selected
-        self.assertEqual(len(result["resources"]), 1)
-        row = result["resources"][0]
-        self.assertEqual(set(row["identity"]), {"ref", "tip", "checked_out", "git", "worker", "provenance",
-                                               "current", "ref_storage", "observation_scope"})
-        self.assertEqual(row["identity"]["observation_scope"], {"mode": "objective", "objective": "objective"})
-        self.assertEqual(row["archives"][0]["declared"], self.rows[60])
-        self.assertEqual(row["archives"][0]["recovery_refs"], self.rows[60]["recovery_refs"])
-        self.assertEqual(row["fingerprint"], plans.digest({key: value for key, value in row.items()
-                                                         if key != "fingerprint"}))
 
 
 class OidTraversalBoundaryTests(unittest.TestCase):
@@ -1107,7 +654,7 @@ class TypeQueryBoundaryTests(unittest.TestCase):
 
 
 class SourceTraversalScaleTests(unittest.TestCase):
-    """Real SHA1/SHA256 graphs, source plans, stash closure and empty-repo recovery."""
+    """Real SHA1/SHA256 graphs and stash closure; production checks stay inside methods."""
 
     @staticmethod
     def history(case, count, name):
@@ -1124,8 +671,7 @@ class SourceTraversalScaleTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from pod import cleanup_stashes
-        cls.cases, cls.results, cls.scale_metrics = {}, {}, {}
+        cls.cases, cls.envs, cls.tips = {}, {}, {}
         for object_format in ("sha1", "sha256"):
             environment = patch.dict(os.environ, {"GIT_DEFAULT_HASH": object_format})
             environment.start()
@@ -1134,76 +680,42 @@ class SourceTraversalScaleTests(unittest.TestCase):
             cls.addClassCleanup(case.doCleanups)
             case.setUp()
             cls.cases[object_format] = case
-            tip = cls.history(case, 50000, "surviving-large")
-            closure = cleanup_archives._walk_oids(case.project, {tip})
-            try:
-                cleanup_archives._text(case.project, ["rev-list", "--objects", "--no-object-names", "--stdin"],
-                                       data=(tip + "\n").encode())
-            except cleanup_archives.Unavailable as exc:
-                before = str(exc)
-            else:
-                before = None
-            ordinary = plans.cleanup_entry(case)
-            # Stash ancestry really traverses the large graph. No holder fact is
-            # invented, and the actual production plan remains held with it.
-            index = plans.git(case.project, "commit-tree", tip + "^{tree}", "-p", tip, "-m", "fixture index")
-            stash = plans.git(case.project, "commit-tree", case.base + "^{tree}", "-p", tip,
-                              "-p", index, "-m", "fixture stash")
-            plans.git(case.project, "stash", "store", "-m", "fixture stash", stash)
-            repository = cleanup_archives.repository_observation(case.project)
-            snapshot = cleanup_stashes.snapshot(case.project, repository)
-            stashed = plans.cleanup_entry(case)
-            bundle = case.root / "large.bundle"
-            plans.git(case.project, "bundle", "create", str(bundle), "refs/heads/objective",
-                      "refs/heads/surviving-large", "refs/stash")
-            recovered = plans.cleanup_entry(case, archives=[_archive(bundle, "refs/heads/objective", case.base)])
-            cls.results[object_format] = {"tip": tip, "closure": closure, "before": before, "ordinary": ordinary,
-                                          "snapshot": snapshot, "stashed": stashed, "recovered": recovered}
-            width = 64 if object_format == "sha256" else 40
-            cls.scale_metrics[object_format] = {"objects": len(closure), "oid_bytes": len(closure) * (width + 1),
-                                                "ordinary_entry_bytes": len(plans.CleanupEntryScaleTests.encoded(ordinary)),
-                                                "stash_objects": snapshot["closure"]["object_count"],
-                                                "archive_entry_bytes": len(plans.CleanupEntryScaleTests.encoded(recovered))}
-            plans.git(case.project, "update-ref", "-d", "refs/stash")
-        # Exercise the exact real SHA256 object/byte boundary independently of
-        # the 100K restored-content domain, then one genuinely larger closure.
+            cls.envs[object_format] = {key: value for key, value in os.environ.items()
+                                      if key.startswith("XDG_") or key == "HOME"}
+            cls.tips[object_format] = cls.history(case, 50000, "surviving-large")
         case = cls.cases["sha256"]
         base_count = len(plans.git(case.project, "rev-list", "--objects", "--no-object-names", case.base).splitlines())
-        limit_tip = cls.history(case, 100000 - base_count - 2, "exact-limit")
-        plans.git(case.project, "update-ref", "-d", "refs/heads/surviving-large")
-        exact = cleanup_archives._walk_oids(case.project, {limit_tip})
-        cls.exact_types = cleanup_archives._types(case.project, exact, limit=cleanup_archives.MAX_TRAVERSAL_OBJECTS)
-        cls.exact_plan = plans.cleanup_entry(case)
-        plans.git(case.project, "update-ref", "refs/heads/surviving-large", cls.results["sha256"]["tip"])
-        cls.overflow_plan = plans.cleanup_entry(case)
-        cls.scale_metrics["sha256_exact"] = {"objects": len(exact), "oid_bytes": len(exact) * 65,
-                                              "typed_objects": len(cls.exact_types),
-                                              "entry_bytes": len(plans.CleanupEntryScaleTests.encoded(cls.exact_plan))}
+        cls.limit_tip = cls.history(case, 100000 - base_count - 2, "exact-limit")
 
     def assert_source(self, object_format):
-        result = self.results[object_format]
-        self.assertEqual(len(result["closure"]), 50008)
-        self.assertIn("output bound", result["before"])
-        row = self.cases[object_format].resource(result["ordinary"], "worktree")
+        case, tip = self.cases[object_format], self.tips[object_format]
+        with patch.dict(os.environ, self.envs[object_format]):
+            result = plans.cleanup_entry(case)
+        row = case.resource(result, "worktree")
         self.assertEqual(row["class"], "integrated", row["reasons"])
         self.assertIsNotNone(row["delete_argv"])
-        return result
 
     def test_sha1_50008_object_surviving_history_passes_the_actual_entry(self):
         self.assert_source("sha1")
 
     def test_sha256_50008_object_surviving_history_passes_the_actual_entry(self):
+        # The independent exact-boundary graph would make this combined closure too large.
+        case = self.cases["sha256"]
+        plans.git(case.project, "update-ref", "-d", "refs/heads/exact-limit")
+        self.addCleanup(plans.git, case.project, "update-ref", "refs/heads/exact-limit", self.limit_tip)
         self.assert_source("sha256")
 
     def assert_stash(self, object_format):
-        result = self.results[object_format]
-        snapshot = result["snapshot"]
+        from pod import cleanup_stashes
+        case, tip = self.cases[object_format], self.tips[object_format]
+        index = plans.git(case.project, "commit-tree", tip + "^{tree}", "-p", tip, "-m", "fixture index")
+        stash = plans.git(case.project, "commit-tree", case.base + "^{tree}", "-p", tip, "-p", index, "-m", "fixture stash")
+        plans.git(case.project, "stash", "store", "-m", "fixture stash", stash)
+        self.addCleanup(plans.git, case.project, "stash", "clear")
+        snapshot = cleanup_stashes.snapshot(case.project, cleanup_archives.repository_observation(case.project))
         self.assertTrue(snapshot["complete"], snapshot["reasons"])
         self.assertGreater(snapshot["closure"]["object_count"], 50008)
         self.assertEqual(snapshot["closure"]["integrity"], "verified")
-        self.assertTrue(all(row["delete_argv"] is None for row in result["stashed"]["resources"]))
-        self.assertTrue(all(part["relation"] == "unknown" for row in result["stashed"]["resources"]
-                            for part in row["stash_observation"]["relations"]))
 
     def test_large_sha1_stash_closure_checks_complete_types_and_preserves_unknown_holders(self):
         self.assert_stash("sha1")
@@ -1211,36 +723,26 @@ class SourceTraversalScaleTests(unittest.TestCase):
     def test_large_sha256_stash_closure_checks_complete_types_and_preserves_unknown_holders(self):
         self.assert_stash("sha256")
 
-    def assert_recovery(self, object_format):
-        for row in self.results[object_format]["recovered"]["resources"]:
-            self.assertTrue(row["archive_verified"], row["archives"])
-            self.assertGreater(row["archives"][0]["restored_objects"]["objects"], 50008)
-            self.assertIsNone(row["delete_argv"])
-
-    def test_large_sha1_archive_coverage_uses_the_same_complete_walker(self):
-        self.assert_recovery("sha1")
-
-    def test_large_sha256_archive_coverage_uses_the_same_complete_walker(self):
-        self.assert_recovery("sha256")
-
     def test_real_sha256_100000_object_boundary_passes_the_actual_entry(self):
-        self.assertEqual(self.scale_metrics["sha256_exact"]["objects"], 100000)
-        self.assertEqual(self.scale_metrics["sha256_exact"]["oid_bytes"], 6500000)
-        self.assertEqual(len(self.exact_types), 100000)
-        self.assertEqual(set(self.exact_types.values()), {"commit", "tree", "blob"})
-        row = self.cases["sha256"].resource(self.exact_plan, "worktree")
-        self.assertTrue(row["identity"]["git"]["complete"], row["reasons"])
-        self.assertIsNotNone(row["delete_argv"])
+        case = self.cases["sha256"]
+        plans.git(case.project, "update-ref", "-d", "refs/heads/surviving-large")
+        self.addCleanup(plans.git, case.project, "update-ref", "refs/heads/surviving-large", self.tips["sha256"])
+        with patch.dict(os.environ, self.envs["sha256"]):
+            result = plans.cleanup_entry(case)
+        self.assertIsNotNone(case.resource(result, "worktree")["delete_argv"])
 
     def test_real_object_count_overflow_holds_the_actual_entry(self):
-        row = self.cases["sha256"].resource(self.overflow_plan, "worktree")
+        case = self.cases["sha256"]
+        with patch.dict(os.environ, self.envs["sha256"]):
+            result = plans.cleanup_entry(case)
+        row = case.resource(result, "worktree")
         self.assertFalse(row["identity"]["git"]["complete"])
         self.assertIsNone(row["delete_argv"])
         self.assertIn("bound", " ".join(row["reasons"]))
 
     def test_surviving_ref_change_after_walk_is_detected_before_a_command_can_survive(self):
         case = self.cases["sha1"]
-        tip = self.results["sha1"]["tip"]
+        tip = self.tips["sha1"]
         plans.git(case.project, "update-ref", "refs/heads/race", tip)
         self.addCleanup(plans.git, case.project, "update-ref", "-d", "refs/heads/race")
         original, changed = cleanup_archives._walk_oids, False
@@ -1260,94 +762,29 @@ class SourceTraversalScaleTests(unittest.TestCase):
 
     def test_arbitrary_tree_and_blob_roots_are_not_negative_commit_subtraction(self):
         case = self.cases["sha1"]
-        tip = self.results["sha1"]["tip"]
+        tip = self.tips["sha1"]
         tree = plans.git(case.project, "rev-parse", tip + "^{tree}")
         blob = plans.git(case.project, "rev-parse", tip + ":f-0")
         outside = _git_input(case.project, ["hash-object", "-w", "--stdin"], b"independent object root\n")
         self.assertEqual(cleanup_archives._uncovered(case.project, {tree, blob, outside}, {tip}), {outside})
 
 
-class ArchiveContentScaleTests(unittest.TestCase):
-    """Shared full-history fixtures cover large aggregate, single-object and object-count inputs."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.case = plans.CleanupPlanTests()
-        cls.addClassCleanup(cls.case.doCleanups)
-        cls.case.setUp()
-        case = cls.case
-        cls.archives = {}
-        # Versions of a large generated text object model the high compression and
-        # aggregate size of complete histories, rather than a tiny mocked inventory.
-        parent = case.base
-        block = b"generated history content\n" * 4096
-        for index in range(40):
-            content = (f"version {index}\n".encode() + block * 164)[:16 * 1024 * 1024]
-            blob = _git_input(case.project, ["hash-object", "-w", "--stdin"], content)
-            tree = _git_input(case.project, ["mktree"], f"100644 blob {blob}\thistory.txt\n".encode())
-            parent = plans.git(case.project, "commit-tree", tree, "-p", parent, "-m", f"history {index}")
-        large = _git_input(case.project, ["hash-object", "-w", "--stdin"], b"x" * (130 * 1024 * 1024))
-        large_tree = _git_input(case.project, ["mktree"], f"100644 blob {large}\tlarge.txt\n".encode())
-        large_commit = plans.git(case.project, "commit-tree", large_tree, "-p", case.base, "-m", "large branch-only object")
-        for name, history in (("aggregate", parent), ("large", large_commit)):
-            tip = plans.git(case.project, "commit-tree", case.base + "^{tree}", "-p", history, "-m", name)
-            ref = "refs/heads/" + name
-            plans.git(case.project, "update-ref", ref, tip)
-            bundle = case.root / (name + ".bundle")
-            plans.git(case.project, "bundle", "create", str(bundle), ref)
-            cls.archives[name] = bundle, ref, tip
-        imported = bytearray()
-        for index in range(40_000):
-            value = f"history object {index}\n".encode()
-            imported.extend(f"blob\nmark :{index + 1}\ndata {len(value)}\n".encode() + value)
-        imported.extend(b"commit refs/heads/many\ncommitter Fixture <fixture@example.invalid> 1 +0000\ndata 5\nmany\n")
-        imported.extend(f"from {case.base}\n".encode())
-        imported.extend("".join(f"M 100644 :{index + 1} object-{index}\n" for index in range(40_000)).encode())
-        imported.extend(b"\ndone\n")
-        _git_input(case.project, ["fast-import", "--quiet", "--done"], bytes(imported))
-        many_tip = plans.git(case.project, "rev-parse", "refs/heads/many")
-        many_bundle = case.root / "many.bundle"
-        plans.git(case.project, "bundle", "create", str(many_bundle), "refs/heads/many")
-        cls.archives["many"] = many_bundle, "refs/heads/many", many_tip
-        repository = cleanup_archives.repository_observation(case.project)
-        cls.results = {}
-        # Full decompression/fsck is shared setup, not repeated by each assertion
-        # method. Each lane can build this disposable fixture independently.
-        for name, (bundle, ref, tip) in cls.archives.items():
-            facts = cleanup_archives.reference_observation(case.project, ref, tip, repository)
-            for expanded in (False, True):
-                cls.results[name, expanded] = cleanup_archives.verify(
-                    case.project, _archive(bundle, ref, tip, expanded=expanded), facts,
-                    [case.child, case.project / ".git"])
-
-    def assert_verified(self, name, expanded):
-        found = self.results[name, expanded]
-        self.assertTrue(found["verified"] and found["covers_resource"], found)
-        self.assertLess(self.archives[name][0].stat().st_size, cleanup_archives.MAX_BUNDLE)
-        return found["restored_objects"]
-
-    def test_aggregate_full_history_expanded_restores_more_than_current_target_histories(self):
-        inventory = self.assert_verified("aggregate", True)
-        self.assertGreater(inventory["bytes"], 640 * 1024 * 1024)
-
-    def test_aggregate_full_history_legacy_keeps_its_narrow_valid_proof(self):
-        inventory = self.assert_verified("aggregate", False)
-        self.assertEqual(inventory, self.results["aggregate", True]["restored_objects"])
-
-    def test_large_130_mib_legacy_object_is_not_limited_by_compressed_input_size(self):
-        self.assertGreater(self.assert_verified("large", False)["bytes"], 130 * 1024 * 1024)
-
-    def test_large_130_mib_expanded_object_is_not_limited_by_compressed_input_size(self):
-        self.assertGreater(self.assert_verified("large", True)["bytes"], 130 * 1024 * 1024)
-
-    def test_many_object_expanded_inventory_has_headroom_without_a_larger_output_budget(self):
-        inventory = self.assert_verified("many", True)
-        self.assertGreater(inventory["objects"], 40_000)
-
-    def test_many_object_legacy_archive_still_proves_complete_branch_history(self):
-        inventory = self.assert_verified("many", False)
-        self.assertEqual(inventory, self.results["many", True]["restored_objects"])
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OrdinaryArchiveInputTests(unittest.TestCase):
+    def test_only_the_ordinary_branch_reference_shape_is_supported(self):
+        row = {"path": "/fixture/saved.bundle", "ref": "refs/heads/task", "tip": "1" * 40}
+        self.assertEqual(cleanup_archives.archive_rows([row]), [row])
+        for field in ("sha256", "recovery_refs", "worktree_archive", "authority", "phase", "relation"):
+            with self.subTest(field=field), self.assertRaises(PodError):
+                cleanup_archives.archive_rows([{**row, field: {}}])
+
+    def test_duplicate_sources_and_excess_archive_rows_still_refuse(self):
+        row = {"path": "/fixture/saved.bundle", "ref": "refs/heads/task", "tip": "1" * 40}
+        for rows in ([row, dict(row)], [row] * 97):
+            with self.subTest(count=len(rows)), self.assertRaises(PodError):
+                cleanup_archives.archive_rows(rows)

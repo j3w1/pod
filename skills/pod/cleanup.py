@@ -21,7 +21,7 @@ _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 
 def _git(project: Path, argv: list[str]) -> str | None:
     try:
-        return cleanup_archives._text(project, argv)
+        return cleanup_archives._text(project, argv, missing=argv[:2] == ["symbolic-ref", "-q"])
     except cleanup_archives.Unavailable:
         return None
 
@@ -55,6 +55,8 @@ def _objective_worktrees(project: Path, paths: set[str], branches: set[str]) -> 
                 if main_path is None:
                     main_path = path
                 if path in paths:
+                    if path in by_path:
+                        raise PodError("cleanup_unavailable", "Objective Git worktree inventory repeats a path")
                     by_path[path] = row
                     if isinstance(row.get("branch"), str):
                         refs.add(row["branch"])
@@ -62,7 +64,10 @@ def _objective_worktrees(project: Path, paths: set[str], branches: set[str]) -> 
             checkouts: dict[str, list[str]] = {}
             for row in worktree_rows(inventory):
                 if row.get("branch") in refs and isinstance(row.get("worktree"), str):
-                    checkouts.setdefault(row["branch"], []).append(row["worktree"])
+                    found = checkouts.setdefault(row["branch"], [])
+                    if row["worktree"] in found:
+                        raise PodError("cleanup_unavailable", "Selected Git checkout inventory repeats a path")
+                    found.append(row["worktree"])
             return by_path, checkouts, main_path
     except PodError as exc:
         raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read") from exc
@@ -260,7 +265,7 @@ def _dirt(path: Path) -> tuple[list[str], bool]:
     return sorted(set(changed))[:64], False
 
 
-def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port) -> tuple[list[dict], bool]:
+def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port, require_empty=False, expected_ref=None) -> tuple[list[dict], bool]:
     selector = "path:" + str(path)
     try:
         shown = orca_reader(["worktree", "show", "--worktree", selector, "--json"])
@@ -268,11 +273,29 @@ def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port) -
         listed = orca_reader(["terminal", "list", "--worktree", selector, "--json"])
         terminals = listed["result"]["terminals"]
         if (not isinstance(worktree, dict) or worktree.get("path") != str(path)
-                or not isinstance(terminals, list) or listed["result"].get("truncated")):
+                or not isinstance(terminals, list) or listed["result"].get("truncated") is not False
+                or listed["result"].get("page") is not None
+                and (not isinstance(listed["result"]["page"], dict)
+                     or listed["result"]["page"].get("hasMore") is not False)):
             return [], True
     except (PodError, KeyError, TypeError):
         return [], True
-    facts, unknown = [], False
+    if require_empty:
+        native_git = worktree.get("git") or {}
+        branch = expected_ref.removeprefix("refs/heads/") if isinstance(expected_ref, str) else None
+        if (not isinstance(shown.get("runtime"), str) or listed.get("runtime") != shown["runtime"]
+                or not isinstance(worktree.get("id"), str) or worktree.get("isMainWorktree") is not False
+                or worktree.get("isBare") is not False or native_git.get("isBare") is not False
+                or native_git.get("path") != str(path) or branch is None
+                or worktree.get("branch") not in {branch, expected_ref}
+                or native_git.get("branch") != worktree.get("branch")):
+            return [], True
+    handles = [terminal.get("handle") for terminal in terminals if isinstance(terminal, dict)]
+    if len(handles) != len(terminals) or any(not isinstance(handle, str) for handle in handles) or len(set(handles)) != len(handles):
+        return [], True
+    facts, unknown = [], bool(require_empty and terminals)
+    if worktree.get("role") in {"coordinator", "setup", "role", "lead", "director"}:
+        unknown = True
     by_handle: dict[str, list[dict]] = {}
     for row in admissions.values():
         binding = row.get("native_binding") if isinstance(row, dict) else None
@@ -364,6 +387,89 @@ def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple
     return plan_hash, fingerprints
 
 
+def _authorization(state: dict, resources: list[dict], *, completed: bool) -> dict:
+    from .standing import cleanup_projection
+    result = cleanup_projection(state, resources)
+    if completed:
+        # This default is independent of yolo. Its exclusions/decision stay unchanged;
+        # protected facts still hold and only an actually guarded command is covered.
+        disposable = {row["id"] for row in resources if row["class"] != "protected"}
+        covered = {row["id"] for row in resources if row["id"] in disposable and row["delete_argv"] is not None}
+        result["asks"] = [name for name in result["asks"] if name not in disposable]
+        result["covers"] = sorted(set(result["covers"]) | covered)
+    return result
+
+
+def _completion(project: Path, objective: str, state: dict, *, older: bool) -> tuple[bool, dict | None]:
+    """Compose existing public reads; closure or cached checkboxes alone never suffice."""
+    checkpoint = state.get("checkpoint") or {}
+    if older or not checkpoint.get("closure"):
+        return False, None
+    from .github import issue_recheck_live, pod_lines, parse_issue_locator
+    from .status import status
+    facts = {"record_sha256": digest(state), "status": None, "source": None, "lines": None}
+    try:
+        view = status(project, None, objective=objective)
+        fields = ("status", "objective", "source", "selected_worktree", "blocker", "report", "obligations",
+                  "readiness", "native", "native_settlement", "native_settlement_failure",
+                  "pending_admissions", "assignments", "retained_terminals", "native_references_truncated",
+                  "pod_ticks", "phase", "evidence_closure")
+        facts["status"] = {key: view.get(key) for key in fields}
+        source = checkpoint.get("objective_source")
+        if (state.get("continued_by") or state.get("historical_retirement") or not isinstance(source, dict)
+                or any(row.get("state") in {"reserved", "unresolved"} for row in state["admissions"].values())
+                or view.get("status") != "observed" or view.get("objective") != objective
+                or view.get("source") != source or view.get("selected_worktree") != checkpoint.get("worktree")
+                or view.get("blocker") != "objective_closed" or view.get("phase") in {"retired", "continued"}
+                or view.get("evidence_closure") or view.get("native_references_truncated") is not False
+                or view.get("pending_admissions") != 0 or view.get("native_settlement_failure")
+                or view.get("native_settlement") != "observed"
+                or (view.get("native") or {}).get("complete") is not True
+                or (view.get("report") or {}).get("status") != "closed"
+                or (view.get("readiness") or {}).get("state") != "closed"
+                or (view.get("readiness") or {}).get("acts_next") != "none"
+                or (view.get("obligations") or {}).get("closure") != checkpoint["closure"]
+                or (view.get("obligations") or {}).get("seq") != checkpoint.get("seq")
+                or (view.get("assignments") or {}).get("active") != []
+                or (view.get("assignments") or {}).get("unverified", []) != []
+                or view.get("retained_terminals") != []):
+            return False, facts
+        ticks = view.get("pod_ticks") or {}
+        lines = ticks.get("lines")
+        if (ticks.get("status") != "closed" or ticks.get("facts_current") is not True
+                or (ticks.get("read") or {}).get("status") != "read"
+                or not isinstance(lines, list) or not lines):
+            return False, facts
+        checked, live = issue_recheck_live(project, source)
+        facts["source"] = checked
+        if (checked.get("schema") != "pod-issue-recheck/v1" or checked.get("body_changed") is not False
+                or checked.get("amendment_changed") is not False
+                or checked.get("status") not in {"current", "reconciliation_required"}
+                or checked.get("reason") not in {None, "closed_issue_requires_intent_reconciliation"}
+                or not isinstance(live, dict) or not isinstance(live.get("body"), str)
+                or live.get("number") != source["number"]
+                or parse_issue_locator(live.get("url")) != {key: source[key] for key in ("repository", "number", "locator")}):
+            return False, facts
+        live_lines = pod_lines(live["body"])
+        facts["lines"] = live_lines
+        seen = set()
+        for row in lines:
+            number = row.get("pod")
+            if (type(number) is not int or number in seen or row.get("facts_current") is not True
+                    or row.get("ticked") is not True or row.get("checkboxes") != [True]
+                    or row.get("occurrences") != 1 or row.get("proven") is not True
+                    or row.get("status") != "current" or row.get("blocked") is not None
+                    or row.get("authorship") == "ambiguous" or row.get("hold") or row.get("blocked_at_closure")
+                    or not row.get("criteria") or any(item.get("state") != "satisfied"
+                        or item.get("current") is not True for item in row["criteria"])
+                    or len(live_lines.get(number, [])) != 1 or live_lines[number][0]["ticked"] is not True):
+                return False, facts
+            seen.add(number)
+        return bool(seen and seen == live_lines.keys()), facts
+    except (PodError, KeyError, TypeError, ValueError, AttributeError):
+        return False, facts
+
+
 def _successor_paths(project: Path, state: dict) -> tuple[str | None, set[str] | None]:
     """Worktrees the successors of a continued objective record (at most eight); None when unreadable."""
     link = state.get("continued_by")
@@ -425,6 +531,7 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
     if state is None or not isinstance(state.get("checkpoint"), dict):
         raise PodError("cleanup_unavailable", "Objective checkpoint is unavailable")
     checkpoint = state["checkpoint"]
+    completed, completion = _completion(project, objective, state, older=older is not None)
     if older is not None and worker is not None:
         raise PodError("cleanup_worker_unavailable",
                        "Older evidence-closed records do not document worker report and release evidence")
@@ -541,7 +648,7 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
             classification, reasons = "protected", [f"recorded by successor objective {successor}"]
         elif path_text == main_path or branch in ("main", default_branch) or branch_ref in target_branches:
             classification, reasons = "protected", ["main checkout, or the default or target branch"]
-        elif expected_branches.get(path_text) and expected_branches[path_text] != {branch}:
+        elif not expected_branches.get(path_text) or expected_branches[path_text] != {branch}:
             classification, reasons = "protected", ["worktree branch changed from its objective binding"]
         elif shared:
             classification, reasons = "protected", ["the branch is also checked out in another worktree"]
@@ -551,16 +658,17 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
             classification, reasons = "protected", git_facts["holds"]
         else:
             terminals, unknown_terminal = _terminal_facts(path, state["admissions"],
-                                                            orca_reader=orca_reader, native_port=port)
+                                                            orca_reader=orca_reader, native_port=port,
+                                                            require_empty=completed, expected_ref=branch_ref)
             dirty, status_unknown = _dirt(path)
             if unknown_terminal:
                 classification, reasons = "protected", ["a terminal here is active, user-owned, external, "
                                                         "held by another Dispatch or of unknown ownership"]
             elif status_unknown or stash_unknown:
                 classification, reasons = "protected", ["worktree status or stash read is uncertain"]
-            elif dirty or stash_present:
+            elif dirty or stash_present and not completed:
                 classification, reasons = "unique", (["worktree has data: " + ", ".join(dirty[:8])] if dirty else [])
-                if stash_present:
+                if stash_present and not completed:
                     reasons.append("repository stash is present")
             elif is_ancestor(project, tip, target) is not True and tip not in merged:
                 classification, reasons = "unique", ["branch has commits outside the observed target"]
@@ -574,13 +682,18 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         archive_argv = (["git", "bundle", "create", "<dir>/" + (branch or "worktree").replace("/", "_") +
                          ".bundle", ref] if classification == "unique" and ref else None)
         deletable = (classification == "integrated"
-                     or classification == "unique" and archive_complete and not dirty and not stash_present)
+                     or classification == "unique" and (completed or archive_complete and not dirty and not stash_present))
+        if completed:
+            # One Git phase: no Orca fallback, branch-config cleanup or metadata removal.
+            from .cleanup_stashes import worktree_argv
+            archive_argv = None
         resources.append(_resource("worktree", path_text,
                                    {"path": path_text, "branch": branch_ref, "tip": tip,
                                     "terminals": terminals, "shared_with": shared, "git": git_facts,
                                     **({"worker": worker_facts} if selected is not None else {})}, classification, reasons,
-                                   delete_argv=["orca", "worktree", "rm", "--worktree", "path:" + path_text,
-                                                "--json"] if deletable else None,
+                                   delete_argv=((worktree_argv(project, path_text) if completed else
+                                                 ["orca", "worktree", "rm", "--worktree", "path:" + path_text, "--json"])
+                                                if deletable else None),
                                    archive_argv=archive_argv, archive_verified=archive_complete,
                                    archive_observations=observed_archives))
     for ref in sorted(local_branches):
@@ -599,7 +712,7 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
             classification, reasons = "protected", ["associated worktree is protected"]
         elif tip is None or target is None or moved:
             classification, reasons = "protected", ["branch or target identity is unavailable"]
-        elif stash_present or associated and any(row["class"] == "unique" for row in associated):
+        elif stash_present and not completed or associated and any(row["class"] == "unique" for row in associated):
             classification, reasons = "unique", ["branch has unique work or a repository stash"]
         elif is_ancestor(project, tip, target) is not True and tip not in merged:
             classification, reasons = "unique", ["branch has commits outside the observed target"]
@@ -609,19 +722,23 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         git_facts = cleanup_archives.reference_observation(project, ref, tip, repository)
         observed_archives = archive_facts(ref, git_facts)
         verified = any(row["verified"] and row["covers_resource"] for row in observed_archives)
-        removed_with_worktree = bool(associated and any(row["delete_argv"] for row in associated))
-        deletable = (classification == "integrated" or classification == "unique" and verified
-                     and not associated and not stash_present)
+        removed_with_worktree = bool(not completed and associated and any(row["delete_argv"] for row in associated))
+        deletable = (classification == "integrated" or classification == "unique" and (completed or verified
+                     and not associated and not stash_present))
+        if completed and checked_out:
+            deletable = False
+            reasons.append("remove the exact Git worktree first, then reobserve current checkout absence")
+        from .cleanup_stashes import local_argv
         resources.append(_resource("local_branch", ref, {"ref": ref, "tip": tip, "checked_out": checked_out,
                                                         "git": git_facts},
                                    classification,
                                    reasons + (["Orca also removes the merged local branch"]
                                               if removed_with_worktree else []),
-                                   delete_argv=(["git", "update-ref", "-d", ref, tip]
+                                   delete_argv=(local_argv(project, ref, tip)
                                                 if deletable and not removed_with_worktree and tip else None),
                                    archive_argv=(["git", "bundle", "create", "<dir>/" +
                                                   branch.replace("/", "_") + ".bundle", ref]
-                                                 if classification == "unique" else None),
+                                                 if classification == "unique" and not completed else None),
                                    archive_verified=verified, archive_observations=observed_archives))
     for remote, branch in sorted(remote_names):
         ref = "refs/heads/" + branch
@@ -650,16 +767,19 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                                    delete_argv=(["git", "push", "--force-with-lease=" + ref + ":" + tip,
                                                 remote, ":" + ref]
                                                 if classification == "merged_remote_head"
-                                                or classification == "unique" and verified else None),
+                                                or classification == "unique" and (completed or verified) else None),
                                    archive_argv=(["git", "bundle", "create", "<dir>/" +
                                                   remote + "_" + branch.replace("/", "_") + ".bundle",
                                                   archive_ref]
-                                                 if classification == "unique" else None),
+                                                 if classification == "unique" and not completed else None),
                                    archive_verified=verified, archive_observations=observed_archives))
     if len(resources) > MAX_RESOURCES:
         raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     resources.sort(key=lambda row: row["id"])
     observed_target = {"ref": target_ref, "commit": target, "moved_after_delivery": moved}
+    for row in resources:
+        if completion is not None:
+            row["identity"]["git"]["objective_completion"] = completion
     if stash_observations:
         from . import cleanup_stashes
         snapshot = cleanup_stashes.snapshot(project, repository)
@@ -668,34 +788,34 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
             tip = row["identity"].get("tip")
             integrated = bool(tip and target and (tip in merged or is_ancestor(project, tip, target) is True))
             cleanup_stashes.apply(row, observation, branch_integrated=integrated)
-        if any("worktree_archive" in item for item in archive_rows):
-            from . import cleanup_reversible
-            for row in resources:
-                cleanup_reversible.apply(project, row, archive_rows, repository, snapshot, excluded=excluded)
         # The selected path borrows the full internal decision basis when this
         # flag is false, then compacts its own final row after reobservation.
         _compact_material(resources)
+    if completed:
+        still_completed, fresh_completion = _completion(project, objective, read(project, objective) or {}, older=False)
+        if not still_completed or fresh_completion != completion:
+            raise PodError("cleanup_changed", "Objective completion changed during cleanup observation")
     plan_hash, fingerprints = _expect_change(expect, resources, observed_target)
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]
-    from .standing import cleanup_projection
     from .evidence_closure import present
     from .ledger import objective_root
     # An objective closed by evidence reads as closed, like one its coordinator closed (R145).
     basis = ("evidence" if present(objective_root(project, objective))
              else "coordinator" if checkpoint.get("closure") else None)
-    notes = ["Read-only plan; owner consent precedes commands.",
-             "Orca worktree removal also removes a merged local branch.",
-             "Verify each unique-work archive before removing its original ref.",
-             "archive_argv creates branch-only evidence; additional recovery roots require a complete "
-             "recovery bundle and expanded archive input."]
+    notes = ["Read-only plan; ordinary cleanup requires its applicable exact scope instruction.",
+             "Ordinary Orca worktree removal also removes a merged local branch.",
+             "Ordinary unique work needs verified branch preservation or separately confirmed discard.",
+             "Completed coordinator objectives with every current proven PoD need no archive; current guards remain.",
+             "Git worktree/ref phases precede public Orca absence; retain any persistent native entry.",
+             "Scratch and native removal require the executor's own supported current task association."]
     if older is not None:
         notes.append("Older record closed by evidence, read through its documented fields only: its target and "
                      "delivery are not documented, so resources that depend on them stay protected.")
     return {"schema": "pod-cleanup-plan/v1", "objective": objective, "closure_basis": basis,
             **({"worker": worker_facts} if selected is not None else {}),
             "record_class": "older" if older is not None else "current",
-            "standing_authorization": cleanup_projection(state, resources),
+            "standing_authorization": _authorization(state, resources, completed=completed),
             "target": observed_target,
             "resources": resources, "digest": plan_hash,
             "expect": {"plan": plan_hash, "resources": fingerprints},
