@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from pod.cleanup import plan
 from pod import cleanup_archives
+from pod import cleanup_stashes
 from pod.util import digest
 from pod.errors import PodError
 from pod.github import repository_context
@@ -770,6 +771,7 @@ class CleanupWorkerTests(KernelCase):
         self.port.show_worker = self.shown
         self.resource_case, self.retained_reason = "released", None
         self.resource_owners = {}
+        self.native_fields = {}
         self.terminals, self.orca_reads = [], []
         self.context_path.write_bytes(self.context_bytes)
         self.journal_path.write_bytes(self.journal_bytes)
@@ -785,6 +787,12 @@ class CleanupWorkerTests(KernelCase):
         admin = Path(git(self.child, "rev-parse", "--absolute-git-dir"))
         (admin / "logs" / "HEAD").write_bytes(self.head_reflog)
         (admin / "ORIG_HEAD").unlink(missing_ok=True)
+        git(self.child, "update-ref", "-d", "refs/worktree/needed-stash")
+        if (admin / "locked").exists():
+            git(self.project, "worktree", "unlock", str(self.child))
+        for other in ("foreign-worktree", "shared-worker"):
+            if (self.root / other).exists():
+                git(self.project, "worktree", "remove", str(self.root / other))
         git(self.project, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/target")
         git(self.root / "origin.git", "update-ref", "refs/heads/worker", self.base)
         git(self.project, "update-ref", "refs/remotes/origin/worker", self.base)
@@ -821,6 +829,7 @@ class CleanupWorkerTests(KernelCase):
         self.port.show_worker = self.shown
         self.terminals = []
         self.orca_reads = []
+        self.native_fields = {}
         bare = self.root / "origin.git"
         subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
         git(self.project, "remote", "add", "origin", str(bare))
@@ -868,7 +877,19 @@ class CleanupWorkerTests(KernelCase):
             shown["runtime"] = "another-runtime"
         return shown
 
-    orca_read = CleanupPlanTests.orca_read
+    def orca_read(self, argv, **kwargs):
+        self.orca_reads.append(list(argv))
+        if argv[:2] == ["worktree", "show"]:
+            path = argv[3].removeprefix("path:")
+            branch = git(Path(path), "symbolic-ref", "--short", "HEAD") if Path(path).exists() else None
+            binding = self.admission["native_binding"]
+            return {"runtime": self.port.runtime, "result": {"worktree": {
+                "id": binding["worktreeId"] if Path(path) == self.child else "fixture-" + Path(path).name,
+                "path": path, "branch": branch, "isBare": False, "isMainWorktree": Path(path) == self.project,
+                "git": {"path": path, "branch": branch, "isBare": False}, **self.native_fields}}}
+        if argv[:2] == ["terminal", "list"]:
+            return {"runtime": self.port.runtime, "result": {"terminals": list(self.terminals), "truncated": False}}
+        raise AssertionError(argv)
     resource = CleanupPlanTests.resource
     changed = CleanupPlanTests.changed
 
@@ -884,6 +905,172 @@ class CleanupWorkerTests(KernelCase):
             self.assertIsNone(row["delete_argv"], row)
             self.assertIn(reason, " ".join(row["reasons"]), row)
 
+    def stash(self):
+        (self.project / "README.md").write_text("unrelated retained worker fixture\n")
+        git(self.project, "stash", "push", "-qm", "retained fixture")
+
+    def stash_state(self):
+        common = self.project / ".git"
+        root = git(self.project, "rev-parse", "refs/stash")
+        oids = git(self.project, "rev-list", "--objects", "--no-object-names", root).splitlines()
+        objects = subprocess.run(["git", "-C", str(self.project), "cat-file", "--batch"],
+                                 input=("\n".join(oids) + "\n").encode(), capture_output=True, check=True).stdout
+        return {"root": root, "oids": oids, "objects_sha256": hashlib.sha256(objects).hexdigest(),
+                "ref": (common / "refs/stash").read_bytes(), "log": (common / "logs/refs/stash").read_bytes()}
+
+    def selected_entry(self, **request):
+        return cleanup_entry(self, worker={"dispatch": self.dispatch},
+                             observe={"kind": "worktree", "name": str(self.child)}, **request)
+
+    def test_reported_released_worker_unforced_entry_preserves_unrelated_real_stash(self):
+        self.stash()
+        before = self.stash_state()
+        state_path = objective_root(self.project, "objective") / "context.json"
+        state = state_path.read_bytes()
+        result = self.selected_entry()
+        row = self.resource(result, "worktree")
+        self.assertIsNone(result["closure_basis"])
+        self.assertEqual(row["class"], "integrated")
+        self.assertEqual(row["identity"]["provenance"]["source"], "admission")
+        self.assertEqual(row["identity"]["current"]["oid"], self.base)
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        self.assertEqual(row["delete_argv"][-3:], ["worktree", "remove", str(self.child)])
+        self.assertNotIn("--force", row["delete_argv"])
+        self.assertFalse(row["archive_verified"])
+        self.assertIsNone(row["archive_argv"])
+        stash = row["stash_observation"]
+        self.assertEqual(stash["executor"]["kind"], "git_worktree_remove")
+        self.assertEqual(stash["executor"]["profile"], "git-worktree-remove/v1")
+        self.assertTrue(stash["executor"]["source_binding_sha256"])
+        self.assertEqual({item["relation"] for item in stash["relations"]}, {"unrelated"})
+        self.assertTrue(stash["freshness"]["stable"])
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        self.assertFalse(self.child.exists())
+        self.assertEqual(self.stash_state(), before)
+        self.assertEqual(state_path.read_bytes(), state)
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), self.base)
+
+    def test_clean_worker_plan_lists_only_unforced_git_worktree_phase_and_keeps_checked_out_ref(self):
+        first = self.observed()
+        row = self.resource(first, "worktree")
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        branch = self.resource(first, "local_branch")
+        self.assertIsNone(branch["delete_argv"])
+        self.assertIn("reobserve current checkout absence", " ".join(branch["reasons"]))
+        self.assertNotIn("Orca also removes", " ".join(branch["reasons"]))
+
+    def test_unforced_worker_command_refuses_new_dirty_data_in_the_actual_git_effect(self):
+        row = self.resource(self.selected_entry(), "worktree")
+        (self.child / "valuable.txt").write_text("new data after observation\n")
+        effect = subprocess.run(row["delete_argv"], capture_output=True)
+        self.assertNotEqual(effect.returncode, 0)
+        self.assertTrue(self.child.exists())
+        self.assertEqual((self.child / "valuable.txt").read_text(), "new data after observation\n")
+
+    def test_ordinary_missing_worktree_keeps_current_recorded_branch_unproven(self):
+        row = self.resource(self.selected_entry(), "worktree")
+        subprocess.run(row["delete_argv"], capture_output=True, check=True)
+        result = cleanup_entry(self, worker={"dispatch": self.dispatch},
+                               observe={"kind": "local_branch", "name": "refs/heads/worker"})
+        branch = result["resources"][0]
+        self.assertEqual(branch["identity"]["current"]["status"], "present")
+        self.assertIsNone(branch["delete_argv"])
+        self.assertIn("creation by this objective is unproven", " ".join(branch["reasons"]))
+
+    def test_open_integration_is_never_selected_as_an_ordinary_released_worker(self):
+        self.stash()
+        state = read(self.project, "objective")
+        state["checkpoint"]["worktree"]["path"] = str(self.child)
+        with patch("pod.cleanup.read", return_value=state):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("objective integration worktree", " ".join(row["reasons"]))
+
+    def test_director_lead_or_role_entry_keeps_ordinary_worker_held(self):
+        for role in ("director", "lead", "role"):
+            self.native_fields = {"role": role}
+            self.assertIsNone(self.resource(self.selected_entry(), "worktree")["delete_argv"])
+
+    def test_current_native_identity_must_match_the_released_worker_binding(self):
+        self.native_fields = {"id": "foreign-native-worktree"}
+        self.assert_held("terminal here is active")
+
+    def test_truncated_attachment_inventory_cannot_enable_ordinary_git_phase(self):
+        original = self.orca_read
+        def truncated(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[:2] == ["terminal", "list"]:
+                result["result"]["truncated"] = True
+            return result
+        with patch.object(self, "orca_read", side_effect=truncated):
+            self.assertIsNone(self.resource(self.selected_entry(), "worktree")["delete_argv"])
+
+    def test_worker_branch_shared_with_another_checkout_is_still_held(self):
+        git(self.project, "worktree", "add", "--force", "-q", str(self.root / "shared-worker"), "worker")
+        self.assert_held("also checked out")
+
+    def test_locked_worker_never_receives_an_extra_force(self):
+        git(self.project, "worktree", "lock", str(self.child))
+        self.assertIsNone(self.resource(self.selected_entry(), "worktree")["delete_argv"])
+
+    def test_unknown_worktree_effect_stays_held_even_with_verified_empty_stash(self):
+        original = cleanup_stashes._worktree_footprint
+        def unsupported(*args):
+            result = original(*args)
+            result.update(status="unavailable", reasons=["unsupported_primitive"], opaque=["unsupported_primitive"])
+            return result
+        with patch.object(cleanup_stashes, "_worktree_footprint", side_effect=unsupported):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["stash_observation"]["freshness"]["stable"])
+
+    def test_unknown_worktree_effect_cannot_borrow_an_unrelated_stash_exemption(self):
+        self.stash()
+        with patch.object(cleanup_stashes, "_worktree_footprint", return_value={
+                **cleanup_stashes._unknown(("paths", "refs", "config", "native", "opaque", "sha256"),
+                    "effect_footprint_unavailable", operation="primitive_footprint", kind="source_correspondence"),
+                "opaque": ["unsupported_primitive"]}):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertEqual({item["relation"] for item in row["stash_observation"]["relations"]}, {"unknown"})
+
+    def test_ordinary_stash_with_missing_log_is_not_an_unrelated_positive(self):
+        self.stash()
+        (self.project / ".git/logs/refs/stash").unlink()
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["stash_observation"]["complete"])
+
+    def test_changed_retained_stash_refuses_the_ordinary_worker_expect(self):
+        self.stash()
+        first = self.selected_entry()
+        (self.project / "README.md").write_text("changed retaining roots\n")
+        git(self.project, "stash", "push", "-qm", "changed fixture")
+        with self.assertRaises(PodError) as refused:
+            self.selected_entry(expect=first["expect"])
+        self.assertEqual(refused.exception.code, "cleanup_changed")
+
+    def test_current_bound_target_branch_stays_protected_for_ordinary_worker(self):
+        state = read(self.project, "objective")
+        state["checkpoint"]["governance"]["base_ref"] = "refs/heads/worker"
+        with patch("pod.cleanup.read", return_value=state):
+            row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("target branch", " ".join(row["reasons"]))
+
+    def test_release_changed_during_ordinary_observation_refuses_before_returning_argv(self):
+        original = self.port.show_worker
+        calls = 0
+        def changed(dispatch):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                self.resource_case = "unreleased"
+            return original(dispatch)
+        with patch.object(self.port, "show_worker", side_effect=changed), self.assertRaises(PodError) as refused:
+            self.selected_entry()
+        self.assertEqual(refused.exception.code, "cleanup_changed")
+
     def test_exact_selector_removes_released_worker_and_its_local_and_remote_branches_while_open(self):
         context = (objective_root(self.project, "objective") / "context.json").read_bytes()
         first = self.observed()
@@ -897,7 +1084,8 @@ class CleanupWorkerTests(KernelCase):
         port.apply(again)
         self.assertFalse(self.child.exists())
         self.assertEqual(git(self.project, "ls-remote", "origin", "refs/heads/worker"), "")
-        self.assertNotIn("refs/heads/worker", git(self.project, "show-ref"))
+        # The narrow Git phase leaves the common branch; it is no earlier-removal proof.
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), self.base)
         self.assertEqual((objective_root(self.project, "objective") / "context.json").read_bytes(), context)
         self.assertTrue(self.project.is_dir())
 
@@ -989,10 +1177,12 @@ class CleanupWorkerTests(KernelCase):
                 self.assert_held(filename)
                 (self.child / filename).unlink()
 
-    def test_stash_and_foreign_terminal_keep_all_worker_resources(self):
+    def test_private_stash_dependency_and_foreign_terminal_keep_all_worker_resources(self):
         (self.child / "README.md").write_text("stashed data\n")
         git(self.child, "stash", "push", "-qm", "retain")
+        git(self.child, "update-ref", "refs/worktree/needed-stash", git(self.project, "rev-parse", "refs/stash"))
         self.assert_held("stash")
+        git(self.child, "update-ref", "-d", "refs/worktree/needed-stash")
         git(self.project, "stash", "clear")
         self.terminals = [{"handle": "foreign", "worktreePath": str(self.child)}]
         self.assert_held("terminal here is active")

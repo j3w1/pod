@@ -40,11 +40,11 @@ def local_argv(project: Path, ref: str, oid: str) -> list[str]:
             "update-ref", "--no-deref", "-d", ref, oid]
 
 
-def worktree_argv(project: Path, path: str) -> list[str]:
+def worktree_argv(project: Path, path: str, *, completed: bool = False) -> list[str]:
     # One force permits completed-task workfiles, never a locked worktree's extra force.
     return ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null",
             "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", str(project),
-            "worktree", "remove", "--force", path]
+            "worktree", "remove", *(["--force"] if completed else []), path]
 
 
 def _retaining(project: Path, repository: dict, *, deadline=None) -> tuple[dict, list[str], dict]:
@@ -167,7 +167,8 @@ def snapshot(project: Path, repository: dict) -> dict:
     return result
 
 
-def _executor(project: Path, ref: str | None, tip: str | None, kind: str, context: dict | None, *, worktree_path=None) -> dict:
+def _executor(project: Path, ref: str | None, tip: str | None, kind: str, context: dict | None, *,
+              worktree_path=None, completed=False) -> dict:
     result = _unknown(("kind", "runtime", "version", "profile", "artifacts", "source_binding_sha256"),
                       "executor_binding_unavailable", operation="primitive_binding", kind="source_correspondence")
     result["kind"] = {"worktree": "orca_worktree_remove", "local_branch": "git_local_ref_delete",
@@ -189,7 +190,8 @@ def _executor(project: Path, ref: str | None, tip: str | None, kind: str, contex
         artifact = {"kind": "member", "sha256": hashed, "reference": str(path)}
         source = hashlib.sha256(archives._bytes(Path(__file__))).hexdigest()
         profile = WORKTREE_PROFILE if kind == "git_worktree" else PROFILE
-        argv = worktree_argv(project, worktree_path) if kind == "git_worktree" else local_argv(project, ref, tip)
+        argv = (worktree_argv(project, worktree_path, completed=completed) if kind == "git_worktree"
+                else local_argv(project, ref, tip))
         binding = digest({"profile": profile, "argv": argv, "artifact": artifact,
                           "source": source, "context": context})
         result.update(status="observed", version=version, profile=profile, artifacts=[artifact],
@@ -507,7 +509,7 @@ def _resource(project: Path, row: dict, context: dict | None) -> dict:
         if kind == "worktree" and not facts.get("complete"):
             raise archives.Unavailable("Current worktree identity is incomplete")
         stamp = _worktree_stamp(facts) if kind == "worktree" else None
-        if kind == "worktree" and row.get("delete_argv") != worktree_argv(project, str(path)):
+        if kind == "worktree" and row.get("delete_argv") != worktree_argv(project, str(path), completed=True):
             from .cleanup import _dirt
             dirty, unavailable = _dirt(path)
             if dirty or unavailable:
@@ -581,9 +583,12 @@ def _once(project: Path, row: dict, repository: dict, saved: dict, orca_reader) 
     ref, tip = resource["ref"], resource["tip"]
     storage = (observations.storage_once(project, ref, repository)[0]
                if kind == "local_branch" and ref else None)
-    primitive = ("git_worktree" if kind == "worktree"
-                 and row.get("delete_argv") == worktree_argv(project, identity.get("path")) else kind)
-    executor = _executor(project, ref, tip, primitive, context, worktree_path=identity.get("path"))
+    completed = (kind == "worktree" and row.get("delete_argv")
+                 == worktree_argv(project, identity.get("path"), completed=True))
+    primitive = ("git_worktree" if kind == "worktree" and (completed
+                 or row.get("delete_argv") == worktree_argv(project, identity.get("path"))) else kind)
+    executor = _executor(project, ref, tip, primitive, context, worktree_path=identity.get("path"),
+                         completed=completed)
     footprint = (_worktree_footprint(identity.get("git") or {}, context) if primitive == "git_worktree"
                  else _footprint(project, ref, tip, kind, storage, context))
     holders, holder_refs = _holders(project, ref, primitive, orca_reader, context) if saved["snapshot"] else (
@@ -896,9 +901,11 @@ def _finish(before: dict, after: dict, saved: dict, fresh: dict) -> dict:
                  and after["resource"]["status"] == after["support"]["status"] == "observed"
                  and after["reflog"]["status"] in {"present", "absent"})
     required = ["resource", "support"]
+    if after["executor"]["kind"] == "git_worktree_remove":
+        required += ["executor", "footprint"]
     if saved["snapshot"] or fresh["snapshot"]:
         required += ["executor", "footprint", "holders"]
-    missing = [code for key in required if after[key]["status"] != "observed"
+    missing = [code for key in required if after[key]["status"] != "observed" or after[key]["reasons"]
                for code in after[key]["reasons"]]
     stable = bool(inspected and not missing)
     changes = []

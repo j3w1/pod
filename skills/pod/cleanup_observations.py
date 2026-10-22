@@ -515,6 +515,10 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
         row["delete_argv"] = row["archive_argv"] = None
     if observe["kind"] in {"cache", "native"}:
         row.update(archives=[], archive_verified=False)
+    if selected is not None and observe["kind"] == "worktree" and row["delete_argv"] \
+            and row["delete_argv"][0] == "git":
+        cleanup._recheck_worker(project, objective, state, selected, ordinary["worker"],
+                                ordinary["worker"]["reuse_reason"], orca_reader, port)
     row["reasons"] = sorted(set(row["reasons"]))
     completion = (row["identity"].get("git") or {}).get("objective_completion")
     if completion is not None:

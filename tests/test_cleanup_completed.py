@@ -79,7 +79,7 @@ class CompletedCleanupTests(_CompletedFixture):
         self.assertIsNone(row["archive_argv"])
         self.assertIn(row["id"], result["standing_authorization"]["covers"])
         self.assertNotIn(row["id"], result["standing_authorization"]["asks"])
-        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child)))
+        self.assertEqual(row["delete_argv"], cleanup_stashes.worktree_argv(self.project, str(self.child), completed=True))
         self.assertIsNone(self.row(result, "local_branch")["delete_argv"])
         self.assertIn("reobserve", " ".join(self.row(result, "local_branch")["reasons"]))
         self.assertEqual(read(self.project, "objective"), before)
@@ -266,7 +266,7 @@ class CompletedRemainingRefTests(_CompletedFixture):
         self.unique()
         self.closed()
         self.tip = git(self.project, "rev-parse", self.ref)
-        subprocess.run(cleanup_stashes.worktree_argv(self.project, str(self.child)), capture_output=True, check=True)
+        subprocess.run(cleanup_stashes.worktree_argv(self.project, str(self.child), completed=True), capture_output=True, check=True)
         self.assertFalse(self.child.exists())
 
     def selected(self, **options):

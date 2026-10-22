@@ -241,6 +241,22 @@ def _placement_history(state: dict, selected: dict, paths: set[str], port, *,
     return history, holds
 
 
+def _recheck_worker(project: Path, objective: str, state: dict, selected: dict, previous: dict,
+                    reuse_reason, orca_reader, port) -> None:
+    """Keep the exact release and empty current placement true through the Git observation."""
+    placement = selected["recovery"]["placement_binding"]
+    current, reasons = _worker_facts(selected, state, port, reuse_reason)
+    history, holds = _placement_history(state, selected, {placement["path"]}, port,
+                                        selected_released=not reasons)
+    current["placement_history"] = history
+    _, unknown = _terminal_facts(Path(placement["path"]), state["admissions"],
+        orca_reader=orca_reader, native_port=port, require_empty=True,
+        expected_ref="refs/heads/" + placement["branch"],
+        expected_worktree=selected["native_binding"]["worktreeId"], expected_runtime=selected["runtime"])
+    if read(project, objective) != state or current != previous or reasons or holds or unknown:
+        raise PodError("cleanup_changed", "Worker release, placement or attachment changed during observation")
+
+
 def _disposable(path: str) -> bool:
     parts = Path(path).parts
     return ("__pycache__" in parts or path.endswith(".pyc")
@@ -265,7 +281,8 @@ def _dirt(path: Path) -> tuple[list[str], bool]:
     return sorted(set(changed))[:64], False
 
 
-def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port, require_empty=False, expected_ref=None) -> tuple[list[dict], bool]:
+def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port, require_empty=False,
+                    expected_ref=None, expected_worktree=None, expected_runtime=None) -> tuple[list[dict], bool]:
     selector = "path:" + str(path)
     try:
         shown = orca_reader(["worktree", "show", "--worktree", selector, "--json"])
@@ -288,7 +305,9 @@ def _terminal_facts(path: Path, admissions: dict, *, orca_reader, native_port, r
                 or worktree.get("isBare") is not False or native_git.get("isBare") is not False
                 or native_git.get("path") != str(path) or branch is None
                 or worktree.get("branch") not in {branch, expected_ref}
-                or native_git.get("branch") != worktree.get("branch")):
+                or native_git.get("branch") != worktree.get("branch")
+                or expected_worktree is not None and worktree["id"] != expected_worktree
+                or expected_runtime is not None and shown["runtime"] != expected_runtime):
             return [], True
     handles = [terminal.get("handle") for terminal in terminals if isinstance(terminal, dict)]
     if len(handles) != len(terminals) or any(not isinstance(handle, str) for handle in handles) or len(set(handles)) != len(handles):
@@ -763,16 +782,20 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         else:
             terminals, unknown_terminal = _terminal_facts(path, state["admissions"],
                                                             orca_reader=orca_reader, native_port=port,
-                                                            require_empty=completed, expected_ref=branch_ref)
+                                                            require_empty=completed or selected is not None,
+                                                            expected_ref=branch_ref,
+                                                            expected_worktree=(selected["native_binding"]["worktreeId"]
+                                                                               if selected else None),
+                                                            expected_runtime=selected["runtime"] if selected else None)
             dirty, status_unknown = _dirt(path)
             if unknown_terminal:
                 classification, reasons = "protected", ["a terminal here is active, user-owned, external, "
                                                         "held by another Dispatch or of unknown ownership"]
             elif status_unknown or stash_unknown:
                 classification, reasons = "protected", ["worktree status or stash read is uncertain"]
-            elif dirty or stash_present and not completed:
+            elif dirty or stash_present and not completed and selected is None:
                 classification, reasons = "unique", (["worktree has data: " + ", ".join(dirty[:8])] if dirty else [])
-                if stash_present and not completed:
+                if stash_present and not completed and selected is None:
                     reasons.append("repository stash is present")
             elif is_ancestor(project, tip, target) is not True and tip not in merged:
                 classification, reasons = "unique", ["branch has commits outside the observed target"]
@@ -787,7 +810,8 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                          ".bundle", ref] if classification == "unique" and ref else None)
         deletable = (classification == "integrated"
                      or classification == "unique" and (completed or archive_complete and not dirty and not stash_present))
-        if completed:
+        known_worker = selected is not None and not worker_holds and classification == "integrated"
+        if completed or known_worker:
             # One Git phase: no Orca fallback, branch-config cleanup or metadata removal.
             from .cleanup_stashes import worktree_argv
             archive_argv = None
@@ -795,7 +819,8 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                                    {"path": path_text, "branch": branch_ref, "tip": tip,
                                     "terminals": terminals, "shared_with": shared, "git": git_facts,
                                     **({"worker": worker_facts} if selected is not None else {})}, classification, reasons,
-                                   delete_argv=((worktree_argv(project, path_text) if completed else
+                                   delete_argv=((worktree_argv(project, path_text, completed=completed)
+                                                 if completed or known_worker else
                                                  ["orca", "worktree", "rm", "--worktree", "path:" + path_text, "--json"])
                                                 if deletable else None),
                                    archive_argv=archive_argv, archive_verified=archive_complete,
@@ -841,10 +866,11 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                 classification, reasons = "protected", reasons + ["current branch identity or checkout exclusion is unavailable"]
         observed_archives = archive_facts(ref, git_facts)
         verified = any(row["verified"] and row["covers_resource"] for row in observed_archives)
-        removed_with_worktree = bool(not completed and associated and any(row["delete_argv"] for row in associated))
+        removed_with_worktree = any((row["delete_argv"] or [])[:3] == ["orca", "worktree", "rm"]
+                                    for row in associated)
         deletable = (classification == "integrated" or classification == "unique" and (completed or verified
                      and not associated and not stash_present))
-        if completed and checked_out:
+        if not removed_with_worktree and checked_out:
             deletable = False
             reasons.append("remove the exact Git worktree first, then reobserve current checkout absence")
         from .cleanup_stashes import local_argv
@@ -926,6 +952,9 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                     or _remaining_local_ref(project, objective, fresh_state, ref, fresh_paths,
                                                                repository, orca_reader) != association):
                 raise PodError("cleanup_changed", "Current recorded branch association changed during observation")
+    if stash_observations and selected is not None and any(row["kind"] == "worktree" and row["delete_argv"]
+                                     and row["delete_argv"][0] == "git" for row in resources):
+        _recheck_worker(project, objective, state, selected, worker_facts, reuse_reason, orca_reader, port)
     plan_hash, fingerprints = _expect_change(expect, resources, observed_target)
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]

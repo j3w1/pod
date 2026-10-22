@@ -164,15 +164,26 @@ Terminal-less native inventories prove only their own current absence, never a
 privileged process scan or earlier exit/release. A present terminal with unknown
 needed-name/dependency facts holds; placement or branch difference alone proves none.
 
-The completed-task worktree path internally builds the same hardened Git prefix
-with `worktree remove --force EXACT_PATH`, under `git-worktree-remove/v1`. One force
+The worktree profile `git-worktree-remove/v1` recognizes two internally built forms
+with the same hardened Git prefix. A clean integrated exact worker, with its recorded
+report, fresh exact native settlement, positive release, exited liveness and empty
+current attachment inventory, uses `worktree remove EXACT_PATH` without force.
+Its native worktree/runtime must match the admission, and report/release/placement
+facts are rechecked through the observation. Unrelated stashes impose no extra hold;
+dirty, unmerged or otherwise unique ordinary work receives no such command.
+The completed-task default uses `worktree remove --force EXACT_PATH`. One force
 permits completed-task files; locked worktrees never receive a second force.
 Its footprint is the exact linked checkout/private administrative directory and
 qualified private refs, excluding common objects and stash retaining ref/log slots
 in both containment directions and through current physical coordinates. Common
 source branches survive this phase. Submodule, unsupported administrative, aliased,
-missing or changing effects hold. Ordinary Orca worktree removal remains opaque;
-completion cannot make that effect known or make a stash unrelated. Remote effects
+missing or changing effects hold, including with a verified empty stash. This Git
+phase leaves the common branch intact; fresh ordinary/worker observations after
+checkout absence retain their existing association holds. An open integration,
+reservation, reused or concurrently held placement, live/attached/role resource,
+default/target/shared branch or changed current identity remains protected.
+Other ordinary Orca worktree removal remains opaque; neither release nor
+completion can make that effect known or make a stash unrelated. Remote effects
 with unproved full footprints stay unknown when a stash is present.
 
 Complete terminal inventories and Git reference observations are bounded and fresh.
