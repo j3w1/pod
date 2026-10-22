@@ -198,8 +198,11 @@ names (`filter.<driver>.clean`, `.smudge` or `.process`) and, when any exist, th
 `filter` attribute of every tracked path, within the generic output bound, 4096-path
 query batches and one 30-second deadline. A driver that a tracked path selects holds
 the effect with the exact driver names; unreadable, malformed or over-budget facts hold
-with their reason. A configured driver that no tracked path selects, or an attribute
-naming an undefined driver, is inactive and holds nothing. The facts bind `expect` and
+with their reason. Because `check-attr` prints `set`, `unset` and `unspecified` both
+for those attribute states and for drivers literally named so, a configured driver
+with one of those names holds whenever a tracked path reports that text. A configured
+driver that no tracked path selects, or an attribute naming an undefined driver, is
+inactive and holds nothing. The facts bind `expect` and
 are read again before the response; a change refuses `cleanup_changed`. No helper is
 run to test it. The forced completed form and the local-ref form run no clean check or
 conversion, so attribute helpers are outside their path. Pod's general status

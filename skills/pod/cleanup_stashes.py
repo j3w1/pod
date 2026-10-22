@@ -93,8 +93,10 @@ def helper_facts(path: Path, *, deadline: float | None = None) -> dict:
                 raise archives.Unavailable("Filter attribute observation is out of order")
             hashed.update(name + b"\0" + value + b"\0")
             driver = value.decode("utf-8")
-            # unspecified/unset/set name no driver; an undefined driver runs nothing.
-            if driver not in {"unspecified", "unset", "set"} and driver in drivers:
+            # An undefined driver runs nothing. check-attr prints the same text for the
+            # unspecified/unset/set states and for a driver literally named so; when such a
+            # name is a configured driver the relevance is unproved, so it is applicable.
+            if driver in drivers:
                 applicable.add(driver)
     result.update(applicable=sorted(applicable), tracked_paths=len(tracked),
                   attributes_sha256=hashed.hexdigest())

@@ -1140,6 +1140,18 @@ class CleanupWorkerTests(KernelCase):
                       ordinary["reasons"])
         self.assertTrue(self.child.is_dir())
 
+    def test_configured_driver_named_like_an_attribute_state_holds_the_unforced_worker(self):
+        tip = git(self.project, "rev-parse", "refs/heads/worker")
+        marker = self.filter_driver("set")
+        self.attributes("* filter\n")  # check-attr prints "set" for the boolean state too
+        row = self.resource(self.selected_entry(), "worktree")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("Git's clean check in this unforced removal could run configured attribute filter helpers: set",
+                      row["reasons"])
+        self.assertTrue(self.child.is_dir())
+        self.assertEqual(git(self.project, "rev-parse", "refs/heads/worker"), tip)
+        self.assertFalse(marker.exists())
+
     def test_inactive_unrelated_filter_helpers_do_not_veto_the_unforced_worker(self):
         self.stash()
         before = self.stash_state()

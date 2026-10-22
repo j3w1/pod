@@ -254,6 +254,33 @@ class StashSourceTests(unittest.TestCase):
         attributes.write_text("*.none filter=unused\n")
         self.assertEqual(stashes.helper_facts(case.child)["applicable"], [])
 
+    def test_configured_drivers_spelled_like_attribute_states_are_never_inactive(self):
+        case = self.source.case
+        marker = case.root / "sentinel-driver-marker"
+        attributes = self.source.common / "info" / "attributes"
+        self.preserve(attributes)
+        attributes.parent.mkdir(exist_ok=True)
+        def facts(text, *drivers):
+            for driver in drivers:
+                plans.git(case.project, "config", f"filter.{driver}.clean", f"sh -c 'echo ran >> {marker}; cat'")
+            try:
+                attributes.write_text(text)
+                return stashes.helper_facts(case.child)["applicable"]
+            finally:
+                for driver in drivers:
+                    plans.git(case.project, "config", "--remove-section", "filter." + driver)
+        for name in ("set", "unset", "unspecified"):
+            with self.subTest(literal=name):
+                self.assertEqual(facts(f"* filter={name}\n", name), [name])
+        # check-attr prints the same text for the attribute states themselves.
+        self.assertEqual(facts("* filter\n", "set"), ["set"])
+        self.assertEqual(facts("* -filter\n", "unset"), ["unset"])
+        self.assertEqual(facts("", "unspecified"), ["unspecified"])
+        # Undefined sentinel spellings and ordinary unselected drivers stay inactive.
+        self.assertEqual(facts("* filter=set\n", "unused"), [])
+        self.assertEqual(facts("* filter\n*.none filter=unused\n", "unused"), [])
+        self.assertFalse(marker.exists())
+
     def test_shared_base_without_complete_effect_binding_is_unknown(self):
         record = self.complete_material()
         self.assertEqual({row["relation"] for row in record["relations"]}, {"unrelated"})
