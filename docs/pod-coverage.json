@@ -1354,7 +1354,12 @@
       ],
       "offline_test": [
         "tests.test_orca_adapter.OrcaAdapterTests.test_three_exact_worker_argv_shapes",
-        "tests.test_kernel_boundaries.CapacityAndReviewTests.test_objective_acceptance_holds_known_route_mismatch"
+        "tests.test_kernel_boundaries.CapacityAndReviewTests.test_objective_acceptance_holds_known_route_mismatch",
+        "tests.test_route_settlements.MatchingReportTests.test_legacy_flag_remains_held_until_fresh_report",
+        "tests.test_route_settlements.MatchingReportTests.test_legacy_consumed_report_alone_does_not_derive_a_settlement",
+        "tests.test_route_settlements.MatchingReportTests.test_new_mismatch_after_settlement_starts_another_occurrence",
+        "tests.test_route_settlements.MatchingReportTests.test_matching_consumption_releases_governor_and_acceptance_without_erasing_flag",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unknown_effective_route_keeps_its_independent_hold_after_lead_settlement"
       ],
       "status": "NOT_RUN"
     },
@@ -4578,7 +4583,35 @@
         "tests.test_record_compaction.RecordCompactionTests.test_unchanged_detection_has_guidance_without_an_owner_question_or_template",
         "tests.test_record_compaction.RecordCompactionTests.test_over_limit_unchanged_detection_names_sections_and_settlement_routes",
         "tests.test_record_compaction.RecordCompactionTests.test_detection_counts_receipt_overhead_before_asking_the_owner",
-        "tests.test_record_compaction.RecordCompactionTests.test_detection_receipt_allowance_covers_the_largest_owner_instruction"
+        "tests.test_record_compaction.RecordCompactionTests.test_detection_receipt_allowance_covers_the_largest_owner_instruction",
+        "tests.test_compaction_requests.CompactionRequestTests.test_coordinator_compacts_over_limit_without_a_decision",
+        "tests.test_compaction_requests.CompactionRequestTests.test_project_lead_compacts_when_the_coordinator_is_live",
+        "tests.test_compaction_requests.CompactionRequestTests.test_project_lead_compacts_without_a_live_coordinator",
+        "tests.test_compaction_requests.CompactionRequestTests.test_detection_offers_a_coordinator_request_and_names_the_lead",
+        "tests.test_compaction_requests.CompactionRequestTests.test_wrong_coordinator_and_missing_lead_relay_refuse",
+        "tests.test_compaction_requests.CompactionRequestTests.test_request_kind_and_authority_fields_are_discriminated",
+        "tests.test_compaction_requests.CompactionRequestTests.test_reason_and_coordinator_identity_bounds_refuse",
+        "tests.test_compaction_requests.CompactionRequestTests.test_lead_relay_is_exact_bounded_utf8_text",
+        "tests.test_compaction_requests.CompactionRequestTests.test_wrong_repository_or_objective_refuses",
+        "tests.test_compaction_requests.CompactionRequestTests.test_stale_record_and_revision_refuse",
+        "tests.test_compaction_requests.CompactionRequestTests.test_stale_physical_and_logical_digests_refuse",
+        "tests.test_compaction_requests.CompactionRequestTests.test_malformed_facts_and_mixed_input_forms_refuse",
+        "tests.test_compaction_requests.CompactionRequestTests.test_coordinator_and_lead_replay_are_idempotent",
+        "tests.test_compaction_requests.CompactionRequestTests.test_replay_does_not_ignore_request_changes_or_later_logical_writes",
+        "tests.test_compaction_requests.CompactionRequestTests.test_mixed_legacy_and_new_receipts_survive_later_writes",
+        "tests.test_compaction_requests.CompactionRequestTests.test_malformed_new_authority_or_receipt_binding_refuses_hydration",
+        "tests.test_compaction_requests.CompactionRequestTests.test_detection_allowance_covers_maximum_escaped_lead_authority",
+        "tests.test_compaction_requests.CompactionRequestTests.test_detection_allowance_covers_maximum_escaped_coordinator_identity",
+        "tests.test_compaction_requests.CompactionRequestTests.test_receipt_allowance_includes_a_new_fragment_reference",
+        "tests.test_compaction_requests.CompactionRequestTests.test_request_rereads_physical_facts_under_the_objective_lock",
+        "tests.test_compaction_requests.CompactionRequestTests.test_request_replans_when_governor_protections_change",
+        "tests.test_compaction_requests.CompactionRequestTests.test_protected_admissions_and_selected_receipts_stay_inline",
+        "tests.test_compaction_requests.CompactionRequestTests.test_no_savings_adds_no_new_receipt_or_chunk",
+        "tests.test_compaction_requests.CompactionRequestTests.test_impossible_fit_with_a_request_publishes_nothing",
+        "tests.test_compaction_requests.CompactionRequestTests.test_evidence_closed_record_refuses_before_lock_or_publication",
+        "tests.test_compaction_requests.CompactionRequestTests.test_continued_record_refuses_both_request_roles",
+        "tests.test_compaction_requests.CompactionRequestTests.test_historically_retired_record_refuses_both_request_roles",
+        "tests.test_compaction_requests.CompactionRequestTests.test_ordinary_closed_record_still_allows_only_physical_maintenance"
       ],
       "status": "NOT_RUN"
     },
@@ -4600,7 +4633,10 @@
         "tests.test_history_boundaries.HistoryScanTests.test_capacity_thresholds_and_largest_sections_are_additive_observations",
         "tests.test_history_boundaries.PublicHistoryProjectionTests.test_status_by_run_and_objective_preserve_every_existing_key",
         "tests.test_history_boundaries.PublicHistoryProjectionTests.test_governor_map_and_checkpoint_rewrite_hydrated_history",
-        "tests.test_history_boundaries.HistoryScanTests.test_warning_before_trigger_describes_compaction_conditionally"
+        "tests.test_history_boundaries.HistoryScanTests.test_warning_before_trigger_describes_compaction_conditionally",
+        "tests.test_compaction_requests.OverLimitGuidanceTests.test_ordinary_read_over_limit_names_the_request_step",
+        "tests.test_compaction_requests.OverLimitGuidanceTests.test_above_the_maintenance_bound_names_lead_preservation_only",
+        "tests.test_completed_closure.CompletionGuidanceTests.test_capacity_and_governance_unavailable_name_the_lead_action"
       ],
       "status": "NOT_RUN"
     },
@@ -4701,7 +4737,9 @@
         "tests.test_retirement_capacity.RetirementCapacityTests.test_full_unsettled_record_uses_entry_pointer_and_preserves_every_guarantee",
         "tests.test_retirement_capacity.RetirementCapacityTests.test_pointer_impossible_fit_preserves_context_journal_and_sidecars",
         "tests.test_retirement_capacity.RetirementCapacityTests.test_small_record_keeps_inline_entry_and_maintenance_refuses_frozen_record",
-        "tests.test_retirement_capacity.RetirementCapacityTests.test_over_limit_record_requires_explicit_maintenance_then_retires"
+        "tests.test_retirement_capacity.RetirementCapacityTests.test_over_limit_record_requires_explicit_maintenance_then_retires",
+        "tests.test_compaction_requests.CompactionRequestTests.test_coordinator_compacts_over_limit_without_a_decision",
+        "tests.test_compaction_requests.CompactionRequestTests.test_project_lead_compacts_without_a_live_coordinator"
       ],
       "status": "NOT_RUN"
     },
@@ -4846,10 +4884,17 @@
         "tests.test_worker_tab_endings.RetiredTabTests.test_discarded_user_owned_retired_record_names_owner_decision",
         "tests.test_worker_tab_endings.RetiredTabTests.test_unreported_external_retired_record_names_owner_decision",
         "tests.test_worker_tab_endings.RetiredTabTests.test_discarded_external_retired_record_names_owner_decision",
-        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_user_owned_route_mismatch_names_owner_decision_before_and_after_discard",
-        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_external_route_mismatch_names_owner_decision_before_and_after_discard",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_user_owned_route_mismatch_names_lead_before_and_after_discard",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_external_route_mismatch_names_lead_before_and_after_discard",
         "tests.test_worker_tab_endings.RouteMismatchTabTests.test_start_receipt_only_mismatch_accepts_report_and_supplies_close",
-        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_discarded_start_receipt_only_mismatch_accepts_report_and_supplies_close"
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_discarded_start_receipt_only_mismatch_accepts_report_and_supplies_close",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_review_tab_keeps_corrections_on_open_and_ended_records",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_investigation_tab_keeps_corrections_on_open_and_ended_records",
+        "tests.test_route_settlements.RouteWordingTests.test_every_route_mismatch_surface_names_lead_exact_step_and_no_owner",
+        "tests.test_route_settlements.CapacityGuidanceTests.test_capacity_referent_and_next_action_name_the_same_held_admission",
+        "tests.test_route_settlements.RenewalGuidanceTests.test_route_held_implementation_names_disposition_before_route_settlement",
+        "tests.test_route_settlements.RenewalGuidanceTests.test_matching_report_still_needs_implementation_disposition_before_renewal",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_closed_route_hold_status_names_the_lead_and_preserves_the_hold"
       ],
       "status": "NOT_RUN"
     },
@@ -4909,7 +4954,9 @@
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
-        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_refuses_every_later_report_before_native_reads",
+        "tests.test_route_settlements.MatchingReportTests.test_matching_consumption_releases_governor_and_acceptance_without_erasing_flag"
       ],
       "status": "NOT_RUN"
     },
@@ -5082,7 +5129,9 @@
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_already_closed_closing_report_keeps_genuine_0150_route_mismatch",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_discard_then_close_keeps_genuine_0150_acceptance_route_hold",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
-        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_refuses_every_later_report_before_native_reads",
+        "tests.test_route_settlements.MatchingReportTests.test_matching_consumption_releases_governor_and_acceptance_without_erasing_flag"
       ],
       "status": "NOT_RUN"
     },
@@ -5131,7 +5180,9 @@
         "tests.test_worker_tabs.ClosureTests.test_continuity_difference_is_not_an_unreadable_tab",
         "tests.test_worker_tabs.ClosureTests.test_closing_continuity_ambiguity_keeps_its_owner_decision_route",
         "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
-        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind"
+        "tests.test_request_contract_compatibility.RefusalCompatibilityTests.test_runtime_changed_malformed_closing_report_keeps_genuine_0150_route_mismatch_rebind",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_refuses_every_later_report_before_native_reads",
+        "tests.test_route_settlements.MatchingReportTests.test_matching_consumption_releases_governor_and_acceptance_without_erasing_flag"
       ],
       "status": "NOT_RUN"
     },
@@ -7276,7 +7327,8 @@
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_unaccounted_current_and_unsettled_results_stay_inline",
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_active_failures_and_unknown_or_mismatched_routes_stay_inline",
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_review_and_investigation_still_require_success",
-        "tests.test_history_outcomes.ImplementationOutcomeTests.test_native_governor_and_ambiguous_joins_preserve_vetoes"
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_native_governor_and_ambiguous_joins_preserve_vetoes",
+        "tests.test_route_settlements.MatchingReportTests.test_settlement_preserves_history_movement_guards"
       ],
       "status": "NOT_RUN"
     },
@@ -7558,7 +7610,16 @@
         "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_its_reservation_and_renewal_hold",
         "tests.test_records_refused_reports.RefusedReportTests.test_failed_without_report_names_consumption_and_keeps_renewal_blocked",
         "tests.test_records_refused_reports.RefusedReportTests.test_sibling_states_never_release_a_hold_without_consumption_or_disposition",
-        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_the_reserved_checkpoint_receipt"
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_the_reserved_checkpoint_receipt",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_releases_reservations_and_keeps_review_incomplete",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_and_renewal_commit_together",
+        "tests.test_route_settlements.ReviewDiscardTests.test_invalid_discard_cannot_release_a_same_write_renewal",
+        "tests.test_route_settlements.ReviewDiscardTests.test_known_required_findings_remain_ordinary_corrections_after_discard_and_renewal",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_refuses_every_later_report_before_native_reads",
+        "tests.test_route_settlements.ReviewDiscardTests.test_investigation_discard_is_terminal_without_supplying_a_report",
+        "tests.test_route_settlements.ReviewDiscardTests.test_review_requires_corrections_list_and_cannot_accept_or_discard_live_work",
+        "tests.test_route_settlements.ReviewDiscardTests.test_consumed_review_refuses_terminal_discard_even_after_another_mismatch",
+        "tests.test_route_settlements.CapacityGuidanceTests.test_capacity_referent_and_next_action_name_the_same_held_admission"
       ],
       "status": "NOT_RUN"
     },
@@ -7642,7 +7703,17 @@
         "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
         "tests.test_records_corrections.InvestigationCapacityTests.test_full_ordinary_history_never_allows_investigation_discard",
-        "tests.test_records_refused_reports.RefusedReportTests.test_consumable_review_keeps_its_slot_and_records_its_finding"
+        "tests.test_records_refused_reports.RefusedReportTests.test_consumable_review_keeps_its_slot_and_records_its_finding",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_releases_reservations_and_keeps_review_incomplete",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_and_renewal_commit_together",
+        "tests.test_route_settlements.ReviewDiscardTests.test_invalid_discard_cannot_release_a_same_write_renewal",
+        "tests.test_route_settlements.ReviewDiscardTests.test_known_required_findings_remain_ordinary_corrections_after_discard_and_renewal",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_refuses_every_later_report_before_native_reads",
+        "tests.test_route_settlements.ReviewDiscardTests.test_investigation_discard_is_terminal_without_supplying_a_report",
+        "tests.test_route_settlements.ReviewDiscardTests.test_review_requires_corrections_list_and_cannot_accept_or_discard_live_work",
+        "tests.test_route_settlements.ReviewDiscardTests.test_consumed_review_refuses_terminal_discard_even_after_another_mismatch",
+        "tests.test_route_settlements.RenewalGuidanceTests.test_route_held_implementation_names_disposition_before_route_settlement",
+        "tests.test_route_settlements.RenewalGuidanceTests.test_matching_report_still_needs_implementation_disposition_before_renewal"
       ],
       "status": "NOT_RUN"
     },
@@ -8133,6 +8204,197 @@
         "tests.test_discovery_bound.BoundTests.test_denied_ancestor_git_marker_does_not_prove_a_non_repository",
         "tests.test_discovery_bound.BoundTests.test_in_memory_inventory_preserves_control_characters_in_worktree_paths",
         "tests.test_discovery_bound.BoundTests.test_unreadable_evidence_closure_lists_unknown_not_available"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A538",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.MatchingReportTests.test_legacy_flag_remains_held_until_fresh_report",
+        "tests.test_route_settlements.MatchingReportTests.test_legacy_consumed_report_alone_does_not_derive_a_settlement",
+        "tests.test_route_settlements.MatchingReportTests.test_new_mismatch_after_settlement_starts_another_occurrence",
+        "tests.test_route_settlements.MatchingReportTests.test_matching_consumption_releases_governor_and_acceptance_without_erasing_flag",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unknown_effective_route_keeps_its_independent_hold_after_lead_settlement"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A539",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.MatchingReportTests.test_matching_consumption_releases_governor_and_acceptance_without_erasing_flag",
+        "tests.test_route_settlements.MatchingReportTests.test_identical_replay_persists_settlement_before_no_write_return",
+        "tests.test_route_settlements.ReviewDiscardTests.test_identical_triage_replay_settles_before_its_no_write_return",
+        "tests.test_route_settlements.MatchingReportTests.test_failed_matching_report_settles_route_without_passing_work",
+        "tests.test_route_settlements.MatchingReportTests.test_matching_a_wrong_recorded_route_never_bypasses_the_admitted_request",
+        "tests.test_route_settlements.MatchingReportTests.test_refused_report_map_does_not_settle_the_route",
+        "tests.test_route_settlements.MatchingReportTests.test_record_size_refusal_publishes_no_settlement_or_report"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A540",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.ExplicitSettlementTests.test_redone_releases_only_after_successful_integrated_exact_coverage",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_redone_resolves_both_served_sets_through_current_renewal_tips",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_partial_coverage_cannot_settle_a_whole_attempt",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_failed_replacement_cannot_settle",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_replacement_on_another_admitted_route_cannot_settle",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_a_changed_obligation_definition_needs_the_lead_basis",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_changed_assignment_boundary_needs_the_lead_basis",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_redone_rejects_self_and_earlier_references",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_report_accompanying_map_can_settle_a_different_admission",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_matching_replay_and_redone_can_settle_both_occurrences_in_one_report_write"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A541",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.ExplicitSettlementTests.test_lead_accept_needs_integration_and_releases_without_changing_observations",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_lead_discard_releases_an_unreported_implementation_only_with_disposition",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_git_result_offers_only_discard_or_redone_lead_steps",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_result_without_git_base_offers_accept_by_attestation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A542",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_releases_reservations_and_keeps_review_incomplete",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_and_renewal_commit_together",
+        "tests.test_route_settlements.ReviewDiscardTests.test_invalid_discard_cannot_release_a_same_write_renewal",
+        "tests.test_route_settlements.ReviewDiscardTests.test_known_required_findings_remain_ordinary_corrections_after_discard_and_renewal",
+        "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_refuses_every_later_report_before_native_reads",
+        "tests.test_route_settlements.ReviewDiscardTests.test_investigation_discard_is_terminal_without_supplying_a_report",
+        "tests.test_route_settlements.ReviewDiscardTests.test_review_requires_corrections_list_and_cannot_accept_or_discard_live_work",
+        "tests.test_route_settlements.ReviewDiscardTests.test_consumed_review_refuses_terminal_discard_even_after_another_mismatch"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A543",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.ReviewDiscardTests.test_lead_accepts_a_later_review_mismatch_after_rebind_without_replaying_proof",
+        "tests.test_route_settlements.ReviewDiscardTests.test_lead_accepts_consumed_investigation_route_evidence_without_inventing_success",
+        "tests.test_route_settlements.ReviewDiscardTests.test_consumed_review_refuses_terminal_discard_even_after_another_mismatch"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A544",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.ExplicitSettlementTests.test_a_refused_multi_settlement_write_settles_nothing",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_map_refusal_precedes_settlement_validation",
+        "tests.test_route_settlements.MatchingReportTests.test_record_size_refusal_publishes_no_settlement_or_report",
+        "tests.test_route_settlements.MatchingReportTests.test_refused_report_map_does_not_settle_the_route",
+        "tests.test_route_settlements.ReviewDiscardTests.test_invalid_discard_cannot_release_a_same_write_renewal",
+        "tests.test_route_settlements.SettlementReadTests.test_closed_map_refuses_settlement_even_with_reopen_authority",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_closed_route_hold_status_names_the_lead_and_preserves_the_hold",
+        "tests.test_route_settlements.SettlementReadTests.test_runtime_rebind_keeps_settlement_and_consumed_report_identity"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A545",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.SettlementReadTests.test_hydration_refuses_arbitrary_or_changed_settlement_records",
+        "tests.test_route_settlements.SettlementReadTests.test_settlement_lifetime_has_no_sixteen_entry_cap_and_projection_stays_bounded",
+        "tests.test_route_settlements.MatchingReportTests.test_settlement_preserves_history_movement_guards",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unknown_effective_route_keeps_its_independent_hold_after_lead_settlement"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A546",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "live_native",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.RouteWordingTests.test_every_route_mismatch_surface_names_lead_exact_step_and_no_owner",
+        "tests.test_route_settlements.CapacityGuidanceTests.test_capacity_referent_and_next_action_name_the_same_held_admission",
+        "tests.test_route_settlements.RenewalGuidanceTests.test_route_held_implementation_names_disposition_before_route_settlement",
+        "tests.test_route_settlements.RenewalGuidanceTests.test_matching_report_still_needs_implementation_disposition_before_renewal",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_closed_route_hold_status_names_the_lead_and_preserves_the_hold",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_git_result_offers_only_discard_or_redone_lead_steps",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_result_without_git_base_offers_accept_by_attestation",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_review_tab_keeps_corrections_on_open_and_ended_records",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_investigation_tab_keeps_corrections_on_open_and_ended_records"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A547",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_compaction_requests.OverLimitGuidanceTests.test_ordinary_read_over_limit_names_the_request_step",
+        "tests.test_compaction_requests.OverLimitGuidanceTests.test_above_the_maintenance_bound_names_lead_preservation_only",
+        "tests.test_completed_closure.CompletionGuidanceTests.test_capacity_and_governance_unavailable_name_the_lead_action"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A548",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_route_settlements.SettlementReadTests.test_internal_contract_exposes_bounded_settlement_wire",
+        "tests.test_route_settlements.SettlementReadTests.test_admission_settlement_refusal_names_the_record",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_input_bounds_and_exact_basis_shapes_refuse_atomically",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_null_settlements_are_not_a_list",
+        "tests.test_route_settlements.ReviewDiscardTests.test_review_requires_corrections_list_and_cannot_accept_or_discard_live_work",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_a_refused_multi_settlement_write_settles_nothing"
       ],
       "status": "NOT_RUN"
     }

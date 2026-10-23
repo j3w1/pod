@@ -114,6 +114,8 @@ When a lost objective is not proved delivered, it stays open as a task for the p
 
 Lost worker-start replies retain the same Orca request for reconciliation. A known effect-free refusal is deferred; an uncertain response remains unresolved until exact native readback. A provider safety refusal never triggers a same-Task model switch. See [installation troubleshooting](docs/installation.md) for PATH, duplicate skills, and interrupted installs.
 
+A recorded worker route mismatch holds the objective until a matching report, a qualifying replacement or a recorded project-lead decision settles it. Its history stays visible, and status names the lead's supported next step. See [route settlement](docs/spec/orca.md#r160--settle-each-recorded-route-mismatch-occurrence) for the conditions.
+
 ## What's inside
 
 - One `skills/pod` tree serves as the skill and importable Python package.

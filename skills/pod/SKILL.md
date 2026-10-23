@@ -55,11 +55,11 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - SEAL authoring/revision: [template](references/seal-template.md).
 - PES authoring/revision: [template](references/pes-template.md).
 - EEL authoring/revision: [template](references/eel-template.md).
-- Map/worktree/packets, row renewal or delegation: [planning](references/planning.md).
+- Map/worktree/packets, row renewal, route settlement or delegation: [planning](references/planning.md).
 - First admission, same-Task retry or supervision: [Orca](references/orca-boundary.md).
 - Starting, claiming, continuing or resuming an objective, admitting a worker, accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
 - Any route choice: [models](references/models.md).
-- Failure/resume/reload, a lost coordinator or stranded delivery: [recovery](references/recovery.md).
+- Failure/resume/reload, an over-limit record, a lost coordinator or stranded delivery: [recovery](references/recovery.md).
 - Proof/review/REUSE: [verification](references/verification.md).
 - Delivery/Git/CI/deployment, or yolo mode on or off: [Governor](references/governor.md).
 - Before cleanup, a sweep or worktree/branch deletion; after worker release or when deciding immediate worktree reuse: [cleanup](references/cleanup.md).

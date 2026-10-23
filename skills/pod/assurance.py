@@ -334,16 +334,13 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
 
 
 def pending_serving(ob: dict, ctx: dict) -> list[str]:
-    """Keep result reservations until consumption or disposition.
-
-    A recorded route mismatch does not release them: Pod still accepts a report
-    whose worker-show route matches, and the Governor already holds a mismatched
-    objective for its route decision.
-    """
+    """Keep reservations until consumption, disposition or validated terminal route discard."""
     from .obligations import _admissions, _outstanding
+    from .util import route_discarded
     outstanding = set(_outstanding(ctx))
     return [key for key, row in _admissions(ctx).items()
             if ob["id"] in (row.get("serves") or []) and row.get("state") != "deferred"
+            and not route_discarded(row, pending=ctx.get("pending_route_settlements", ()))
             and row.get("disposition") is None and (key in outstanding or row.get("report") is None)]
 
 
@@ -362,7 +359,9 @@ def reserve_capacity(ob: dict, ctx: dict, *, seq: int):
 def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int, proposed: int, prior=None, reserved=0):
     """The same accepted-state renewal route for admission, report and checkpoint."""
     from .obligations import MAX_RECEIPTS, MAX_FINDINGS, refuse
+    from .util import route_hold, route_next_action
     pending = pending_serving(ob, ctx)
+    route_held = next((ctx["admissions"][key] for key in pending if route_hold(ctx["admissions"][key])), None)
     replacement = {"id": ob["id"], "as": "<fresh-id>"}
     rows = (ctx.get("accepted_map") or ctx.get("map_state") or {}).get("obligations", [])
     basis = next((row for row in rows if row["id"] == ob["id"]), prior if prior is not None else ob)
@@ -381,8 +380,9 @@ def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int
                   obligation=ob["id"], retained=retained, proposed=proposed,
                   reserved=reserved,
                   limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
-                  **({"admission": pending[0]} if pending else {}),
-                  next_action=(f"settle and consume the report for admission {pending[0]} before retrying this write"
+                  **({"admission": route_held["admission_id"] if route_held is not None else pending[0]} if pending else {}),
+                  next_action=(route_next_action(route_held) if route_held is not None else
+                               f"settle and consume the report for admission {pending[0]} before retrying this write"
                                if pending else {"seq": seq, "renew": [replacement]}))
 
 

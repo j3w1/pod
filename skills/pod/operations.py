@@ -594,7 +594,9 @@ def _bind(project: Path, objective: str, *, owner: str, admission_id: str,
         if inherited is not None:
             row["effective_evidence"]["inherited"] = inherited
         row["route_decision"]["effective"] = effective
-        row["route_decision"]["route_mismatch"] = mismatch
+        if mismatch:
+            from .util import flag_route_mismatch
+            flag_route_mismatch(row)
         row["route_decision"]["effective_unknown"] = any(
             effective[key] == "unknown" for key in ("agent", "model", "effort"))
     # The receipt and worker read were checked at this runtime; a rebind inside the write's

@@ -14,6 +14,6 @@ Task titles and the names of tabs and worktrees, with their readback, are in the
 
 Report Task/Dispatch, worktree, terminal/tab and native placement warnings. Background/discoverability observations prove neither rendering nor focus; those need UI evidence. Diagnose missing tabs with the existing worker. Missing attention proves nothing; invent no visibility flag. Focus needs supported behavior and user request. Retain protected/uncertain resources.
 
-Catalog limits prove no effective context. Requested settings are not effective proof: missing model/effort stays unknown; mismatch blocks acceptance. Orca has no per-worker context selector; omit its flag. If context is inadequate, narrow/decompose. Missing launch capability blocks delegation while safe direct work remains available.
+Catalog limits prove no effective context. Requested settings are not effective proof: missing model/effort stays unknown; an unsettled route mismatch blocks acceptance. Use the router's route-settlement guidance for the project lead's supported step. Orca has no per-worker context selector; omit its flag. If context is inadequate, narrow/decompose. Missing launch capability blocks delegation while safe direct work remains available.
 
 Do not mirror native account state, write provider settings, automate provider prompts, invent receipt fields or wrap direct APIs. Supported Orca advisory dismissal, recognized Codex update opt-out and the worker-tab guidance's guarded session rename remain bounded exceptions; use recovery guidance for the update opt-out.

@@ -13,7 +13,8 @@ from .contracts import TABLE, describe, input_record, fields, required
 from .errors import FieldRefusal, PodError
 from .records import (acceptance, integration_observation, packet, report, source_identity,
                       verify_sources)
-from .util import bounded_json, bounded_stdin_json, exact, route_flags
+from .util import (bounded_json, bounded_stdin_json, exact, route_flags, route_hold,
+                   flag_route_mismatch, route_discarded, route_next_action, route_settlement_projection)
 from .context import execution_brief
 
 
@@ -167,9 +168,10 @@ def _prepare_report(request, state, admission, shown, *, closing):
         update(Path(request["project"]), request["objective"],
                **({"state": state} if closing else {}),
                owner=admission["owner"], admission_id=admission["admission_id"],
-               update=lambda row: row["route_decision"].update(route_mismatch=True),
+               update=flag_route_mismatch,
                expected_runtime=admission["runtime"])
-        raise PodError("route_mismatch", "Native effective route changed after start")
+        raise PodError("route_mismatch", "Native effective route changed after start",
+                       {"next_action": route_next_action(admission)})
     if not closing:
         if route_refresh:
             def refresh(row):
@@ -199,6 +201,9 @@ def _op_report(request: dict) -> dict:
     from .handoff import refuse_nonowner
     refuse_nonowner(Path(request["project"]), request["objective"], state, (state or {}).get("owner"))
     admission = state.get("admissions", {}).get(request["admission_id"]) if state else None
+    if admission is not None and route_discarded(admission):
+        raise PodError("route_settled_discarded", "Project lead: this admission was terminally discarded through route_settlements; use a fresh admission for further proof",
+                       {"admission": admission["admission_id"]})
     if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
             or admission.get("packet_id") != request["packet"].get("packet_id")):
         raise PodError("report_attempt_unverified", "No exact native admission binding")
@@ -312,12 +317,12 @@ def _op_acceptance(request: dict) -> dict:
         view = kernel_view(Path(request["project"]), request["objective"], candidate=request["candidate"])
         arguments["label"] = view["label"]
         arguments["route_holds"] = [
-            {"admission": key, "reason": "route_mismatch" if flags[0]
+            {"admission": key, "reason": "route_mismatch" if route_hold(row)
              else "effective_unknown"}
             for key, row in view["state"]["admissions"].items()
             if row.get("state") in ("bound", "closed")
             for flags in [route_flags(row)]
-            if flags[0] or flags[1]
+            if route_hold(row) or flags[1]
         ] if view["state"] is not None else []
     objective_source = arguments.pop("objective_source", None)
     if objective_source is not None:
@@ -573,7 +578,7 @@ def _op_admission(request: dict) -> dict:
     from .display import admission_output
     row = result["admission"]
     current = read(Path(request["project"]), request["objective"])
-    return {**result, **admission_output(current, row)}
+    return {**result, **admission_output(current, row), **route_settlement_projection([row])}
 
 
 def _op_runtime_continuity(request: dict) -> dict:
@@ -624,9 +629,10 @@ def _op_historical_retirement(request: dict) -> dict:
 
 
 def _op_record_compaction(request: dict) -> dict:
-    exact(request, {"project", "objective", "decision"}, {"project", "objective"}, name="request")
+    exact(request, {"project", "objective", "request", "decision"}, {"project", "objective"}, name="request")
     from .history import record_compaction
-    return record_compaction(Path(request["project"]), request["objective"], decision=request.get("decision"))
+    return record_compaction(Path(request["project"]), request["objective"],
+                             request=request.get("request"), decision=request.get("decision"))
 
 
 def _op_cleanup_plan(request: dict) -> dict:
@@ -842,6 +848,10 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
         acknowledgement = ({**result, "admission": admission} if operation == "admission"
                            else {"status": "recorded", "admission": admission})
         acknowledgement["decision"] = row["route_decision"]
+        acknowledgement.update(route_settlement_projection([row]))
+        acknowledgement["route_hold"] = route_hold(row)
+        if route_hold(row):
+            acknowledgement["next_action"] = route_next_action(row)
     elif operation == "constraint":
         identity = request["value"]["id"] if request["action"] == "add" else request["id"]
         acknowledgement = {"status": "recorded", "constraint": next(
@@ -892,6 +902,9 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
             acknowledgement["next_safe_action"] = checkpoint["next_safe_action"]
     acknowledgement["objective"] = request["objective"]
     if operation in ("checkpoint", "report"):
+        for key in ("route_settlements", "route_settlements_truncated", "route_settlement_authority"):
+            if key in result:
+                acknowledgement[key] = result[key]
         from .standing import projection as standing_projection
         acknowledgement["standing_authorization"] = (result.get("standing_authorization")
             or (result.get("report") or {}).get("standing_authorization") or standing_projection({}))

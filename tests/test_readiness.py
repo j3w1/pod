@@ -401,6 +401,9 @@ class ProjectionTests(unittest.TestCase):
 class CompatibilityTests(ReadinessCase):
     """Every prior field keeps its exact value; readiness and R120 inventories are additive."""
 
+    ROUTE_FIELDS = ("route_holds", "route_holds_truncated", "route_settlements", "route_settlements_truncated",
+                    "route_settlement_authority")
+
     def compare(self, caller, objective="objective", changed=()):
         if caller is None:
             os.environ.pop("ORCA_TERMINAL_HANDLE", None)
@@ -420,10 +423,11 @@ class CompatibilityTests(ReadinessCase):
                 os.chdir(old)
             results.append((json.loads(json.dumps(result)), output.getvalue()))
         (expected, expected_text), (observed, observed_text) = results
-        self.assertTrue(set(NEW_FIELDS) & set(observed) and not set(NEW_FIELDS) & set(expected))
+        self.assertTrue(set(NEW_FIELDS + self.ROUTE_FIELDS) & set(observed)
+                        and not set(NEW_FIELDS + self.ROUTE_FIELDS) & set(expected))
         # `changed`: earlier fields a later requirement deliberately revised (R145's lead task); compared elsewhere.
         self.assertEqual({key: value for key, value in observed.items()
-                          if key not in NEW_FIELDS + DECISION_FIELDS + tuple(changed)},
+                          if key not in NEW_FIELDS + self.ROUTE_FIELDS + DECISION_FIELDS + tuple(changed)},
                          {key: value for key, value in expected.items() if key not in changed})
         if changed:
             # The revised next action shows in the text's Blocker and Next action lines only.

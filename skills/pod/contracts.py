@@ -79,6 +79,7 @@ _MAP_FIELDS = {
     "governance_refresh": {"type": "boolean"}, "revision_authority": record("revision authority"),
     "reopen": {"type": "boolean"}, "close": {"type": "boolean"}, "rebind": {"type": "list"},
     "dispositions": items(16, record("disposition")), "delivery": {"type": "object"},
+    "route_settlements": {**items(16, record("route settlement")), "only": "checkpoint or report map"},
     "update": {"type": "object", "max_items": 128, "form": "obligation ids mapped to field updates; state changes clear conflicting state fields"},
     "renew": {**items(16, record("renewal request")), "only": "checkpoint"},
     "reuse": {"type": "object"}, "acceptances": items(16, record("acceptance request")),
@@ -86,6 +87,14 @@ _MAP_FIELDS = {
 }
 
 TABLE = {
+    "route settlement": definition({
+        "admission": _DIGEST, "basis": choice(("redone", "lead_decision")),
+        "replacement": _DIGEST, "decision": choice(("accept", "discard")),
+        "source": record("route settlement source"), "reason": text(1024),
+        "corrections": items(512, ident()),
+    }, ("admission", "basis"),
+       form="redone requires only replacement; lead_decision requires decision, source and reason; review/investigation discard requires corrections and no consumed report, accept requires an already consumed report; delegated lead is relayed, not authenticated"),
+    "route settlement source": definition({"reference": text(512)}, ("reference",)),
     "renewal request": definition({"id": ident(), "as": ident(), "state": choice(STATES),
         "wait": record("wait"), "executor": text(128), "external": record("external")}, ("id", "as")),
     "mapping repair": definition({

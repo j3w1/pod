@@ -72,13 +72,14 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
     change the admission's bound state or current native outstanding predicate.
     Any freshly observed outstanding/native or Governor dependency vetoes a move.
     """
+    from .util import route_hold
     candidate = (state.get("checkpoint") or {}).get("candidate")
     report = row.get("report") or {}
     if (key in protected or row.get("state") not in ("closed", "bound")
             or not row.get("candidate") or row.get("candidate") == candidate
             or report.get("status") != "validated_observation"
             or row.get("route_decision", {}).get("effective_unknown") is True
-            or row.get("route_decision", {}).get("route_mismatch") is True
+            or route_hold(row)
             or any(not failure.get("cleared_at") for failure in row.get("failures", []))):
         return False
     role = row.get("role")
@@ -244,8 +245,9 @@ def _require_size(record, *, current_bytes):
                                        "rows through the checkpoint renew route so terminal rows can archive. "
                                        "Consume or triage reports, record implementation dispositions and settle "
                                        "governed effects through their supported paths. If the record is still over "
-                                       "limit, the project lead diagnoses the remaining sections and supported "
-                                       "recovery; record-compaction keeps its existing authority."})
+                                       "limit, project lead or coordinator: run internal record-compaction detection "
+                                       "for this exact project and objective, then submit its exact scoped maintenance "
+                                       "request; no owner decision is required."})
 
 
 def _expand(reference, loader, cache):
@@ -295,6 +297,33 @@ def _expand(reference, loader, cache):
     return value
 
 
+def _compaction_request(value):
+    """Validate declared maintenance scope; this never authenticates a caller."""
+    from .util import bounded_text, exact
+    common = {"schema", "requested_by", "reason", "repository", "objective", "facts"}
+    value = exact(value, common | {"owner", "relay"}, common, name="compaction request")
+    if value["schema"] != "pod-compaction-request/v1" or value["requested_by"] not in ("coordinator", "project_lead"):
+        _fail("compaction_decision_mismatch", "Unsupported compaction request kind")
+    field = "owner" if value["requested_by"] == "coordinator" else "relay"
+    exact(value, common | {field}, common | {field}, name="compaction request")
+    texts = [(value["reason"], "reason", 1024), (value["objective"], "objective", 256)]
+    if field == "owner":
+        texts.append((value["owner"], "owner", 256))
+    else:
+        relay = exact(value["relay"], {"reference"}, {"reference"}, name="compaction relay")
+        texts.append((relay["reference"], "reference", 512))
+    for text, name, limit in texts:
+        bounded_text(text, name=name, limit=limit)
+        text.encode("utf-8")
+    facts = exact(value["facts"], {"record", "revision", "input_sha256", "logical_sha256"},
+                  {"record", "revision", "input_sha256", "logical_sha256"}, name="compaction facts")
+    if (type(facts["revision"]) is not int or facts["revision"] < 0
+            or any(not isinstance(item, str) or not HEX.fullmatch(item)
+                   for item in (value["repository"], facts["record"], facts["input_sha256"], facts["logical_sha256"]))):
+        _fail("compaction_decision_mismatch", "Malformed compaction request scope or facts")
+    return value
+
+
 def _maintenance_valid(receipts):
     from .util import owner_decision, DECISION_FIELDS
     if not isinstance(receipts, list) or not receipts:
@@ -303,13 +332,20 @@ def _maintenance_valid(receipts):
         if (not isinstance(receipt, dict) or set(receipt) != {"authority", "decision", "input_sha256", "logical_sha256"}
                 or any(not isinstance(receipt[field], str) or not HEX.fullmatch(receipt[field])
                        for field in ("decision", "input_sha256", "logical_sha256"))
-                or not isinstance(receipt["authority"], dict)
-                or set(receipt["authority"]) != DECISION_FIELDS - {"relay"}
-                or receipt["authority"].get("provenance") != "user_direct"):
+                or not isinstance(receipt["authority"], dict)):
             _fail("history_invalid", "Malformed immutable maintenance receipt")
         try:
-            owner_decision(receipt["authority"], kind="compaction", stored=True)
-        except PodError as exc:
+            authority = receipt["authority"]
+            if authority.get("schema") == "pod-compaction-request/v1":
+                _compaction_request(authority)
+                if (digest(authority) != receipt["decision"]
+                        or any(authority["facts"][key] != receipt[key] for key in ("input_sha256", "logical_sha256"))):
+                    raise ValueError("request digest or facts differ")
+            else:
+                if set(authority) != DECISION_FIELDS - {"relay"} or authority.get("provenance") != "user_direct":
+                    raise ValueError("session authority")
+                owner_decision(authority, kind="compaction", stored=True)
+        except (PodError, ValueError, UnicodeError) as exc:
             raise PodError("history_invalid", "Malformed maintenance authority") from exc
     return receipts
 
@@ -458,11 +494,16 @@ def _context_bytes(path, limit):
             _check_read_deadline()
             data = file.read(limit + 1)
         if len(data) > limit or info.st_size > limit:
-            raise PodError("record_too_large", "Context exceeds its bounded read limit; use internal "
-                           "record-compaction detection for bounded maintenance by the project lead",
+            maintenance = limit >= MAINTENANCE_LIMIT
+            raise PodError("record_too_large", "Context exceeds its bounded read limit; "
+                           + ("bounded compaction cannot read it" if maintenance else
+                              "use internal record-compaction detection for a project-lead or coordinator request"),
                            {"current_bytes": max(info.st_size, len(data)), "limit_bytes": limit,
-                            "next_action": "Run internal record-compaction for this exact project and objective; "
-                                           "the project lead must recover records above its maintenance bound without treating them as completed."})
+                            "next_action": ("Project lead: preserve this record and arrange supported recovery; "
+                                            "bounded compaction cannot read it." if maintenance else
+                                            "Project lead or coordinator: run internal record-compaction detection for "
+                                            "this exact project and objective, then submit its exact scoped maintenance "
+                                            "request; no owner decision is required.")})
         return data
     except OSError as exc:
         raise PodError("unsafe_record", "Context cannot be safely opened") from exc
@@ -611,8 +652,10 @@ def capacity(path, state):
             if exc.code != "record_too_large":
                 raise
             useful = False
-        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; internal "
-                                 "record-compaction permits explicit bounded maintenance now; the project lead handles capacity before closure." if useful else
+        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; project lead "
+                                 "or coordinator: run internal record-compaction detection, then submit its exact scoped "
+                                 "maintenance request for explicit bounded maintenance now. The project lead handles capacity "
+                                 "before closure." if useful else
                                  _settlement_action(result["largest_sections"]))
         if useful and any(row["section"] == "standing_authorization" for row in result["largest_sections"][:3]):
             result["next_action"] += " The standing_authorization section is bounded and needs no maintenance."
@@ -621,8 +664,8 @@ def capacity(path, state):
     return result
 
 
-def record_compaction(project, objective, *, decision=None):
-    """Explicit owner-scoped maintenance, never ordinary work or native authority."""
+def record_compaction(project, objective, *, request=None, decision=None):
+    """Declared project-lead or coordinator maintenance, never ordinary work or native authority."""
     from contextlib import nullcontext
     from .github import repository_context
     from .ledger import _path, _record_exists, _lock
@@ -638,6 +681,13 @@ def record_compaction(project, objective, *, decision=None):
         _fail("objective_unknown", "No record exists for this exact objective; nothing was created")
     from .evidence_closure import refuse_closed
     refuse_closed(path.parent)
+    if request is not None and decision is not None:
+        _fail("compaction_decision_mismatch", "Supply one scoped compaction request")
+    if request is not None:
+        try:
+            request = _compaction_request(request)
+        except (PodError, UnicodeError) as exc:
+            raise PodError("compaction_decision_mismatch", "Compaction needs an exact coordinator or project-lead request") from exc
     if decision is not None:
         try:
             decision = exact(decision, DECISION_FIELDS | {"repository", "objective", "facts"},
@@ -647,8 +697,9 @@ def record_compaction(project, objective, *, decision=None):
             bounded_text(decision["instruction"], name="instruction", limit=1024)
             decision = owner_decision(decision, kind="compaction")
         except (PodError, ValueError) as exc:
-            raise PodError("compaction_decision_mismatch", "Compaction needs an exact owner session decision") from exc
-    with _lock(path) if decision is not None else nullcontext():
+            raise PodError("compaction_decision_mismatch", "Compaction needs an exact session decision") from exc
+    submitted = request if request is not None else decision
+    with _lock(path) if submitted is not None else nullcontext():
         state, receipts, raw = _load(path, limit=MAINTENANCE_LIMIT)
         refuse_continued(state, reserved=False)
         checkpoint = state.get("checkpoint") or {}
@@ -658,18 +709,24 @@ def record_compaction(project, objective, *, decision=None):
         binding = {"record": path.parent.name, "revision": state["revision"], "input_sha256": _sha(raw),
                    "logical_sha256": logical}
         facts = {"repository": repository, "objective": objective, "owner": state["owner"], **binding}
-        if decision is not None:
-            same_scope = decision["repository"] == repository and decision["objective"] == objective
-            prior = next((row for row in receipts if row["decision"] == digest(decision)), None)
+        if submitted is not None:
+            if request is not None and request["requested_by"] == "coordinator" and request["owner"] != state["owner"]:
+                _fail("compaction_decision_mismatch", "The coordinator request does not name the recorded coordinator")
+            same_scope = submitted["repository"] == repository and submitted["objective"] == objective
+            prior = next((row for row in receipts if row["decision"] == digest(submitted)), None)
             if same_scope and prior is not None and prior["logical_sha256"] == logical:
                 return {"status": "replayed", "facts": facts, "written": False}
-            if not same_scope or decision["facts"] != binding:
-                _fail("compaction_decision_mismatch", "The decision differs from the exact physical or logical record; detect again")
-        # Both detection and decision reserve the next receipt, including the
-        # largest JSON encoding of a permitted instruction. Its digest has fixed
-        # width; byte-count digits and fragment references can otherwise grow
-        # after the owner fills in the template. A no-op needs no write capacity.
-        allowance = {"authority": {"provenance": "user_direct", "channel": "session", "instruction": "\x01" * 1024},
+            if not same_scope or submitted["facts"] != binding:
+                _fail("compaction_decision_mismatch", "The request differs from the exact physical or logical record; detect again")
+        # Reserve the largest complete request authority, including six-byte JSON
+        # escapes in reason, coordinator identity and lead relay. Digests have
+        # fixed width; receipt fragment references can grow at part boundaries.
+        # The session-decision authority is smaller. A no-op needs no write capacity.
+        authority = {"schema": "pod-compaction-request/v1", "reason": "\x01" * 1024,
+                     "repository": repository, "objective": objective, "facts": binding}
+        authorities = [{**authority, "requested_by": "coordinator", "owner": "\x01" * 256},
+                       {**authority, "requested_by": "project_lead", "relay": {"reference": "\x01" * 512}}]
+        allowance = {"authority": max(authorities, key=lambda value: len(_bytes(value))),
                      "decision": "0" * 64, "input_sha256": binding["input_sha256"], "logical_sha256": logical}
         record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, allowance], require_fit=False)
         useful = len(_bytes(record)) < len(raw)
@@ -683,15 +740,17 @@ def record_compaction(project, objective, *, decision=None):
                                      "Continue through the existing objective operations; no settled history currently "
                                      "reduces this record after the maintenance receipt allowance.")
             return result
-        if decision is None:
-            result["question"] = (f"May Pod compact settled history for objective {objective}, preserving all recorded "
-                                  "work and decisions and keeping unsettled items in its record?")
+        if submitted is None:
+            result["question"] = (f"Does the project lead or coordinator request lossless compaction for objective {objective}, "
+                                  "preserving all recorded work and decisions and keeping unsettled items in its record?")
             result["next_action"] = {"operation": "record-compaction", "request": {"project": str(project), "objective": objective,
-                "decision": {"provenance": "user_direct", "instruction": "<owner instruction>", "channel": "session",
-                             "repository": repository, "objective": objective, "facts": binding}}}
+                "request": {"schema": "pod-compaction-request/v1", "requested_by": "coordinator",
+                            "reason": "<reason for lossless compaction>", "owner": state["owner"],
+                            "repository": repository, "objective": objective, "facts": binding}}}
             return result
-        receipt = {"authority": {key: decision[key] for key in ("provenance", "instruction", "channel")},
-                   "decision": digest(decision), "input_sha256": binding["input_sha256"], "logical_sha256": logical}
+        receipt = {"authority": request if request is not None else
+                   {key: decision[key] for key in ("provenance", "instruction", "channel")},
+                   "decision": digest(submitted), "input_sha256": binding["input_sha256"], "logical_sha256": logical}
         record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, receipt], require_fit=False)
         if len(_bytes(record)) >= len(raw):
             return {**result, "status": "unchanged", "proposed_bytes": len(_bytes(record)), "written": False}
