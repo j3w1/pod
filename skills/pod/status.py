@@ -568,8 +568,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         elif block is not None and block.get("continues") and (not _claim_recorded(project, state)
                                                                or reserved_for(state) is not None):
             result["succession"]["state"] = "claim_incomplete"
-            result.update(next_safe_action="rerun the same internal succession claim to complete it",
-                          next_action="rerun the same internal succession claim to complete it")
+            # Completing the claim needs coordinator authority: while an available window step would move it to this
+            # caller, that step stays first; once it has moved, completing the original claim comes next (pod#110).
+            if (result.get("window_continuation") or {}).get("status") != "window_available":
+                result.update(next_safe_action="rerun the same internal succession claim to complete it",
+                              next_action="rerun the same internal succession claim to complete it")
         elif block is not None:
             result["succession"]["state"] = "claimed"
         if record_root is not None:
