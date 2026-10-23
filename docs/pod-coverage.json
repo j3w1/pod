@@ -6629,7 +6629,8 @@
       ],
       "offline_test": [
         "tests.test_evidence_closure.LostCoordinatorTests.test_an_exited_coordinator",
-        "tests.test_evidence_closure.LostCoordinatorTests.test_a_signaled_coordinator"
+        "tests.test_evidence_closure.LostCoordinatorTests.test_a_signaled_coordinator",
+        "tests.test_closure_fixes_a.ClaimedSourceTests.test_duplicate_fully_ticked_lines_still_prove_evidence_delivery"
       ],
       "status": "NOT_RUN"
     },
@@ -7692,7 +7693,9 @@
       ],
       "offline_test": [
         "tests.test_completed_closure.ClosingPortTests.test_only_the_fixed_query_and_exact_bound_completion_patch_are_allowed",
-        "tests.test_completed_closure.ClosingPortTests.test_linked_pr_identity_and_pagination_fail_closed"
+        "tests.test_completed_closure.ClosingPortTests.test_linked_pr_identity_and_pagination_fail_closed",
+        "tests.test_closure_fixes_a.ForeignLinkedPRTests.test_valid_foreign_closer_is_skipped_even_with_same_pr_number",
+        "tests.test_closure_fixes_a.ForeignLinkedPRTests.test_foreign_url_with_target_repository_identity_still_refuses"
       ],
       "status": "NOT_RUN"
     },
@@ -7757,7 +7760,8 @@
       ],
       "offline_test": [
         "tests.test_completed_closure.GovernanceCompletionTests.test_default_retarget_and_unknown_ancestry_never_grant_the_exemption",
-        "tests.test_completed_closure.GovernanceCompletionTests.test_combined_delivery_and_closure_cannot_skip_finalization"
+        "tests.test_completed_closure.GovernanceCompletionTests.test_combined_delivery_and_closure_cannot_skip_finalization",
+        "tests.test_closure_fixes_a.DeliveryOnlyTests.test_dispositions_do_not_receive_the_delivery_only_exemption"
       ],
       "status": "NOT_RUN"
     },
@@ -7769,7 +7773,10 @@
       "offline_test": [
         "tests.test_completed_closure.SourceClosingTests.test_checkpoint_closes_source_and_sweep_replays_without_rewriting_pod",
         "tests.test_completed_closure.SourceClosingTests.test_report_closure_has_the_same_source_effect_and_acknowledgement",
-        "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together"
+        "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together",
+        "tests.test_closure_fixes_a.ClaimedSourceTests.test_ordinary_successor_closure_closes_and_acknowledges_predecessor_source",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_older_ordinary_closure_observes_completed_source_without_conversion",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_older_ordinary_closure_cannot_authorize_a_new_source_write"
       ],
       "status": "NOT_RUN"
     },
@@ -7781,7 +7788,8 @@
       "offline_test": [
         "tests.test_completed_closure.SourceClosingTests.test_refused_close_is_acknowledged_and_sweep_retries_it",
         "tests.test_completed_closure.SourceClosingTests.test_lost_close_response_uses_readback_and_never_resends_a_completed_issue",
-        "tests.test_completed_closure.SourceClosingTests.test_unlanded_close_is_unknown_then_retried_by_sweep"
+        "tests.test_completed_closure.SourceClosingTests.test_unlanded_close_is_unknown_then_retried_by_sweep",
+        "tests.test_closure_fixes_a.ClaimedSourceTests.test_sweep_retries_predecessor_source_after_ordinary_successor_close"
       ],
       "status": "NOT_RUN"
     },
@@ -7793,7 +7801,11 @@
       "offline_test": [
         "tests.test_completed_closure.LinkedClosureTests.test_interrupted_chain_source_effects_retry_only_the_remaining_issue",
         "tests.test_completed_closure.SourceClosingTests.test_reopened_or_unclosed_objective_cannot_send_a_source_effect",
-        "tests.test_completed_closure.SourceClosingTests.test_source_changed_during_immediate_read_prevents_the_effect"
+        "tests.test_completed_closure.SourceClosingTests.test_source_changed_during_immediate_read_prevents_the_effect",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_source_reopen_is_preserved_by_effect_and_repeated_sweeps",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_reopened_source_never_gets_its_first_automatic_close_either",
+        "tests.test_closure_fixes_a.ClaimedSourceTests.test_tail_record_change_during_predecessor_read_fences_the_write",
+        "tests.test_closure_fixes_a.ClaimedSourceTests.test_evidence_closed_source_reopen_stays_open_in_sweep"
       ],
       "status": "NOT_RUN"
     },
@@ -7806,7 +7818,9 @@
         "tests.test_completed_closure.SourceClosingTests.test_source_material_change_and_closed_other_reason_never_write",
         "tests.test_completed_closure.SourceClosingTests.test_referenced_seal_and_eel_stay_named_lead_tasks",
         "tests.test_completed_closure.SourceClosingTests.test_empty_recognized_criteria_never_close_vacuously",
-        "tests.test_completed_closure.SourceClosingTests.test_duplicate_ticked_criteria_still_refuse_source_completion"
+        "tests.test_completed_closure.SourceClosingTests.test_duplicate_ticked_criteria_still_refuse_source_completion",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_sweep_memoizes_shared_sources_and_parents_and_reports_each_parent_once",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_shared_reopened_source_has_one_lead_task_and_one_read_per_sweep"
       ],
       "status": "NOT_RUN"
     },
@@ -7831,7 +7845,8 @@
         "tests.test_eel_intake.EelMarkerTests.test_intake_refuses_title_and_each_body_marker_form_without_a_binding",
         "tests.test_completed_closure.SourceClosingTests.test_seal_completion_binding_cannot_start_a_new_objective",
         "tests.test_completed_closure.SourceClosingTests.test_an_issue_bound_objective_cannot_rebind_to_a_seal",
-        "tests.test_completed_closure.SealCompletionTests.test_extra_unmapped_handoff_still_holds_evidence_closure"
+        "tests.test_completed_closure.SealCompletionTests.test_extra_unmapped_handoff_still_holds_evidence_closure",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_bound_seal_source_refresh_keeps_identity_and_refuses_another_issue"
       ],
       "status": "NOT_RUN"
     },

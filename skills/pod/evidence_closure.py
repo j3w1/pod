@@ -719,7 +719,7 @@ def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _P
         ticked = sum(line["ticked"] for line in lines)
         facts.update(state=row["state"], state_reason=_clip(row.get("state_reason"), 64),
                      pod_lines={"ticked": ticked, "total": len(lines)}, body_sha256=_sha(row["body"].encode()))
-        if lines and ticked == len(lines) and all(len(rows) == 1 for rows in recognized.values()):
+        if lines and ticked == len(lines):
             facts["proof"] = "pod_ticks"
         elif row["state"] == "CLOSED" and row.get("state_reason") == "COMPLETED":
             facts["proof"] = "issue_completed"
@@ -1267,9 +1267,10 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
             return _closed_effects(project, objective, _replay(project, root, chain, caller=caller, port=port),
                                    chain, remote=remote)
         raw, _ = _read_record(root)
-        if _phase(root, raw) == "closed" and isinstance((raw.get("checkpoint") or {}).get("objective_source"), dict):
+        if _phase(root, raw) == "closed" and (isinstance((raw.get("checkpoint") or {}).get("objective_source"), dict)
+                or any(row["doc"]["issue"] is not None for row in chain)):
             return _closed_effects(project, objective, {"objective": objective, "status": "replayed",
-                                   "closure": {"basis": "obligations"}}, [], remote=remote)
+                                   "closure": {"basis": "obligations"}}, chain, remote=remote)
         verdict = prove(project, objective, port=port, remote=remote, now=now)
         if verdict["status"] != "proved":
             return {"objective": objective, "status": verdict["status"], "conditions": verdict["conditions"]}
@@ -1295,12 +1296,13 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
 def _closed_effects(project: Path, objective: str, result: dict, chain: list[dict], *, remote=None) -> dict:
     if result["status"] not in ("closed", "replayed", "chain_completed"):
         return result
-    result.update(close_source_issues(project, objective, remote=remote, locked=True))
-    for member in chain:
-        if present(member["root"]):
-            effects = close_source_issues(project, member["objective"], remote=remote, locked=True)
-            for key in ("source_issues", "parents_open"):
-                result[key].extend(effects[key])
+    from .ledger import objective_root
+    result.update(close_source_issues(project, objective, remote=remote, locked=True,
+                                     _roots={objective_root(project, objective), *[row["root"] for row in chain]}))
+    return result
+
+
+def _completed_sources(result: dict) -> dict:
     completed = {row["locator"].casefold(): row for row in result["source_issues"]
                  if row.get("locator") and row["outcome"] in ("closed", "already_completed")}
     for row in result["source_issues"]:
@@ -1555,50 +1557,96 @@ def render(result: dict) -> None:
 # --------------------------------------------------------------------------- sweep (R148)
 
 
-def close_source_issues(project: Path, objective: str, *, remote=None, locked: bool = False) -> dict:
-    """Closed-objective external effect shared by both writers and sweep; never changes Pod bytes.
+def _source_closure(project: Path, objective: str, root: Path, raw: dict, before: bytes) -> bool:
+    """Validate closure before source effects; an older ordinary closure permits observation alone."""
+    kind = _record_class(raw)
+    if kind not in SUPPORTED or raw.get("historical_retirement"):
+        raise PodError("objective_not_closed", "Only an actual supported Pod closure permits this effect")
+    if present(root):
+        stored = load(root)
+        from .github import repository_context
+        if (stored["objective"] != objective or stored["repository"] != repository_context(project)["repo_key"]
+                or not isinstance(stored["record"], dict) or stored["record"].get("context_sha256") != _sha(before)):
+            raise PodError("objective_not_closed", "The evidence closure names another objective")
+        if stored["relation"] == "predecessor":
+            from .ledger import objective_root
+            tail = load(objective_root(project, stored["tail"]["objective"]))
+            if tail["relation"] != "tail" or not any(row.get("objective") == objective
+                    and row.get("relation") == "predecessor" for row in tail["chain"]):
+                raise PodError("objective_not_closed", "The evidence closure's certified tail is unavailable")
+        return True
+    if raw.get("continued_by") or not isinstance((raw.get("checkpoint") or {}).get("closure"), dict):
+        raise PodError("objective_not_closed", "Only an actual ordinary or evidence closure permits this effect")
+    if kind == "older":
+        return False
+    from .ledger import _read, map_of, validate_checkpoint_snapshot, closed_snapshot_context
+    from .obligations import validate_closed_snapshot
+    state = _read(root / "context.json")
+    mapped = map_of(state)
+    validate_checkpoint_snapshot(project, state)
+    if not (mapped or {}).get("closure") or validate_closed_snapshot(mapped, closed_snapshot_context(project, objective, state)):
+        raise PodError("closure_unverified", "A required recorded closure fact is unavailable")
+    return True
 
-    Only the issue retained by this objective is writable. The objective lock fences local reopen; GitHub's
-    unconditional PATCH retains an outside-edit race between the immediate read and write. Provider outcomes
-    cannot undo or fail acknowledgement of an already-recorded Pod closure.
+
+def _source_failure(objective: str, reason: str) -> dict:
+    outcome = "refused" if reason in ("objective_unknown", "objective_not_closed", "closure_changed", "chain_changed") else "unverified"
+    return {"source_issues": [{"objective": objective, "locator": None, "outcome": outcome, "reason": reason,
+            "next_action": "the project lead resolves the named closure or chain condition before source completion"}],
+            "parents_open": []}
+
+
+def close_source_issues(project: Path, objective: str, *, remote=None, locked: bool = False,
+                       _roots: set[Path] | None = None) -> dict:
+    """The shared closed-chain effect. Every writable issue is retained by a reciprocal chain member.
+
+    Writers release their write lock first; this effect acquires every chain lock in path order and validates the
+    accepted closure afresh. Evidence closure already holds those locks. Provider outcomes never undo the accepted
+    Pod write, and context, history and Governor bytes stay identical.
     """
     from .ledger import _lock, _record_exists, objective_root
     root = objective_root(project, objective)
+    if not _record_exists(root / "context.json"):
+        return _source_failure(objective, "objective_unknown")
+    try:
+        raw, before = _read_record(root)
+        chain, problem = _lineage(project, raw)
+    except PodError as exc:
+        return _source_failure(objective, exc.code)
+    roots = {root, *[row["root"] for row in chain]}
     if not locked:
-        if not _record_exists(root / "context.json"):
-            return {"source_issues": [{"objective": objective, "locator": None, "outcome": "refused",
-                     "reason": "objective_unknown", "next_action": "the project lead restores the actual objective record before source completion"}],
-                    "parents_open": []}
-        with _lock(root / "context.json"):
-            return close_source_issues(project, objective, remote=remote, locked=True)
+        with ExitStack() as stack:
+            for path in sorted(roots, key=str):
+                stack.enter_context(_lock(path / "context.json"))
+            return close_source_issues(project, objective, remote=remote, locked=True, _roots=roots)
+    if _roots != roots:
+        return _source_failure(objective, "chain_changed")
+    if problem is not None:
+        return _source_failure(objective, problem[1])
+    try:
+        writable = _source_closure(project, objective, root, raw, before)
+        members = [(objective, root, raw, before)]
+        for row in chain:
+            member, data = _read_record(row["root"])
+            if member != row["raw"]:
+                raise PodError("closure_changed", "A chain member changed during closure validation")
+            members.append((row["objective"], row["root"], member, data))
+    except PodError as exc:
+        return _source_failure(objective, exc.code)
+    snapshots = [(path, data) for _, path, _, data in members]
+    out = {"source_issues": [], "parents_open": []}
+    for name, path, record, data in members:
+        effect = _close_source_issue(project, name, record, remote=remote, writable=writable, snapshots=snapshots)
+        for key in out:
+            out[key].extend(effect[key])
+    return _completed_sources(out)
+
+
+def _close_source_issue(project: Path, objective: str, raw: dict, *, remote, writable: bool,
+                        snapshots: list[tuple[Path, bytes]]) -> dict:
     out = {"source_issues": [], "parents_open": []}
     effect = {"objective": objective, "locator": None, "outcome": "unverified"}
     try:
-        raw, before = _read_record(root)
-        kind = _record_class(raw)
-        if kind not in SUPPORTED or raw.get("historical_retirement"):
-            raise PodError("objective_not_closed", "Only an actual supported Pod closure permits this effect")
-        if present(root):
-            stored = load(root)
-            from .github import repository_context
-            if (stored["objective"] != objective or stored["repository"] != repository_context(project)["repo_key"]
-                    or not isinstance(stored["record"], dict) or stored["record"].get("context_sha256") != _sha(before)):
-                raise PodError("objective_not_closed", "The evidence closure names another objective")
-            if stored["relation"] == "predecessor":
-                tail = load(objective_root(project, stored["tail"]["objective"]))
-                if tail["relation"] != "tail" or not any(row.get("objective") == objective
-                        and row.get("relation") == "predecessor" for row in tail["chain"]):
-                    raise PodError("objective_not_closed", "The evidence closure's certified tail is unavailable")
-        else:
-            from .ledger import _read, map_of, validate_checkpoint_snapshot, closed_snapshot_context
-            state = _read(root / "context.json")
-            mapped = map_of(state)
-            if kind != "current" or raw.get("continued_by") or not (mapped or {}).get("closure"):
-                raise PodError("objective_not_closed", "Only an actual ordinary or evidence closure permits this effect")
-            from .obligations import validate_closed_snapshot
-            validate_checkpoint_snapshot(project, state)
-            if validate_closed_snapshot(mapped, closed_snapshot_context(project, objective, state)):
-                raise PodError("closure_unverified", "A required recorded closure fact is unavailable")
         source = (raw.get("checkpoint") or {}).get("objective_source")
         if source in (None, "direct_objective"):
             return out
@@ -1613,7 +1661,11 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
         if live["state"] == "CLOSED":
             effect.update(outcome="already_completed" if checked.get("state_reason") == "COMPLETED" else "closed_other_reason",
                           state=live["state"], state_reason=checked.get("state_reason"))
+        elif checked.get("state_reason") == "REOPENED":
+            effect.update(outcome="reopened", reason="source_reopened", state="OPEN", state_reason="REOPENED")
         else:
+            if not writable:
+                raise PodError("closure_unverified", "An older ordinary closure permits source observation, not a new mutation")
             from .pod_mapping import scope_hash
             from .util import digest
             retained = (raw.get("pod_ticks") or {}).get("facts") or {}
@@ -1626,9 +1678,10 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
             if not lines or any(len(rows) != 1 or not rows[0]["ticked"] for rows in lines.values()):
                 raise PodError("source_unproved", "The bound source needs a nonempty unambiguous fully ticked PoD set")
             # The cooperative lock is the local fence; this second read also rejects an uncooperative raw edit.
-            _, immediate = _read_record(root)
-            if immediate != before:
-                raise PodError("closure_changed", "The Pod record changed during source readback; no issue write was sent")
+            for path, before in snapshots:
+                _, immediate = _read_record(path)
+                if immediate != before:
+                    raise PodError("closure_changed", "A closed-chain record changed during source readback; no issue write was sent")
             try:
                 response = reader.issue_close(source=source)
             except PodError as exc:
@@ -1651,6 +1704,8 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
                       ("objective_not_closed", "closure_changed", "source_changed", "source_unproved") else "unverified",
                       reason=getattr(exc, "code", "source_effect_unavailable"))
     effect["next_action"] = ("the bound source issue is completed" if effect["outcome"] in ("closed", "already_completed")
+                             else "the project lead reconciles the source issue's explicit reopen; Pod will not re-close it automatically"
+                             if effect["outcome"] == "reopened"
                              else "the project lead resolves the named source condition, then runs pod sweep; no owner completion decision is needed")
     for parent in out["parents_open"]:
         parent["objective"] = objective
@@ -1671,12 +1726,20 @@ def _source_parents(body: str, source: dict, remote, output: list) -> None:
         if link.casefold() == source["locator"].casefold():
             continue
         issue = parse_issue_locator(link)
+        cache = getattr(remote, "parent_tasks", None)
+        key = link.casefold()
+        if cache is not None and key in cache:
+            if cache[key] is not None:
+                output.append(deepcopy(cache[key]))
+            continue
         facts = {"repository": issue["repository"], "number": issue["number"]}
         try:
             row = remote.issue(repository=issue["repository"], number=issue["number"])
             role = ("SEAL" if _document_marker(row.get("title"), row.get("body"), SEAL_TITLE, SEAL_FORMAT) else
                     "EEL" if _document_marker(row.get("title"), row.get("body"), EEL_TITLE, EEL_FORMAT) else None)
             if role is None or row.get("state") == "CLOSED" and row.get("stateReason") == "COMPLETED":
+                if cache is not None:
+                    cache[key] = None
                 continue
             facts.update(read="observed", state=row.get("state"), state_reason=row.get("stateReason"),
                          body_sha256=_sha(row["body"].encode()), updated_at=row.get("updatedAt"))
@@ -1685,10 +1748,98 @@ def _source_parents(body: str, source: dict, remote, output: list) -> None:
             facts.update(read="unavailable", code=getattr(exc, "code", "source_unreadable"))
         rule = {"EEL": "closes when its consuming PES work is delivered",
                 "SEAL": "closes when every requirement's delivering PES is closed"}.get(role, "source completion rule unavailable")
-        output.append({"locator": link, "role": role, "party": "lead", "completion_rule": rule, "facts": facts,
+        task = {"locator": link, "role": role, "party": "lead", "completion_rule": rule, "facts": facts,
                        "reason": "completion_rule_unavailable",
                        "next_action": "the project lead verifies this rule against all consumers or requirements: "
-                                      + rule + "; the child objective alone cannot evaluate that rule"})
+                                      + rule + "; the child objective alone cannot evaluate that rule"}
+        if cache is not None:
+            cache[key] = deepcopy(task)
+        output.append(task)
+
+
+class _SweepRemote:
+    """One sweep's observations only; open source reads before mutations are always fresh.
+
+    Full issue bodies have a small cache bound. Parent tasks retain only compact facts, bounded by the sweep's
+    record and per-source reference limits. A mutation invalidates every observation of its issue.
+    """
+
+    def __init__(self, project: Path, remote):
+        self.project, self.source_reader = project, remote
+        self.remote = _Remote(project, remote)
+        self.issues, self.states, self.parent_tasks = {}, {}, {}
+
+    def _source(self):
+        if self.source_reader is None:
+            from .github import GhPort
+            self.source_reader = GhPort(self.project)
+        return self.source_reader
+
+    def __getattr__(self, name):
+        return getattr(self._source() if name == "amendment" else self.remote.get(), name)
+
+    def _read(self, method: str, arguments: dict, cache: dict, *, closed_only: bool = False):
+        key = (arguments["repository"].casefold(), arguments["number"])
+        if key in cache:
+            value = cache[key]
+            if isinstance(value, PodError):
+                raise value
+            return deepcopy(value)
+        try:
+            reader = self._source() if method == "issue" else self.remote.get()
+            value = getattr(reader, method)(**arguments)
+        except PodError as exc:
+            if len(cache) < MAX_LISTED:
+                cache[key] = exc
+            raise
+        if len(cache) < MAX_LISTED and (not closed_only or value.get("state") == "CLOSED"
+                                      or value.get("stateReason") == "REOPENED"):
+            cache[key] = deepcopy(value)
+        return value
+
+    def issue(self, **arguments):
+        return self._read("issue", arguments, self.issues, closed_only=True)
+
+    def issue_state(self, **arguments):
+        return self._read("issue_state", arguments, self.states)
+
+    def issue_close(self, *, source):
+        key = (source["repository"].casefold(), source["number"])
+        self.issues.pop(key, None)
+        self.states.pop(key, None)
+        self.parent_tasks.pop(source["locator"].casefold(), None)
+        return self._source().issue_close(source=source)
+
+
+def _effect_tasks(row: dict) -> bool:
+    return any(effect.get("outcome") not in ("closed", "already_completed") and not effect.get("task_with")
+               for effect in row.get("source_issues", [])) or bool(row.get("parents_open"))
+
+
+def _deduplicate_tasks(rows: list[dict]) -> None:
+    """Keep every source outcome, with one actionable task per issue locator in this sweep."""
+    tasks = {}
+    for row in rows:
+        for effect in row.get("source_issues", []):
+            if effect.get("outcome") in ("closed", "already_completed") or not effect.get("locator"):
+                continue
+            key = effect["locator"].casefold()
+            if key in tasks:
+                effect["task_with"] = tasks[key]["objective"]
+            else:
+                tasks[key] = effect
+    for row in rows:
+        parents = []
+        for parent in row.get("parents_open", []):
+            key = parent["locator"].casefold()
+            if key in tasks:
+                tasks[key].setdefault("also_referenced_by", []).append(row["objective"])
+            else:
+                tasks[key] = parent
+                parents.append(parent)
+        if "parents_open" in row:
+            row["parents_open"] = parents
+        row["party"] = "lead" if row["outcome"] in ("not_proved", "unverified") or _effect_tasks(row) else None
 
 
 def _outcome(objective: str, verdict: dict) -> dict:
@@ -1699,8 +1850,7 @@ def _outcome(objective: str, verdict: dict) -> dict:
                "not_proved": "not_proved", "unverified": "unverified"}.get(status, "skipped")
     effects = {key: [row for row in verdict[key] if row.get("objective") == objective]
                for key in ("source_issues", "parents_open") if key in verdict}
-    effects_held = any(row.get("outcome") not in ("closed", "already_completed")
-                       for row in effects.get("source_issues", [])) or bool(effects.get("parents_open"))
+    effects_held = _effect_tasks(effects)
     return {"objective": objective, "outcome": outcome,
             "conditions": [{"code": item["code"], "message": item["message"]}
                            for item in verdict.get("conditions", [])][:MAX_LISTED],
@@ -1770,6 +1920,7 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
     reason, and the sweep never claims its objectives all closed. The sweep still ran.
     """
     from .github import repository_context
+    from .ledger import objective_root
     targets = [Path(path).expanduser() for path in (repositories or [str(project)])]
     names = list(dict.fromkeys(objectives or []))
     if len(targets) > MAX_LISTED or len(names) > MAX_LISTED:
@@ -1795,12 +1946,13 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
             continue
         # Successor tails first: closing a tail writes its continued predecessors' entries too.
         rows = sorted(rows, key=lambda row: (row["phase"] == "continued", row["objective"]))
+        reader = _SweepRemote(target, remote)
         done, results = set(), []
         for row in rows:
             if row["objective"] in done:
                 continue
             done.add(row["objective"])
-            verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=remote)
+            verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=reader)
             results.append(_outcome(row["objective"], verdict))
             # A predecessor entry this sweep wrote, with its tail or completing an interrupted closure, closed that
             # predecessor now: it is reported as its own `closed` row, never as an earlier closure replayed.
@@ -1808,9 +1960,19 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
                 if name not in done:
                     done.add(name)
                     results.append(_outcome(name, {**verdict, "status": "closed"}))
+            # An ordinary closed tail can have no binding itself. Keep each continued predecessor's source
+            # outcome visible even when the caller selected only the tail, and never repeat its effect this sweep.
+            for effect in verdict.get("source_issues", []):
+                name = effect["objective"]
+                if name not in done:
+                    done.add(name)
+                    results.append(_outcome(name, {**verdict, "status": "replayed" if present(
+                        objective_root(target, name))
+                        else "not_applicable"}))
         for name in missing:
             results.append(_outcome(name, {"status": "not_applicable", "conditions": [
                 {"code": "objective_unknown", "message": "No record of that objective exists in this repository."}]}))
+        _deduplicate_tasks(results)
         for row in results:
             out["counts"][row["outcome"]] += 1
         out["repositories"].append({"path": str(target), "repository": context["repository"],
@@ -1832,8 +1994,7 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
     if "incomplete" in statuses:
         text += ("; a repository's records could not all be read, so an objective there may still be open: "
                  "restore them as its reason names, then sweep again")
-    effects_held = sum(any(effect.get("outcome") not in ("closed", "already_completed")
-                          for effect in row.get("source_issues", [])) or bool(row.get("parents_open"))
+    effects_held = sum(_effect_tasks(row)
                        for repository in out["repositories"] for row in repository["objectives"])
     if effects_held:
         text = text.removesuffix("; nothing else needs the sweep")

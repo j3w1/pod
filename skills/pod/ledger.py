@@ -1388,7 +1388,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             from .obligations import restatable_rows
             closing = (proposed.get("close") is True and not prior_map.get("closure")
                        and (verified_delivery is None or prior_map.get("delivery") == verified_delivery))
-            delivery_only = (verified_delivery is not None and set(proposed) <= {"seq", "obligations"}
+            delivery_only = (verified_delivery is not None and not dispositions and set(proposed) <= {"seq", "obligations"}
                              and proposed.get("obligations", prior_map["obligations"]) in
                                  (prior_map["obligations"], restatable_rows(prior_map))
                              and all(core.get(key) == previous.get(key) for key in core
@@ -1597,7 +1597,12 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             core["verification"] = previous["verification"]
         source = core.get("objective_source") or {}
         if source.get("role") == "SEAL" and source != previous.get("objective_source"):
-            if not previous or previous.get("objective_source") is not None:
+            prior_source = previous.get("objective_source")
+            same_seal = (isinstance(prior_source, dict) and prior_source.get("role") == "SEAL"
+                         and prior_source.get("number") == source.get("number")
+                         and all(prior_source.get(key, "").casefold() == source.get(key, "").casefold()
+                                 for key in ("repository", "locator")))
+            if not previous or prior_source is not None and not same_seal:
                 raise PodError("seal_completion_binding_refused", "Bind a SEAL only to its existing direct objective",
                                {"next_action": "the project lead uses the direct objective that owns this SEAL's completion"})
             from .github import issue_recheck_live
@@ -1671,10 +1676,10 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         except PodError:
             journal = None
         result["standing_authorization"] = standing_projection(state, journal)
-        if map_state.get("closure"):
-            from .evidence_closure import close_source_issues
-            result.update(close_source_issues(project, objective, locked=True))
-        return result
+    if map_state.get("closure"):
+        from .evidence_closure import close_source_issues
+        result.update(close_source_issues(project, objective))
+    return result
 
 
 def _observed_continuity(state: dict, authority: dict, owner: str) -> dict | None:
@@ -2296,16 +2301,16 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
         if closing:
             _record_continuity_event(prepared_continuity or authority.get("continuity"))
-        source_effects = {}
-        if new_map.get("closure"):
-            from .evidence_closure import close_source_issues
-            source_effects = close_source_issues(project, objective, locked=True)
-        return {"ingestion": ingestion, "settled": settled,
+        result = {"ingestion": ingestion, "settled": settled,
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
                         "quiescence": new_map["quiescence"]},
                 "report": report_projection(state["checkpoint"], ctx, standing_normal=True),
-                **({"governance_adoption": kept} if kept else {}), **source_effects, **tab_output()}
+                **({"governance_adoption": kept} if kept else {}), **tab_output()}
+    if new_map.get("closure"):
+        from .evidence_closure import close_source_issues
+        result.update(close_source_issues(project, objective))
+    return result
 
 
 def state_inventory(project: Path) -> dict:

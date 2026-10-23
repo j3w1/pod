@@ -741,17 +741,20 @@ class GhPort:
             result, seen = [], set()
             for row in nodes:
                 pr = row["number"]
-                url = f"https://github.com/{repository}/pull/{pr}"
                 oid = (row.get("mergeCommit") or {}).get("oid")
                 base_repository = row["baseRepository"]["nameWithOwner"]
-                if (type(pr) is not int or pr < 1 or pr in seen or row["url"].casefold() != url.casefold()
+                identity = (base_repository.casefold(), pr)
+                url = f"https://github.com/{base_repository}/pull/{pr}"
+                if (type(pr) is not int or pr < 1 or identity in seen or row["url"].casefold() != url.casefold()
                         or row["state"] not in ("OPEN", "CLOSED", "MERGED")
                         or not isinstance(base_repository, str) or not _name(base_repository)
                         or not isinstance(row["baseRefName"], str) or not _name(row["baseRefName"])
                         or row["state"] == "MERGED" and (not isinstance(oid, str) or not _GIT_ID.fullmatch(oid)
                                                                           or not isinstance(row["mergedAt"], str))):
                     raise ValueError
-                seen.add(pr)
+                seen.add(identity)
+                if base_repository.casefold() != repository.casefold():
+                    continue
                 result.append({"number": pr, "url": row["url"], "state": row["state"],
                                "merged_at": row.get("mergedAt"), "merge_commit": oid,
                                "base_repository": base_repository, "base_branch": row["baseRefName"]})
