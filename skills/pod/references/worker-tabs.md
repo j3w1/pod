@@ -158,20 +158,24 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   worker-tab standing close authorization. This never applies to active, coordinator, setup,
   reused-later, other-objective or owner-kept terminals. If Orca refuses, name
   the tab and failure in the final report.
-  Once closure, continuation or historical retirement is recorded without its
-  report, the standing close authorization does not cover it; name the tab in
-  the final report for the owner's decision.
-  Otherwise, if the admission's route decision records `route_mismatch`, say
-  that its mismatch is recorded: the standing close authorization covers the
-  tab only once its report is recorded, and Pod refuses that report while
-  Orca's effective route differs. If it stays refused, name the tab in the final
-  report for the owner's decision. A mismatch recorded from start-receipt
-  evidence alone does not mean reports are refused: a report with matching
-  worker-show route evidence remains accepted and supplies the close, even
-  after discard.
-  Without a recorded mismatch, while the objective is open, recording its
-  report makes the authorized close available, even if its result was discarded.
-  Until then, give no close command.
+- For an unreported user-owned or external tab with an active route hold,
+  name the held admission and the project lead's settlement step from the
+  route-settlement guidance reached through the router. A start-receipt
+  mismatch alone does not mean a report will refuse: matching worker-show
+  evidence can still permit consumption. Settlement alone supplies no standing
+  close command for an unreported tab. On a closed, continued, evidence-closed
+  record or one ended by historical retirement, give the project lead the remaining tab
+  follow-up in the successor or repository task; this ended record accepts no
+  settlement write and supplies no close command.
+- For a terminally discarded, unreported review or investigation tab, the
+  project lead preserves its correction follow-up in the successor or repository
+  task. This tab has no standing close command.
+- For other unreported user-owned or external tabs, while the objective is open,
+  recording the report makes the authorized close available, even if an
+  implementation result was discarded. Until then, give no close command.
+  After closure, continuation or historical retirement, the standing close
+  authorization does not cover an unreported tab; name it in the final report
+  for the owner's decision.
 - A disconnected or not-materialized terminal needs nothing. A terminal reused
   for a later Dispatch belongs to that assignment alone.
 
