@@ -278,6 +278,37 @@ class ContinuationTests(WindowCase):
                          ("unavailable", "window_not_session_ending"))
         self.assertTrue(row["continuation"]["next_action"].startswith(window.LEAD))
 
+    def test_a_pending_continuation_holds_an_owner_handoff(self):
+        self.establish()
+        self.lose()
+        self.mode = "lost"
+        self.command()
+        self.mode = "success"
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        observed = self.status()["owner_handoff"]
+        self.assertEqual((observed["status"], observed["condition"]), ("handoff_unavailable", "window_continuation_pending"))
+        before = self.snapshot()
+        with self.assertRaises(PodError):
+            self.handoff({"provenance": "user_direct", "instruction": "Make this terminal the coordinator",
+                          **observed["facts"]})
+        self.assertEqual(self.snapshot(), before)
+
+    def test_discovery_outside_orca_and_within_its_budget(self):
+        self.establish()
+        self.lose()
+        rows = [{"objective": "objective", "phase": "open"}]
+        with patch.dict(os.environ):
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+            window.discover(rows, project=self.project)
+        self.assertEqual((rows[0]["continuation"]["status"], rows[0]["continuation"]["condition"]),
+                         ("unavailable", "not_in_orca"))
+        rows = [{"objective": "objective", "phase": "open"}]
+        with patch.object(window, "DISCOVERY_CALLS", 0):
+            window.discover(rows, project=self.project)
+        self.assertEqual((rows[0]["continuation"]["status"], rows[0]["continuation"]["condition"]),
+                         ("unchecked", "discovery_budget"))
+        self.assertEqual(self.host_requests, [])
+
     def test_stored_rows_validate_and_succession_lineage_recognizes_them(self):
         self.establish()
         self.lose()
