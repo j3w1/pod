@@ -975,46 +975,37 @@ class DiscoveryTests(WindowCase):
         self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "discovery_budget"))
         self.assertEqual(self.host_requests, [])
 
-    def test_scope_checks_the_budget_between_retained_history_validations(self):
+    def test_the_list_leaves_a_closed_peer_unknown_and_the_command_proves_it(self):
         from pod import ledger, obligations
         self.establish(admissions=False)
         self.closed_review_peer()
         self.lose()
-        clock, stages = {"now": 0.0}, []
+        stages = []
 
-        class Clock(window.Budget):
-            def __init__(self, seconds):
-                self._clock = lambda: clock["now"]
-                self.deadline = seconds
-
-        def observe(name, function, spend):
+        def observe(name, function):
             def call(*args, **kwargs):
-                stages.append((name, clock["now"]))
-                result = function(*args, **kwargs)
-                if name == spend:
-                    clock["now"] = window.DISCOVERY_SECONDS
-                return result
+                stages.append(name)
+                return function(*args, **kwargs)
             return call
 
         before = self.snapshot()
-        for spend, expected in (("checkpoint", ["checkpoint"]), ("context", ["checkpoint", "context"]),
-                                ("closure", ["checkpoint", "context", "closure"])):
-            with self.subTest(spend=spend):
-                clock["now"], stages[:] = 0.0, []
-                with patch.object(window, "Budget", Clock), \
-                        patch.object(ledger, "validate_checkpoint_snapshot",
-                                     side_effect=observe("checkpoint", ledger.validate_checkpoint_snapshot, spend)), \
-                        patch.object(ledger, "closed_snapshot_context",
-                                     side_effect=observe("context", ledger.closed_snapshot_context, spend)), \
-                        patch.object(obligations, "validate_closed_snapshot",
-                                     side_effect=observe("closure", obligations.validate_closed_snapshot, spend)):
-                    continuation = self.listed()
-                self.assertEqual([name for name, _ in stages], expected)
-                self.assertTrue(all(start < window.DISCOVERY_SECONDS for _, start in stages), stages)
-                self.assertEqual((continuation["status"], continuation["condition"]),
-                                 ("unknown", "discovery_budget"))
-        self.assertEqual(self.host_requests, [])
-        self.assertEqual(self.snapshot(), before)
+        with patch.object(ledger, "validate_checkpoint_snapshot",
+                          side_effect=observe("checkpoint", ledger.validate_checkpoint_snapshot)), \
+                patch.object(ledger, "closed_snapshot_context",
+                             side_effect=observe("context", ledger.closed_snapshot_context)), \
+                patch.object(obligations, "validate_closed_snapshot",
+                             side_effect=observe("closure", obligations.validate_closed_snapshot)):
+            continuation = self.listed()
+            # The list runs no closure proof (its config, Governor, governance and source reads) and says so.
+            self.assertEqual(stages, [])
+            self.assertEqual((continuation["status"], continuation["condition"]),
+                             ("unknown", "peer_closure_unverified"))
+            self.assertIn("closure-peer", continuation["message"])
+            self.assertEqual(self.host_requests, [])
+            self.assertEqual(self.snapshot(), before)
+            # Without a discovery budget, the command proves the peer's closure in full and continues.
+            self.assertEqual(self.resume()["status"], "continued")
+            self.assertEqual(stages[:3], ["checkpoint", "context", "closure"])
 
     def test_spent_budget_prevents_each_objective_reread(self):
         from pod import ledger

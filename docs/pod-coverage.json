@@ -8086,14 +8086,25 @@
         "tests.test_window_continuation.DiscoveryTests.test_one_deadline_checks_each_scope_directory_metadata_read",
         "tests.test_window_continuation.DiscoveryTests.test_spent_verifier_request_budget_prevents_the_verifier_process",
         "tests.test_window_continuation.DiscoveryTests.test_scope_checks_the_budget_during_directory_enumeration",
-        "tests.test_window_continuation.DiscoveryTests.test_scope_checks_the_budget_between_retained_history_validations",
+        "tests.test_window_continuation.DiscoveryTests.test_the_list_leaves_a_closed_peer_unknown_and_the_command_proves_it",
         "tests.test_window_continuation.DiscoveryTests.test_spent_budget_prevents_each_objective_reread",
         "tests.test_window_continuation.DiscoveryTests.test_an_unavailable_reserved_task_read_lists_unknown_and_still_continues",
         "tests.test_window_continuation.DiscoveryTests.test_a_partial_reserved_task_read_lists_unknown_and_still_continues",
         "tests.test_window_continuation.DiscoveryTests.test_an_unreadable_bound_admission_lists_unknown_and_still_continues",
         "tests.test_window_continuation.DiscoveryTests.test_a_read_failing_after_the_runtime_read_lists_unknown_not_a_refusal",
         "tests.test_window_continuation.DiscoveryTests.test_exhausted_attempts_are_never_advertised",
-        "tests.test_window_continuation.DiscoveryTests.test_the_list_reads_no_configuration_outside_orca_and_only_the_verifier_setting_inside"
+        "tests.test_window_continuation.DiscoveryTests.test_the_list_reads_no_configuration_outside_orca_and_only_the_verifier_setting_inside",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_each_read_uses_the_remaining_budget",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_a_large_budget_keeps_the_original_timeout",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_exhaustion_starts_no_process",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_exhaustion_after_a_read_starts_no_next_process",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_a_deadline_timeout_reports_budget_exhaustion",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_without_a_deadline_the_original_timeout_is_unchanged",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_leaving_the_deadline_restores_the_original_timeout",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_an_early_timeout_keeps_the_original_failure",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_without_a_deadline_errors_are_unchanged",
+        "tests.test_discovery_git_budget.ReadTests.test_an_explicit_timeout_stays_below_both_limits",
+        "tests.test_discovery_git_budget.LocalGitTests.test_an_explicit_timeout_stays_below_both_limits"
       ],
       "status": "NOT_RUN"
     }

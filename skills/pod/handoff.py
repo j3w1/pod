@@ -79,13 +79,15 @@ def _mentions(value: object, text: str, depth: int = 0) -> bool:
     return False
 
 
-def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dict:
+def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_closure: bool = True) -> dict:
     """Prove scope without the diagnostic reader's unsupported-record skip.
 
     A positive raw reference blocks unless a supported record proves closure.
     Unknown membership holds; no record is converted, locked or rewritten.
     Discovery may supply a budget; exhaustion raises rather than returning a partial
     scope. Without it, continuation and owner handoff still require the complete proof.
+    Discovery also passes `prove_closure=False`: a closed peer that records the Run is then
+    reported in `closure_unchecked` instead of proving its closure, which only execution does.
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, closed_snapshot_context)
@@ -114,7 +116,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dic
         return {"objectives": [], "unreadable": 1}
     own = objective_root(project, objective) / "context.json"
     others, unknown = [], 0
-    unverifiable = []
+    unverifiable, unchecked = [], []
     # A complete frontier is part of the proof. scandir/stat propagate errors that
     # Path.glob suppresses; an unavailable directory is never apparent absence.
     paths = []
@@ -168,6 +170,10 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dic
             pass
         if referenced:
             closure = checkpoint.get("closure") if isinstance(checkpoint, dict) else None
+            if supported and closure is not None and not prove_closure:
+                name = checkpoint["objective"]
+                unchecked.append(name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective")
+                continue
             if supported and closure is not None:
                 from .obligations import validate_closed_snapshot
                 try:
@@ -204,7 +210,10 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dic
             # proves it only when its Run id appears nowhere in the record.
             unknown += 1
     check()
-    return {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
+    result = {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
+    if unchecked:
+        result["closure_unchecked"] = sorted(set(unchecked))
+    return result
 
 
 def detect(project: Path, objective: str, state: dict, *, port, caller: str | None = None) -> dict:

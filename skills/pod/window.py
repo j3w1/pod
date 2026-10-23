@@ -49,7 +49,7 @@ DISCOVERY_SECONDS = 15.0
 DISCOVERY_RUNTIME_TIMEOUT = 3
 # A failed, timed-out or partial read leaves eligibility unproved: the list says `continuation unknown`, never a refusal.
 UNPROVED = frozenset({"runtime_unreadable", "owner_unreadable", "run_unverified", "workers_unreadable",
-                      "scope_unreadable", "window_unverified", "binding_unstable"})
+                      "scope_unreadable", "window_unverified", "binding_unstable", "peer_closure_unverified"})
 # No window question: the ordinary paths apply unchanged.
 QUIET = frozenset({"runtime_unchanged", "objective_continued", "objective_retired", "objective_closed",
                    "window_verifier_unavailable"})
@@ -90,6 +90,8 @@ NEXT = {
     "run_shared": "another open objective records this Run; resolve the shared Run before continuing",
     "scope_unreadable": "another objective record could not prove whether it uses this Run; resolve it first",
     "peer_history_unverifiable": "a peer's retained history cannot prove its closure; resolve it first",
+    "peer_closure_unverified": "read pod status --objective for this objective; it and the command prove a closed peer "
+                               "sharing the Run, which the list does not",
     "identity_differs": "a bound admission's native identity differs from its record; differing identities cannot be "
                         "continued; use an existing recovery path",
     "history_full": "the eight-entry continuity history is full; continue in a successor objective",
@@ -571,7 +573,9 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                for key in ("terminalHandle", "agentTerminalHandle")):
             return fail("caller_is_worker", "this terminal has a worker binding on this Run.", definitive=True)
     _step(budget)
-    scope = run_scope(project, objective, run_id, budget=budget)
+    # The list never runs a closed peer's full closure proof (config, Governor, governance and source reads); such a peer
+    # leaves the row unknown, and the command itself proves it (pod#110).
+    scope = run_scope(project, objective, run_id, budget=budget, prove_closure=budget is None)
     _step(budget)
     if scope["objectives"]:
         result["other_objectives"] = scope["objectives"][:8]
@@ -579,6 +583,9 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                     definitive=True)
     if scope["unreadable"]:
         return fail("scope_unreadable", f"{scope['unreadable']} objective record(s) could not prove Run membership.")
+    if scope.get("closure_unchecked"):
+        return fail("peer_closure_unverified", "a closed objective that records this Run is proved closed only by the "
+                    "command itself: " + ", ".join(scope["closure_unchecked"][:8]) + ".")
     if scope.get("unverifiable"):
         return fail("peer_history_unverifiable", "peer history cannot prove closure: "
                     + ", ".join(scope["unverifiable"][:8]) + ".")
