@@ -8131,7 +8131,8 @@
         "tests.test_discovery_bound.BoundTests.test_a_truly_missing_worktree_still_lists_worktree_changed",
         "tests.test_discovery_bound.BoundTests.test_a_non_directory_worktree_still_lists_worktree_changed",
         "tests.test_discovery_bound.BoundTests.test_denied_ancestor_git_marker_does_not_prove_a_non_repository",
-        "tests.test_discovery_bound.BoundTests.test_in_memory_inventory_preserves_control_characters_in_worktree_paths"
+        "tests.test_discovery_bound.BoundTests.test_in_memory_inventory_preserves_control_characters_in_worktree_paths",
+        "tests.test_discovery_bound.BoundTests.test_unreadable_evidence_closure_lists_unknown_not_available"
       ],
       "status": "NOT_RUN"
     }

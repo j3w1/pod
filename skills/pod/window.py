@@ -55,7 +55,8 @@ _DISCOVERY_START = Lock()
 _DISCOVERY_WORKER: Thread | None = None
 # A failed, timed-out or partial read leaves eligibility unproved: the list says `continuation unknown`, never a refusal.
 UNPROVED = frozenset({"runtime_unreadable", "owner_unreadable", "run_unverified", "workers_unreadable",
-                      "scope_unreadable", "window_unverified", "binding_unstable", "peer_closure_unverified"})
+                      "scope_unreadable", "window_unverified", "binding_unstable", "peer_closure_unverified",
+                      "closure_unreadable"})
 # No window question: the ordinary paths apply unchanged.
 QUIET = frozenset({"runtime_unchanged", "objective_continued", "objective_retired", "objective_closed",
                    "window_verifier_unavailable"})
@@ -67,6 +68,7 @@ NEXT = {
     "objective_continued": "read the successor objective; this record accepts no coordinator",
     "objective_retired": "read it with pod status --objective ID; it accepts no coordinator",
     "objective_closed": "read it with pod status --objective ID; it accepts no coordinator",
+    "closure_unreadable": "restore read access to the objective's state directory, then read pod status --objective ID",
     "recorded_owner": "this terminal is the recorded coordinator; continue with ordinary Pod writes",
     "already_continued": "this terminal already continued the objective; continue with ordinary Pod writes",
     "handoff_pending": "finish or abort the pending owner handoff first; window continuation never overrides it",
@@ -450,13 +452,17 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("objective_continued", "a successor objective continued this objective.", definitive=True)
     if isinstance(state.get("historical_retirement"), dict):
         return fail("objective_retired", "the owner's historical retirement ended this objective.", definitive=True)
-    from .evidence_closure import present
+    from .evidence_closure import _presence
     from .ledger import objective_root
     _step(budget)
     root = objective_root(project, objective)
     _step(budget)
-    if present(root):
+    # An evidence closure Pod cannot inspect is neither a closure nor its absence; the command refuses on it too.
+    closure = _presence(root)
+    if closure == "present":
         return fail("objective_closed", "the objective was closed by evidence.", definitive=True)
+    if closure == "unknown":
+        return fail("closure_unreadable", "whether the objective is closed by evidence cannot be read.")
     if checkpoint.get("closure"):
         return fail("objective_closed", "the objective is closed.", definitive=True)
     try:

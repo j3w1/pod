@@ -369,6 +369,24 @@ class BoundTests(WindowCase):
         self.worktree_stat_failure(PermissionError(errno.EACCES, "synthetic denied metadata"),
                                    observe=lambda: self.assert_lead_refusal("worktree_changed"))
 
+    def test_unreadable_evidence_closure_lists_unknown_not_available(self):
+        from pod import evidence_closure
+        original, observed = os.lstat, []
+
+        def lstat(path, *args, **kwargs):
+            if os.fspath(path).endswith(os.sep + evidence_closure.FILE):
+                observed.append(path)
+                raise PermissionError(errno.EACCES, "synthetic denied metadata")
+            return original(path, *args, **kwargs)
+
+        before = self.snapshot()
+        with patch.object(os, "lstat", new=lstat):
+            result = self.listed()[0]["continuation"]
+        self.assertTrue(observed)
+        self.assertEqual((result["status"], result["condition"]), ("unknown", "closure_unreadable"))
+        self.assertEqual(self.host_requests, [])
+        self.assertEqual(self.snapshot(), before)
+
     def test_a_truly_missing_worktree_still_lists_worktree_changed(self):
         state = self.state()
         state["checkpoint"]["worktree"]["path"] = str(self.root / "missing")
