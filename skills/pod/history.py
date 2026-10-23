@@ -232,9 +232,13 @@ def _require_size(record, *, current_bytes):
                        + ", ".join(f"{row['section']}={row['bytes']}" for row in sections),
                        {"current_bytes": current_bytes, "proposed_bytes": proposed,
                         "limit_bytes": CONTEXT_LIMIT, "largest_sections": sections,
-                        "next_action": "Consume or triage reports, record implementation dispositions, or settle "
-                                       "governed effects through their supported paths; use internal record-compaction "
-                                       "for bounded explicit maintenance of an already over-limit record; the project lead resolves capacity and proof before closure."})
+                        "next_action": "On waiting rows, unselect stale selected evidence with evidence: [] so their "
+                                       "retained receipts can move to immutable history. Mechanically renew large "
+                                       "rows through the checkpoint renew route so terminal rows can archive. "
+                                       "Consume or triage reports, record implementation dispositions and settle "
+                                       "governed effects through their supported paths. If the record is still over "
+                                       "limit, the project lead diagnoses the remaining sections and supported "
+                                       "recovery; record-compaction keeps its existing authority."})
 
 
 def _expand(reference, loader, cache):

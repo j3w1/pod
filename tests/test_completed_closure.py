@@ -528,6 +528,12 @@ class CompletionGuidanceTests(unittest.TestCase):
             history._require_size({"padding": "x" * history.CONTEXT_LIMIT}, current_bytes=0)
         self.assertIn("project lead", full.exception.detail["next_action"])
         self.assertNotIn("with an owner decision", full.exception.detail["next_action"])
+        self.assertIn("waiting rows", full.exception.detail["next_action"])
+        self.assertIn("evidence: []", full.exception.detail["next_action"])
+        self.assertIn("retained receipts can move to immutable history", full.exception.detail["next_action"])
+        self.assertIn("renew", full.exception.detail["next_action"])
+        self.assertIn("terminal rows can archive", full.exception.detail["next_action"])
+        self.assertIn("record-compaction keeps its existing authority", full.exception.detail["next_action"])
         case, _ = evidence.DeliveryClosesTests.merged(self)
         state = read(case.project, "objective")["checkpoint"]
         observed = governance.governance_observation(case.project, state["governance"]["base_ref"])
