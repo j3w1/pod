@@ -793,6 +793,8 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
                          obligation=ob["id"], seq=seq)
         ob["introduced_seq"] = seq
         if ob["id"] in ctx.get("renewal_new", set()):
+            if (refresh or ctx.get("derived_adoption")) and ob["provenance"] == "project_policy":
+                ob["source"] = _relocate(ob["source"], observed, sources)
             continue
         if ob["provenance"] == "user_direct" and isinstance(ob.get("source"), dict):
             authority = ctx.get("revision_authority") or {}

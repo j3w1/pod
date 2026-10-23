@@ -170,6 +170,28 @@ class LineageReadTests(unittest.TestCase):
 
 
 class TerminalCitationTests(ProductionCase):
+    def test_renewal_in_adoption_or_refresh_checkpoint_relocates_generated_policy_tip(self):
+        from pod.lineage import copied_identity
+        from tests import kernel_support as boundaries
+        renewal.RenewalAssuranceTests.policy(self)
+        for old, new, path, content, refresh in (
+                ("A", "A2", "README.md", "sibling work\n", False),
+                ("A2", "A3", "AGENTS.md", "Inserted introduction.\n" + boundaries.AGENTS, True)):
+            with self.subTest(refresh=refresh):
+                (self.project / path).write_text(content)
+                boundaries.git(self.project, "add", path)
+                boundaries.git(self.project, "commit", "-qm", "advance target before renewal")
+                target = boundaries.git(self.project, "rev-parse", "HEAD")
+                boundaries.git(self.project, "update-ref", "refs/remotes/origin/target", target)
+                fields = {"governance_refresh": True,
+                          "revision_authority": {"provenance": "user_direct", "instruction": "Adopt the target policy"}} if refresh else {}
+                self.write(renew=[{"id": old, "as": new}], **fields)
+                rows = {row["id"]: row for row in self.stored()}
+                for key in (old, new):
+                    self.assertEqual(rows[key]["source"]["base"], target)
+                self.assertEqual(rows[old]["renewal"]["definition"], copied_identity(rows[new]))
+                self.assertEqual(rows[new]["receipts"], [])
+
     def test_terminal_policy_citations_follow_adoption_and_refresh_without_changing_identity(self):
         from pod.lineage import copied_identity
         from tests import kernel_support as boundaries

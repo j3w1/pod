@@ -7565,7 +7565,8 @@
         "tests.test_records_renewal.RenewalTests.test_objective_and_coordinator_copy_history_and_waits",
         "tests.test_records_renewal.RenewalTests.test_user_copy_keeps_adoption_and_acceptances_and_allows_later_revision",
         "tests.test_records_boundaries.RenewalAssuranceTests.test_policy_renewal_without_owner_decision_remains_required",
-        "tests.test_records_corrections.TerminalCitationTests.test_terminal_policy_citations_follow_adoption_and_refresh_without_changing_identity"
+        "tests.test_records_corrections.TerminalCitationTests.test_terminal_policy_citations_follow_adoption_and_refresh_without_changing_identity",
+        "tests.test_records_corrections.TerminalCitationTests.test_renewal_in_adoption_or_refresh_checkpoint_relocates_generated_policy_tip"
       ],
       "status": "NOT_RUN"
     },
