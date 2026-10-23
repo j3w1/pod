@@ -1042,6 +1042,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
+            "closure_at": datetime.now(timezone.utc).isoformat(),
             "pod_mapping_source": checkpoint_value.get("objective_source"),
             "pod_mapping_facts": state.get("pod_ticks", {}).get("facts"),
             "pod_mapping_read": state.get("pod_ticks", {}).get("read", {}),
@@ -1394,7 +1395,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              and all(core.get(key) == previous.get(key) for key in core
                                      if key not in {"schema", "native_refs", "policy_revision"}))
             if closing or delivery_only:
-                kept, unchanged = completion_governance(project, current_map, checkpoint=True)
+                kept, unchanged = completion_governance(project, current_map, checkpoint=True, state=state)
             else:
                 unchanged = require_governance_current(project, current_map, checkpoint=True)
             if unchanged is not None:
@@ -2260,7 +2261,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         from .governance import completion_governance
         kept = None
         if closing:
-            kept, _ = completion_governance(project, map_state)
+            kept, _ = completion_governance(project, map_state, state=state)
         else:
             require_governance_current(project, map_state)
         if kept is not None:

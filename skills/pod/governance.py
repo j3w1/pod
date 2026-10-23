@@ -648,15 +648,20 @@ def unchanged_governance(project: Path, map_state: dict) -> tuple[dict, dict] | 
                       "sources": revisions(sources)}
 
 
-def _github_completion(project: Path, map_state: dict) -> list[dict] | None:
-    """Reuse the bounded chain/source/delivery proof without requiring coordinator loss or creating R93."""
+def _github_completion(project: Path, map_state: dict, *, state: dict | None = None) -> list[dict] | None:
+    """Prove the baseline from the locked authority-joined state, or its persisted equivalent.
+
+    Closing writes supply their state after a proven continuity rebind, whose persistence is atomic with the
+    write. The map must still be that state's baseline, never the checkpoint or report's proposed replacement.
+    """
     from . import evidence_closure as closure
     from .ledger import read
     objective = map_state.get("objective")
     if not isinstance(objective, str):
         return None
     try:
-        state = read(project, objective)
+        if state is None:
+            state = read(project, objective)
         if state is None or state.get("checkpoint") != map_state:
             return None
         doc = closure._documented(state, current=True)
@@ -680,7 +685,7 @@ def _github_completion(project: Path, map_state: dict) -> list[dict] | None:
     return None
 
 
-def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
+def closure_keeps_baseline(project: Path, map_state: dict, *, state: dict | None = None) -> dict | None:
     """Shared completion proof: unchanged target containing R93 or GitHub-proved delivery.
 
     Callers still validate the entire write and finalization. This predicate adopts nothing, including when
@@ -703,7 +708,7 @@ def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
     if delivery is None:
         if git_is_ancestor(project, governance["base"], current) is not True:
             return None
-        proved = _github_completion(project, map_state)
+        proved = _github_completion(project, map_state, state=state)
         if proved is None:
             return None
         if (_resolve_commit(project, governance["base_ref"]) != current
@@ -723,9 +728,10 @@ def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
                       "the contained result and later policy are not adopted"}
 
 
-def completion_governance(project: Path, map_state: dict, *, checkpoint: bool = False) -> tuple[dict | None, tuple[dict, dict] | None]:
+def completion_governance(project: Path, map_state: dict, *, checkpoint: bool = False,
+                          state: dict | None = None) -> tuple[dict | None, tuple[dict, dict] | None]:
     """Completion callers share proof and refusal guidance; ordinary adoption keeps its own authority."""
-    kept = closure_keeps_baseline(project, map_state)
+    kept = closure_keeps_baseline(project, map_state, state=state)
     if kept is not None:
         return kept, None
     try:
@@ -734,11 +740,12 @@ def completion_governance(project: Path, map_state: dict, *, checkpoint: bool = 
         if exc.code not in ("governance_changed", "governance_unavailable"):
             raise
         raise PodError(exc.code, "Completion bookkeeping lacks proved delivery, retained target identity or Git ancestry; "
-                       "the project lead must resolve that proof before retrying",
-                       {**(exc.detail or {}), "next_action": "the project lead restores the named Git/target facts and checks "
-                        "available bound-source completion and merged GitHub delivery evidence, then retries proved closure "
-                        "on the retained baseline without governance_refresh; unavailable proof remains a lead task; ordinary work adopting "
-                        "changed governance retains its existing revision authority"}) from exc
+                       "closure remains blocked as a project lead task",
+                       {**(exc.detail or {}), "next_action": "the project lead restores genuine delivery proof and the retained "
+                        "Git/target facts; if no recorded or linked merge into that target exists, keep closure blocked and "
+                        "report the unavailable completion proof to the project lead; retry only after the required proof "
+                        "is available, on the retained baseline without governance_refresh; ordinary work adopting changed "
+                        "governance retains its existing revision authority"}) from exc
 
 
 def accepted_current_target(map_state: dict, current: str) -> bool:
