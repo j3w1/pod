@@ -85,6 +85,8 @@ def refuse(code: str, detail: str, message: str, *, next_action: str | None = No
         "receipt_conflict": "preserve the immutable receipt; use a fresh reference or review attempt for fresh evidence",
         "finding_limit": "preserve every stored finding; consolidate only related new findings within the group/id bounds",
         "receipt_limit": "preserve receipt history; no receipt can be evicted to admit new proof",
+        "row_limit": (f"keep every row; a map holds at most {MAX_LIVE} live and {MAX_OBLIGATIONS} total rows, "
+                      "withdrawn and renewed rows leave the live count, so record fewer new rows in this write"),
         "malformed": "correct the named record or fields to the accepted shape and retry",
     }
     action = next_action or actions.get(detail) or NEXT_ACTIONS.get(code, "inspect the refused record")
