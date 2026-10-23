@@ -79,15 +79,35 @@ def _mentions(value: object, text: str, depth: int = 0) -> bool:
     return False
 
 
-def run_scope(project: Path, objective: str, run_id: str) -> dict:
+def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dict:
     """Prove scope without the diagnostic reader's unsupported-record skip.
 
     A positive raw reference blocks unless a supported record proves closure.
     Unknown membership holds; no record is converted, locked or rewritten.
+    Discovery may supply a budget; exhaustion raises rather than returning a partial
+    scope. Without it, continuation and owner handoff still require the complete proof.
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, closed_snapshot_context)
     from .history import load_context
+    from .orca import DEADLINE_SPENT
+
+    def check():
+        if budget is not None:
+            budget.check()
+
+    def directory_entries(path):
+        check()
+        with os.scandir(path) as entries:
+            found = []
+            while True:
+                check()
+                entry = next(entries, None)
+                if entry is None:
+                    return found
+                found.append(entry)
+
+    check()
     root = state_root(project)
     if root.is_symlink():
         return {"objectives": [], "unreadable": 1}
@@ -98,25 +118,25 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
     # Path.glob suppresses; an unavailable directory is never apparent absence.
     paths = []
     try:
-        with os.scandir(root) as frontier:
-            directories = list(frontier)
+        directories = directory_entries(root)
     except FileNotFoundError:
         return {"objectives": [], "unreadable": 1}
     except OSError:
         return {"objectives": [], "unreadable": 1}
     for directory in directories:
+        check()
         try:
             if directory.is_symlink():
                 unknown += 1
                 continue
             if not directory.is_dir(follow_symlinks=False):
                 continue
-            with os.scandir(directory.path) as contents:
-                entries = list(contents)
+            entries = directory_entries(directory.path)
             paths.extend(Path(entry.path) for entry in entries if entry.name == "context.json")
         except OSError:
             unknown += 1
     for path in paths:
+        check()
         if path == own:
             continue
         try:
@@ -136,6 +156,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
         referenced = (isinstance(refs, list) and any(isinstance(row, dict) and row.get("runId") == run_id for row in refs)
                       or isinstance(admissions, dict) and any(isinstance(row, dict) and row.get("run_id") == run_id for row in admissions.values()))
         supported = False
+        check()
         try:
             _run_references(_validate_context(raw))
             supported = True
@@ -156,10 +177,15 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                         raise PodError("closure_unverified", "Peer repository binding is unavailable")
                     if not peer_project.is_dir():
                         raise PodError("closure_unverified", "Peer worktree is unreadable")
+                    check()
                     validate_checkpoint_snapshot(peer_project, raw)
+                    check()
                     ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
+                    check()
                     unproven = validate_closed_snapshot(checkpoint, ctx)
-                except (PodError, KeyError, TypeError, ValueError, OSError):
+                except (PodError, KeyError, TypeError, ValueError, OSError) as exc:
+                    if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT:
+                        raise
                     pass
                 else:
                     if unproven:
@@ -172,6 +198,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
             # Only documented reference layouts can prove non-membership; an older-schema record
             # proves it only when its Run id appears nowhere in the record.
             unknown += 1
+    check()
     return {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
 
 

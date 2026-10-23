@@ -8075,6 +8075,13 @@
         "tests.test_window_continuation.RefusalTests.test_discovery_checks_the_recorded_worktree_itself",
         "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors",
         "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_worker_pages_and_clamps_every_read",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_peer_loads_in_a_twelve_peer_frontier",
+        "tests.test_window_continuation.DiscoveryTests.test_scope_checks_the_budget_during_directory_enumeration",
+        "tests.test_window_continuation.DiscoveryTests.test_scope_checks_the_budget_between_retained_history_validations",
+        "tests.test_window_continuation.DiscoveryTests.test_spent_budget_prevents_each_objective_reread",
+        "tests.test_window_continuation.DiscoveryTests.test_an_unavailable_reserved_task_read_lists_unknown_and_still_continues",
+        "tests.test_window_continuation.DiscoveryTests.test_a_partial_reserved_task_read_lists_unknown_and_still_continues",
+        "tests.test_window_continuation.DiscoveryTests.test_an_unreadable_bound_admission_lists_unknown_and_still_continues",
         "tests.test_window_continuation.DiscoveryTests.test_a_read_failing_after_the_runtime_read_lists_unknown_not_a_refusal",
         "tests.test_window_continuation.DiscoveryTests.test_exhausted_attempts_are_never_advertised",
         "tests.test_window_continuation.DiscoveryTests.test_the_list_reads_no_configuration_outside_orca_and_only_the_verifier_setting_inside"

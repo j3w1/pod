@@ -305,11 +305,15 @@ def _step(budget: "Budget | None", need: float = 0.0) -> None:
         budget.check(need=need)
 
 
-def _admissions(state: dict, *, runtime: str, port, budget: "Budget | None" = None) -> tuple[list[dict], list[str]]:
-    """Fresh readback of every outstanding admission; identities compared exactly, nothing settled or stamped."""
+def _admissions(state: dict, *, runtime: str, port,
+                budget: "Budget | None" = None) -> tuple[list[dict], list[str], list[str]]:
+    """Fresh readback, identity differences and read failures; nothing settled or stamped.
+
+    Read failures are discovery metadata only: execution may still record that admission UNKNOWN.
+    """
     from .ledger import _native_assignment_settled
     from .orca import worker_rows
-    rows, differs = [], []
+    rows, differs, read_failures = [], [], []
     fleets: dict[str, object] = {}
     for key in sorted(state.get("admissions", {})):
         row = state["admissions"][key]
@@ -332,8 +336,10 @@ def _admissions(state: dict, *, runtime: str, port, budget: "Budget | None" = No
             fleet = fleets[run]
             if isinstance(fleet, str):
                 item["reason"] = f"exact Run/Task lookup unavailable ({fleet})"
+                read_failures.append(item["reason"])
             elif fleet["runtime"] != runtime or fleet.get("complete") is not True:
                 item["reason"] = "exact Run/Task lookup incomplete at the current runtime"
+                read_failures.append(item["reason"])
             else:
                 item["runtime"] = runtime
                 found = [worker for worker in fleet["workers"] if isinstance(worker, dict) and (
@@ -352,12 +358,14 @@ def _admissions(state: dict, *, runtime: str, port, budget: "Budget | None" = No
                 if getattr(exc, "code", None) == DEADLINE_SPENT:
                     raise
                 item["reason"] = "worker read unavailable (" + getattr(exc, "code", "unbound") + ")"
+                read_failures.append(item["reason"])
                 rows.append(item)
                 continue
             result = shown.get("result") if isinstance(shown, dict) else None
             parts = [result.get(name) if isinstance(result, dict) else None for name in ("dispatch", "projection", "worker")]
             if shown.get("runtime") != runtime or not all(isinstance(part, dict) for part in parts):
                 item["reason"] = "worker read incomplete at the current runtime"
+                read_failures.append(item["reason"])
             else:
                 dispatch, projection, worker = parts
                 if (dispatch.get("id"), dispatch.get("runId"), dispatch.get("taskId"), projection.get("id"),
@@ -376,7 +384,7 @@ def _admissions(state: dict, *, runtime: str, port, budget: "Budget | None" = No
                 else:
                     item["reason"] = "not settled at readback"
         rows.append(item)
-    return rows, differs
+    return rows, differs, read_failures
 
 
 def _cwd_toplevel() -> str | None:
@@ -555,7 +563,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                for key in ("terminalHandle", "agentTerminalHandle")):
             return fail("caller_is_worker", "this terminal has a worker binding on this Run.", definitive=True)
     _step(budget)
-    scope = run_scope(project, objective, run_id)
+    scope = run_scope(project, objective, run_id, budget=budget)
     _step(budget)
     if scope["objectives"]:
         result["other_objectives"] = scope["objectives"][:8]
@@ -566,7 +574,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     if scope.get("unverifiable"):
         return fail("peer_history_unverifiable", "peer history cannot prove closure: "
                     + ", ".join(scope["unverifiable"][:8]) + ".")
-    admissions, differs = _admissions(state, runtime=runtime, port=port, budget=budget)
+    admissions, differs, read_failures = _admissions(state, runtime=runtime, port=port, budget=budget)
     if differs:
         result["differs"] = differs[:16]
         return fail("identity_differs", "a bound admission identity differs: " + ", ".join(differs[:4]) + ".",
@@ -579,7 +587,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
             pending["state"] == "aborted" or pending["to_owner"] != caller and not result["pending"]["live"]):
         return fail("attempts_full", f"{len(pending['attempts'])} earlier attempts are already recorded, so another "
                                      "attempt does not fit.")
-    result.update(branch=branch, admissions=admissions,
+    result.update(branch=branch, admissions=admissions, admission_read_failures=read_failures,
                   run={"id": run_id, "before": {"coordinator": holder, "generation": held}})
     if verify:
         _step(budget, need=TIMEOUT_S)
@@ -840,6 +848,11 @@ def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
     calls = 0
     for row in opened:
         try:
+            budget.check()
+        except PodError as exc:
+            unknown(row, exc.code, "the bounded check did not finish")
+            continue
+        try:
             state = read(project, row["objective"])
             runtimes = set(_run_references(state).values()) if state else set()
         except (PodError, KeyError, TypeError, OSError):
@@ -852,7 +865,7 @@ def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
             budget.check()
             verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True, verify=False,
                              budget=budget)
-            if verdict["status"] == "window_available":
+            if verdict["status"] == "window_available" and not verdict.get("admission_read_failures"):
                 if calls >= DISCOVERY_CALLS:
                     raise PodError(DEADLINE_SPENT, "The discovery verifier budget is spent")
                 calls += 1
@@ -863,6 +876,9 @@ def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
                     else f"a read failed ({exc.code})")
             continue
         if verdict["condition"] in QUIET:
+            continue
+        if verdict["status"] == "window_available" and verdict.get("admission_read_failures"):
+            unknown(row, "workers_unreadable", "; ".join(verdict["admission_read_failures"][:4]))
             continue
         if verdict["status"] != "window_available" and verdict["condition"] in UNPROVED:
             # A read that failed is no refusal: the objective's eligibility is unknown until a read succeeds.

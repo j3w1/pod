@@ -697,6 +697,215 @@ class DiscoveryTests(WindowCase):
         self.assertEqual(reads[0][2], window.DISCOVERY_RUNTIME_TIMEOUT)  # The first runtime read is inside it too.
         self.assertEqual(self.host_requests, [])
 
+    def test_one_deadline_stops_peer_loads_in_a_twelve_peer_frontier(self):
+        from pod import history
+        from pod.ledger import state_root
+        self.establish(admissions=False)
+        self.lose()
+        for index in range(12):
+            peer = state_root(self.project) / f"incomplete-peer-{index}"
+            peer.mkdir()
+            (peer / "context.json").write_text("{}")
+        clock, starts = {"now": 0.0}, []
+        native, load = self.native_read, history.load_context
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        def native_read(argv, **kwargs):
+            clock["now"] += 1.0
+            return native(argv, **kwargs)
+
+        def local_read(path, **kwargs):
+            if Path(path).parent.name.startswith("incomplete-peer-"):
+                starts.append(clock["now"])
+                clock["now"] += 3.0  # Cost per actual peer load, never per budget check or sleep.
+            return load(path, **kwargs)
+
+        before = self.snapshot()
+        with patch.object(window, "Budget", Clock), patch("pod.orca.read_command", side_effect=native_read), \
+                patch("pod.history.load_context", side_effect=local_read):
+            continuation = self.listed()
+        self.assertTrue(starts)
+        self.assertTrue(all(start < window.DISCOVERY_SECONDS for start in starts), starts)
+        self.assertLess(len(starts), 12)
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "discovery_budget"))
+        self.assertEqual(self.host_requests, [])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_scope_checks_the_budget_during_directory_enumeration(self):
+        from pod import handoff
+        from pod.ledger import state_root
+        self.establish(admissions=False)
+        for index in range(12):
+            peer = state_root(self.project) / f"incomplete-peer-{index}"
+            peer.mkdir()
+            (peer / "context.json").write_text("{}")
+        clock, starts, scan = {"now": 0.0}, [], os.scandir
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        @contextmanager
+        def directory(path):
+            with scan(path) as entries:
+                def observed():
+                    while True:
+                        starts.append(clock["now"])
+                        clock["now"] += 3.0
+                        entry = next(entries, None)
+                        if entry is None:
+                            return
+                        yield entry
+                yield observed()
+
+        before = self.snapshot()
+        with patch("pod.handoff.os.scandir", side_effect=directory), \
+                patch("pod.history.load_context", side_effect=AssertionError("frontier is still incomplete")):
+            with self.assertRaises(PodError) as caught:
+                handoff.run_scope(self.project, "objective", "run", budget=Clock(window.DISCOVERY_SECONDS))
+        self.assertEqual(caught.exception.code, "discovery_budget")
+        self.assertTrue(starts)
+        self.assertTrue(all(start < window.DISCOVERY_SECONDS for start in starts), starts)
+        # Without the discovery budget the complete-scope proof still examines every incomplete peer.
+        self.assertEqual(handoff.run_scope(self.project, "objective", "run")["unreadable"], 12)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_scope_checks_the_budget_between_retained_history_validations(self):
+        from pod import ledger, obligations
+        self.establish(admissions=False)
+        self.closed_review_peer()
+        self.lose()
+        clock, stages = {"now": 0.0}, []
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        def observe(name, function, spend):
+            def call(*args, **kwargs):
+                stages.append((name, clock["now"]))
+                result = function(*args, **kwargs)
+                if name == spend:
+                    clock["now"] = window.DISCOVERY_SECONDS
+                return result
+            return call
+
+        before = self.snapshot()
+        for spend, expected in (("checkpoint", ["checkpoint"]), ("context", ["checkpoint", "context"]),
+                                ("closure", ["checkpoint", "context", "closure"])):
+            with self.subTest(spend=spend):
+                clock["now"], stages[:] = 0.0, []
+                with patch.object(window, "Budget", Clock), \
+                        patch.object(ledger, "validate_checkpoint_snapshot",
+                                     side_effect=observe("checkpoint", ledger.validate_checkpoint_snapshot, spend)), \
+                        patch.object(ledger, "closed_snapshot_context",
+                                     side_effect=observe("context", ledger.closed_snapshot_context, spend)), \
+                        patch.object(obligations, "validate_closed_snapshot",
+                                     side_effect=observe("closure", obligations.validate_closed_snapshot, spend)):
+                    continuation = self.listed()
+                self.assertEqual([name for name, _ in stages], expected)
+                self.assertTrue(all(start < window.DISCOVERY_SECONDS for _, start in stages), stages)
+                self.assertEqual((continuation["status"], continuation["condition"]),
+                                 ("unknown", "discovery_budget"))
+        self.assertEqual(self.host_requests, [])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_spent_budget_prevents_each_objective_reread(self):
+        from pod import ledger
+        self.establish(admissions=False)
+        self.lose()
+        clock, starts, native = {"now": 0.0}, [], self.native_read
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        def runtime_read(argv, **kwargs):
+            result = native(argv, **kwargs)
+            clock["now"] = window.DISCOVERY_SECONDS
+            return result
+
+        def reread(*args, **kwargs):
+            starts.append(clock["now"])
+            return ledger_read(*args, **kwargs)
+
+        ledger_read = ledger.read
+        rows = [{"objective": name, "phase": "open"} for name in ("objective", "not-reread")]
+        with patch.object(window, "Budget", Clock), patch("pod.orca.read_command", side_effect=runtime_read), \
+                patch.object(ledger, "read", side_effect=reread):
+            window.discover(rows, project=self.project)
+        self.assertEqual(starts, [])
+        self.assertEqual([(row["continuation"]["status"], row["continuation"]["condition"]) for row in rows],
+                         [("unknown", "discovery_budget")] * 2)
+        self.assertEqual(self.host_requests, [])
+
+    def reserved_read_failure_lists_unknown(self, code):
+        self.establish(admissions=False)
+        with patch.object(OrcaPort, "start_worker", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): self.start("reserved", self.frozen)
+        self.lose()
+        native, before, calls = self.native_read, self.state(), self.snapshot()
+
+        def failed_lookup(argv, **kwargs):
+            if argv[:2] == ["orchestration", "worker-list"]:
+                raise PodError(code, SENTINEL)
+            return native(argv, **kwargs)
+
+        with patch("pod.orca.read_command", side_effect=failed_lookup):
+            continuation = self.listed()
+        reason = f"exact Run/Task lookup unavailable ({code})"
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "workers_unreadable"))
+        self.assertIn(reason, continuation["message"])
+        self.assertEqual(continuation["next_action"], "pod status --objective objective")
+        self.assertNotIn(SENTINEL, json.dumps(continuation))
+        self.assertEqual(self.snapshot(), calls)
+        self.assertEqual(self.mutations, [])
+
+        lookups = []
+
+        def admission_lookup_fails(argv, **kwargs):
+            if argv[:2] == ["orchestration", "worker-list"]:
+                lookups.append(argv)
+                # Each detector first proves caller exclusion, then reads the reserved Task.
+                if len(lookups) % 2 == 0:
+                    raise PodError(code, SENTINEL)
+            return native(argv, **kwargs)
+
+        with patch("pod.orca.read_command", side_effect=admission_lookup_fails):
+            entry = self.resume()["window_continuation"]
+        self.assertEqual(len(lookups), 4)
+        for observation in (entry["initial"], entry, entry["completion"]):
+            self.assertEqual([(row["state"], row["verdict"], row["reason"]) for row in observation["admissions"]],
+                             [("reserved", "unknown", reason)])
+        self.assert_only_continuation_changes(before, self.state(), owner="next")
+
+    def test_an_unavailable_reserved_task_read_lists_unknown_and_still_continues(self):
+        self.reserved_read_failure_lists_unknown("orca_unavailable")
+
+    def test_a_partial_reserved_task_read_lists_unknown_and_still_continues(self):
+        self.reserved_read_failure_lists_unknown("orca_pagination")
+
+    def test_an_unreadable_bound_admission_lists_unknown_and_still_continues(self):
+        self.establish()
+        self.lose()
+        before, snapshot = self.state(), self.snapshot()
+        with patch.object(OrcaPort, "show_worker", side_effect=PodError("orca_unavailable", SENTINEL)):
+            continuation = self.listed()
+            self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "workers_unreadable"))
+            self.assertIn("worker read unavailable (orca_unavailable)", continuation["message"])
+            self.assertNotIn(SENTINEL, json.dumps(continuation))
+            self.assertEqual(self.snapshot(), snapshot)
+            entry = self.resume()["window_continuation"]
+        self.assertEqual(entry["admissions"][0]["verdict"], "unknown")
+        self.assert_only_continuation_changes(before, self.state(), owner="next")
+
     def test_a_read_failing_after_the_runtime_read_lists_unknown_not_a_refusal(self):
         self.establish()
         self.lose()
