@@ -16,7 +16,7 @@ Keep this conversation, model, effort and settings as coordinator; pool edits ne
 
 ## Done when
 
-Close only with every obligation satisfied or validly withdrawn with reason, a final report, final-candidate gates and independent review required by work/project, and Governor-recorded delivery. Withdrawal is not passing verification. Separate implementation, local checks, independent review, hosted CI, live native proof, project acceptance and merge; name uncertainty, unresolved native references and next safe action.
+Close only with every live obligation satisfied or validly withdrawn with reason, a final report, final-candidate gates and independent review required by work/project, and Governor-recorded delivery. Withdrawal is not passing verification. Separate implementation, local checks, independent review, hosted CI, live native proof, project acceptance and merge; name uncertainty, unresolved native references and next safe action.
 
 Closure is part of delivery. Once the source's PoDs are all ticked, delivery is merged and installed where in scope, and the final report is consumed, record closure in the same turn. Never end, be released or have the coordinator tab closed before that write; no owner decision is needed. Lost or stranded delivered objectives route to `pod sweep`.
 
@@ -55,7 +55,7 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - SEAL authoring/revision: [template](references/seal-template.md).
 - PES authoring/revision: [template](references/pes-template.md).
 - EEL authoring/revision: [template](references/eel-template.md).
-- Map/worktree/packets or delegation: [planning](references/planning.md).
+- Map/worktree/packets, row renewal or delegation: [planning](references/planning.md).
 - First admission, same-Task retry or supervision: [Orca](references/orca-boundary.md).
 - Starting, claiming, continuing or resuming an objective, admitting a worker, accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
 - Any route choice: [models](references/models.md).

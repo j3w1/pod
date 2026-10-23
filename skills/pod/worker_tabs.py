@@ -55,6 +55,8 @@ def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | N
     if keep:
         return "owner request"
     obligations = (state.get("checkpoint") or {}).get("obligations") or []
+    from .lineage import Lineage
+    lineage = Lineage(obligations)
     integrated = admission.get("disposition") or {}
     review_attempts = {key for key, row in state.get("admissions", {}).items()
                        if admission.get("role") == "implement" and integrated.get("kind") == "integrated_into"
@@ -65,14 +67,15 @@ def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | N
                             and finding.get("attempt") in review_attempts}
     # Findings bind the cycle to the review attempt's candidate. The parent
     # assurance may move to the corrected candidate while delta review is due.
+    served_tips = {lineage.effective(key) for key in admission.get("serves", [])}
     children = [ob for ob in obligations if ob.get("kind") == "correction"
-                and (ob.get("id") in admission.get("serves", [])
+                and (lineage.effective(ob.get("id")) in served_tips
                      or (ob.get("finding") or {}).get("attempt") == admission["admission_id"]
                      or ob.get("id") in reviewed_corrections)]
-    if any(ob["state"] not in ("satisfied", "withdrawn") for ob in children):
+    if any(ob["state"] not in ("satisfied", "withdrawn", "renewed") for ob in children):
         return "corrections"
-    parents = {ob.get("parent") for ob in children}
-    if children and any(ob["id"] in parents and ob["state"] not in ("satisfied", "withdrawn")
+    parents = {lineage.effective(ob.get("parent")) for ob in children}
+    if children and any(ob["id"] in parents and ob["state"] not in ("satisfied", "withdrawn", "renewed")
                         for ob in obligations):
         return "delta review"
     return None

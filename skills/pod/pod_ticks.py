@@ -17,6 +17,7 @@ import uuid
 
 from .errors import PodError
 from .util import digest, exact
+from .lineage import FROZEN, Lineage, copied_identity
 
 SCHEMA = "pod-ticks/v1"
 STEPS = "Record the same proof without closing, run each due pod internal pod-tick request, confirm its readback, then close."
@@ -136,10 +137,11 @@ def validate(value: object) -> None:
                        for key, hashes in blocks.items())):
             raise PodError("state_unsupported", "PoD source block observations are malformed")
     scopes = row.get("criterion_scopes", {})
-    if not isinstance(scopes, dict) or len(scopes) > 96:
+    from .obligations import MAX_OBLIGATIONS
+    if not isinstance(scopes, dict) or len(scopes) > MAX_OBLIGATIONS:
         raise PodError("state_unsupported", "PoD criterion source identities are malformed")
     for key, scope in scopes.items():
-        from .obligations import _ident, MAX_EVIDENCE
+        from .obligations import _ident, MAX_RECEIPTS
         _ident(key, "criterion")
         exact(scope, SCOPE_FIELDS | {"proofs", "acceptance"}, {"definition"}, name="criterion source facts")
         if not isinstance(scope["definition"], str) or not _SHA.fullmatch(scope["definition"]):
@@ -153,7 +155,7 @@ def validate(value: object) -> None:
                            for key in ACCEPTANCE_FIELDS - {"seq"})):
                 raise PodError("state_unsupported", "PoD requirement acceptance is malformed")
         proofs = scope.get("proofs", {})
-        if (not isinstance(proofs, dict) or len(proofs) > MAX_EVIDENCE
+        if (not isinstance(proofs, dict) or len(proofs) > MAX_RECEIPTS
                 or any(not isinstance(key, str) or not _SHA.fullmatch(key) for key in proofs)):
             raise PodError("state_unsupported", "PoD proof source identities are malformed")
         for proof in proofs.values():
@@ -303,10 +305,17 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
                       and decision.get("kind") in ("revision", "question")
                       and (decision.get("kind") == "question" or decision.get("channel", "session") == "session"))
     for row in checkpoint.get("obligations", []):
-        if row["kind"] != "criterion" or row["provenance"] != "objective" or row["state"] == "withdrawn":
+        if row["kind"] != "criterion" or row["provenance"] != "objective" or row["state"] in FROZEN:
             continue
         earlier = before.get(row["id"], {})
         entry = ledger.get("criterion_scopes", {}).get(row["id"], {})
+        if not earlier and row.get("renews") in before:
+            predecessor = before[row["renews"]]
+            retained = ledger.get("criterion_scopes", {}).get(predecessor["id"], {})
+            if retained.get("definition") == predecessor["definition"]:
+                entry = {key: deepcopy(value) for key, value in retained.items() if key != "proofs"}
+                entry["definition"] = row["definition"]
+            earlier = {**row, "receipts": [], "evidence": []}
         number = pod_ref_number(row.get("source", {}).get("ref"))
         blocks = facts.get("blocks", {}).get(str(number), [])
         observed = None
@@ -414,6 +423,8 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
     terminal = bool(state.get("continued_by") or state.get("historical_retirement") or (map_state or {}).get("closure"))
     closed_blocks = {row["pod"]: row for row in ledger["closure_blocked"]} if terminal else {}
     gov = bound_governance_digest(map_state) if map_state and map_state.get("obligations") is not None else ""
+    lineage = Lineage((map_state or {}).get("obligations", []))
+    ctx = {**ctx, "lineage": lineage}
     output = []
     for number in sorted(set(mapped) | {int(key) for key in lines} | {int(key) for key in ledger["authors"]}):
         key = str(number)
@@ -421,6 +432,15 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
                      "current": row["state"] == "satisfied" and evidence_valid(row, ctx, gov)}
                     for row in mapped.get(number, [])]
         proven = bool(criteria) and all(row["current"] for row in criteria)
+        # A mechanical renewal preserves a checkbox temporarily, never proof.
+        # Test each predecessor against today's independent binding facts.
+        pending = bool(criteria) and not proven and all(item["current"] or any(
+            old["id"] != item["id"] and old.get("evidence")
+            and copied_identity(old) == copied_identity(lineage.rows[item["id"]])
+            and evidence_valid({**old, "state": "satisfied"}, ctx, gov)
+            for old in lineage.family(item["id"])) for item in criteria)
+        pending = (pending and fresh and facts.get("body_sha256") == source["body_sha256"]
+                   and ledger["read"]["status"] == "read")
         observed = lines.get(key, [])
         ticked = observed[0] if len(observed) == 1 else None
         author = ledger["authors"].get(key, "not_pod")
@@ -445,6 +465,8 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
         elif not criteria:
             label, block = "blocked", {"code": "unmapped", "reason": "unmapped"}
         request = ledger["requests"].get(key)
+        if pending and fresh and len(observed) == 1:
+            direction, label = None, "renewal_pending"
         if request is not None and request["phase"] != "completed" and direction is None:
             direction, label = request["direction"], "due"
         # Only a request after the latest checkpoint/report can justify leaving

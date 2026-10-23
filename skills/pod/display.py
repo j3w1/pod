@@ -300,7 +300,7 @@ def worktree_status(state: dict, path: str) -> tuple[str, str]:
                       and row.get("report") is None), None)
     if reviewing:
         return "in-review", worker_title(state, reviewing) + " working"
-    assurance = any(ob.get("kind") == "assurance" and ob.get("state") not in ("satisfied", "withdrawn")
+    assurance = any(ob.get("kind") == "assurance" and ob.get("state") not in ("satisfied", "withdrawn", "renewed")
                     for ob in (state.get("checkpoint") or {}).get("obligations", []))
     if any(row.get("report") is None or retention_reason(state, row, None) in ("corrections", "delta review")
            or facts(state, row)["kind"] in ("implementer", "fixer") and assurance for row in rows):

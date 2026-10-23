@@ -237,6 +237,13 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported", "Admissions are malformed")
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict):
+        if checkpoint_value.get("obligations") is not None:
+            from .obligations import row_bounds
+            from .lineage import Lineage
+            row_bounds(checkpoint_value["obligations"])
+            if any(isinstance(row, dict) and ("renews" in row or "renewal" in row or row.get("state") == "renewed")
+                   for row in checkpoint_value["obligations"]):
+                Lineage(checkpoint_value["obligations"])
         if "issue_revision_data" in checkpoint_value:
             raise PodError("state_unsupported", "Transient issue body DATA cannot be stored in a checkpoint")
         from .issue_revision import requested, validate_decision
@@ -1162,7 +1169,7 @@ def map_read(project: Path, objective: str) -> dict:
     for ob in map_state["obligations"]:
         if ob["kind"] != "assurance":
             continue
-        if map_state.get("closure") or ob["state"] == "withdrawn":
+        if map_state.get("closure") or ob["state"] in ("withdrawn", "renewed"):
             status = "terminal"
         elif ob["state"] == "satisfied" and evidence_valid(ob, ctx, gov):
             status = "bound"
@@ -1477,6 +1484,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if issue_revision is not None:
             ctx["issue_revision"] = issue_revision
         if dispositions:
+            ctx["map_state"] = prior_map
             if prior_map is None:
                 raise refuse("obligation_unaccounted", "disposition_invalid",
                              "dispositions follow admissions under a map", record='checkpoint map transition')
@@ -2168,6 +2176,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         map_state = map_of(state)
         if map_state is None:
             raise refuse("unbound_assignment", "no_map", "a report joins an obligation map", record='consume report')
+        if (row.get("disposition") or {}).get("capacity_refusal"):
+            raise PodError("report_dispositioned", "This capacity-blocked report was discarded; renew and admit a fresh attempt")
         ctx = kernel_context(project, objective, state, authority.get("native"))
         ctx["operation"] = "report"
         try:

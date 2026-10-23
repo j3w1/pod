@@ -188,7 +188,7 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
     from .pod_ticks import proof_identity, requirement_epoch, requirement_scope, selected_pass_receipts
     prior = state["checkpoint"]
     rows = [row for row in prior["obligations"] if row["kind"] == "criterion"
-            and row["provenance"] == "objective" and row["state"] != "withdrawn"]
+            and row["provenance"] == "objective" and row["state"] not in ("withdrawn", "renewed")]
     associations = {}
     requirements = {}
     for row in rows:
@@ -453,7 +453,10 @@ class Revision:
         rows = expanded.get("obligations", prior["obligations"])
         if not isinstance(rows, list) or len(rows) > obligations.MAX_OBLIGATIONS:
             raise refuse("malformed_obligations")
+        obligations.row_bounds(rows)
         previous_rows = {row["id"]: row for row in prior["obligations"]}
+        supplied = {row["id"] for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)}
+        rows = [*rows, *[deepcopy(row) for row in prior["obligations"] if row["state"] in ("withdrawn", "renewed") and row["id"] not in supplied]]
         data = body_data(data)
         scope_facts, retained_scopes = _prior_scopes(state, data, self.source)
         def unchanged_scope(row):
@@ -476,12 +479,16 @@ class Revision:
             if row.get("state") == "withdrawn" and not isinstance(row.get("withdrawal"), dict):
                 raise refuse("malformed_withdrawal")
             earlier = previous_rows.get(row["id"])
+            if earlier is not None and earlier["state"] in ("withdrawn", "renewed"):
+                if row != earlier:
+                    raise refuse("kernel_history_change")
+                continue
             if earlier is not None:
                 if any(key in row and row[key] != earlier.get(key)
                        for key in ("introduced_seq", "definition", "receipts", "findings", "finding", "acceptances")):
                     raise refuse("kernel_history_change")
-                normalized = obligations.restatable_rows({"obligations": [obligations._structure(row)]})[0]
-                old_normalized = obligations.restatable_rows({"obligations": [earlier]})[0]
+                normalized = obligations.restatable_rows({"obligations": [obligations._structure(row)]}, include_terminal=True)[0]
+                old_normalized = obligations.restatable_rows({"obligations": [earlier]}, include_terminal=True)[0]
             if earlier is not None and normalized != old_normalized:
                 expected = {key: item for key, item in old_normalized.items()
                             if key not in {"state", "executor", "wait", "external", "evidence", "reuse", "withdrawal"}}
@@ -496,7 +503,7 @@ class Revision:
                 if unchanged_scope(earlier):
                     raise refuse("unchanged_criterion_retirement")
             if (row.get("kind") == "criterion" and row.get("provenance") == "objective"
-                    and row.get("state") != "withdrawn"):
+                    and row.get("state") not in ("withdrawn", "renewed")):
                 ref = row.get("source", {}).get("ref")
                 if (not isinstance(ref, str) or ref not in self.lines or ref in current
                         or row.get("provenance") != "objective" or set(row.get("source", {})) != {"ref"}
@@ -522,7 +529,7 @@ class Revision:
                     raise refuse("new_proof_forbidden")
         previous_criteria = {row.get("source", {}).get("ref", ""): row
                              for row in prior["obligations"] if row["kind"] == "criterion"
-                             and row["provenance"] == "objective" and row["state"] != "withdrawn"}
+                             and row["provenance"] == "objective" and row["state"] not in ("withdrawn", "renewed")}
         material = (set(previous_criteria) != set(current)
                     or any(not unchanged_scope(row) for row in previous_criteria.values()))
         if set(current) != set(self.lines) or not material:
@@ -612,10 +619,13 @@ def _validate_decision(row: dict, checkpoint: dict) -> None:
         if (digest(source) != verdict[OPERATION]["source"][key]
                 or any(source[field] != verdict[OPERATION]["source"][field] for field in ("repository", "number", "locator"))):
             raise refuse("stored_source_binding")
-    if (not isinstance(previous["obligations"], list) or not previous["obligations"] or len(previous["obligations"]) > 96
+    if (not isinstance(previous["obligations"], list) or not previous["obligations"] or len(previous["obligations"]) > obligations.MAX_OBLIGATIONS
             or not isinstance(previous["criteria"], list) or not previous["criteria"] or len(previous["criteria"]) > 64
             or any(not isinstance(ref, str) or not ref for ref in previous["criteria"])):
         raise refuse("stored_previous_map")
+    obligations.row_bounds(previous["obligations"])
+    from .lineage import Lineage
+    Lineage(previous["obligations"])
     for ob in previous["obligations"]:
         parsed = obligations._structure(ob)
         if parsed.get("definition") != obligations.definition_id(parsed):
@@ -648,7 +658,7 @@ def _validate_scope_facts(row: dict) -> None:
     facts = exact(row["scope_facts"], {"previous", "current", "data_digests"},
                   {"previous", "current", "data_digests"}, name="issue scope facts")
     previous = {ob["id"]: ob for ob in row["previous"]["obligations"] if ob["kind"] == "criterion"
-                and ob["provenance"] == "objective" and ob["state"] != "withdrawn"}
+                and ob["provenance"] == "objective" and ob["state"] not in ("withdrawn", "renewed")}
     if not isinstance(facts["previous"], list) or len(facts["previous"]) != len(previous):
         raise refuse("stored_scope_facts")
     prior_facts = {}

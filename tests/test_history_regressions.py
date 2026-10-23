@@ -28,7 +28,7 @@ def previous_history_bundle(directory, revision=PREVIOUS):
     return bundle
 
 
-def previous_history_call(bundle, state, *, operation="read", context=None, chunks=None, prior=None):
+def previous_history_call(bundle, state, *, operation="read", context=None, chunks=None, prior=None, map_value=None):
     """Exercise real earlier physical and semantic boundaries in a separate process."""
     import base64
     program = """
@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / 'context.json'
     if request['prior'] is not None:
         _write(path, request['prior'])
-    if request['operation'] == 'read':
+    if request['operation'] in ('read', 'map_write'):
         path.write_bytes(encoded(request['state'], compact=True))
         for address, data in request['chunks'].items():
             chunk = path.parent / 'history/sha256' / (address + '.json')
@@ -52,6 +52,12 @@ with tempfile.TemporaryDirectory() as directory:
             chunk.write_bytes(base64.b64decode(data))
     before = {str(p.relative_to(path.parent)): p.read_bytes() for p in path.parent.rglob('*') if p.is_file()}
     try:
+        if request['operation'] == 'map_write':
+            from pod.obligations import accept_write
+            context = request['context']
+            context['source_current'] = lambda entry: True
+            value = accept_write(_read(path)['checkpoint'], request['map_value'], context)
+            _write(path, {**request['state'], 'checkpoint': value})
         if request['operation'] == 'write':
             _write(path, request['state'])
         logical = _read(path)
@@ -69,7 +75,7 @@ with tempfile.TemporaryDirectory() as directory:
 """
     completed = subprocess.run([sys.executable, "-c", program], cwd=bundle,
         env={**os.environ, "PYTHONPATH": str(bundle / "skills")},
-        input=json.dumps({"operation": operation, "state": state, "context": context, "prior": prior,
+        input=json.dumps({"operation": operation, "state": state, "context": context, "prior": prior, "map_value": map_value,
                           "chunks": {key: base64.b64encode(value).decode("ascii")
                                      for key, value in (chunks or {}).items()}}),
         capture_output=True, text=True, check=True, timeout=15)
