@@ -8041,7 +8041,9 @@
         "tests.test_window_continuation.ContinuationTests.test_the_pending_claimant_sees_its_own_resumable_step",
         "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_holds_an_owner_handoff",
         "tests.test_window_continuation.DiscoveryTests.test_exhausted_attempts_are_never_advertised",
-        "tests.test_window_continuation.DiscoveryTests.test_an_exhausted_pending_attempt_resumes_for_its_claimant_and_is_never_replaced"
+        "tests.test_window_continuation.DiscoveryTests.test_an_exhausted_pending_attempt_resumes_for_its_claimant_and_is_never_replaced",
+        "tests.test_window_status.ReservedSuccessorStatusTests.test_window_step_comes_before_completing_a_reserved_claim",
+        "tests.test_window_status.ReservedSuccessorStatusTests.test_an_unavailable_window_keeps_its_lead_task_before_the_claim"
       ],
       "status": "NOT_RUN"
     },
