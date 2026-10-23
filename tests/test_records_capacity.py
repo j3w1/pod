@@ -123,7 +123,7 @@ class RecordsCapacityTests(unittest.TestCase):
                          "summary": "genuine report consumption in the synthetic capacity fixture"} for index in range(3 if group == 0 else 1)]
             request_size = request_bytes(request_map, findings)
             case.report(admission, frozen, map=request_map, triage=findings)
-            cls.metrics["groups"].append({"request_bytes": request_size, **cls.measure()})
+            cls.metrics["groups"].append({"request_bytes": request_size, **cls.measure(served)})
             if group == 0:
                 # Exercise physical overflow before renewal archives the old assurance.
                 state = _read(cls.path)
@@ -163,12 +163,12 @@ class RecordsCapacityTests(unittest.TestCase):
         return {str(path.relative_to(cls.path.parent)): path.read_bytes() for path in cls.path.parent.rglob("*") if path.is_file() and path.name != ".lock"}
 
     @classmethod
-    def measure(cls):
+    def measure(cls, assurance_id="A"):
         state = _read(cls.path)
         rows = state["checkpoint"]["obligations"]
-        assurance = next(row for row in rows if row["id"] == "A")
+        assurance = next(row for row in rows if row["id"] == assurance_id)
         physical = json.loads(cls.path.read_bytes())
-        return {"logical_bytes": size(state), "physical_bytes": cls.path.stat().st_size,
+        return {"assurance_id": assurance_id, "logical_bytes": size(state), "physical_bytes": cls.path.stat().st_size,
                 "chunk_bytes": sum(path.stat().st_size for path in cls.path.parent.glob("history/sha256/*.json")),
                 "rows": len(rows), "row_bytes": size(rows), "live": sum(row["state"] not in ("withdrawn", "renewed") for row in rows),
                 "states": {name: sum(row["state"] == name for row in rows) for name in ("withdrawn", "waiting", "active", "blocked_external")},
@@ -221,3 +221,13 @@ class RecordsCapacityTests(unittest.TestCase):
         for group in range(1, 7):
             self.assertEqual(rows[f"NEW{group}"]["finding"]["attempt"], self.fresh)
             self.assertEqual(rows[f"NEW{group}"]["parent"], "A2")
+
+    def test_group_metrics_follow_the_renewed_assurance_tip(self):
+        groups = self.metrics["groups"]
+        self.assertEqual([row["assurance_id"] for row in groups], ["A", *(["A2"] * 6)])
+        self.assertTrue(all(left["finding_bytes"] < right["finding_bytes"]
+                            for left, right in zip(groups[1:], groups[2:])))
+        tip = next(row for row in self.after["checkpoint"]["obligations"] if row["id"] == "A2")
+        self.assertEqual(groups[-1]["assurance_bytes"], size(tip))
+        self.assertEqual(groups[-1]["finding_bytes"], size(tip["findings"]))
+        self.assertEqual(groups[-1]["receipt_bytes"], size(tip["receipts"]))

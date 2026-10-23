@@ -148,7 +148,7 @@ class AssuranceCapacityTests(unittest.TestCase):
     def test_retained_63_plus_one_required_finding_preserves_every_prior_record(self):
         self.assert_added(63)
 
-    def test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action(self):
+    def test_retained_64_plus_one_refuses_atomically_and_names_pending_consumption(self):
         admission, packet = self.restore(64)
         before = self.files()
         with self.assertRaises(PodError) as caught:
@@ -156,10 +156,9 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "obligation_invalid")
         self.assertEqual(caught.exception.detail["detail"], "finding_limit")
         self.assertEqual(caught.exception.detail["referent"]["limit"], 64)
-        action = caught.exception.detail["next_action"]
-        self.assertEqual(action["seq"], _read(self.path)["checkpoint"]["seq"] + 1)
-        self.assertEqual(action["renew"], [{"id": "A", "as": "<fresh-id>", "state": "waiting",
-                                            "wait": {"class": "sequenced", "referent": "O1"}}])
+        self.assertEqual(caught.exception.detail["referent"]["admission"], admission["admission_id"])
+        self.assertEqual(caught.exception.detail["next_action"],
+                         f"consume the report for admission {admission['admission_id']} before retrying this write")
         self.assertEqual(self.files(), before)
 
     def test_new_admission_reserves_the_full_finding_budget(self):

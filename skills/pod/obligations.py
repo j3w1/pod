@@ -966,14 +966,18 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
                          "renewal copies the recorded row unchanged", changed_fields=set(changed), obligation=old_id,
                          next_action=("use the existing authorized revision path for changed definitions" if changed else
                                       "omit the renewed row from obligations or update; put replacement state fields in its renew entry"))
+        from .assurance import report_permanently_refused
         pending = [key for key, admission in _admissions(ctx).items() if old_id in admission.get("serves", [])
+                   and not report_permanently_refused(admission)
                    and (key in _outstanding(ctx) or admission.get("state") != "deferred"
                         and (admission.get("report") is None and admission.get("disposition") is None
                              or admission.get("role") == "implement" and admission.get("disposition") is None))]
         if pending:
             raise refuse("obligation_invalid", "renewal_result_pending", "serving work must settle and its result be consumed or dispositioned",
                          obligation=old_id, admission=pending[0],
-                         next_action="consume the result first; at full receipt or finding capacity, discard through dispositions in the same checkpoint that renews the served row, then re-admit")
+                         next_action=(f"consume the report for admission {pending[0]} before retrying renewal"
+                                      if _admissions(ctx)[pending[0]].get("role") != "implement" else
+                                      f"record an ordinary disposition for implementation admission {pending[0]} before retrying renewal"))
         state = entry.get("state", old["state"])
         if state in TERMINAL:
             raise refuse("obligation_invalid", "renewal_terminal_state", "the replacement needs an explicit non-terminal state", obligation=new_id)

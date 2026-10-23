@@ -333,12 +333,22 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
     return stamped
 
 
+def report_permanently_refused(admission: dict) -> bool:
+    """Only an explicit recorded report refusal releases this result's hold.
+
+    Route mismatch is the current permanent report refusal marker. Unknown
+    routes, native failures and recoverable errors do not establish refusal.
+    """
+    return (admission.get("route_decision") or {}).get("route_mismatch") is True
+
+
 def pending_serving(ob: dict, ctx: dict) -> list[str]:
-    """Retain reservations through native settlement until consumption or disposition."""
+    """Keep result reservations until consumption, disposition or permanent refusal."""
     from .obligations import _admissions, _outstanding
     outstanding = set(_outstanding(ctx))
     return [key for key, row in _admissions(ctx).items()
             if ob["id"] in (row.get("serves") or []) and row.get("state") != "deferred"
+            and not report_permanently_refused(row)
             and row.get("disposition") is None and (key in outstanding or row.get("report") is None)]
 
 
@@ -356,7 +366,15 @@ def reserve_capacity(ob: dict, ctx: dict, *, seq: int):
 
 def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int, proposed: int, prior=None, reserved=0):
     """The same accepted-state renewal route for admission, report and checkpoint."""
-    from .obligations import MAX_RECEIPTS, MAX_FINDINGS, refuse
+    from .obligations import MAX_RECEIPTS, MAX_FINDINGS, _admissions, refuse
+    pending = pending_serving(ob, ctx)
+    reporting = ctx.get("unconsumed_report_attempt")
+    admission = _admissions(ctx).get(reporting, {})
+    if (reporting is not None and reporting not in pending and ob["id"] in admission.get("serves", [])
+            and not report_permanently_refused(admission)):
+        # Ingestion excludes itself from slot accounting, but a refused write
+        # has not consumed its report and cannot yet renew the served row.
+        pending.append(reporting)
     replacement = {"id": ob["id"], "as": "<fresh-id>"}
     rows = (ctx.get("accepted_map") or ctx.get("map_state") or {}).get("obligations", [])
     basis = next((row for row in rows if row["id"] == ob["id"]), prior if prior is not None else ob)
@@ -371,11 +389,13 @@ def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int
         else:
             replacement.update(state="active", executor="coordinator")
     return refuse("obligation_invalid", "receipt_limit" if field == "receipts" else "finding_limit",
-                  "retained history and pending serving results exceed capacity; consume pending results before renewal",
+                  "retained history and reserved serving capacity exceed the bound",
                   obligation=ob["id"], retained=retained, proposed=proposed,
                   reserved=reserved,
                   limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
-                  next_action={"seq": seq, "renew": [replacement]})
+                  **({"admission": pending[0]} if pending else {}),
+                  next_action=(f"consume the report for admission {pending[0]} before retrying this write"
+                               if pending else {"seq": seq, "renew": [replacement]}))
 
 
 def binding_current(binding: Any, ctx: dict) -> bool:

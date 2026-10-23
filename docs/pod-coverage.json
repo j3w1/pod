@@ -1671,7 +1671,7 @@
         "tests.test_assurance_history.AssuranceHistoryTests.test_advisory_overflow_refuses_without_evicting_required_finding",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_32_plus_one_required_finding_preserves_every_prior_record",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_63_plus_one_required_finding_preserves_every_prior_record",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_and_names_pending_consumption",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_exact_replay_of_32_old_findings_spends_no_new_slots",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_persisted_history_refuses_33_records_from_the_same_attempt",
@@ -2725,7 +2725,7 @@
         "tests.test_issue41.AdditionalFindingTests.test_findings_and_correction_id_bounds_refuse_without_eviction",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_32_plus_one_required_finding_preserves_every_prior_record",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_63_plus_one_required_finding_preserves_every_prior_record",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_and_names_pending_consumption",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_interrupted_report_publication_retries_without_losing_or_duplicating_findings",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_genuine_previous_reader_keeps_32_record_meaning_unchanged",
@@ -7539,7 +7539,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_records_receipts.ReceiptBoundaryTests.test_65th_report_refuses_atomically_with_exact_renewal_request",
+        "tests.test_records_receipts.ReceiptBoundaryTests.test_65th_report_refuses_atomically_and_names_pending_consumption",
         "tests.test_obligations.ProofIntegrityTests.test_ordinary_receipt_requires_definition_and_history_never_evicts",
         "tests.test_records_reservations.ReceiptReservationTests.test_full_history_refuses_before_an_outcome_or_native_launch",
         "tests.test_records_reservations.ReceiptReservationTests.test_sibling_result_states_reserve_until_consumed",
@@ -7547,7 +7547,11 @@
         "tests.test_records_reservations.AcceptedRenewalAdviceTests.test_receipt_refusal_uses_accepted_coordinator_slot",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
         "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
-        "tests.test_records_reservations.FindingReservationTests.test_incremental_old_report_cannot_take_a_pending_reviews_finding_budget"
+        "tests.test_records_reservations.FindingReservationTests.test_incremental_old_report_cannot_take_a_pending_reviews_finding_budget",
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_after_retained_finding_allows_replacement_review",
+        "tests.test_records_refused_reports.RefusedReportTests.test_failed_without_report_names_consumption_and_keeps_renewal_blocked",
+        "tests.test_records_refused_reports.RefusedReportTests.test_sibling_states_release_only_explicit_permanent_refusal",
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_releases_the_reserved_checkpoint_receipt"
       ],
       "status": "NOT_RUN"
     },
@@ -7630,7 +7634,8 @@
         "tests.test_records_receipts.ReceiptBoundaryTests.test_historical_review_cannot_be_discarded",
         "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
-        "tests.test_records_corrections.InvestigationCapacityTests.test_full_ordinary_history_never_allows_investigation_discard"
+        "tests.test_records_corrections.InvestigationCapacityTests.test_full_ordinary_history_never_allows_investigation_discard",
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_does_not_block_renewal_or_supply_proof"
       ],
       "status": "NOT_RUN"
     },
@@ -7653,7 +7658,8 @@
       ],
       "offline_test": [
         "tests.test_records_capacity.RecordsCapacityTests.test_acceptance_shape_and_original_three_findings_share_one_new_correction",
-        "tests.test_records_capacity.RecordsCapacityTests.test_post_upgrade_admission_renews_before_recording_further_groups"
+        "tests.test_records_capacity.RecordsCapacityTests.test_post_upgrade_admission_renews_before_recording_further_groups",
+        "tests.test_records_capacity.RecordsCapacityTests.test_group_metrics_follow_the_renewed_assurance_tip"
       ],
       "status": "NOT_RUN"
     },
