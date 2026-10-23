@@ -8120,6 +8120,17 @@
         "tests.test_discovery_bound.BoundTests.test_repeated_catalog_reads_can_finish_late_without_publishing_a_verdict",
         "tests.test_discovery_bound.BoundTests.test_worker_start_failure_is_unknown",
         "tests.test_discovery_bound.BoundTests.test_unreadable_inventory_never_proves_a_worktree_refusal",
+        "tests.test_discovery_bound.BoundTests.test_fatal_origin_process_exit_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_absent_origin_process_exit_still_reads_no_origin",
+        "tests.test_discovery_bound.BoundTests.test_unbudgeted_fatal_origin_keeps_the_ordinary_no_origin_result",
+        "tests.test_discovery_bound.BoundTests.test_denied_worktree_stat_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_failed_worktree_stat_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_denied_recorded_worktree_stat_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_denied_worktree_stat_keeps_the_status_refusal",
+        "tests.test_discovery_bound.BoundTests.test_denied_worktree_stat_keeps_the_command_refusal",
+        "tests.test_discovery_bound.BoundTests.test_a_truly_missing_worktree_still_lists_worktree_changed",
+        "tests.test_discovery_bound.BoundTests.test_a_non_directory_worktree_still_lists_worktree_changed",
+        "tests.test_discovery_bound.BoundTests.test_denied_ancestor_git_marker_does_not_prove_a_non_repository",
         "tests.test_discovery_bound.BoundTests.test_in_memory_inventory_preserves_control_characters_in_worktree_paths"
       ],
       "status": "NOT_RUN"

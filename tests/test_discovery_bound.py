@@ -1,6 +1,7 @@
 """The list stops waiting at one deadline and never publishes late discovery facts."""
 
 import builtins
+import errno
 from contextlib import ExitStack
 from contextvars import ContextVar
 from copy import deepcopy
@@ -8,6 +9,8 @@ import fcntl
 import io
 import os
 from pathlib import Path
+import subprocess
+import sys
 from threading import Event, current_thread
 import time
 import traceback
@@ -284,6 +287,126 @@ class BoundTests(WindowCase):
         with patch.object(github, "_local_git", side_effect=oversized):
             result = self.listed()[0]["continuation"]
         self.assertEqual((result["status"], result["condition"]), ("unknown", "git_contract"))
+
+    def origin_exit(self, code, observe):
+        run = subprocess.run
+        failures = []
+
+        def failed(argv, *args, **kwargs):
+            if list(argv[-3:]) == ["remote", "get-url", "origin"]:
+                failures.append(code)
+                return subprocess.CompletedProcess(argv, code, stdout="", stderr="synthetic Git failure")
+            return run(argv, *args, **kwargs)
+
+        with patch.object(subprocess, "run", side_effect=failed):
+            result = observe()
+        self.assertTrue(failures)
+        return result
+
+    def test_fatal_origin_process_exit_lists_unknown(self):
+        before = self.snapshot()
+        result = self.origin_exit(128, lambda: self.listed()[0]["continuation"])
+        self.assertEqual((result["status"], result["condition"]),
+                         ("unknown", "repository_identity_unavailable"))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.mutations, [])
+
+    def test_absent_origin_process_exit_still_reads_no_origin(self):
+        with orca.read_deadline(window.Budget(5)):
+            result, complete = self.origin_exit(2, lambda: github._read_repository_context(self.project))
+        self.assertIsNone(result["repository"])
+        self.assertTrue(complete)
+        self.assertEqual(result["worktree"], str(self.project))
+
+    def test_unbudgeted_fatal_origin_keeps_the_ordinary_no_origin_result(self):
+        result, complete = self.origin_exit(128, lambda: github._read_repository_context(self.project))
+        self.assertIsNone(result["repository"])
+        self.assertTrue(complete)
+        with self.assertRaises(PodError) as caught:
+            self.origin_exit(128, lambda: github._local_git(self.project, ["remote", "get-url", "origin"]))
+        self.assertEqual(caught.exception.code, "repository_identity_unavailable")
+        self.assertEqual(str(caught.exception), "Git repository identity could not be read")
+        self.assertEqual(caught.exception.detail["returncode"], 128)
+
+    def worktree_stat_failure(self, failure, *, skip=0, observe=None):
+        original = os.stat
+        observed = []
+
+        def stat(path, *args, **kwargs):
+            if (os.fspath(path) == str(self.project)
+                    and sys._getframe(1).f_code.co_name in ("isdir", "_worktree_directory")):
+                observed.append(failure.errno)
+                if len(observed) > skip:
+                    raise failure
+            return original(path, *args, **kwargs)
+
+        with patch.object(os, "stat", new=stat):
+            result = observe() if observe else self.listed()[0]["continuation"]
+        self.assertGreater(len(observed), skip)
+        return result
+
+    def test_denied_worktree_stat_lists_unknown(self):
+        before = self.snapshot()
+        result = self.worktree_stat_failure(PermissionError(errno.EACCES, "synthetic denied metadata"))
+        self.assertEqual((result["status"], result["condition"]), ("unknown", "worktree_unreadable"))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.mutations, [])
+
+    def test_failed_worktree_stat_lists_unknown(self):
+        result = self.worktree_stat_failure(OSError(errno.EIO, "synthetic failed metadata"))
+        self.assertEqual((result["status"], result["condition"]), ("unknown", "worktree_unreadable"))
+
+    def test_denied_recorded_worktree_stat_lists_unknown(self):
+        result = self.worktree_stat_failure(PermissionError(errno.EACCES, "synthetic denied metadata"), skip=1)
+        self.assertEqual((result["status"], result["condition"]), ("unknown", "worktree_unreadable"))
+
+    def test_denied_worktree_stat_keeps_the_status_refusal(self):
+        result = self.worktree_stat_failure(PermissionError(errno.EACCES, "synthetic denied metadata"),
+                                            observe=lambda: self.status()["window_continuation"])
+        self.assertEqual((result["status"], result["condition"]), ("window_unavailable", "worktree_changed"))
+
+    def test_denied_worktree_stat_keeps_the_command_refusal(self):
+        self.worktree_stat_failure(PermissionError(errno.EACCES, "synthetic denied metadata"),
+                                   observe=lambda: self.assert_lead_refusal("worktree_changed"))
+
+    def test_a_truly_missing_worktree_still_lists_worktree_changed(self):
+        state = self.state()
+        state["checkpoint"]["worktree"]["path"] = str(self.root / "missing")
+        with patch.object(ledger, "read", return_value=state):
+            result = self.listed()[0]["continuation"]
+        self.assertEqual((result["status"], result["condition"]), ("unavailable", "worktree_changed"))
+
+    def test_a_non_directory_worktree_still_lists_worktree_changed(self):
+        file = self.root / "not-a-directory"
+        file.write_text("synthetic")
+        for path in (file, file / "child"):
+            with self.subTest(path=path.name):
+                state = self.state()
+                state["checkpoint"]["worktree"]["path"] = str(path)
+                with patch.object(ledger, "read", return_value=state):
+                    result = self.listed()[0]["continuation"]
+                self.assertEqual((result["status"], result["condition"]), ("unavailable", "worktree_changed"))
+
+    def test_denied_ancestor_git_marker_does_not_prove_a_non_repository(self):
+        run, original = subprocess.run, os.stat
+        observed = []
+
+        def failed(argv, *args, **kwargs):
+            if "rev-parse" in argv:
+                return subprocess.CompletedProcess(argv, 128, stdout="", stderr="synthetic Git failure")
+            return run(argv, *args, **kwargs)
+
+        def stat(path, *args, **kwargs):
+            if os.fspath(path) == str(self.project / ".git"):
+                observed.append(errno.EACCES)
+                raise PermissionError(errno.EACCES, "synthetic denied marker")
+            return original(path, *args, **kwargs)
+
+        with orca.read_deadline(window.Budget(5)), patch.object(subprocess, "run", side_effect=failed), \
+                patch.object(os, "stat", new=stat), self.assertRaises(OSError) as caught:
+            github._read_repository_context(self.project)
+        self.assertTrue(observed)
+        self.assertEqual(caught.exception.errno, errno.EACCES)
 
     def test_in_memory_inventory_preserves_control_characters_in_worktree_paths(self):
         linked = self.root / "linked\r\nworktree"

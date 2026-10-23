@@ -286,7 +286,8 @@ def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
     except UnicodeDecodeError:
         raise PodError("git_contract", "Git discovery output is not valid UTF-8") from None
     if completed.returncode:
-        raise PodError("repository_identity_unavailable", "Git repository identity could not be read")
+        raise PodError("repository_identity_unavailable", "Git repository identity could not be read",
+                       {"returncode": completed.returncode})
     if len(output) > MAX_OUTPUT:
         raise PodError("git_contract", "Git discovery output exceeds its bound")
     return output
@@ -360,7 +361,18 @@ def _read_repository_context(root: Path) -> tuple[dict, bool]:
     except PodError as exc:
         if exc.code == DEADLINE_SPENT or budget is not None and exc.code != "repository_identity_unavailable":
             raise
-        if any((candidate / ".git").exists() for candidate in (root, *root.parents)):
+        if budget is None:
+            present = any((candidate / ".git").exists() for candidate in (root, *root.parents))
+        else:
+            present = False
+            for candidate in (root, *root.parents):
+                try:
+                    os.stat(candidate / ".git")
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                present = True
+                break
+        if present:
             raise
         return {"repository": None, "repo_key": None, "worktree": str(root),
                 "main_worktree": str(root), "branch": None, "dirty": None,
@@ -387,7 +399,8 @@ def _read_repository_context(root: Path) -> tuple[dict, bool]:
     try:
         remote = _local_git(worktree, ["remote", "get-url", "origin"]).strip()
     except PodError as exc:
-        if exc.code == DEADLINE_SPENT or budget is not None and exc.code != "repository_identity_unavailable":
+        no_origin = exc.code == "repository_identity_unavailable" and (exc.detail or {}).get("returncode") == 2
+        if exc.code == DEADLINE_SPENT or budget is not None and not no_origin:
             raise
         remote = ""
         complete = exc.code == "repository_identity_unavailable"  # No origin answers; a timeout does not.

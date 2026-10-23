@@ -16,6 +16,7 @@ from contextvars import copy_context
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import stat
 import subprocess
 from threading import Lock, Thread
 
@@ -409,6 +410,16 @@ def _cwd_toplevel() -> str | None:
 
 # --------------------------------------------------------------------------- detection
 
+def _worktree_directory(path: Path) -> bool:
+    """Only a successful stat or proved absence can answer whether the worktree exists."""
+    try:
+        return stat.S_ISDIR(os.stat(path).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        raise PodError("worktree_unreadable", "The recorded worktree's metadata could not be read") from exc
+
+
 def detect(project: Path, objective: str, state: dict, *, port, caller: str | None = None,
            objective_only: bool = False, verify: bool = True, budget: "Budget | None" = None) -> dict:
     """Fresh facts only; no writes and no native mutation.
@@ -508,7 +519,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     recorded = Path(workspace["path"])
     # The recorded worktree itself must still be that repository, key, path and branch, whoever reads.
     try:
-        if not recorded.is_dir():
+        if not _worktree_directory(recorded):
             raise PodError("worktree_binding_changed", "missing")
         _step(budget)
         _check_worktree_binding(recorded, workspace)
@@ -957,7 +968,7 @@ def _discover(opened: list[dict], *, project: Path, budget: Budget, publish) -> 
             if not state or not state.get("checkpoint") or not runtimes or runtimes == {runtime}:
                 continue
             workspace = (state["checkpoint"].get("worktree") or {}).get("path")
-            where = Path(workspace) if isinstance(workspace, str) and Path(workspace).is_dir() else project
+            where = Path(workspace) if isinstance(workspace, str) and _worktree_directory(Path(workspace)) else project
             try:
                 budget.check()
                 verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True, verify=False,
