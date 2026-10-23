@@ -217,13 +217,15 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if keep:
         return finish("owner_kept_unowned", f"Owner-kept by instruction {keep['id']}. " + wording, command=None)
     if admission.get("report") is None:
-        if recorded_settlement:
+        from .util import route_flags, route_next_action
+        if recorded_settlement and route_flags(admission)[0]:
+            next_step = (f"Project lead: for admission {admission['admission_id']}, record any remaining tab follow-up "
+                         "in the successor or repository task; this ended record accepts no settlement write and supplies no close command.")
+        elif route_flags(admission)[0]:
+            next_step = route_next_action(admission) + " This unreported tab has no standing close command."
+        elif recorded_settlement:
             next_step = ("The owner's standing close authorization does not cover this tab because its report "
                          "was not recorded; name it in the final report for the owner's decision.")
-        elif (admission.get("route_decision") or {}).get("route_mismatch"):
-            next_step = ("Its route mismatch is recorded: the standing close authorization covers this tab "
-                         "only once its report is recorded, and Pod refuses that report while Orca's effective "
-                         "route differs; if it stays refused, name it in the final report for the owner's decision.")
         else:
             next_step = "The authorized close becomes available once its report is recorded."
         return finish("user_owned" if row["ownership"] == "user_owned" else "external",

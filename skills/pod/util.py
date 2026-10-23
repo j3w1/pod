@@ -374,9 +374,141 @@ def route_flags(row: dict) -> tuple[bool, bool]:
     return bool(decision.get("route_mismatch")), bool(decision.get("effective_unknown"))
 
 
+LEAD_ROUTE_AUTHORITY = ("The coordinator relays the project lead's delegated decision; Pod does not authenticate "
+                        "the lead. It supplies no review proof, receipts, REUSE or provider authority.")
+
+
+def route_occurrence(row: dict) -> int:
+    decision = row.get("route_decision") or {}
+    return decision.get("mismatch_occurrence", 1 if route_flags(row)[0] else 0)
+
+
+def validate_route_settlements(row: dict) -> None:
+    """Validate stored settlement shapes; recorded flags alone never settle a hold."""
+    decision = row.get("route_decision") or {}
+    occurrence = route_occurrence(row)
+    entries = decision.get("settlements", [])
+    if (type(occurrence) is not int or occurrence < 0
+            or "mismatch_occurrence" in decision and (occurrence < 1 or not route_flags(row)[0])
+            or not isinstance(entries, list) or entries and "mismatch_occurrence" not in decision):
+        raise PodError("state_unsupported", "Route mismatch occurrence or settlements are malformed")
+    last = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise PodError("state_unsupported", "Route settlement must be a record")
+        basis = entry.get("basis")
+        common = {"basis", "occurrence", "utc"}
+        specific = ({"report_digest"} if basis == "matching_report" else
+                    {"replacement", "seq"} if basis == "redone" else
+                    {"decision", "source", "reason", "seq"} if basis == "lead_decision" else None)
+        if specific is None:
+            raise PodError("state_unsupported", "Route settlement basis is unsupported")
+        if basis == "lead_decision" and row.get("role") in ("review", "investigate"):
+            specific |= {"corrections"}
+        allowed = common | specific | ({"seq"} if basis == "matching_report" else set())
+        if (set(entry) - allowed or not (common | specific) <= set(entry)
+                or type(entry.get("occurrence")) is not int or not last < entry["occurrence"] <= occurrence
+                or "seq" in entry and (type(entry["seq"]) is not int or entry["seq"] < 1)):
+            raise PodError("state_unsupported", "Route settlement fields or occurrence are malformed")
+        normalize_timestamp(entry["utc"], field="Route settlement UTC", code="state_unsupported")
+        last = entry["occurrence"]
+        if basis == "matching_report":
+            consumed = row.get("report") or {}
+            if (not isinstance(entry["report_digest"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", entry["report_digest"]) is None
+                    or entry["report_digest"] != consumed.get("observation_digest")):
+                raise PodError("state_unsupported", "Route settlement does not bind its consumed report")
+        elif basis == "redone":
+            if (row.get("role") != "implement" or not isinstance(entry["replacement"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", entry["replacement"]) is None
+                    or entry["replacement"] == row.get("admission_id")):
+                raise PodError("state_unsupported", "Route replacement identity is malformed")
+        else:
+            if (entry["decision"] not in ("accept", "discard")
+                    or not isinstance(entry["source"], dict) or set(entry["source"]) != {"reference"}
+                    or row.get("role") in ("review", "investigate") and entry["decision"] != "discard"):
+                raise PodError("state_unsupported", "Relayed project lead route decision is malformed")
+            try:
+                bounded_text(entry["source"]["reference"], name="reference", limit=bound("route settlement source", "reference"))
+                bounded_text(entry["reason"], name="reason", limit=bound("route settlement", "reason"))
+            except PodError:
+                raise PodError("state_unsupported", "Relayed project lead source or reason is malformed") from None
+            if "corrections" in entry:
+                ids = entry["corrections"]
+                if (not isinstance(ids, list) or len(ids) > bound("route settlement", "corrections", "max_items")
+                        or any(not isinstance(key, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", key) is None for key in ids)
+                        or len(ids) != len(set(ids)) or row.get("report") is not None):
+                    raise PodError("state_unsupported", "Terminal route discard corrections are malformed")
+
+
+def route_hold(row: dict) -> bool:
+    """Raw mismatch history holds only its current, unsettled occurrence."""
+    validate_route_settlements(row)
+    return route_flags(row)[0] and not any(entry["occurrence"] == route_occurrence(row)
+                                         for entry in (row.get("route_decision") or {}).get("settlements", []))
+
+
+def flag_route_mismatch(row: dict) -> None:
+    if route_discarded(row):
+        raise PodError("route_settled_discarded", "Project lead: this admission was terminally discarded through route_settlements; use a fresh admission for further proof")
+    decision = row["route_decision"]
+    occurrence = route_occurrence(row)
+    if not route_hold(row):
+        occurrence += 1
+    decision.update(route_mismatch=True, mismatch_occurrence=occurrence)
+
+
+def route_discarded(row: dict, *, pending=()) -> bool:
+    """Terminal review/investigation discard, including an uncommitted map intent.
+
+    Pending input affects only validation inside that transaction. Every intent is
+    fully validated against the completed map before any admission is changed.
+    """
+    if row.get("role") not in ("review", "investigate"):
+        return False
+    validate_route_settlements(row)
+    if any(entry.get("basis") == "lead_decision" and entry.get("decision") == "discard"
+           for entry in (row.get("route_decision") or {}).get("settlements", [])):
+        return True
+    return isinstance(pending, list) and any(
+        isinstance(entry, dict) and entry.get("admission") == row.get("admission_id")
+        and entry.get("basis") == "lead_decision" and entry.get("decision") == "discard" for entry in pending)
+
+
+def matching_route_settlement(row: dict, *, seq: int | None = None) -> bool:
+    if not route_hold(row):
+        return False
+    row["route_decision"].setdefault("mismatch_occurrence", route_occurrence(row))
+    row["route_decision"].setdefault("settlements", []).append({
+        "basis": "matching_report", "occurrence": route_occurrence(row),
+        "utc": datetime.now(timezone.utc).isoformat(),
+        **({"seq": seq} if seq is not None else {}), "report_digest": row["report"]["observation_digest"]})
+    return True
+
+
+def route_next_action(row: dict) -> str:
+    key = row.get("admission_id", "<admission>")
+    implementation = row.get("role") == "implement"
+    replacement = ("for an implementation, disposition it and record route_settlements basis redone "
+                   "for a qualifying replacement; " if implementation else "")
+    discard = ("include corrections listing every known required finding as an ordinary correction id "
+               "(or [] with a reason explaining why none are known); " if not implementation else "")
+    return (f"Project lead: for admission {key}, consume its report with internal report after a matching readback; "
+            + replacement + "otherwise record route_settlements basis lead_decision with the lead's source and "
+            "reason in internal checkpoint; " + discard + LEAD_ROUTE_AUTHORITY)
+
+
+def route_settlement_projection(rows: list[dict]) -> dict:
+    entries = [{"admission": row["admission_id"], **entry} for row in rows
+               for entry in (row.get("route_decision") or {}).get("settlements", [])]
+    return ({"route_settlements": entries[-64:], "route_settlements_truncated": len(entries) > 64,
+             **({"route_settlement_authority": LEAD_ROUTE_AUTHORITY}
+                if any(entry["basis"] == "lead_decision" for entry in entries) else {})} if entries else {})
+
+
 def route_summary(rows: list[dict], *, unknown_states: tuple[str, ...] | None = None) -> tuple[bool, bool]:
     flagged = [(row, route_flags(row)) for row in rows]
-    return (any(flags[0] for _, flags in flagged),
+    return (any(route_hold(row) for row, _ in flagged),
             any(flags[1] and (unknown_states is None or row.get("state") in unknown_states)
                 for row, flags in flagged))
 

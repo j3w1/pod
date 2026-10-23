@@ -13,7 +13,7 @@ from .orca import current_run, worker_rows
 from .routes import project as project_routes
 from .selection import active_constraints, failure_active
 from .term import clean
-from .util import route_summary
+from .util import route_summary, route_hold, route_next_action, route_settlement_projection
 
 PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
                    "max_active", "refresh", "errors", "setup")
@@ -402,6 +402,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     drift = bool(checkpoint and not identity_matches(recorded, running))
     admissions = list(state["admissions"].values()) if state else []
     mismatch, unknown = route_summary(admissions)
+    route_holds = [row for row in admissions if route_hold(row)]
     checkpoint_refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else None
     checkpoint_assignments = checkpoint.get("assignments") if isinstance(checkpoint, dict) else None
     checkpoint_refs = checkpoint_refs if isinstance(checkpoint_refs, list) else []
@@ -428,6 +429,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                       for failure in row["failures"]],
                    "active_constraints": active_constraints(state["constraints"], preferences) if state else [],
                    "route_decisions": [row["route_decision"] for row in admissions[:64]],
+                   "route_holds": [row["admission_id"] for row in route_holds[:64]],
+                   "route_holds_truncated": len(route_holds) > 64,
+                   **route_settlement_projection(admissions),
                    "native_references": native_references,
                    "native_references_truncated": len(admissions) > 64,
                    "checkpoint_join": {"native_refs": checkpoint_refs[:64],
@@ -449,8 +453,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                    "blocker": "route_mismatch" if mismatch
                               else "effective_unknown" if unknown
                               else native_error or checkpoint.get("blocker") if checkpoint else native_error,
-                   "next_safe_action": checkpoint.get("next_safe_action", "inspect native Run")
-                                       if checkpoint else "inspect native Run"})
+                   "next_safe_action": (" ".join(route_next_action(row) for row in route_holds[:64]) if mismatch else
+                                        checkpoint.get("next_safe_action", "inspect native Run")
+                                        if checkpoint else "inspect native Run")})
     objective = checkpoint.get("objective") if checkpoint else None
     view = None
     if isinstance(objective, str) and checkpoint.get("obligations") is not None:
@@ -654,6 +659,8 @@ def render(result: dict) -> None:
             print(f"Record capacity: {capacity['physical_bytes']}/{capacity['limit_bytes']} bytes. "
                   + clean(capacity["next_action"]))
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
+        if result.get("route_settlement_authority"):
+            print("Route settlement: " + clean(result["route_settlement_authority"]))
         if "standing_authorization" in result:
             from .standing import mode_line
             print(clean(mode_line(result["standing_authorization"])))

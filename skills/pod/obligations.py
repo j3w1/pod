@@ -17,6 +17,7 @@ Governor boundaries, status, and the recorded-trace checks; there is no second c
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import hashlib
 import re
 from typing import Any, Callable
@@ -27,7 +28,8 @@ from .contracts import (TABLE, UNIT, IDENTIFIER, SURFACE, SOURCE, LINES, GOVERNA
 from .errors import PodError
 from .gitio import OBJECT_ID
 from .util import (digest, exact, _field_names, owner_decision, decision_channel, channel_fields,
-                   CHANNEL_FIELDS, DECISION_FIELDS)
+                   CHANNEL_FIELDS, DECISION_FIELDS, route_hold, route_flags, route_discarded,
+                   route_next_action, route_occurrence, validate_route_settlements)
 import unicodedata
 
 from .lineage import Lineage, FROZEN, DEFINITION as RENEW_DEFINITION
@@ -967,13 +969,15 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
                          next_action=("use the existing authorized revision path for changed definitions" if changed else
                                       "omit the renewed row from obligations or update; put replacement state fields in its renew entry"))
         pending = [key for key, admission in _admissions(ctx).items() if old_id in admission.get("serves", [])
+                   and not route_discarded(admission, pending=ctx.get("pending_route_settlements", ()))
                    and (key in _outstanding(ctx) or admission.get("state") != "deferred"
                         and (admission.get("report") is None and admission.get("disposition") is None
                              or admission.get("role") == "implement" and admission.get("disposition") is None))]
         if pending:
             raise refuse("obligation_invalid", "renewal_result_pending", "serving work must settle and its result be consumed or dispositioned",
                          obligation=old_id, admission=pending[0],
-                         next_action=(f"settle and consume the report for admission {pending[0]} before retrying renewal"
+                         next_action=(route_next_action(_admissions(ctx)[pending[0]]) if route_hold(_admissions(ctx)[pending[0]]) else
+                                      f"settle and consume the report for admission {pending[0]} before retrying renewal"
                                       if _admissions(ctx)[pending[0]].get("role") != "implement" else
                                       f"record an ordinary disposition for implementation admission {pending[0]} before retrying renewal"))
         state = entry.get("state", old["state"])
@@ -1125,6 +1129,8 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     if closed and not (user and reopen):
         raise refuse("objective_closed", "objective_closed", "the objective is closed",
                      closure_revision=prior_map["closure"]["revision"])
+    if closed and "route_settlements" in value:
+        raise refuse("objective_closed", "objective_closed", "a closed objective accepts no route settlement")
     if prior_map is not None and "obligations" not in value:
         # A checkpoint that leaves the map unchanged still revalidates it against current facts.
         value = {**value, "obligations": deepcopy(prior_map["obligations"])}
@@ -1147,7 +1153,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     if refresh and prior_map is None:
         raise refuse("obligation_invalid", "malformed", "governance is bound at intake, then refreshed", record='obligation map')
     ctx = {**ctx, "governance_refresh": refresh, "revision_authority": authority, "authority_kind": authority_kind,
-           "request_entries": request_entries}
+           "request_entries": request_entries, "pending_route_settlements": value.get("route_settlements", ())}
     value = _renew(prior_map, value, ctx, seq)
     revision = (prior_map["revision"] + (1 if user or refresh or issue else 0)) if prior_map else 1
 
@@ -1269,6 +1275,8 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         state["closure"] = closure
     elif "close" in value:
         raise refuse("obligation_invalid", "malformed", "close is true when present", record='obligation map')
+    if "route_settlements" in value:
+        _route_settlements(value["route_settlements"], state, ctx)
     return state
 
 
@@ -1283,6 +1291,108 @@ def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozens
         detail.setdefault("revision", current.get("revision", 0))
         exc.detail = detail
         raise
+
+
+def _route_later(original: dict, replacement: dict) -> bool:
+    if type(original.get("admitted_seq")) is int and type(replacement.get("admitted_seq")) is int:
+        return replacement["admitted_seq"] > original["admitted_seq"]
+    from .util import normalize_timestamp
+    try:
+        old = normalize_timestamp(original.get("created_at"), field="admission time", code="state_unsupported")
+        new = normalize_timestamp(replacement.get("created_at"), field="replacement time", code="state_unsupported")
+        return datetime.fromisoformat(new.replace("Z", "+00:00")) > datetime.fromisoformat(old.replace("Z", "+00:00"))
+    except PodError:
+        return False
+
+
+def _route_definitions(admission: dict, lineage: Lineage) -> bool:
+    binding = admission.get("binding")
+    definitions = binding.get("definitions") if isinstance(binding, dict) else None
+    if not isinstance(definitions, dict):
+        return False
+    return all(key in lineage.rows and definitions.get(key) == definition_id({
+        **lineage.rows[lineage.effective(key)], "id": key}) for key in admission["serves"])
+
+
+@input_record("route settlement")
+def _route_settlements(entries, state: dict, ctx: dict) -> None:
+    """Validate every basis last, then append all records to the locked write's admissions."""
+    if ctx.get("operation", "checkpoint") not in ("checkpoint", "report"):
+        raise refuse("route_settlement_invalid", "checkpoint_only", "route settlements use internal checkpoint or report map")
+    if not isinstance(entries, list) or len(entries) > bound("map", "route_settlements", "max_items"):
+        raise refuse("route_settlement_invalid", "malformed", "route_settlements is a bounded list")
+    admissions, seen, accepted = _admissions(ctx), set(), []
+    lineage = Lineage(state["obligations"])
+    for entry in entries:
+        _exact(entry, fields("route settlement"), required("route settlement"), "route settlement",
+               code="route_settlement_invalid")
+        key = entry["admission"]
+        row = admissions.get(key) if isinstance(key, str) else None
+        if row is None or key in seen or not route_hold(row):
+            raise refuse("route_settlement_invalid", "route_not_held", "name each recorded unsettled route once",
+                         admission=key)
+        seen.add(key)
+        basis = entry["basis"]
+        expected = {"admission", "basis", "replacement"} if basis == "redone" else {
+            "admission", "basis", "decision", "source", "reason"}
+        if basis == "lead_decision" and row["role"] in ("review", "investigate"):
+            expected.add("corrections")
+        if basis not in ("redone", "lead_decision") or set(entry) != expected:
+            raise refuse("route_settlement_invalid", "malformed", "use the exact fields for this route settlement basis",
+                         admission=key, accepted=expected, optional=set())
+        if basis == "redone":
+            replacement = admissions.get(entry["replacement"]) if isinstance(entry["replacement"], str) else None
+            consumed = (replacement or {}).get("report") or {}
+            if (row["role"] != "implement" or row.get("disposition") is None or replacement is None
+                    or not _route_later(row, replacement) or replacement.get("role") != "implement"
+                    or route_hold(replacement) or route_flags(replacement)[1]
+                    or consumed.get("status") != "validated_observation" or consumed.get("outcome") != "succeeded"
+                    or (replacement.get("disposition") or {}).get("kind") != "integrated_into"
+                    or any((replacement.get("route_decision") or {}).get("effective", {}).get(field) != row["request"][field]
+                           for field in ("agent", "model", "effort"))):
+                raise refuse("route_settlement_invalid", "replacement_unqualified", "redone needs a later successful integrated implementation on the admitted route",
+                             admission=key, next_action=route_next_action(row))
+            original_serves = {lineage.effective(ob) for ob in row["serves"]}
+            replacement_serves = {lineage.effective(ob) for ob in replacement["serves"]}
+            if (original_serves != replacement_serves or not original_serves <= set(lineage.rows)
+                    or row["boundary"] != replacement["boundary"]
+                    or not _route_definitions(row, lineage) or not _route_definitions(replacement, lineage)):
+                raise refuse("route_settlement_invalid", "replacement_coverage", "replacement must serve exactly every original obligation at its current renewal tip",
+                             admission=key, next_action=route_next_action(row))
+        else:
+            decision = entry["decision"]
+            source = _exact(entry["source"], fields("route settlement source"), required("route settlement source"),
+                            "route settlement source", code="route_settlement_invalid")
+            _text(source["reference"], "reference", limit=bound("route settlement source", "reference"), code="route_settlement_invalid")
+            _text(entry["reason"], "reason", limit=bound("route settlement", "reason"), code="route_settlement_invalid")
+            if decision not in ("accept", "discard"):
+                raise refuse("route_settlement_invalid", "malformed", "a lead decision accepts or discards the attempt", admission=key)
+            if row["role"] == "implement":
+                kind = "integrated_into" if decision == "accept" else "discarded"
+                if (row.get("disposition") or {}).get("kind") != kind:
+                    raise refuse("route_settlement_invalid", "disposition_required", "the lead decision needs its matching ordinary implementation disposition",
+                                 admission=key, next_action=route_next_action(row))
+            elif row["role"] in ("review", "investigate"):
+                if decision != "discard" or key in _outstanding(ctx) or row.get("state") != "bound" or row.get("report") is not None:
+                    raise refuse("route_settlement_invalid", "discard_unavailable", "only a natively settled review or investigation without a consumed report can be terminally discarded",
+                                 admission=key, next_action=route_next_action(row))
+                corrections = entry["corrections"]
+                if (not isinstance(corrections, list) or len(corrections) > bound("route settlement", "corrections", "max_items")
+                        or any(not isinstance(identity, str) for identity in corrections)
+                        or len(corrections) != len(set(corrections))
+                        or any(lineage.rows.get(identity, {}).get("kind") != "correction" for identity in corrections)):
+                    raise refuse("route_settlement_invalid", "corrections_required", "list ordinary correction ids for every known required finding; [] needs a reason explaining why none are known",
+                                 admission=key, next_action=route_next_action(row))
+            else:
+                raise refuse("route_settlement_invalid", "role_invalid", "this admission has no supported settlement role", admission=key)
+        record = {field: deepcopy(item) for field, item in entry.items() if field != "admission"}
+        record.update(occurrence=route_occurrence(row), seq=state["seq"], utc=datetime.now(timezone.utc).isoformat())
+        staged = {**row, "route_decision": {**row["route_decision"], "mismatch_occurrence": route_occurrence(row),
+                                           "settlements": [*row["route_decision"].get("settlements", []), record]}}
+        validate_route_settlements(staged)
+        accepted.append((row, staged["route_decision"]))
+    for row, decision in accepted:
+        row["route_decision"] = decision
 
 
 @input_record("objective source")

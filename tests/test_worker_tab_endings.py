@@ -25,11 +25,17 @@ class EndedTabAssertions:
         else:
             self.assertIsNone(row["command"])
             self.assertIn("Do not reuse", row["wording"])
-            if route_mismatch:
-                self.assertIn("Its route mismatch is recorded: the standing close authorization covers this tab "
-                              "only once its report is recorded, and Pod refuses that report while Orca's effective "
-                              "route differs; if it stays refused, name it in the final report for the owner's decision.",
-                              row["wording"])
+            state = read(self.project, "objective")
+            flagged = any(item["route_decision"]["route_mismatch"] for item in state["admissions"].values())
+            if route_mismatch or flagged:
+                self.assertIn("Project lead:", row["wording"])
+                self.assertNotIn("owner", row["wording"].lower())
+                if ended or state["checkpoint"].get("closure"):
+                    self.assertIn("this ended record accepts no settlement write and supplies no close command", row["wording"])
+                else:
+                    self.assertIn("route_settlements basis lead_decision", row["wording"])
+                    self.assertIn("internal checkpoint", row["wording"])
+                    self.assertIn("This unreported tab has no standing close command", row["wording"])
             else:
                 self.assertIn("The owner's standing close authorization does not cover this tab because its report "
                               "was not recorded; name it in the final report for the owner's decision.", row["wording"])
@@ -169,10 +175,10 @@ class RouteMismatchTabTests(EndedTabAssertions, TabCase):
         self.write(self.finished_rows(), close=True)
         self.assert_tab_wording(case)
 
-    def test_open_user_owned_route_mismatch_names_owner_decision_before_and_after_discard(self):
+    def test_open_user_owned_route_mismatch_names_lead_before_and_after_discard(self):
         self.route_mismatch("user_owned")
 
-    def test_open_external_route_mismatch_names_owner_decision_before_and_after_discard(self):
+    def test_open_external_route_mismatch_names_lead_before_and_after_discard(self):
         self.route_mismatch("external")
 
     def receipt_only_mismatch(self, *, discarded=False):

@@ -72,13 +72,14 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
     change the admission's bound state or current native outstanding predicate.
     Any freshly observed outstanding/native or Governor dependency vetoes a move.
     """
+    from .util import route_hold
     candidate = (state.get("checkpoint") or {}).get("candidate")
     report = row.get("report") or {}
     if (key in protected or row.get("state") not in ("closed", "bound")
             or not row.get("candidate") or row.get("candidate") == candidate
             or report.get("status") != "validated_observation"
             or row.get("route_decision", {}).get("effective_unknown") is True
-            or row.get("route_decision", {}).get("route_mismatch") is True
+            or route_hold(row)
             or any(not failure.get("cleared_at") for failure in row.get("failures", []))):
         return False
     role = row.get("role")

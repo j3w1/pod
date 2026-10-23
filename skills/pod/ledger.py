@@ -17,7 +17,9 @@ from .errors import PodError
 from .history import load_context, prepare_context, publish_context
 from . import gitio
 from .installer import STATE_SCHEMAS, superseded_objectives, superseded_schemas
-from .util import MAX_RECORD, bounded_text, digest, exact, explicit_home, native_home
+from .util import (MAX_RECORD, bounded_text, digest, exact, explicit_home, native_home,
+                   flag_route_mismatch, matching_route_settlement, route_discarded,
+                   route_next_action, route_settlement_projection, validate_route_settlements)
 
 ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred")
 CONTEXT_SCHEMA = STATE_SCHEMAS["context"]
@@ -204,6 +206,34 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
         from .display import validate_facts
         validate_facts(value["display"])
     _consumed_report(value, runtimes or set())
+    validate_route_settlements(value)
+
+
+def _validate_route_references(state: dict) -> None:
+    """Read stored reference identity without rejudging a once-accepted replacement."""
+    from .obligations import _route_later
+    admissions = state["admissions"]
+    checkpoint = state.get("checkpoint") or {}
+    obligations = {row["id"]: row for row in checkpoint.get("obligations", [])}
+    for row in admissions.values():
+        for entry in row["route_decision"].get("settlements", []):
+            if entry.get("seq", 1) > checkpoint.get("seq", 0):
+                raise PodError("state_unsupported", "Route settlement sequence is ahead of its map")
+            if entry["basis"] == "redone":
+                replacement = admissions.get(entry["replacement"])
+                if (replacement is None or replacement.get("role") != "implement" or not _route_later(row, replacement)
+                        or row.get("disposition") is None
+                        or (replacement.get("report") or {}).get("status") != "validated_observation"
+                        or (replacement.get("report") or {}).get("outcome") != "succeeded"
+                        or (replacement.get("disposition") or {}).get("kind") != "integrated_into"):
+                    raise PodError("state_unsupported", "Route settlement replacement reference is malformed")
+            elif entry["basis"] == "lead_decision":
+                if row["role"] == "implement":
+                    kind = "integrated_into" if entry["decision"] == "accept" else "discarded"
+                    if (row.get("disposition") or {}).get("kind") != kind:
+                        raise PodError("state_unsupported", "Route settlement disposition reference is malformed")
+                elif any(obligations.get(key, {}).get("kind") != "correction" for key in entry["corrections"]):
+                    raise PodError("state_unsupported", "Route settlement correction reference is malformed")
 
 
 def _validate_context(value: object) -> dict:
@@ -267,6 +297,7 @@ def _validate_context(value: object) -> dict:
         if not isinstance(key, str) or not key:
             raise PodError("state_unsupported", "Admission key is malformed")
         _validate_admission(key, row, runtimes=runtimes)
+    _validate_route_references(state)
     if (not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict)
             or not isinstance(state["constraints"], list) or len(state["constraints"]) > 64):
         raise PodError("state_unsupported", "Context evidence is malformed")
@@ -1203,6 +1234,7 @@ def map_read(project: Path, objective: str) -> dict:
     from .worker_tabs import finalization as tab_finalization
     remaining = tab_finalization(remaining, view.get("worker_tabs", []))
     return {"schema": "pod-map-view/v1", "seq": map_state["seq"], "next_seq": map_state["seq"] + 1,
+            **route_settlement_projection(list(state["admissions"].values())),
             "revision": map_state["revision"], "candidate": state["checkpoint"].get("candidate"),
             **{key: state["checkpoint"].get(key) for key in
                ("criteria", "plan_revision", "objective_source", "worktree", "policy_revision")},
@@ -1659,6 +1691,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if isinstance(proposed, dict) and proposed.get("close") is True:
             _record_continuity_event(authority.get("continuity"))
         result = dict(state)
+        result.update(route_settlement_projection(list(state["admissions"].values())))
         # Acknowledgements use the accepted closure/dispositions with the same
         # native facts; the pre-write rows can still promise a future report.
         from .worker_tabs import rows as tab_rows
@@ -2178,6 +2211,9 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         row = state["admissions"].get(admission_id)
         if state["owner"] != owner or row is None:
             raise PodError("unknown_admission", "No owned admission identity")
+        if route_discarded(row):
+            raise PodError("route_settled_discarded", "Project lead: this admission was terminally discarded through route_settlements; use a fresh admission for further proof",
+                           {"admission": admission_id})
         prepared_continuity = None
         if prepare is not None:
             prepared = prepare(state, row)
@@ -2188,9 +2224,10 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         if route_mismatch:
             _update_admission_locked(project, objective, state=state, owner=owner,
                                      admission_id=admission_id,
-                                     update=lambda item: item["route_decision"].update(route_mismatch=True),
+                                     update=flag_route_mismatch,
                                      expected_runtime=row["runtime"])
-            raise PodError("route_mismatch", "Native effective route changed after start")
+            raise PodError("route_mismatch", "Native effective route changed after start",
+                           {"next_action": route_next_action(row)})
         # The report path read its fresh identity at the observation's runtime (A2).
         observed_runtime = (observation.get("native_binding") or {}).get("runtime")
         closing = isinstance(accompanying, dict) and accompanying.get("close") is True
@@ -2234,6 +2271,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             tabs = [worker if item["admission"] == admission_id else item for item in tabs]
             from .pod_ticks import projection as tick_projection
             return {"worker_tabs": tabs, "worker_tab": worker,
+                    **route_settlement_projection(list(state["admissions"].values())),
                     "pod_ticks": tick_projection(state, map_of(state), ctx, project=project, objective=objective)}
         settled = admission_id not in ctx["outstanding"]
         if not settled:
@@ -2245,6 +2283,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                                          or prior_report.get("result_commit") != result_commit):
             raise PodError("report_conflict", "A consumed Dispatch report or result cannot be replaced")
         if prior_report is not None and not accompanying and not findings and not proposals:
+            if matching_route_settlement(row):
+                _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
             ingestion = _stored_ingestion(row)
             return {"ingestion": ingestion, "settled": True,
                     "written": _report_written_ids(map_state, admission_id),
@@ -2275,14 +2315,20 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         if kept is not None:
             ctx["governance_kept"] = kept
         try:
+            ctx["pending_route_settlements"] = (accompanying or {}).get("route_settlements", ())
             value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
                                     admission_id=admission_id)
             if (prior_report is not None and not accompanying and value.get("obligations") == map_state["obligations"]
                     and value.get("proposals") == map_state["proposals"]):
+                if matching_route_settlement(row):
+                    _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
                 return {"ingestion": _stored_ingestion(row), "settled": True,
                         "written": _report_written_ids(map_state, admission_id),
                         "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
                         "report": report_projection(map_state, ctx, standing_normal=True), **tab_output()}
+            # The prepared matching basis is staged with this map, so its validated
+            # replacement can settle another admission in the same transaction.
+            matching_route_settlement(row, seq=map_state["seq"] + 1)
             if value.get("close") is True and not map_state.get("closure"):
                 from .succession import refuse_incomplete
                 refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's new closure (R118).

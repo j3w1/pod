@@ -29,7 +29,7 @@ from .errors import PodError
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
 from .util import (MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact,
-                   normalize_timestamp, route_summary)
+                   normalize_timestamp, route_summary, route_hold, route_next_action)
 
 SCHEMA = "pod-governor/v2"
 KINDS = GOVERNED_KINDS
@@ -73,7 +73,7 @@ NEXT_ACTIONS = {
     "effects_unknown": "declare effects: [] for none, or workflow:ci.yml (a bare workflow file name); inspect governor-status trigger_proposal; proposals are never applied",
     "effect_unresolved": "reconcile the unresolved submission with the governor-reconcile helper before submitting again",
     "integration_unsettled": "settle the unit's native work and corrections first",
-    "route_mismatch": "inspect the exact worker launch with Orca and resolve the route mismatch",
+    "route_mismatch": route_next_action({"admission_id": "<holding-admission>", "role": "implement"}),
     "effective_unknown": "obtain exact effective worker launch evidence before delivery",
     "diagnosis_required": "record a discriminating diagnosis for the unit's repeated failure",
     "local_preflight_missing": "run the configured local preflight and record each result for this candidate",
@@ -994,7 +994,10 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
     mismatch, unknown = route_summary(list(state.get("admissions", {}).values()),
                                       unknown_states=("bound", "closed"))
     if mismatch:
-        _reason(reasons, "correctness", "route_mismatch", "a bound worker used a different route")
+        for row in state.get("admissions", {}).values():
+            if route_hold(row):
+                _reason(reasons, "correctness", "route_mismatch",
+                        f"Admission {row['admission_id']} has unsettled route evidence. " + route_next_action(row))
     elif unknown:
         _reason(reasons, "correctness", "effective_unknown", "worker launch readback lacks effective values")
     effects, source = _effects(action, governor_policy)
@@ -1144,9 +1147,12 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
         codes = [reason["code"] for reason in verdict["reasons"]]
         next_action = next((NEXT_ACTIONS[code] for code in codes if code in NEXT_ACTIONS), None)
+        route_reasons = [reason for reason in verdict["reasons"] if reason["code"] == "route_mismatch"]
         missing = next((reason for reason in verdict["reasons"]
                         if reason["code"] == "authorization_missing"), None)
-        if missing is not None:
+        if route_reasons:
+            next_action = " ".join(reason["detail"] for reason in route_reasons)
+        elif missing is not None:
             next_action = missing["detail"]
         target_binding = None
         if proposal["kind"] == "merge":
