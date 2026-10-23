@@ -481,9 +481,36 @@ class ReviewDiscardTests(SettlementCase):
     def test_review_requires_corrections_list_and_cannot_accept_or_discard_live_work(self):
         admission, _ = self.review()
         self.refused_write("malformed", **self.parked(["A"]), route_settlements=[self.lead(admission)])
-        self.refused_write("discard_unavailable", **self.parked(["A"]), route_settlements=[self.lead(admission, "accept", corrections=[])])
+        self.refused_write("accept_unavailable", **self.parked(["A"]), route_settlements=[self.lead(admission, "accept")])
         self.c.port.workers[admission["native_binding"]["dispatchId"]]["outcome"] = "in_progress"
         self.refused_write("discard_unavailable", route_settlements=[self.discard(admission)])
+
+    def test_lead_accepts_a_later_review_mismatch_after_rebind_without_replaying_proof(self):
+        admission, frozen = self.review()
+        self.c.report(admission, frozen, map=self.parked(["A"]))
+        self.flag(admission, frozen)
+        self.c.port.runtime = self.c.port.placement["runtime"] = "next-runtime"
+        self.c.write()
+        with self.assertRaises(PodError) as caught:
+            self.c.report(admission, frozen)
+        self.assertEqual(caught.exception.code, "report_conflict")
+        self.refused_write("discard_unavailable", route_settlements=[self.discard(admission)])
+        before = self.state()
+        self.c.write(route_settlements=[self.lead(admission, "accept")])
+        after = self.state()
+        self.assertEqual(self.row(admission)["report"], before["admissions"][admission["admission_id"]]["report"])
+        self.assertEqual(after["checkpoint"]["obligations"], before["checkpoint"]["obligations"])
+        self.assertFalse(route_hold(self.row(admission)))
+        self.assertFalse(route_discarded(self.row(admission)))
+        self.assertNotIn("corrections", self.row(admission)["route_decision"]["settlements"][-1])
+
+    def test_lead_accepts_consumed_investigation_route_evidence_without_inventing_success(self):
+        admission, frozen = self.original(("S",), role="investigate", resolves="bounded question", stop_condition="answer recorded")
+        self.c.report(admission, frozen, outcome="failed", map=self.parked())
+        self.flag(admission, frozen)
+        self.c.write(route_settlements=[self.lead(admission, "accept")])
+        self.assertFalse(route_hold(self.row(admission)))
+        self.assertEqual(self.row(admission)["report"]["outcome"], "failed")
 
 
 class SettlementReadTests(SettlementCase):
@@ -591,7 +618,7 @@ class RouteWordingTests(unittest.TestCase):
             ("map finalization", case.op("map")["finalization"]["next_action"])))
         case.write(case.finished_rows(), dispositions=[{"admission": key, "discarded": True, "reason": "superseded"}], close=True)
         cls.wordings.append(("ended worker tab", case.status()["worker_tabs"][0]["wording"], key, "ended"))
-        review = ProductionCase(); review.setUp(); cls.addClassCleanup(review.doCleanups)
+        review = TabCase(); review.setUp(); cls.addClassCleanup(review.doCleanups)
         review.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
             "check": "review", "scope": {"paths": ["src"]}, "question": "is src right?", "candidate": review.candidate,
             "existing_evidence": "tests", "insufficiency": "no review", **deepcopy(WAIT)})
@@ -612,17 +639,29 @@ class RouteWordingTests(unittest.TestCase):
                 call()
             except PodError as exc:
                 cls.wordings.append((name, exc.detail["next_action"], admission["admission_id"], "review"))
+        review.tab_case = "external"
+        review.write(seq=read(review.project, "objective")["checkpoint"]["seq"] + 1,
+            update={"A": deepcopy(WAIT)}, route_settlements=[{"admission": admission["admission_id"],
+                "basis": "lead_decision", "decision": "discard", "source": {"reference": "repository-task/lead-decision"},
+                "reason": "No required findings are known from the refused attempt", "corrections": []}])
+        tab = next(row for row in review.status()["worker_tabs"] if row["admission"] == admission["admission_id"])
+        cls.wordings.append(("settled discarded worker tab", tab["wording"], admission["admission_id"], "discarded"))
 
     def test_every_route_mismatch_surface_names_lead_exact_step_and_no_owner(self):
         self.assertEqual({name for name, *_ in self.wordings}, {"bind acknowledgement", "report refusal", "consume refusal",
             "Governor vocabulary", "Governor action", "Governor reason", "status safe action", "status action", "worker tab",
-            "map finalization", "ended worker tab", "capacity refusal", "renewal refusal"})
+            "map finalization", "ended worker tab", "capacity refusal", "renewal refusal", "settled discarded worker tab"})
         for name, text, admission, role in self.wordings:
             with self.subTest(surface=name):
                 self.assertIn("Project lead:", text)
                 self.assertIn(admission, text)
                 self.assertNotIn("owner", text.lower())
-                if role == "ended":
+                if role == "discarded":
+                    self.assertIn("terminally discarded", text)
+                    self.assertIn("no standing close command", text)
+                    self.assertNotIn("route_settlements", text)
+                    self.assertNotIn("internal checkpoint", text)
+                elif role == "ended":
                     self.assertIn("successor or repository task", text)
                     self.assertIn("accepts no settlement write", text)
                     self.assertNotIn("internal checkpoint", text)

@@ -232,7 +232,7 @@ def _validate_route_references(state: dict) -> None:
                     kind = "integrated_into" if entry["decision"] == "accept" else "discarded"
                     if (row.get("disposition") or {}).get("kind") != kind:
                         raise PodError("state_unsupported", "Route settlement disposition reference is malformed")
-                elif any(obligations.get(key, {}).get("kind") != "correction" for key in entry["corrections"]):
+                elif any(obligations.get(key, {}).get("kind") != "correction" for key in entry.get("corrections", [])):
                     raise PodError("state_unsupported", "Route settlement correction reference is malformed")
 
 

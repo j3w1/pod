@@ -403,7 +403,8 @@ def validate_route_settlements(row: dict) -> None:
                     {"decision", "source", "reason", "seq"} if basis == "lead_decision" else None)
         if specific is None:
             raise PodError("state_unsupported", "Route settlement basis is unsupported")
-        if basis == "lead_decision" and row.get("role") in ("review", "investigate"):
+        if (basis == "lead_decision" and row.get("role") in ("review", "investigate")
+                and entry.get("decision") == "discard"):
             specific |= {"corrections"}
         allowed = common | specific | ({"seq"} if basis == "matching_report" else set())
         if (set(entry) - allowed or not (common | specific) <= set(entry)
@@ -426,7 +427,8 @@ def validate_route_settlements(row: dict) -> None:
         else:
             if (entry["decision"] not in ("accept", "discard")
                     or not isinstance(entry["source"], dict) or set(entry["source"]) != {"reference"}
-                    or row.get("role") in ("review", "investigate") and entry["decision"] != "discard"):
+                    or row.get("role") in ("review", "investigate")
+                       and entry["decision"] == "accept" and row.get("report") is None):
                 raise PodError("state_unsupported", "Relayed project lead route decision is malformed")
             try:
                 bounded_text(entry["source"]["reference"], name="reference", limit=bound("route settlement source", "reference"))
@@ -491,7 +493,9 @@ def route_next_action(row: dict) -> str:
     implementation = row.get("role") == "implement"
     replacement = ("for an implementation, disposition it and record route_settlements basis redone "
                    "for a qualifying replacement; " if implementation else "")
-    discard = ("include corrections listing every known required finding as an ordinary correction id "
+    discard = ("accept the later route evidence while the consumed report stands as recorded; "
+               if not implementation and row.get("report") is not None else
+               "for an unreported review or investigation discard, include corrections listing every known required finding as an ordinary correction id "
                "(or [] with a reason explaining why none are known); " if not implementation else "")
     return (f"Project lead: for admission {key}, consume its report with internal report after a matching readback; "
             + replacement + "otherwise record route_settlements basis lead_decision with the lead's source and "

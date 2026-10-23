@@ -217,11 +217,15 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if keep:
         return finish("owner_kept_unowned", f"Owner-kept by instruction {keep['id']}. " + wording, command=None)
     if admission.get("report") is None:
-        from .util import route_flags, route_next_action
-        if recorded_settlement and route_flags(admission)[0]:
+        from .util import route_hold, route_discarded, route_next_action
+        if route_discarded(admission):
+            next_step = (f"Project lead: admission {admission['admission_id']} was terminally discarded; "
+                         "preserve its correction follow-up in the successor or repository task. "
+                         "This unreported tab has no standing close command.")
+        elif recorded_settlement and route_hold(admission):
             next_step = (f"Project lead: for admission {admission['admission_id']}, record any remaining tab follow-up "
                          "in the successor or repository task; this ended record accepts no settlement write and supplies no close command.")
-        elif route_flags(admission)[0]:
+        elif route_hold(admission):
             next_step = route_next_action(admission) + " This unreported tab has no standing close command."
         elif recorded_settlement:
             next_step = ("The owner's standing close authorization does not cover this tab because its report "

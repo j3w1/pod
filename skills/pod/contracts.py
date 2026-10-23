@@ -93,7 +93,7 @@ TABLE = {
         "source": record("route settlement source"), "reason": text(1024),
         "corrections": items(512, ident()),
     }, ("admission", "basis"),
-       form="redone requires only replacement; lead_decision requires decision, source and reason; review/investigation only discard with corrections; delegated lead is relayed, not authenticated"),
+       form="redone requires only replacement; lead_decision requires decision, source and reason; review/investigation discard requires corrections and no consumed report, accept requires an already consumed report; delegated lead is relayed, not authenticated"),
     "route settlement source": definition({"reference": text(512)}, ("reference",)),
     "renewal request": definition({"id": ident(), "as": ident(), "state": choice(STATES),
         "wait": record("wait"), "executor": text(128), "external": record("external")}, ("id", "as")),

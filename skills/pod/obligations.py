@@ -1335,7 +1335,8 @@ def _route_settlements(entries, state: dict, ctx: dict) -> None:
         basis = entry["basis"]
         expected = {"admission", "basis", "replacement"} if basis == "redone" else {
             "admission", "basis", "decision", "source", "reason"}
-        if basis == "lead_decision" and row["role"] in ("review", "investigate"):
+        if (basis == "lead_decision" and row["role"] in ("review", "investigate")
+                and entry.get("decision") == "discard"):
             expected.add("corrections")
         if basis not in ("redone", "lead_decision") or set(entry) != expected:
             raise refuse("route_settlement_invalid", "malformed", "use the exact fields for this route settlement basis",
@@ -1373,10 +1374,14 @@ def _route_settlements(entries, state: dict, ctx: dict) -> None:
                     raise refuse("route_settlement_invalid", "disposition_required", "the lead decision needs its matching ordinary implementation disposition",
                                  admission=key, next_action=route_next_action(row))
             elif row["role"] in ("review", "investigate"):
-                if decision != "discard" or key in _outstanding(ctx) or row.get("state") != "bound" or row.get("report") is not None:
+                if decision == "accept":
+                    if row.get("report") is None:
+                        raise refuse("route_settlement_invalid", "accept_unavailable", "accepting later route evidence needs an already consumed review or investigation report",
+                                     admission=key, next_action=route_next_action(row))
+                elif key in _outstanding(ctx) or row.get("state") != "bound" or row.get("report") is not None:
                     raise refuse("route_settlement_invalid", "discard_unavailable", "only a natively settled review or investigation without a consumed report can be terminally discarded",
                                  admission=key, next_action=route_next_action(row))
-                corrections = entry["corrections"]
+                corrections = entry.get("corrections", [])
                 if (not isinstance(corrections, list) or len(corrections) > bound("route settlement", "corrections", "max_items")
                         or any(not isinstance(identity, str) for identity in corrections)
                         or len(corrections) != len(set(corrections))
