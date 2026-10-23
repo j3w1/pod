@@ -79,49 +79,75 @@ def _mentions(value: object, text: str, depth: int = 0) -> bool:
     return False
 
 
-def run_scope(project: Path, objective: str, run_id: str) -> dict:
+def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_closure: bool = True) -> dict:
     """Prove scope without the diagnostic reader's unsupported-record skip.
 
     A positive raw reference blocks unless a supported record proves closure.
     Unknown membership holds; no record is converted, locked or rewritten.
+    Discovery may supply a budget; exhaustion raises rather than returning a partial
+    scope. Without it, continuation and owner handoff still require the complete proof.
+    Discovery also passes `prove_closure=False`: a closed peer that records the Run is then
+    reported in `closure_unchecked` instead of proving its closure, which only execution does.
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, closed_snapshot_context)
     from .history import load_context
+    from .orca import DEADLINE_SPENT
+
+    def check():
+        if budget is not None:
+            budget.check()
+
+    def directory_entries(path):
+        check()
+        with os.scandir(path) as entries:
+            found = []
+            while True:
+                check()
+                entry = next(entries, None)
+                if entry is None:
+                    return found
+                found.append(entry)
+
+    check()
     root = state_root(project)
+    check()
     if root.is_symlink():
         return {"objectives": [], "unreadable": 1}
     own = objective_root(project, objective) / "context.json"
     others, unknown = [], 0
-    unverifiable = []
+    unverifiable, unchecked = [], []
     # A complete frontier is part of the proof. scandir/stat propagate errors that
     # Path.glob suppresses; an unavailable directory is never apparent absence.
     paths = []
     try:
-        with os.scandir(root) as frontier:
-            directories = list(frontier)
+        directories = directory_entries(root)
     except FileNotFoundError:
         return {"objectives": [], "unreadable": 1}
     except OSError:
         return {"objectives": [], "unreadable": 1}
     for directory in directories:
+        check()
         try:
             if directory.is_symlink():
                 unknown += 1
                 continue
+            check()
             if not directory.is_dir(follow_symlinks=False):
                 continue
-            with os.scandir(directory.path) as contents:
-                entries = list(contents)
+            entries = directory_entries(directory.path)
             paths.extend(Path(entry.path) for entry in entries if entry.name == "context.json")
         except OSError:
             unknown += 1
     for path in paths:
+        check()
         if path == own:
             continue
         try:
             raw = load_context(path, validate=False)
-        except PodError:
+        except PodError as exc:
+            if exc.code == DEADLINE_SPENT:
+                raise
             unknown += 1
             continue
         if not isinstance(raw, dict):
@@ -136,6 +162,7 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
         referenced = (isinstance(refs, list) and any(isinstance(row, dict) and row.get("runId") == run_id for row in refs)
                       or isinstance(admissions, dict) and any(isinstance(row, dict) and row.get("run_id") == run_id for row in admissions.values()))
         supported = False
+        check()
         try:
             _run_references(_validate_context(raw))
             supported = True
@@ -143,6 +170,10 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
             pass
         if referenced:
             closure = checkpoint.get("closure") if isinstance(checkpoint, dict) else None
+            if supported and closure is not None and not prove_closure:
+                name = checkpoint["objective"]
+                unchecked.append(name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective")
+                continue
             if supported and closure is not None:
                 from .obligations import validate_closed_snapshot
                 try:
@@ -154,12 +185,18 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
                         project if objective_root(project, checkpoint["objective"]) == path.parent else None)
                     if peer_project is None:
                         raise PodError("closure_unverified", "Peer repository binding is unavailable")
+                    check()
                     if not peer_project.is_dir():
                         raise PodError("closure_unverified", "Peer worktree is unreadable")
+                    check()
                     validate_checkpoint_snapshot(peer_project, raw)
+                    check()
                     ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
+                    check()
                     unproven = validate_closed_snapshot(checkpoint, ctx)
-                except (PodError, KeyError, TypeError, ValueError, OSError):
+                except (PodError, KeyError, TypeError, ValueError, OSError) as exc:
+                    if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT:
+                        raise
                     pass
                 else:
                     if unproven:
@@ -172,7 +209,11 @@ def run_scope(project: Path, objective: str, run_id: str) -> dict:
             # Only documented reference layouts can prove non-membership; an older-schema record
             # proves it only when its Run id appears nowhere in the record.
             unknown += 1
-    return {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
+    check()
+    result = {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
+    if unchecked:
+        result["closure_unchecked"] = sorted(set(unchecked))
+    return result
 
 
 def detect(project: Path, objective: str, state: dict, *, port, caller: str | None = None) -> dict:
@@ -226,6 +267,13 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("caller_not_live", "Orca cannot prove this caller's handle live (" + (own["code"] or "successful terminal show did not prove liveness") + ").",
                     definitive=own["state"] == "lost")
     pending = unfinished(state)
+    from .window import unfinished as window_unfinished
+    window = window_unfinished(state)
+    if window is not None and window["state"] == "pending":
+        # Neither coordinator-change path overwrites the other's pending authority (pod#110).
+        return fail("window_continuation_pending", "A window continuation is pending; it finishes through pod continue.",
+                    action="Finish the pending window continuation with pod continue --objective " + objective
+                           + " --json; do not run orca orchestration run-use by hand.")
     if pending and pending["state"] == "pending" and pending["decision"]["to_owner"] != caller:
         holder = terminal_identity(pending["decision"]["to_owner"])
         if holder["state"] != "lost":
@@ -355,8 +403,14 @@ def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: st
         refuse_incomplete(project, objective, state, claim=claim)
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)
     if verdict is not None:
-        raise PodError(code, "Caller is not the recorded owner. " + verdict["message"],
-                       {"owner_handoff": verdict, "next_action": verdict["next_action"]})
+        detail = {"owner_handoff": verdict, "next_action": verdict["next_action"]}
+        from .window import primary_action, status_block
+        window = status_block(project, objective, state, port=port)
+        if window is not None:
+            # The window route, or its lead task, needs no owner decision and comes first (pod#110).
+            detail["window_continuation"] = window
+            detail["next_action"] = primary_action(window)
+        raise PodError(code, "Caller is not the recorded owner. " + verdict["message"], detail)
 
 
 def owner_handoff(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:

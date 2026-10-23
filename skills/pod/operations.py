@@ -44,6 +44,10 @@ def _check_worktree_binding(project: Path, binding: dict | None, current: dict |
     if current is None:
         from .github import repository_context
         current = repository_context(project, fresh=True)
+    from .orca import _DEADLINE
+    budget = _DEADLINE.get()
+    if budget is not None:
+        budget.check()
     current_repository = current["repository"]
     expected_repository = binding.get("repository")
     repository_matches = (current_repository is None and expected_repository is None
@@ -935,7 +939,8 @@ def _no_start_proof(project: Path, state: dict, previous: dict, ref: str | None)
         reached = observed_runtime
         for entry in (state.get("checkpoint", {}).get("continuity") or {}).get("history", []):
             if (entry["from_runtime"] == reached
-                    and (entry.get("provenance") != "owner_handoff" or entry.get("state") == "done")):
+                    and (entry.get("provenance") not in ("owner_handoff", "window_continuation")
+                         or entry.get("state") == "done")):
                 reached = entry["to_runtime"]
         if not isinstance(observed_runtime, str) or reached != previous["runtime"]:
             raise ValueError("no recorded runtime continuity for no-start proof")

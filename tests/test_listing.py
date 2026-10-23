@@ -17,6 +17,13 @@ def offline(*_args, **_kwargs):
 
 
 class ListingCase(KernelCase):
+    def setUp(self):
+        super().setUp()
+        # Outside a live Orca terminal the list is record-only; inside one it adds a bounded window check (pod#110).
+        handle = patch.dict(os.environ)
+        handle.start(); self.addCleanup(handle.stop)
+        os.environ.pop("ORCA_TERMINAL_HANDLE", None)
+
     def listed(self, **scope):
         with patch("pod.orca.read_command", side_effect=offline):
             return listing.objective_list(self.project, **scope)

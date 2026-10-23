@@ -467,6 +467,9 @@ def _validate_continuity(value: object) -> None:
     if sum(isinstance(row, dict) and row.get("provenance") == "owner_handoff"
            and row.get("state") != "done" for row in history) > 1:
         raise PodError("state_unsupported", "More than one unfinished owner handoff")
+    if sum(isinstance(row, dict) and row.get("provenance") in ("owner_handoff", "window_continuation")
+           and row.get("state") == "pending" for row in history) > 1:
+        raise PodError("state_unsupported", "More than one pending coordinator change")
     for row in history:
         if not isinstance(row, dict) or not {"from_runtime", "to_runtime"} <= set(row):
             raise PodError("state_unsupported", "Runtime continuity history row is malformed")
@@ -475,6 +478,11 @@ def _validate_continuity(value: object) -> None:
         if isinstance(row, dict) and row.get("provenance") == "owner_handoff":
             from .handoff import validate_entry
             validate_entry(row)
+            continue
+        if isinstance(row, dict) and row.get("provenance") == "window_continuation":
+            from .window import unfinished, validate_entry as validate_window
+            validate_window(row)
+            unfinished({"checkpoint": {"continuity": value}})
             continue
         if (not isinstance(row, dict)
                 or not {"from_runtime", "to_runtime", "at", "provenance", "verified"} <= set(row)

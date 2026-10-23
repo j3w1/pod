@@ -20,7 +20,8 @@ from tests.test_succession import SuccessionCase
 
 BASELINE = "5f7298bab47c4a3263496dc2a7fe50ecfcda0530"  # Pod 0.12.0, the last status without readiness
 REPOSITORY = Path(__file__).resolve().parents[1]
-NEW_FIELDS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization")
+NEW_FIELDS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization",
+              "window_continuation")
 DECISION_FIELDS = ("owner_decisions", "derived_governance_decisions")
 
 
@@ -303,6 +304,8 @@ class ListLabelTests(ReadinessCase):
         self.prepare()
         self.closed(objective="closed-one")
         self.rows(self.row("merge-1", "merge", "PASS"))
+        # Outside a live Orca terminal the list is record-only; inside one it adds a bounded window check (pod#110).
+        os.environ.pop("ORCA_TERMINAL_HANDLE", None)
         with patch("pod.orca.read_command", side_effect=offline):
             out = StringIO()
             old = os.getcwd()
@@ -431,7 +434,8 @@ class CompatibilityTests(ReadinessCase):
                                     if not line.startswith(revised))
         lines = observed_text.splitlines(keepends=True)
         self.assertEqual(lines[0].rstrip("\n"), observed["readiness"]["summary"])
-        added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ", "PoD#", "Mode: ")
+        added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ", "PoD#", "Mode: ",
+                 "Window continuation: ")
         self.assertEqual(sum(line.startswith("Worker tab: ") for line in lines), len(observed.get("worker_tabs", [])))
         self.assertEqual("".join(line for line in lines[1:] if not line.startswith(added)),
                          expected_text)

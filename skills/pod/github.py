@@ -12,6 +12,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 import json
 import hashlib
+from io import StringIO
 import os
 from pathlib import Path
 import re
@@ -258,27 +259,38 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
 
 
 def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
+    from .orca import _DEADLINE
     allowed = (
         argv == ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]
         or argv == ["worktree", "list", "--porcelain"]
         or argv == ["remote", "get-url", "origin"]
         or argv == ["symbolic-ref", "--quiet", "--short", "HEAD"]
+        or argv == ["worktree", "list", "--porcelain", "-z"]
     )
     if not allowed:
         raise PodError("unsupported_git_operation", "Project discovery accepts only bounded Git reads")
     # Discovery reads this host's Git only, so its failures are local, never a remote contract (`_run`).
+    budget = _DEADLINE.get()
     try:
-        completed = subprocess.run([str(git_executable()), *argv], capture_output=True, text=True, timeout=timeout,
+        inventory = argv == ["worktree", "list", "--porcelain", "-z"]
+        options = ["--no-optional-locks"] if inventory else []
+        completed = subprocess.run([str(git_executable()), *options, *argv],
+                                   capture_output=True, text=not inventory,
+                                   timeout=timeout if budget is None else budget.limit(timeout),
                                    check=False, cwd=str(project))
+        output = completed.stdout.decode("utf-8") if inventory else completed.stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
+        if budget is not None and isinstance(exc, subprocess.TimeoutExpired):
+            budget.check()
         raise PodError("git_unavailable", "Git did not answer the repository discovery read") from exc
     except UnicodeDecodeError:
         raise PodError("git_contract", "Git discovery output is not valid UTF-8") from None
     if completed.returncode:
-        raise PodError("repository_identity_unavailable", "Git repository identity could not be read")
-    if len(completed.stdout) > MAX_OUTPUT:
+        raise PodError("repository_identity_unavailable", "Git repository identity could not be read",
+                       {"returncode": completed.returncode})
+    if len(output) > MAX_OUTPUT:
         raise PodError("git_contract", "Git discovery output exceeds its bound")
-    return completed.stdout
+    return output
 
 
 def _github_repository(remote: str) -> str | None:
@@ -301,9 +313,9 @@ _IDENTITY: ContextVar[dict | None] = ContextVar("pod_repository_identity", defau
 
 
 @contextmanager
-def repository_reads():
+def repository_reads(*, isolated: bool = False):
     """Share repository identity reads within one helper call or one-shot command."""
-    if _IDENTITY.get() is not None:
+    if _IDENTITY.get() is not None and not isolated:
         yield
         return
     token = _IDENTITY.set({})
@@ -341,11 +353,26 @@ def repository_context(project: Path, *, fresh: bool = False) -> dict:
 
 def _read_repository_context(root: Path) -> tuple[dict, bool]:
     """The identity, and whether every read answered (a failed read raises or is incomplete)."""
+    from .orca import _DEADLINE, DEADLINE_SPENT
+    budget = _DEADLINE.get()
     try:
         lines = _local_git(root, ["rev-parse", "--path-format=absolute", "--show-toplevel",
                                   "--git-common-dir"]).splitlines()
-    except PodError:
-        if any((candidate / ".git").exists() for candidate in (root, *root.parents)):
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT or budget is not None and exc.code != "repository_identity_unavailable":
+            raise
+        if budget is None:
+            present = any((candidate / ".git").exists() for candidate in (root, *root.parents))
+        else:
+            present = False
+            for candidate in (root, *root.parents):
+                try:
+                    os.stat(candidate / ".git")
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                present = True
+                break
+        if present:
             raise
         return {"repository": None, "repo_key": None, "worktree": str(root),
                 "main_worktree": str(root), "branch": None, "dirty": None,
@@ -355,7 +382,11 @@ def _read_repository_context(root: Path) -> tuple[dict, bool]:
     worktree = Path(lines[0]).resolve()
     common = Path(lines[1]).resolve()
     worktrees: list[dict] = []
-    with worktree_inventory(worktree, executable=str(git_executable())) as inventory:
+    # Discovery can outlive its caller, so it must never create the ordinary inventory's temporary spool.
+    # Its in-memory read keeps _local_git's output limit; larger inventories remain unknown in the list.
+    source = (StringIO(_local_git(worktree, ["worktree", "list", "--porcelain", "-z"]))
+              if budget is not None else worktree_inventory(worktree, executable=str(git_executable())))
+    with source as inventory:
         for fields in worktree_rows(inventory):
             candidate = fields.get("worktree")
             if isinstance(candidate, str):
@@ -368,6 +399,9 @@ def _read_repository_context(root: Path) -> tuple[dict, bool]:
     try:
         remote = _local_git(worktree, ["remote", "get-url", "origin"]).strip()
     except PodError as exc:
+        no_origin = exc.code == "repository_identity_unavailable" and (exc.detail or {}).get("returncode") == 2
+        if exc.code == DEADLINE_SPENT or budget is not None and not no_origin:
+            raise
         remote = ""
         complete = exc.code == "repository_identity_unavailable"  # No origin answers; a timeout does not.
     repository = _github_repository(remote)

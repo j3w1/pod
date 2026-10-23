@@ -47,12 +47,14 @@ def worktree_rows(stream):
 def worktree_inventory(root: Path, *, executable: str = "git"):
     """Spool the whole read to disk, independent of repository worktree count and bytes."""
     from .errors import PodError
+    from .orca import _DEADLINE
+    budget = _DEADLINE.get()
     try:
         with tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="") as inventory:
             result = subprocess.run([executable, "--no-optional-locks", "-C", str(root),
                                      "worktree", "list", "--porcelain", "-z"],
                                     stdout=inventory, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                                    timeout=30, check=False)
+                                    timeout=30 if budget is None else budget.limit(30), check=False)
             if result.returncode:
                 raise PodError("repository_identity_unavailable", "Git worktree inventory cannot be read")
             inventory.seek(0)
@@ -60,16 +62,23 @@ def worktree_inventory(root: Path, *, executable: str = "git"):
     except UnicodeError as exc:
         raise PodError("git_contract", "Git worktree inventory is not valid UTF-8") from exc
     except (OSError, subprocess.SubprocessError) as exc:
+        if budget is not None and isinstance(exc, subprocess.TimeoutExpired):
+            budget.check()
         raise PodError("git_unavailable", "Git worktree inventory cannot be read") from exc
 
 
 def read(root: Path, argv: list[str], *, binary: bool = False,
          timeout: int = 30) -> subprocess.CompletedProcess | None:
+    from .orca import _DEADLINE
+    budget = _DEADLINE.get()
     try:
         return subprocess.run(["git", "--no-optional-locks", "-C", str(root), *argv],
-                              capture_output=True, text=not binary, timeout=timeout,
+                              capture_output=True, text=not binary,
+                              timeout=timeout if budget is None else budget.limit(timeout),
                               check=False, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):  # Output that is not UTF-8 is no answer.
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:  # Output that is not UTF-8 is no answer.
+        if budget is not None and isinstance(exc, subprocess.TimeoutExpired):
+            budget.check()
         return None
 
 

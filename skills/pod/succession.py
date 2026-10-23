@@ -403,6 +403,11 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
     facts["predecessor_owner"] = prior["owner"]
     if unfinished(prior) is not None:
         return refused("predecessor_handoff_pending", "The predecessor has an unfinished owner handoff.")
+    from .window import unfinished as window_unfinished
+    if (window_unfinished(prior) or {}).get("state") == "pending":
+        # A claimant may hold a pending window continuation; a claim never ends it (pod#110).
+        return refused("predecessor_continuation_pending", "The predecessor has a pending window continuation; "
+                       "finish it with pod continue first.")
     incomplete = _incomplete_claim(project, predecessor, prior)
     if incomplete is not None:
         return refused(*incomplete)
@@ -818,7 +823,8 @@ def _delivered_route(project: Path, predecessor: str, verdict: dict, *, port) ->
 
 
 def _handed_over(state: dict, original: str, current: str, *, since: str) -> bool:
-    """Whether completed owner handoffs recorded after `since` moved this objective from `original` to `current`."""
+    """Whether completed owner handoffs or window continuations recorded after `since` moved this objective from
+    `original` to `current`. A window continuation moves authority only; the reserving decision keeps its owner."""
     if original == current or state.get("owner") != current:
         return False
     history = ((state.get("checkpoint") or {}).get("continuity") or {}).get("history") or []
@@ -828,6 +834,9 @@ def _handed_over(state: dict, original: str, current: str, *, since: str) -> boo
         if (entry.get("provenance") == "owner_handoff" and entry.get("state") == "done" and isinstance(decision, dict)
                 and str(entry.get("at")) >= since and decision.get("from_owner") == owner):
             owner = decision.get("to_owner")
+        elif (entry.get("provenance") == "window_continuation" and entry.get("state") == "done"
+              and str(entry.get("at")) >= since and entry.get("from_owner") == owner):
+            owner = entry.get("to_owner")
     return owner == current
 
 

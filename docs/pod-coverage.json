@@ -7979,6 +7979,162 @@
         "tests.test_completed_review_upgrade.RetainedHistoryDisplayTests.test_map_and_status_show_frozen_receipt_and_finding_counts_without_writes"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A532",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_settled_and_reserved_admissions_continue_with_history_and_provenance_preserved",
+        "tests.test_window_continuation.ContinuationTests.test_unknown_work_stays_unknown_and_nothing_is_stamped",
+        "tests.test_window_continuation.ContinuationTests.test_a_window_with_two_runtime_changes_continues_from_the_first_stop"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A533",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_one_winner_among_claimants_and_idempotent_replay",
+        "tests.test_window_continuation.ContinuationTests.test_same_caller_resumes_after_an_interruption_before_run_use",
+        "tests.test_window_continuation.ContinuationTests.test_a_lost_pending_claimant_is_replaced_without_extra_history",
+        "tests.test_window_continuation.ContinuationTests.test_a_refused_run_use_ends_the_attempt_and_the_retry_keeps_it",
+        "tests.test_window_continuation.ContinuationTests.test_the_initial_readback_stays_beside_the_completion_readback",
+        "tests.test_window_continuation.ContinuationTests.test_a_retry_after_an_ended_attempt_keeps_every_readback",
+        "tests.test_window_continuation.ContinuationTests.test_a_lost_claimant_is_replaced_across_another_runtime_change_keeping_its_readback",
+        "tests.test_window_continuation.ContinuationTests.test_an_interruption_after_the_receipt_recovers_after_another_restart",
+        "tests.test_window_continuation.ContinuationTests.test_an_interrupted_done_write_resumes_without_another_run_use"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A534",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.RefusalTests.test_host_refusals_reach_the_lead",
+        "tests.test_window_continuation.RefusalTests.test_loss_outside_the_window_and_runtime_unchanged",
+        "tests.test_window_continuation.RefusalTests.test_moved_repository_and_changed_worktree",
+        "tests.test_window_continuation.RefusalTests.test_run_and_work_identity_refusals",
+        "tests.test_window_continuation.RefusalTests.test_pending_owner_handoff_holds_window_continuation",
+        "tests.test_window_continuation.RefusalTests.test_a_caller_in_the_wrong_place_never_ends_a_pending_attempt"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A535",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.RefusalTests.test_a_denied_window_leads_every_non_owner_refusal_with_a_lead_task",
+        "tests.test_window_continuation.RefusalTests.test_status_elsewhere_reports_objective_eligibility_and_caller_readiness",
+        "tests.test_window_continuation.ContinuationTests.test_the_pending_claimant_sees_its_own_resumable_step",
+        "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_holds_an_owner_handoff",
+        "tests.test_window_continuation.DiscoveryTests.test_exhausted_attempts_are_never_advertised",
+        "tests.test_window_continuation.DiscoveryTests.test_an_exhausted_pending_attempt_resumes_for_its_claimant_and_is_never_replaced",
+        "tests.test_window_status.ReservedSuccessorStatusTests.test_window_step_comes_before_completing_a_reserved_claim",
+        "tests.test_window_status.ReservedSuccessorStatusTests.test_an_unavailable_window_keeps_its_lead_task_before_the_claim"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A536",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_receipts_are_scoped_per_repository_and_objective",
+        "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_fences_a_successor_claim",
+        "tests.test_window_continuation.ContinuationTests.test_stored_rows_validate_and_succession_lineage_recognizes_them",
+        "tests.test_window_continuation.ContinuationTests.test_the_preceding_helper_refuses_a_record_carrying_the_row"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A537",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_status_list_shows_the_supported_step_and_lead_conditions",
+        "tests.test_window_continuation.ContinuationTests.test_discovery_outside_orca_and_within_its_budget",
+        "tests.test_window_continuation.ContinuationTests.test_a_failed_or_slow_orca_read_degrades_the_list_to_unknown",
+        "tests.test_window_continuation.ContinuationTests.test_the_budget_bounds_reads_inside_a_row_and_skips_the_verifier",
+        "tests.test_window_continuation.RefusalTests.test_discovery_checks_the_recorded_worktree_itself",
+        "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_worker_pages_and_clamps_every_read",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_peer_loads_in_a_twelve_peer_frontier",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_compacted_peer_chunk_reads",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_compacted_objective_reread_chunk_reads",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_context_directory_reads",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_history_directory_reads",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_includes_the_initial_verifier_setting",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_checks_the_verifier_setting_reread",
+        "tests.test_window_continuation.DiscoveryTests.test_spent_objective_reread_prevents_worktree_metadata_reads",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_checks_each_scope_directory_metadata_read",
+        "tests.test_window_continuation.DiscoveryTests.test_spent_verifier_request_budget_prevents_the_verifier_process",
+        "tests.test_window_continuation.DiscoveryTests.test_scope_checks_the_budget_during_directory_enumeration",
+        "tests.test_window_continuation.DiscoveryTests.test_the_list_leaves_a_closed_peer_unknown_and_the_command_proves_it",
+        "tests.test_window_continuation.DiscoveryTests.test_spent_budget_prevents_each_objective_reread",
+        "tests.test_window_continuation.DiscoveryTests.test_an_unavailable_reserved_task_read_lists_unknown_and_still_continues",
+        "tests.test_window_continuation.DiscoveryTests.test_a_partial_reserved_task_read_lists_unknown_and_still_continues",
+        "tests.test_window_continuation.DiscoveryTests.test_an_unreadable_bound_admission_lists_unknown_and_still_continues",
+        "tests.test_window_continuation.DiscoveryTests.test_a_read_failing_after_the_runtime_read_lists_unknown_not_a_refusal",
+        "tests.test_window_continuation.DiscoveryTests.test_exhausted_attempts_are_never_advertised",
+        "tests.test_window_continuation.DiscoveryTests.test_the_list_reads_no_configuration_outside_orca_and_only_the_verifier_setting_inside",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_each_read_uses_the_remaining_budget",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_a_large_budget_keeps_the_original_timeout",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_exhaustion_starts_no_process",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_exhaustion_after_a_read_starts_no_next_process",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_a_deadline_timeout_reports_budget_exhaustion",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_without_a_deadline_the_original_timeout_is_unchanged",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_leaving_the_deadline_restores_the_original_timeout",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_an_early_timeout_keeps_the_original_failure",
+        "tests.test_discovery_git_budget.GitBudgetChecks.test_without_a_deadline_errors_are_unchanged",
+        "tests.test_discovery_git_budget.ReadTests.test_an_explicit_timeout_stays_below_both_limits",
+        "tests.test_discovery_git_budget.LocalGitTests.test_an_explicit_timeout_stays_below_both_limits",
+        "tests.test_discovery_bound.BoundTests.test_worker_has_private_rows_copied_context_and_isolated_repository_cache",
+        "tests.test_discovery_bound.BoundTests.test_late_available_verdict_is_discarded",
+        "tests.test_discovery_bound.BoundTests.test_late_refusal_is_discarded",
+        "tests.test_discovery_bound.BoundTests.test_only_rows_completed_before_the_deadline_are_applied",
+        "tests.test_discovery_bound.BoundTests.test_blocking_read_does_not_hold_the_list_past_its_deadline",
+        "tests.test_discovery_bound.BoundTests.test_a_second_call_starts_no_worker_while_the_first_read_is_blocked",
+        "tests.test_discovery_bound.BoundTests.test_initial_worker_exceptions_become_unknown_with_a_reason",
+        "tests.test_discovery_bound.BoundTests.test_row_worker_exceptions_become_unknown_with_a_reason",
+        "tests.test_discovery_bound.BoundTests.test_discovery_writes_no_file_cache_or_temporary_and_takes_no_file_lock",
+        "tests.test_discovery_bound.BoundTests.test_repository_deadline_is_rethrown_before_fallback_or_binding_refusal",
+        "tests.test_discovery_bound.BoundTests.test_request_target_deadline_is_not_translated_to_window_unverified",
+        "tests.test_discovery_bound.BoundTests.test_late_repository_identity_is_not_compared_as_a_definite_binding",
+        "tests.test_discovery_bound.BoundTests.test_repeated_catalog_reads_can_finish_late_without_publishing_a_verdict",
+        "tests.test_discovery_bound.BoundTests.test_worker_start_failure_is_unknown",
+        "tests.test_discovery_bound.BoundTests.test_unreadable_inventory_never_proves_a_worktree_refusal",
+        "tests.test_discovery_bound.BoundTests.test_fatal_origin_process_exit_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_absent_origin_process_exit_still_reads_no_origin",
+        "tests.test_discovery_bound.BoundTests.test_unbudgeted_fatal_origin_keeps_the_ordinary_no_origin_result",
+        "tests.test_discovery_bound.BoundTests.test_denied_worktree_stat_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_failed_worktree_stat_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_denied_recorded_worktree_stat_lists_unknown",
+        "tests.test_discovery_bound.BoundTests.test_denied_worktree_stat_keeps_the_status_refusal",
+        "tests.test_discovery_bound.BoundTests.test_denied_worktree_stat_keeps_the_command_refusal",
+        "tests.test_discovery_bound.BoundTests.test_a_truly_missing_worktree_still_lists_worktree_changed",
+        "tests.test_discovery_bound.BoundTests.test_a_non_directory_worktree_still_lists_worktree_changed",
+        "tests.test_discovery_bound.BoundTests.test_denied_ancestor_git_marker_does_not_prove_a_non_repository",
+        "tests.test_discovery_bound.BoundTests.test_in_memory_inventory_preserves_control_characters_in_worktree_paths",
+        "tests.test_discovery_bound.BoundTests.test_unreadable_evidence_closure_lists_unknown_not_available"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

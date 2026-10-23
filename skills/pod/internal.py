@@ -600,6 +600,14 @@ def _op_owner_handoff(request: dict) -> dict:
                          decision=request["decision"], port=OrcaPort(project))
 
 
+def _op_window_continuation(request: dict) -> dict:
+    exact(request, {"project", "objective", "owner"}, {"project", "objective", "owner"}, name="request")
+    from .window import continue_objective
+    from .operations import OrcaPort
+    project = Path(request["project"])
+    return continue_objective(project, request["objective"], owner=request["owner"], port=OrcaPort(project))
+
+
 def _op_succession(request: dict) -> dict:
     exact(request, {"project", "objective", "owner", "predecessor", "decision"},
           {"project", "objective", "owner", "predecessor"}, name="request")
@@ -705,6 +713,7 @@ _OPERATIONS = {
     'admission': _op_admission,
     'runtime-continuity': _op_runtime_continuity,
     'owner-handoff': _op_owner_handoff,
+    'window-continuation': _op_window_continuation,
     'succession': _op_succession,
     'historical-retirement': _op_historical_retirement,
     'record-compaction': _op_record_compaction,
