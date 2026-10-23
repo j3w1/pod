@@ -51,6 +51,7 @@ REQUIRED = {
     "display": ("project", "objective"),
     "runtime-continuity": (*OWNED, "decision"),
     "owner-handoff": (*OWNED, "decision"),
+    "window-continuation": OWNED,
     "succession": (*OWNED, "predecessor"),
     "historical-retirement": ("project", "objectives"),
     "record-compaction": ("project", "objective"),

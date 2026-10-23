@@ -354,6 +354,38 @@ class RefusalTests(WindowCase):
         next(iter(self.port.workers.values())).update(worktree="different")
         self.assert_lead_refusal("identity_differs")
 
+    def test_a_caller_in_the_wrong_place_never_ends_a_pending_attempt(self):
+        self.mode = "lost"
+        self.command()
+        self.mode = "success"
+        self.assertEqual(self.rows()[-1]["state"], "pending")
+        other = self.root / "other"
+        git(self.project, "worktree", "add", "-q", "-b", "elsewhere", str(other))
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        self.assert_lead_refusal("pending_other_caller", lambda: self.resume(where=other, project=other))
+        os.environ["ORCA_TERMINAL_HANDLE"] = "next"
+        self.assert_lead_refusal("worktree_changed", lambda: self.resume(where=other, project=other))
+        self.assertEqual(self.rows()[-1]["state"], "pending")
+        self.assertEqual(self.resume()["status"], "continued")
+
+    def test_status_elsewhere_reports_objective_eligibility_and_caller_readiness(self):
+        other = self.root / "other"
+        git(self.project, "worktree", "add", "-q", "-b", "elsewhere", str(other))
+        old = Path.cwd(); os.chdir(other)
+        try:
+            from io import StringIO
+            from contextlib import redirect_stdout
+            from pod import cli
+            out = StringIO()
+            with redirect_stdout(out):
+                cli.main(["status", "--objective", "objective", "--json"])
+        finally:
+            os.chdir(old)
+        block = json.loads(out.getvalue())["window_continuation"]
+        self.assertEqual(block["status"], "window_available")
+        self.assertEqual(block["cwd"], repository_context(self.project)["worktree"])
+        self.assertEqual((block["caller"]["ready"], block["caller"]["condition"]), (False, "worktree_changed"))
+
     def test_pending_owner_handoff_holds_window_continuation(self):
         self.mode = "lost"
         with self.assertRaises(PodError):

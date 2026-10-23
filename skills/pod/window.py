@@ -35,6 +35,10 @@ RUN_FIELDS = {"id", "before", "after"}
 ADMISSION_FIELDS = {"id", "state", "verdict", "reason", "runtime", "status", "outcome"}
 VERDICTS = ("settled", "unknown", "absent")
 DISCOVERY_CALLS = 16
+# Definite objective-level losses of eligibility; caller-level conditions never end an attempt.
+OBJECTIVE_LOSS = frozenset({"objective_continued", "objective_retired", "objective_closed", "owner_live",
+                            "coordinator_lost_outside_window", "run_missing", "run_rebound_elsewhere", "run_shared",
+                            "identity_differs"})
 DISCOVERY_SECONDS = 20.0
 
 # Each lead-task condition names what to resolve; none asks the owner.
@@ -364,6 +368,9 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     if handoff is not None and handoff["state"] == "pending":
         return fail("handoff_pending", "an owner handoff is pending.")
     pending = unfinished(state)
+    if pending is not None and pending["state"] == "pending" and pending["to_owner"] != caller:
+        if terminal_identity(pending["to_owner"])["state"] != "lost":
+            return fail("pending_other_caller", "another terminal holds the pending continuation.")
     if not objective_only:
         if not caller:
             return fail("caller_not_live", "this process is not in a live Orca terminal.")
@@ -416,10 +423,6 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("run_unverified", "the Run read does not prove its coordinator at the current runtime.")
     holder, held = shown["coordinator_handle"], shown["consumer_generation"]
     holder_pending = pending is not None and pending["state"] == "pending"
-    if pending is not None and holder_pending and pending["to_owner"] != caller:
-        other = terminal_identity(pending["to_owner"])
-        if other["state"] != "lost":
-            return fail("pending_other_caller", "another terminal holds the pending continuation.")
     branch = None
     if holder in (owner, None) and held == generation:
         branch = "fresh"
@@ -518,16 +521,18 @@ def continue_objective(project: Path, objective: str, *, owner: str, port) -> di
         pending = unfinished(state)
         verdict = detect(project, objective, state, port=port)
         if verdict["status"] != "window_available":
-            if pending is not None and pending["state"] == "pending" and verdict["definitive"] \
-                    and verdict["condition"] not in ("pending_other_caller",):
+            # Only this caller's own attempt ends, and only on a definite objective-level loss of eligibility; a
+            # caller in the wrong place, or another live caller, never aborts anything.
+            if (pending is not None and pending["state"] == "pending" and pending["to_owner"] == owner
+                    and verdict["definitive"] and verdict["condition"] in OBJECTIVE_LOSS):
                 pending.update(state="aborted", abort_reason=verdict["condition"])
                 _write(path, state)
             raise _refusal(verdict["condition"], verdict["message"], verdict=_public(verdict))
         facts = verdict["facts"]
         repo_key = state["checkpoint"]["worktree"]["repo_key"]
         bound = stable(verdict["window"], facts, repo_key)
-        if pending is not None and stable(pending["window"], {**facts, "from_owner": pending["from_owner"]},
-                                          repo_key) != bound:
+        if pending is not None and pending["state"] == "pending" and stable(
+                pending["window"], {**facts, "from_owner": pending["from_owner"]}, repo_key) != bound:
             raise _refusal("window_changed", "the host's answer differs from the pending continuation.",
                            verdict=_public(verdict))
         if pending is not None and pending["state"] == "pending" and pending["to_owner"] != owner:
@@ -592,7 +597,7 @@ def continue_objective(project: Path, objective: str, *, owner: str, port) -> di
                                                        "next_action": LEAD + "rerun " + COMMAND.format(objective) + "."})
         final = detect(project, objective, state, port=port)
         if final["status"] != "window_available" or final["condition"] != "resume":
-            if final["definitive"]:
+            if final["definitive"] and final["condition"] in OBJECTIVE_LOSS:
                 pending.update(state="aborted", abort_reason=final["condition"] or "unavailable")
                 _write(path, state)
             raise _refusal(final["condition"], final["message"], verdict=_public(final))
@@ -628,15 +633,24 @@ def _public(verdict: dict) -> dict:
 # --------------------------------------------------------------------------- status
 
 def status_block(project: Path, objective: str, state: dict, *, port=None) -> dict | None:
-    """The block `pod status --objective` shows to a non-owner terminal; None when no window question arises."""
+    """The block `pod status --objective` and the non-owner refusal show; None when no window question arises.
+
+    It reports the objective's eligibility, then whether this terminal could run the step, so a reader elsewhere
+    (for example the project lead) sees the objective's real state rather than its own location.
+    """
     from .operations import OrcaPort
     if not state or not state.get("owner") or os.environ.get("ORCA_TERMINAL_HANDLE") in (None, state["owner"]):
         return None
-    verdict = detect(project, objective, state, port=port or OrcaPort(project))
-    if verdict["condition"] in ("runtime_unchanged", "recorded_owner", "objective_continued", "objective_retired",
-                                "objective_closed"):
+    port = port or OrcaPort(project)
+    verdict = detect(project, objective, state, port=port, objective_only=True)
+    if verdict["condition"] in ("runtime_unchanged", "objective_continued", "objective_retired", "objective_closed"):
         return None
-    return _public(verdict)
+    block = _public(verdict)
+    if verdict["status"] == "window_available":
+        caller = detect(project, objective, state, port=port, verify=False)
+        block["caller"] = ({"ready": True} if caller["status"] == "window_available" else
+                           {"ready": False, "condition": caller["condition"], "message": caller["message"]})
+    return block
 
 
 def discover(rows: list[dict], *, project: Path) -> None:
