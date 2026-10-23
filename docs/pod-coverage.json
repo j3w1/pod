@@ -6800,7 +6800,8 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_evidence_closure.SweepTests.test_the_sweep_reads_every_record_past_the_list_bound_and_names_what_it_cannot_read"
+        "tests.test_evidence_closure.SweepTests.test_the_sweep_reads_every_record_past_the_list_bound_and_names_what_it_cannot_read",
+        "tests.test_closure_fixes_c1.ClaimedSweepTests.test_narrowed_predecessor_sweep_retries_its_source_through_the_closed_tail"
       ],
       "status": "NOT_RUN"
     },
