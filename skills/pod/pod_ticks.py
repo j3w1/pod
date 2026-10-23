@@ -434,11 +434,10 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
         proven = bool(criteria) and all(row["current"] for row in criteria)
         # A mechanical renewal preserves a checkbox temporarily, never proof.
         # Test each predecessor against today's independent binding facts.
-        pending = bool(criteria) and not proven and all(item["current"] or any(
-            old["id"] != item["id"] and old.get("evidence")
+        pending = bool(criteria) and not proven and all(item["current"] or (
+            (old := lineage.pending_proof(item["id"])) is not None
             and copied_identity(old) == copied_identity(lineage.rows[item["id"]])
-            and evidence_valid({**old, "state": "satisfied"}, ctx, gov)
-            for old in lineage.family(item["id"])) for item in criteria)
+            and evidence_valid({**old, "state": "satisfied"}, ctx, gov)) for item in criteria)
         pending = (pending and fresh and facts.get("body_sha256") == source["body_sha256"]
                    and ledger["read"]["status"] == "read")
         observed = lines.get(key, [])

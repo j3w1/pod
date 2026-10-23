@@ -16,28 +16,31 @@ class ReceiptBoundaryTests(unittest.TestCase):
         cls.addClassCleanup(case.doCleanups)
         renewal.RenewalAssuranceTests.policy(case)
         cls.path = objective_root(case.project, "objective") / "context.json"
-        for index in range(64):
-            frozen = case.packet(["A"], role="review")
-            admission = case.start(f"receipt-{index}", frozen)["admission"]; case.settle(admission)
-            state = _read(cls.path)
-            if index == 0:
-                native = admission["native_binding"]
-                body = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": native["dispatchId"],
-                    "candidate": case.candidate, "outcome": "succeeded", "scope": ["src"], "files": [], "checks": ["unit"],
-                    "failures": [], "evidence": [], "uncertainty": [], "questions": []}
-                probe_map = {"seq": state["checkpoint"]["seq"] + 1,
-                    "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}}
-                before = cls.files()
-                try:
-                    case.write(**probe_map, dispositions=[{"admission": admission["admission_id"], "discarded": True, "reason": "capacity probe",
-                        "capacity": {"packet": frozen, "report": body, "map": probe_map}}])
-                except PodError as exc:
-                    cls.consumable_refusal = exc
-                else:
-                    raise AssertionError("consumable report was discarded")
-                cls.consumable_atomic = cls.files() == before
-            case.report(admission, frozen, map={"seq": state["checkpoint"]["seq"] + 1,
-                "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}})
+        frozen = case.packet(["A"], role="review")
+        admission = case.start("first-receipt", frozen)["admission"]; case.settle(admission)
+        state = _read(cls.path)
+        native = admission["native_binding"]
+        body = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": native["dispatchId"],
+            "candidate": case.candidate, "outcome": "succeeded", "scope": ["src"], "files": [], "checks": ["unit"],
+            "failures": [], "evidence": [], "uncertainty": [], "questions": []}
+        waiting = {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        renew = [{"id": "A", "as": "A2", **waiting}]
+        before = cls.files()
+        try:
+            case.write(renew=renew, dispositions=[{"admission": admission["admission_id"], "discarded": True, "reason": "capacity probe",
+                "capacity": {"packet": frozen, "report": body}}])
+        except PodError as exc:
+            cls.consumable_refusal = exc
+        else:
+            raise AssertionError("consumable report was discarded")
+        cls.consumable_atomic = cls.files() == before
+        case.report(admission, frozen, map={"seq": state["checkpoint"]["seq"] + 1, "update": {"A": waiting}})
+        # Seed retained observations in four bounded checkpoint writes. They are
+        # deliberately not proof; only the first and overflowing reports cross
+        # the native review boundary. This keeps the shared fixture cheap.
+        for start in range(0, 63, 16):
+            case.write(seq=_read(cls.path)["checkpoint"]["seq"] + 1, update={"A": {
+                "evidence": [{"attempt": f"retained-{index}"} for index in range(start, min(start + 16, 63))]}})
         state = _read(cls.path)
         case.write(seq=state["checkpoint"]["seq"] + 1, update={"A": {"evidence": [{"attempt": admission["admission_id"]}]}})
         cls.replay_count = len(next(row for row in case.stored() if row["id"] == "A")["receipts"])
@@ -62,18 +65,16 @@ class ReceiptBoundaryTests(unittest.TestCase):
         else:
             raise AssertionError("65th report receipt was accepted")
         cls.unchanged = cls.files() == cls.before
-        # The same observation is supplied to the existing disposition route;
-        # its dry run decides whether capacity actually blocks consumption.
+        # Only stored counts justify capacity discard, atomically with renewal.
         native = cls.admission["native_binding"]
         body = {"schema": "pod-report/v1", "assignment": cls.frozen["packet_id"], "attempt": native["dispatchId"],
             "candidate": case.candidate, "outcome": "succeeded", "scope": ["src"], "files": [], "checks": ["unit"],
             "failures": [], "evidence": [], "uncertainty": [], "questions": []}
-        case.write(seq=cls.map["seq"], update=cls.map["update"], dispositions=[{"admission": cls.admission["admission_id"],
+        case.write(seq=cls.map["seq"], renew=renew, dispositions=[{"admission": cls.admission["admission_id"],
             "discarded": True, "reason": "receipt capacity prevents consuming this report", "capacity": {
-                "packet": cls.frozen, "report": body, "map": cls.map}}])
+                "packet": cls.frozen, "report": body}}])
         cls.discarded = _read(cls.path)
-        case.write(renew=[{"id": "A", "as": "A2"}])
-        cls.renewed = _read(cls.path)
+        cls.renewed = cls.discarded
         print("records_receipts=" + json.dumps({"retained": 64, "proposed": 65, "limit": 64, "replay_count": cls.replay_count,
             "before_context_bytes": len(cls.before["context.json"]), "before_chunk_bytes": sum(len(value) for key, value in cls.before.items() if key.startswith("history/")),
             "report_refusal_unchanged": cls.unchanged, "checkpoint_refusal_unchanged": cls.checkpoint_atomic,
@@ -108,3 +109,8 @@ class ReceiptBoundaryTests(unittest.TestCase):
         self.assertEqual(len(rows["A"]["receipts"]), 64)
         self.assertEqual(rows["A2"]["receipts"], [])
         self.assertEqual(rows["A2"]["state"], "waiting")
+        before = self.files()
+        with self.assertRaises(PodError) as caught:
+            self.case.start("repeat-on-predecessor", self.frozen)
+        self.assertEqual(caught.exception.detail["detail"], "renewed")
+        self.assertEqual(self.files(), before)

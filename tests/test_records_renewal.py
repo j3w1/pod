@@ -138,6 +138,38 @@ class RenewalTests(unittest.TestCase):
         with self.assertRaises(PodError):
             accept_write(first, {"renew": [{"id": "S", "as": "S2"}]}, ctx(operation="report"))
 
+    def test_renewal_accepts_exact_or_restatable_rows_and_names_state_conflicts(self):
+        first = self.first()
+        for rows in (first["obligations"], restatable_rows(first)):
+            with self.subTest(form="stored" if rows is first["obligations"] else "restatable"):
+                renewed = accept_write(first, {"obligations": rows, "renew": [{"id": "O1", "as": "O2"}]}, ctx())
+                self.assertEqual(by_id(renewed, "O2")["renews"], "O1")
+        for state_fields in ({"state": "waiting", "wait": {"class": "sequenced", "referent": "S"}},
+                             {"state": "blocked_external", "external": {"party": "provider", "need": "input", "unblocks_when": "supplied"}}):
+            with self.subTest(state=state_fields["state"]), self.assertRaises(PodError) as caught:
+                accept_write(first, {"seq": 2, "update": {"O1": state_fields}, "renew": [{"id": "O1", "as": "O2"}]}, ctx())
+            self.assertEqual(caught.exception.detail["detail"], "renewal_changed_row")
+            self.assertIn("renew entry", caught.exception.detail["next_action"])
+
+    def test_pending_proof_distinguishes_satisfied_and_reopened_sibling_states(self):
+        for state in ("satisfied", "active", "waiting", "blocked_external"):
+            with self.subTest(state=state):
+                first = accept_write(None, intake(ob("S", "satisfied", evidence=[proof("S")])), ctx())
+                if state != "satisfied":
+                    fields = ({"executor": "coordinator"} if state == "active" else
+                              {"wait": {"class": "sequenced", "referent": "O1"}} if state == "waiting" else
+                              {"external": {"party": "provider", "need": "input", "unblocks_when": "supplied"}})
+                    if state == "active":
+                        # O1 already holds the coordinator slot.
+                        fields = {"executor": "worker"}
+                        context = ctx(admissions={"worker": {"serves": ["S"], "role": "implement"}}, outstanding=["worker"])
+                    else:
+                        context = ctx()
+                    first = accept_write(first, {"seq": 2, "update": {"S": {"state": state, **fields}}}, context)
+                renewed = accept_write(first, {"renew": [{"id": "S", "as": "S2", "state": "waiting",
+                    "wait": {"class": "sequenced", "referent": "O1"}}]}, ctx())
+                self.assertEqual(Lineage(renewed["obligations"]).pending_proof("S2") is not None, state == "satisfied")
+
 
 class RowAndHistoryTests(unittest.TestCase):
     @classmethod

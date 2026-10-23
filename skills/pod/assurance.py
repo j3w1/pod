@@ -214,11 +214,11 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
     return tuple(unverifiable)
 
 
-def validate_findings(ob: dict, rows: dict, *, seq: int) -> None:
+def validate_findings(ob: dict, rows: dict, *, seq: int, lineage=None) -> None:
     """Parse immutable triage records on ordinary writes and closure reads."""
     from .obligations import MAX_FINDINGS, MAX_REPORT_FINDINGS, SEVERITIES, TRIAGE, _exact, _text, _ident, refuse
     from .lineage import Lineage
-    lineage = Lineage(rows)
+    lineage = lineage if lineage is not None else Lineage(rows)
     findings = ob.get("findings", [])
     if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
         raise refuse("obligation_invalid", "malformed", "finding history is a bounded list", obligation=ob["id"])
@@ -325,22 +325,34 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
         receipts[key] = {**(previous or {}), "evidence": evidence}
         stamped.append(evidence)
     if len(receipts) > MAX_RECEIPTS:
-        replacement = {"id": ob["id"], "as": "<fresh-id>"}
-        if ob.get("state") in ("waiting", "blocked_external"):
-            field = "wait" if ob["state"] == "waiting" else "external"
-            replacement.update(state=ob["state"], **{field: deepcopy(ob[field])})
-        else:
-            held = next((row["id"] for row in getattr(ctx.get("lineage"), "rows", {}).values()
-                         if row["id"] != ob["id"] and row.get("state") == "active" and row.get("executor") == "coordinator"), None)
-            if held:
-                replacement.update(state="waiting", wait={"class": "sequenced", "referent": held})
-            else:
-                replacement.update(state="active", executor="coordinator")
-        raise refuse("obligation_invalid", "receipt_limit", "the bounded receipt history is full",
-                     obligation=ob["id"], retained=len((prior or {}).get("receipts", [])), proposed=len(receipts), limit=MAX_RECEIPTS,
-                     next_action={"seq": seq, "renew": [replacement]})
+        raise capacity_refusal(ob, ctx, seq=seq, field="receipts",
+                               retained=len((prior or {}).get("receipts", [])), proposed=len(receipts), prior=prior)
     ob["receipts"] = list(receipts.values())
     return stamped
+
+
+def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int, proposed: int, prior=None):
+    """The same bounded renewal route for report, checkpoint and disposition."""
+    from .obligations import MAX_RECEIPTS, MAX_FINDINGS, refuse
+    replacement = {"id": ob["id"], "as": "<fresh-id>"}
+    basis = prior if prior is not None else ob
+    if basis.get("state") in ("waiting", "blocked_external"):
+        state_field = "wait" if basis["state"] == "waiting" else "external"
+        replacement.update(state=basis["state"], **{state_field: deepcopy(basis[state_field])})
+    else:
+        rows = getattr(ctx.get("lineage"), "rows", None)
+        rows = rows.values() if rows is not None else (ctx.get("map_state") or {}).get("obligations", [])
+        held = next((row["id"] for row in rows if row["id"] != ob["id"]
+                     and row.get("state") == "active" and row.get("executor") == "coordinator"), None)
+        if held:
+            replacement.update(state="waiting", wait={"class": "sequenced", "referent": held})
+        else:
+            replacement.update(state="active", executor="coordinator")
+    return refuse("obligation_invalid", "receipt_limit" if field == "receipts" else "finding_limit",
+                  "the bounded retained history is full; an unconsumed result needs a capacity disposition in the renewal checkpoint",
+                  obligation=ob["id"], retained=retained, proposed=proposed,
+                  limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
+                  next_action={"seq": seq, "renew": [replacement]})
 
 
 def binding_current(binding: Any, ctx: dict) -> bool:
@@ -672,12 +684,9 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
                          next_action="preserve every recorded finding; a completed review attempt at its finding "
                                      "bound cannot be extended or its stored findings regrouped")
         if len(stored) + len(records) > MAX_FINDINGS:
-            raise refuse("obligation_invalid", "finding_limit",
-                         "the bounded finding history is full", obligation=assurance_id,
-                         retained=len(stored), proposed=len(stored) + len(records), limit=MAX_FINDINGS,
-                         next_action="preserve every stored finding and the unconsumed report; report this "
-                                     "capacity blocker to the maintainer, since no supported write can add "
-                                     "another finding beyond this assurance's retained history bound")
+            raise capacity_refusal(assurance, {**ctx, "map_state": state}, seq=state["seq"] + 1, field="findings",
+                                   retained=len(stored), proposed=len(stored) + len(records),
+                                   prior=next(row for row in state["obligations"] if row["id"] == assurance_id))
         assurance["findings"] = list(stored) + records
         written.add(assurance_id)
     if admission.get("role") == "review":

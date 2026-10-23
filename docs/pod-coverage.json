@@ -7564,7 +7564,8 @@
       "offline_test": [
         "tests.test_records_renewal.RenewalTests.test_objective_and_coordinator_copy_history_and_waits",
         "tests.test_records_renewal.RenewalTests.test_user_copy_keeps_adoption_and_acceptances_and_allows_later_revision",
-        "tests.test_records_boundaries.RenewalAssuranceTests.test_policy_renewal_without_owner_decision_remains_required"
+        "tests.test_records_boundaries.RenewalAssuranceTests.test_policy_renewal_without_owner_decision_remains_required",
+        "tests.test_records_corrections.TerminalCitationTests.test_terminal_policy_citations_follow_adoption_and_refresh_without_changing_identity"
       ],
       "status": "NOT_RUN"
     },
@@ -7576,7 +7577,8 @@
       "offline_test": [
         "tests.test_records_renewal.RenewalTests.test_definition_override_names_every_field_and_bad_links_refuse",
         "tests.test_records_renewal.RenewalTests.test_frozen_rows_omitted_or_exact_and_fresh_children_name_tip",
-        "tests.test_records_renewal.RowAndHistoryTests.test_every_context_read_validates_the_frozen_renewal_digest"
+        "tests.test_records_renewal.RowAndHistoryTests.test_every_context_read_validates_the_frozen_renewal_digest",
+        "tests.test_records_renewal.RenewalTests.test_renewal_accepts_exact_or_restatable_rows_and_names_state_conflicts"
       ],
       "status": "NOT_RUN"
     },
@@ -7587,7 +7589,8 @@
       ],
       "offline_test": [
         "tests.test_records_boundaries.RenewalAssuranceTests.test_assurance_and_correction_renewal_keep_review_order",
-        "tests.test_records_renewal.RenewalTests.test_closure_retains_renewed_rows_and_requires_fresh_tip_proof"
+        "tests.test_records_renewal.RenewalTests.test_closure_retains_renewed_rows_and_requires_fresh_tip_proof",
+        "tests.test_records_corrections.AdmissionLineageTests.test_reopening_or_renewing_predecessor_correction_allows_fresh_tip_review"
       ],
       "status": "NOT_RUN"
     },
@@ -7600,7 +7603,11 @@
         "tests.test_records_boundaries.RenewalTickTests.test_candidate_move_independently_unticks_pending_renewal",
         "tests.test_records_boundaries.RenewalTickTests.test_pending_renewal_never_supplies_evidence_closure_source_proof",
         "tests.test_records_boundaries.RenewalMappingTests.test_verified_r149_mapping_keeps_approved_ids_through_renewal",
-        "tests.test_records_boundaries.RenewalTickTests.test_independent_source_policy_dependency_environment_changes_end_pending"
+        "tests.test_records_boundaries.RenewalTickTests.test_independent_source_policy_dependency_environment_changes_end_pending",
+        "tests.test_records_renewal.RenewalTests.test_pending_proof_distinguishes_satisfied_and_reopened_sibling_states",
+        "tests.test_records_boundaries.RenewalTickTests.test_reopened_proof_keeps_due_untick_through_renewal",
+        "tests.test_records_boundaries.RenewalTickTests.test_successive_renewal_holds_but_reopening_tip_proof_ends_hold",
+        "tests.test_records_boundaries.RenewalMappingTests.test_mapping_epoch_bound_uses_root_only_for_renewal_copies"
       ],
       "status": "NOT_RUN"
     },
@@ -7612,7 +7619,10 @@
       "offline_test": [
         "tests.test_records_receipts.ReceiptBoundaryTests.test_capacity_disposition_preserves_report_and_renewal_has_no_proof",
         "tests.test_records_renewal.RenewalTests.test_renewal_refusals_and_pending_results",
-        "tests.test_records_receipts.ReceiptBoundaryTests.test_consumable_review_cannot_be_capacity_discarded"
+        "tests.test_records_receipts.ReceiptBoundaryTests.test_consumable_review_cannot_be_capacity_discarded",
+        "tests.test_records_corrections.CapacityPaddingTests.test_caller_padding_never_justifies_discard",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_capacity_discard_requires_full_stored_history_and_same_checkpoint_renewal",
+        "tests.test_records_corrections.InvestigationCapacityTests.test_investigation_discard_uses_full_stored_receipts_and_same_write_renewal"
       ],
       "status": "NOT_RUN"
     },
@@ -7623,7 +7633,8 @@
       ],
       "offline_test": [
         "tests.test_records_renewal.RowAndHistoryTests.test_512_hydrated_rows_keep_384_omitted_terminal_rows",
-        "tests.test_records_renewal.RowAndHistoryTests.test_request_update_and_live_overflows_report_distinct_counts"
+        "tests.test_records_renewal.RowAndHistoryTests.test_request_update_and_live_overflows_report_distinct_counts",
+        "tests.test_records_corrections.LineageReadTests.test_persisted_rows_share_one_lineage_for_all_finding_checks"
       ],
       "status": "NOT_RUN"
     },

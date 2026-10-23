@@ -78,6 +78,13 @@ def validate(row: dict) -> None:
         raise _hold("association_invalid", row.get("id"))
 
 
+def validate_epoch(row: dict, *, seq: int, lineage) -> None:
+    if "pod_mapping" in row:
+        introduced = min(item["introduced_seq"] for item in lineage.family(row["id"]))
+        if not introduced <= row["pod_mapping"]["accepted_seq"] <= seq:
+            raise _hold("association_invalid", row["id"])
+
+
 def scope_hash(body: str) -> str:
     """Whole body, masking only checkbox bytes recognized by the existing parser."""
     from .github import pod_lines
@@ -411,8 +418,7 @@ def write(prior: dict | None, value: dict, rows: dict, ctx: dict, seq: int) -> N
             row["pod_mapping"] = deepcopy(repairs[key])
         if "pod_mapping" in row:
             validate(row)
-            if not 1 <= row["pod_mapping"]["accepted_seq"] <= seq:
-                raise _hold("association_invalid", key)
+            validate_epoch(row, seq=seq, lineage=ctx["lineage"])
             if row["state"] == "satisfied":
                 if not current(row, ctx):
                     raise _hold("mapping_invalidated" if row["pod_mapping"]["invalidated"] else "mapping_binding_unavailable", key)

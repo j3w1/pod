@@ -1485,6 +1485,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             ctx["issue_revision"] = issue_revision
         if dispositions:
             ctx["map_state"] = prior_map
+            ctx["renewal_request"] = proposed.get("renew", [])
             if prior_map is None:
                 raise refuse("obligation_unaccounted", "disposition_invalid",
                              "dispositions follow admissions under a map", record='checkpoint map transition')

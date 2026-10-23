@@ -43,6 +43,27 @@ class RenewalTickTests(TickCase):
         self.tick()
         self.assertEqual(self.issue.writes[-1], "- [ ] **PoD#1")
 
+    def test_reopened_proof_keeps_due_untick_through_renewal(self):
+        self.bind(); self.prove(); self.tick()
+        self.lapse()
+        self.assertEqual(self.line()["direction"], "untick")
+        self.write(renew=[{"id": "O1", "as": "O2"}])
+        self.assertEqual(self.line()["direction"], "untick")
+        self.tick()
+        self.assertEqual(self.issue.writes[-1], "- [ ] **PoD#1")
+
+    def test_successive_renewal_holds_but_reopening_tip_proof_ends_hold(self):
+        self.renew_proved()
+        self.write(renew=[{"id": "O2", "as": "O3"}])
+        self.assertEqual(self.line()["status"], "renewal_pending")
+        self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1,
+                   update={"O3": {"state": "satisfied", "evidence": [self.proof("O3")]}})
+        self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1,
+                   update={"O3": {"state": "active", "executor": "coordinator"}})
+        self.assertEqual(self.line()["direction"], "untick")
+        self.write(renew=[{"id": "O3", "as": "O4"}])
+        self.assertEqual(self.line()["direction"], "untick")
+
     def test_independent_source_policy_dependency_environment_changes_end_pending(self):
         self.renew_proved()
         from pod.ledger import kernel_context
@@ -151,3 +172,27 @@ class RenewalMappingTests(unittest.TestCase):
         self.assertEqual(case.line()["criteria"][0]["id"], "R2")
         case.write()
         self.assertEqual(next(row for row in case.stored() if row["id"] == "O1"), before["checkpoint"]["obligations"][0])
+
+    def test_mapping_epoch_bound_uses_root_only_for_renewal_copies(self):
+        from pod.lineage import Lineage
+        from pod.pod_mapping import validate_epoch
+        for renewed, accepted, valid in (
+                (False, 1, False), (False, 2, True),
+                (True, 1, False), (True, 2, True), (True, 3, True)):
+            with self.subTest(renewed=renewed, accepted=accepted):
+                from pod.obligations import accept_write
+                from tests.test_obligations import ctx, intake, ob
+                state = accept_write(None, intake(), ctx())
+                state = accept_write(state, {"seq": 2, "update": {"S": ob("S")}}, ctx())
+                key = "S"
+                if renewed:
+                    state = accept_write(state, {"renew": [{"id": "S", "as": "S2"}]}, ctx())
+                    key = "S2"
+                lineage = Lineage(state["obligations"])
+                row = {**lineage.rows[key], "pod_mapping": {"accepted_seq": accepted}}
+                if valid:
+                    validate_epoch(row, seq=3, lineage=lineage)
+                else:
+                    with self.assertRaises(PodError) as caught:
+                        validate_epoch(row, seq=3, lineage=lineage)
+                    self.assertEqual(caught.exception.detail["detail"], "association_invalid")

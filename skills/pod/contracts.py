@@ -155,7 +155,7 @@ TABLE = {
         "adopts": ident(), "reuse": _ANY, "findings": items(64, _ANY), "finding": _ANY,
         "definition": _ANY, "receipts": {**items(64, _ANY), "stored_only": True}, "proof_scope": items(64, _PATH),
         "renews": {**ident(), "stored_only": True},
-        "renewal": {"type": "object", "stored_only": True, "form": "by: successor id, seq: renewal sequence"},
+        "renewal": {"type": "object", "stored_only": True, "form": "by: successor id, seq: renewal sequence, definition: copied identity, was_satisfied: prior state fact"},
         "acceptances": {**items(16, record("acceptance")), "stored_only": True},
         "pod_mapping": {**record("pod mapping"), "stored_only": True},
     }, ("id", "kind", "provenance")),
@@ -241,9 +241,8 @@ TABLE["disposition"] = definition({"admission": {"type": "text"}, "integrated_in
                                    "capacity": record("capacity disposition")},
                                   ("admission",))
 TABLE["capacity disposition"] = definition({"packet": {"type": "object", "form": "exact frozen admission packet"},
-    "report": record("report"), "map": record("map"), "triage": items(32, record("finding")),
-    "proposals": items(16, record("report proposal"))}, ("packet", "report", "map"),
-    only="settled unconsumed review; dry run must refuse receipt_limit or finding_limit on the served row")
+    "report": record("report")}, ("packet", "report"),
+    only="settled unconsumed review/investigation; stored served history is full; same checkpoint renews that row")
 TABLE["objective source"] = definition({"ref": text(256)}, ("ref",))
 TABLE["user source"] = definition({"instruction": _OWNER_INSTRUCTION, "ref": text(256), "question": _ANY,
                                    "channel": choice(("session", "relayed")), "relay": {"type": "object"}},

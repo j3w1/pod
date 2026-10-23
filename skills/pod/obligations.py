@@ -702,13 +702,10 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
     prior_rows = {row["id"]: row for row in (prior_map or {}).get("obligations", [])}
     # Omission preserves terminal history in its original position. Live rows cannot disappear.
     requested = {row.get("id"): row for row in raw_obligations if isinstance(row, dict) and isinstance(row.get("id"), str)}
-    retained = [requested.get(key, deepcopy(row)) for key, row in prior_rows.items()
-                if key in requested or row["state"] in FROZEN]
-    raw_obligations = retained + [row for row in raw_obligations
-                                  if not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] not in prior_rows]
-    # Keep duplicate request ids observable to the normal validator.
-    if len(requested) != len(value["obligations"]):
-        raw_obligations = value["obligations"]
+    raw_obligations = list(raw_obligations)
+    for index, (key, row) in enumerate(prior_rows.items()):
+        if key not in requested and row["state"] in FROZEN:
+            raw_obligations.insert(min(index, len(raw_obligations)), deepcopy(row))
     value["obligations"] = raw_obligations
     row_bounds(raw_obligations, request_entries=ctx.get("request_entries", 0))
     rows: dict[str, dict] = {}
@@ -742,6 +739,8 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
     for ob in rows.values():
         earlier = prior_rows.get(ob["id"])
         if earlier is not None and (earlier["state"] in FROZEN or ob["state"] == "renewed" and ob["id"] in ctx.get("renewal_rows", set())):
+            if (refresh or ctx.get("derived_adoption")) and ob["provenance"] == "project_policy":
+                ob["source"] = _relocate(earlier["source"], observed, sources)
             continue
         if ob["kind"] == "assurance" and ctx.get("candidate_check") is not None:
             ctx["candidate_check"](ob["candidate"])
@@ -832,7 +831,7 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
                 raise refuse("obligation_invalid", "malformed", "the adopted proposal is not open",
                              obligation=ob["id"], proposal=ob["adopts"])
             proposal["status"] = "adopted"
-    _ancestry(rows)
+    _ancestry(rows, lineage=lineage)
     for ob in rows.values():
         if ob["kind"] == "assurance" and ob["id"] not in prior_rows and ob["id"] not in ctx.get("renewal_new", set()) and ob["state"] not in FROZEN:
             for other in rows.values():
@@ -930,7 +929,7 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
     if "renew" not in value:
         return value
     if ctx.get("operation", "checkpoint") != "checkpoint" or prior is None:
-        raise refuse("obligation_invalid", "renewal_checkpoint_only", "renewal uses an existing checkpoint map")
+        raise refuse("obligation_invalid", "renewal_checkpoint_only", "renewal uses an existing checkpoint map", record="renewal request")
     entries = value["renew"]
     if not isinstance(entries, list) or len(entries) > bound("map", "renew", "max_items"):
         raise refuse("obligation_invalid", "malformed", "renew is a bounded list", record="renewal request")
@@ -956,11 +955,15 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
             raise refuse("obligation_invalid", "renewal_unavailable", "renew the current live row once per write", obligation=old_id)
         if new_id in ids or any(isinstance(item, dict) and item.get("id") == new_id for item in entries):
             raise refuse("obligation_invalid", "renewal_id_conflict", "renewal needs a fresh id and no same-write chains", obligation=new_id)
-        if old_id in supplied and supplied[old_id] != old:
+        restatable = restatable_rows({"obligations": [old]})[0]
+        if old_id in supplied and supplied[old_id] not in (old, restatable):
             changed = [key for key in RENEW_DEFINITION if supplied[old_id].get(key) != old.get(key)]
+            if supplied[old_id].get("source") == restatable.get("source") and "source" in changed:
+                changed.remove("source")
             raise refuse("obligation_invalid", "renewal_changed_definition" if changed else "renewal_changed_row",
                          "renewal copies the recorded row unchanged", changed_fields=set(changed), obligation=old_id,
-                         next_action="use the existing authorized revision path for changed definitions")
+                         next_action=("use the existing authorized revision path for changed definitions" if changed else
+                                      "omit the renewed row from obligations or update; put replacement state fields in its renew entry"))
         pending = [key for key, admission in _admissions(ctx).items() if old_id in admission.get("serves", [])
                    and (key in _outstanding(ctx) or admission.get("state") != "deferred"
                         and (admission.get("report") is None and admission.get("disposition") is None
@@ -968,7 +971,7 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
         if pending:
             raise refuse("obligation_invalid", "renewal_result_pending", "serving work must settle and its result be consumed or dispositioned",
                          obligation=old_id, admission=pending[0],
-                         next_action="consume the result first; if consumption hits receipt or finding capacity, discard through dispositions with its capacity refusal, then renew and re-admit")
+                         next_action="consume the result first; at full receipt or finding capacity, discard through dispositions in the same checkpoint that renews the served row, then re-admit")
         state = entry.get("state", old["state"])
         if state in TERMINAL:
             raise refuse("obligation_invalid", "renewal_terminal_state", "the replacement needs an explicit non-terminal state", obligation=new_id)
@@ -985,7 +988,8 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
         frozen = deepcopy(old)
         for field in (*_STATE_FIELDS.values(), "reuse"):
             frozen.pop(field, None)
-        frozen.update(state="renewed", renewal={"by": new_id, "seq": seq, "definition": copied_identity(old)})
+        frozen.update(state="renewed", renewal={"by": new_id, "seq": seq, "definition": copied_identity(old),
+                                                "was_satisfied": old["state"] == "satisfied"})
         if old_id in supplied:
             raw[raw.index(supplied[old_id])] = frozen
         else:
@@ -1327,8 +1331,8 @@ def _introduce(ob: dict, intake: bool, user: bool, observed: dict | None, source
                          "coordinator obligations derive from their parent, not a source", obligation=ob["id"])
 
 
-def _ancestry(rows: dict[str, dict]) -> None:
-    lineage = Lineage(rows)
+def _ancestry(rows: dict[str, dict], *, lineage=None) -> None:
+    lineage = lineage if lineage is not None else Lineage(rows)
     for ob in rows.values():
         cursor = rows[lineage.effective(ob["id"])]
         seen = {cursor["id"]}
@@ -1941,6 +1945,8 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
     for ob in rows.values():
         if type(ob.get("introduced_seq")) is not int or not 1 <= ob["introduced_seq"] <= state["seq"] or ob.get("definition") != definition_id(ob):
             raise refuse("obligation_invalid", "malformed", "persisted obligations retain introduction and definition identities", obligation=ob["id"])
+        from .pod_mapping import validate_epoch
+        validate_epoch(ob, seq=state["seq"], lineage=ctx["lineage"])
         if "parent" in ob and (ob["parent"] not in rows or ob["kind"] == "correction" and rows[ob["parent"]]["kind"] != "assurance"):
             raise refuse("obligation_invalid", "no_parent", "persisted parent names its recorded obligation", obligation=ob["id"])
         if ob["provenance"] == "project_policy":
@@ -1958,15 +1964,8 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
                 raise refuse("obligation_invalid", "cite_not_found", "persisted citation names declared bounded lines", obligation=ob["id"])
             if observed is None or observed.get("status") != "observed":
                 raise refuse("governance_unavailable", "governance_unavailable", "persisted policy citation needs its bound source snapshot", obligation=ob["id"])
-            citation_observed, citation_sources = observed, state["governance_sources"]
-            if ob["state"] in FROZEN and source["base"] != state["governance"]["base"]:
-                reader = ctx.get("bound_governance")
-                if not callable(reader):
-                    raise refuse("governance_unavailable", "governance_unavailable", "retained policy citation needs its stored base snapshot", obligation=ob["id"])
-                citation_observed = reader({**state["governance"], "base": source["base"]})
-                citation_sources, _ = bind_governance(citation_observed, state["governance"]["base_ref"], state["governance"]["exclude"])
-            cited = (_relocate(source, citation_observed, citation_sources) if source["gone"]
-                     else _cite(source, citation_observed, citation_sources, obligation=ob["id"]))
+            cited = (_relocate(source, observed, state["governance_sources"]) if source["gone"]
+                     else _cite(source, observed, state["governance_sources"], obligation=ob["id"]))
             if cited != source:
                 raise refuse("obligation_invalid", "cite_not_base", "persisted citation and withdrawal match their bound source text", obligation=ob["id"])
         elif "renews" not in ob:
@@ -1990,8 +1989,8 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
         unknown = validate_receipts(ob, ctx, seq=state["seq"])
         if unknown and unverifiable is not None:
             unverifiable.append(ob["id"])
-        validate_findings(ob, rows, seq=state["seq"])
-    _ancestry(rows)
+        validate_findings(ob, rows, seq=state["seq"], lineage=ctx["lineage"])
+    _ancestry(rows, lineage=ctx["lineage"])
     return rows
 
 
@@ -2135,6 +2134,7 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
     rows = {ob["id"]: ob for ob in state["obligations"]}
     proposals = {row["id"] for row in state.get("proposals", [])}
     lineage = Lineage(rows)
+    ctx = {**ctx, "lineage": lineage}
     for served in binding["serves"]:
         if lineage.effective(served) != served:
             raise refuse("unbound_assignment", "renewed", "new admissions serve the live renewal tip",
@@ -2258,7 +2258,7 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
     if row.get("role") != "implement":
         if record.get("discarded") is not True or "reason" not in record or "capacity" not in record or row.get("report") is not None:
             raise refuse("obligation_unaccounted", "disposition_invalid", "unconsumed reviews can only be discarded after a kernel-proved capacity refusal", admission=key)
-        capacity = _exact(record["capacity"], {"packet", "report", "map", "triage", "proposals"}, {"packet", "report", "map"}, "capacity disposition")
+        capacity = _exact(record["capacity"], {"packet", "report"}, {"packet", "report"}, "capacity disposition")
         from .records import report
         packet = capacity["packet"]
         if not isinstance(packet, dict) or packet.get("packet_id") != row.get("packet_id"):
@@ -2270,19 +2270,20 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
         prior = ctx.get("map_state")
         if prior is None or len(row.get("serves", [])) != 1:
             raise refuse("obligation_unaccounted", "disposition_invalid", "capacity probe needs its served map", admission=key)
-        probe_ctx = {**ctx, "operation": "report", "admissions": deepcopy(_admissions(ctx))}
-        probe_ctx["admissions"][key]["report"] = {"status": observed["status"], "outcome": observed["observation"]["outcome"]}
-        try:
-            proposed, triaged = triage(prior, deepcopy(capacity["map"]), capacity.get("triage", []), capacity.get("proposals", []), probe_ctx, admission_id=key)
-            accept_write(prior, proposed, probe_ctx, triaged=triaged)
-        except PodError as exc:
-            failure = exc.detail or {}
-            if (failure.get("detail") not in ("receipt_limit", "finding_limit")
-                    or failure.get("referent", {}).get("obligation") != row["serves"][0]):
-                raise
-            return {"kind": "discarded", "reason": record["reason"], "seq": seq,
-                    "capacity_refusal": deepcopy(failure), "report": deepcopy(observed)}
-        raise refuse("obligation_unaccounted", "disposition_invalid", "the report is consumable; consume it before renewal", admission=key)
+        served = row["serves"][0]
+        renew = ctx.get("renewal_request", [])
+        if not isinstance(renew, list) or not any(isinstance(entry, dict) and entry.get("id") == served for entry in renew):
+            raise refuse("obligation_unaccounted", "disposition_invalid",
+                         "a capacity discard renews its served row in the same checkpoint", admission=key, obligation=served)
+        ob = next((item for item in prior["obligations"] if item["id"] == served), None)
+        from .assurance import capacity_refusal
+        if ob is not None:
+            for field, limit in (("receipts", MAX_RECEIPTS), ("findings", MAX_FINDINGS)):
+                if len(ob.get(field, [])) == limit:
+                    failure = capacity_refusal(ob, ctx, seq=seq, field=field, retained=limit, proposed=limit + 1)
+                    return {"kind": "discarded", "reason": record["reason"], "seq": seq,
+                            "capacity_refusal": deepcopy(failure.detail), "report": deepcopy(observed)}
+        raise refuse("obligation_unaccounted", "disposition_invalid", "the stored history has capacity; consume the report before renewal", admission=key)
     if "capacity" in record:
         raise refuse("obligation_unaccounted", "disposition_invalid", "capacity probes apply only to unconsumed review results", admission=key)
     if "discarded" in record:
