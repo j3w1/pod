@@ -109,6 +109,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dic
 
     check()
     root = state_root(project)
+    check()
     if root.is_symlink():
         return {"objectives": [], "unreadable": 1}
     own = objective_root(project, objective) / "context.json"
@@ -129,6 +130,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dic
             if directory.is_symlink():
                 unknown += 1
                 continue
+            check()
             if not directory.is_dir(follow_symlinks=False):
                 continue
             entries = directory_entries(directory.path)
@@ -141,7 +143,9 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dic
             continue
         try:
             raw = load_context(path, validate=False)
-        except PodError:
+        except PodError as exc:
+            if exc.code == DEADLINE_SPENT:
+                raise
             unknown += 1
             continue
         if not isinstance(raw, dict):
@@ -175,6 +179,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None) -> dic
                         project if objective_root(project, checkpoint["objective"]) == path.parent else None)
                     if peer_project is None:
                         raise PodError("closure_unverified", "Peer repository binding is unavailable")
+                    check()
                     if not peer_project.is_dir():
                         raise PodError("closure_unverified", "Peer worktree is unreadable")
                     check()

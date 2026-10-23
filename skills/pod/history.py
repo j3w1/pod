@@ -43,6 +43,13 @@ def _fail(code, message):
     raise PodError(code, message)
 
 
+def _check_read_deadline():
+    from .orca import _DEADLINE
+    budget = _DEADLINE.get()
+    if budget is not None:
+        budget.check()
+
+
 def is_reference(value) -> bool:
     return isinstance(value, dict) and set(value) == {MARKER}
 
@@ -349,9 +356,11 @@ class ChunkStore:
 
     @contextmanager
     def directory(self, *, create=False):
+        _check_read_deadline()
         fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
         try:
             for name in self.root.absolute().parts[1:]:
+                _check_read_deadline()
                 if create:
                     try:
                         os.mkdir(name, mode=0o700, dir_fd=fd)
@@ -432,17 +441,21 @@ class ChunkStore:
 
 def _context_bytes(path, limit):
     """Bound the actual read, retaining exact physical bytes for decision binding."""
+    _check_read_deadline()
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
         for name in path.absolute().parent.parts[1:]:
+            _check_read_deadline()
             child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = child
+        _check_read_deadline()
         record = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
         with os.fdopen(record, "rb") as file:
             info = os.fstat(file.fileno())
             if not stat.S_ISREG(info.st_mode):
                 _fail("unsafe_record", "Context must be a regular, non-symlink file")
+            _check_read_deadline()
             data = file.read(limit + 1)
         if len(data) > limit or info.st_size > limit:
             raise PodError("record_too_large", "Context exceeds its bounded read limit; use internal "
@@ -469,8 +482,10 @@ def _load(path, *, limit=CONTEXT_LIMIT, validate=True):
         directory = None
         def read_chunk(address):
             nonlocal directory
+            _check_read_deadline()
             if directory is None:
                 directory = stack.enter_context(store.directory())
+            _check_read_deadline()
             return store._load(directory, address)
         state, receipts = _hydrate(physical, read_chunk)
     if validate:
