@@ -324,24 +324,46 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
         evidence = {**base, "governance": stamp}
         receipts[key] = {**(previous or {}), "evidence": evidence}
         stamped.append(evidence)
-    if len(receipts) > MAX_RECEIPTS:
+    reserved = len(pending_serving(ob, ctx)) if ob["kind"] == "assurance" else 0
+    retained = len((prior or {}).get("receipts", []))
+    if len(receipts) > MAX_RECEIPTS or len(receipts) > retained and len(receipts) + reserved > MAX_RECEIPTS:
         raise capacity_refusal(ob, ctx, seq=seq, field="receipts",
-                               retained=len((prior or {}).get("receipts", [])), proposed=len(receipts), prior=prior)
+                               retained=retained, proposed=len(receipts) + reserved, prior=prior, reserved=reserved)
     ob["receipts"] = list(receipts.values())
     return stamped
 
 
-def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int, proposed: int, prior=None):
-    """The same bounded renewal route for report, checkpoint and disposition."""
+def pending_serving(ob: dict, ctx: dict) -> list[str]:
+    """Retain reservations through native settlement until consumption or disposition."""
+    from .obligations import _admissions, _outstanding
+    outstanding = set(_outstanding(ctx))
+    return [key for key, row in _admissions(ctx).items()
+            if ob["id"] in (row.get("serves") or []) and row.get("state") != "deferred"
+            and row.get("disposition") is None and (key in outstanding or row.get("report") is None)]
+
+
+def reserve_capacity(ob: dict, ctx: dict, *, seq: int):
+    """Admit only when every pending result, including this one, fits in full."""
+    from .obligations import MAX_RECEIPTS, MAX_FINDINGS, MAX_REPORT_FINDINGS
+    attempts = len(pending_serving(ob, ctx)) + 1
+    for field, per_attempt, limit in (("receipts", 1, MAX_RECEIPTS), ("findings", MAX_REPORT_FINDINGS, MAX_FINDINGS)):
+        retained = len(ob.get(field, []))
+        reserved = per_attempt * attempts
+        if retained + reserved > limit:
+            raise capacity_refusal(ob, ctx, seq=seq, field=field, retained=retained,
+                                   proposed=retained + reserved, reserved=reserved)
+
+
+def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int, proposed: int, prior=None, reserved=0):
+    """The same accepted-state renewal route for admission, report and checkpoint."""
     from .obligations import MAX_RECEIPTS, MAX_FINDINGS, refuse
     replacement = {"id": ob["id"], "as": "<fresh-id>"}
-    basis = prior if prior is not None else ob
+    rows = (ctx.get("accepted_map") or ctx.get("map_state") or {}).get("obligations", [])
+    basis = next((row for row in rows if row["id"] == ob["id"]), prior if prior is not None else ob)
     if basis.get("state") in ("waiting", "blocked_external"):
         state_field = "wait" if basis["state"] == "waiting" else "external"
         replacement.update(state=basis["state"], **{state_field: deepcopy(basis[state_field])})
     else:
-        rows = getattr(ctx.get("lineage"), "rows", None)
-        rows = rows.values() if rows is not None else (ctx.get("map_state") or {}).get("obligations", [])
         held = next((row["id"] for row in rows if row["id"] != ob["id"]
                      and row.get("state") == "active" and row.get("executor") == "coordinator"), None)
         if held:
@@ -349,8 +371,9 @@ def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int
         else:
             replacement.update(state="active", executor="coordinator")
     return refuse("obligation_invalid", "receipt_limit" if field == "receipts" else "finding_limit",
-                  "the bounded retained history is full; an unconsumed result needs a capacity disposition in the renewal checkpoint",
+                  "retained history and pending serving results exceed capacity; consume pending results before renewal",
                   obligation=ob["id"], retained=retained, proposed=proposed,
+                  reserved=reserved,
                   limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
                   next_action={"seq": seq, "renew": [replacement]})
 
@@ -381,7 +404,7 @@ def review_completed(admission: Any) -> bool:
     into corrections that the assurance obligation waits on.
     """
     report = admission.get("report") if isinstance(admission, dict) else None
-    return (isinstance(report, dict) and not (admission.get("disposition") or {}).get("capacity_refusal") and report.get("outcome") == "succeeded"
+    return (isinstance(report, dict) and report.get("outcome") == "succeeded"
             and report.get("status") == "validated_observation")
 
 
@@ -683,9 +706,10 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
                          obligation=assurance_id, attempt=admission_id,
                          next_action="preserve every recorded finding; a completed review attempt at its finding "
                                      "bound cannot be extended or its stored findings regrouped")
-        if len(stored) + len(records) > MAX_FINDINGS:
+        reserved = MAX_REPORT_FINDINGS * len(pending_serving(assurance, ctx))
+        if len(stored) + len(records) + reserved > MAX_FINDINGS:
             raise capacity_refusal(assurance, {**ctx, "map_state": state}, seq=state["seq"] + 1, field="findings",
-                                   retained=len(stored), proposed=len(stored) + len(records),
+                                   retained=len(stored), proposed=len(stored) + len(records) + reserved, reserved=reserved,
                                    prior=next(row for row in state["obligations"] if row["id"] == assurance_id))
         assurance["findings"] = list(stored) + records
         written.add(assurance_id)

@@ -1,4 +1,4 @@
-"""Report-ingested receipt exhaustion and the capacity-only disposition recipe."""
+"""Receipt admission reservations and preceding report overflow boundaries."""
 from copy import deepcopy
 import json
 import unittest
@@ -7,6 +7,7 @@ from pod.errors import PodError
 from pod.ledger import _read, objective_root
 from tests.issue41_support import ProductionCase
 from tests import test_records_boundaries as renewal
+from tests.records_support import start_before_reservations
 
 
 class ReceiptBoundaryTests(unittest.TestCase):
@@ -19,21 +20,8 @@ class ReceiptBoundaryTests(unittest.TestCase):
         frozen = case.packet(["A"], role="review")
         admission = case.start("first-receipt", frozen)["admission"]; case.settle(admission)
         state = _read(cls.path)
-        native = admission["native_binding"]
-        body = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": native["dispatchId"],
-            "candidate": case.candidate, "outcome": "succeeded", "scope": ["src"], "files": [], "checks": ["unit"],
-            "failures": [], "evidence": [], "uncertainty": [], "questions": []}
         waiting = {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
         renew = [{"id": "A", "as": "A2", **waiting}]
-        before = cls.files()
-        try:
-            case.write(renew=renew, dispositions=[{"admission": admission["admission_id"], "discarded": True, "reason": "capacity probe",
-                "capacity": {"packet": frozen, "report": body}}])
-        except PodError as exc:
-            cls.consumable_refusal = exc
-        else:
-            raise AssertionError("consumable report was discarded")
-        cls.consumable_atomic = cls.files() == before
         case.report(admission, frozen, map={"seq": state["checkpoint"]["seq"] + 1, "update": {"A": waiting}})
         # Seed retained observations in four bounded checkpoint writes. They are
         # deliberately not proof; only the first and overflowing reports cross
@@ -45,7 +33,7 @@ class ReceiptBoundaryTests(unittest.TestCase):
         case.write(seq=state["checkpoint"]["seq"] + 1, update={"A": {"evidence": [{"attempt": admission["admission_id"]}]}})
         cls.replay_count = len(next(row for row in case.stored() if row["id"] == "A")["receipts"])
         cls.frozen = case.packet(["A"], role="review")
-        cls.admission = case.start("overflow", cls.frozen)["admission"]; case.settle(cls.admission)
+        cls.admission = start_before_reservations(case, "preceding-overflow", cls.frozen)["admission"]; case.settle(cls.admission)
         state = _read(cls.path)
         cls.map = {"seq": state["checkpoint"]["seq"] + 1, "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}}
         cls.before = cls.files()
@@ -65,16 +53,21 @@ class ReceiptBoundaryTests(unittest.TestCase):
         else:
             raise AssertionError("65th report receipt was accepted")
         cls.unchanged = cls.files() == cls.before
-        # Only stored counts justify capacity discard, atomically with renewal.
-        native = cls.admission["native_binding"]
-        body = {"schema": "pod-report/v1", "assignment": cls.frozen["packet_id"], "attempt": native["dispatchId"],
-            "candidate": case.candidate, "outcome": "succeeded", "scope": ["src"], "files": [], "checks": ["unit"],
-            "failures": [], "evidence": [], "uncertainty": [], "questions": []}
-        case.write(seq=cls.map["seq"], renew=renew, dispositions=[{"admission": cls.admission["admission_id"],
-            "discarded": True, "reason": "receipt capacity prevents consuming this report", "capacity": {
-                "packet": cls.frozen, "report": body}}])
-        cls.discarded = _read(cls.path)
-        cls.renewed = cls.discarded
+        # Preceding overcommitment still refuses without discarding the review.
+        before = cls.files()
+        try:
+            case.write(renew=renew, dispositions=[{"admission": cls.admission["admission_id"],
+                "discarded": True, "reason": "history is full"}])
+        except PodError as exc:
+            cls.discard_refusal = exc
+        else:
+            raise AssertionError("preceding review was discarded")
+        cls.discard_atomic = cls.files() == before
+        # Failed consumption adds no receipt; it releases the pending result,
+        # permitting mechanical renewal without claiming passing proof.
+        case.report(cls.admission, cls.frozen, outcome="failed", map=cls.map)
+        case.write(renew=renew)
+        cls.renewed = _read(cls.path)
         print("records_receipts=" + json.dumps({"retained": 64, "proposed": 65, "limit": 64, "replay_count": cls.replay_count,
             "before_context_bytes": len(cls.before["context.json"]), "before_chunk_bytes": sum(len(value) for key, value in cls.before.items() if key.startswith("history/")),
             "report_refusal_unchanged": cls.unchanged, "checkpoint_refusal_unchanged": cls.checkpoint_atomic,
@@ -96,15 +89,14 @@ class ReceiptBoundaryTests(unittest.TestCase):
         self.assertTrue(self.checkpoint_atomic)
         self.assertEqual(self.replay_count, 64)
 
-    def test_consumable_review_cannot_be_capacity_discarded(self):
-        self.assertEqual(self.consumable_refusal.detail["detail"], "disposition_invalid")
-        self.assertTrue(self.consumable_atomic)
+    def test_historical_review_cannot_be_discarded(self):
+        self.assertEqual(self.discard_refusal.detail["detail"], "disposition_invalid")
+        self.assertTrue(self.discard_atomic)
 
-    def test_capacity_disposition_preserves_report_and_renewal_has_no_proof(self):
-        row = self.discarded["admissions"][self.admission["admission_id"]]
-        self.assertEqual(row["disposition"]["capacity_refusal"]["detail"], "receipt_limit")
-        self.assertEqual(row["disposition"]["report"]["observation"]["attempt"], self.admission["native_binding"]["dispatchId"])
-        self.assertIsNone(row["report"])
+    def test_consumption_then_renewal_keeps_history_without_replacement_proof(self):
+        row = self.renewed["admissions"][self.admission["admission_id"]]
+        self.assertIsNone(row["disposition"])
+        self.assertEqual(row["report"]["outcome"], "failed")
         rows = {row["id"]: row for row in self.renewed["checkpoint"]["obligations"]}
         self.assertEqual(len(rows["A"]["receipts"]), 64)
         self.assertEqual(rows["A2"]["receipts"], [])

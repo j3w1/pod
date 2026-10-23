@@ -11,6 +11,7 @@ from pod.ledger import _read, objective_root
 from pod.obligations import MAX_FINDINGS, MAX_REPORT_FINDINGS
 from tests.issue41_support import ProductionCase
 from tests import kernel_support as boundaries
+from tests.records_support import start_before_reservations
 
 
 class AssuranceCapacityTests(unittest.TestCase):
@@ -50,7 +51,7 @@ class AssuranceCapacityTests(unittest.TestCase):
 
         def begin(name):
             packet = case.packet(["A"], role="review")
-            admission = case.start(name, packet)["admission"]
+            admission = start_before_reservations(case, name, packet)["admission"]
             case.settle(admission)
             return admission, packet
 
@@ -161,34 +162,31 @@ class AssuranceCapacityTests(unittest.TestCase):
                                             "wait": {"class": "sequenced", "referent": "O1"}}])
         self.assertEqual(self.files(), before)
 
-    def test_capacity_discard_requires_full_stored_history_and_same_checkpoint_renewal(self):
-        from tests.test_records_corrections import report_body
-        for count, renew in ((32, True), (63, True), (64, False), (64, True)):
-            with self.subTest(count=count, renew=renew):
-                admission, packet = self.restore(count)
-                before = self.files()
-                request = {"admission": admission["admission_id"], "discarded": True, "reason": "full retained history",
-                    "capacity": {"packet": packet, "report": report_body(self.case, admission, packet)}}
-                value = {"dispositions": [request]}
-                if renew:
-                    value["renew"] = [{"id": "A", "as": "A2", "state": "waiting",
-                                      "wait": {"class": "sequenced", "referent": "O1"}}]
-                if count < 64 or not renew:
-                    with self.assertRaises(PodError) as caught:
-                        self.case.write(**value)
-                    self.assertEqual(caught.exception.detail["detail"], "disposition_invalid")
-                    self.assertEqual(self.files(), before)
-                    continue
-                self.case.write(**value)
-                after = _read(self.path)
-                rows = {row["id"]: row for row in after["checkpoint"]["obligations"]}
-                disposition = after["admissions"][admission["admission_id"]]["disposition"]
-                self.assertEqual(disposition["capacity_refusal"]["detail"], "finding_limit")
-                self.assertEqual(disposition["report"]["observation"]["attempt"], admission["native_binding"]["dispatchId"])
-                self.assertEqual((rows["A"]["state"], len(rows["A"]["findings"])), ("renewed", 64))
-                self.assertEqual((rows["A2"]["state"], rows["A2"]["receipts"]), ("waiting", []))
-                with self.assertRaises(PodError):
-                    self.case.report(admission, packet)
+    def test_new_admission_reserves_the_full_finding_budget(self):
+        # Consume the preceding pending result, so refusal is about the new
+        # attempt's 32-record budget, not an older pending result.
+        admission, packet = self.restore(63)
+        self.case.report(admission, packet, outcome="failed", map={"seq": _read(self.path)["checkpoint"]["seq"] + 1,
+            "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}})
+        packet = self.case.packet(["A"], role="review")
+        before = self.files()
+        workers = deepcopy(self.case.port.workers)
+        with self.assertRaises(PodError) as caught:
+            self.case.start("must-renew-first", packet)
+        detail = caught.exception.detail
+        self.assertEqual(detail["detail"], "finding_limit")
+        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
+                         {"retained": 63, "proposed": 95, "reserved": 32, "limit": 64})
+        action = detail["next_action"]
+        self.assertEqual(action, {"seq": _read(self.path)["checkpoint"]["seq"] + 1,
+            "renew": [{"id": "A", "as": "<fresh-id>", "state": "waiting",
+                       "wait": {"class": "sequenced", "referent": "O1"}}]})
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.case.port.workers, workers)
+        action["renew"][0]["as"] = "A2"
+        self.case.write(**action)
+        fresh = self.case.start("review-renewal", self.case.packet(["A2"], role="review"))
+        self.assertEqual(fresh["admission"]["serves"], ["A2"])
 
     def test_report_33_refuses_even_with_32_history_slots_remaining(self):
         admission, packet = self.restore(32)
@@ -278,11 +276,12 @@ class AssuranceCapacityTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught:
             self.case.write(rows)
         self.assertEqual(caught.exception.detail["detail"], "evidence_invalidated")
-        frozen = self.case.packet(["A"], role="review")
+        self.case.write(renew=[{"id": "A", "as": "A2"}])
+        frozen = self.case.packet(["A2"], role="review")
         fresh = self.case.start("admitted-after-new-resolution", frozen)["admission"]
         self.case.settle(fresh)
         rows = self.case.stored()
-        assurance = next(row for row in rows if row["id"] == "A")
+        assurance = next(row for row in rows if row["id"] == "A2")
         assurance.pop("executor")
         assurance.update(state="satisfied", evidence=[{"attempt": fresh["admission_id"]}])
         self.case.report(fresh, frozen, map={"obligations": rows})

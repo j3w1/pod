@@ -1273,7 +1273,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
 def accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozenset = frozenset()) -> dict:
     """Expose refusal context alongside the same ordered map transition."""
     try:
-        return _accept_write(prior, value, ctx, triaged=triaged)
+        return _accept_write(prior, value, {**ctx, "accepted_map": prior}, triaged=triaged)
     except PodError as exc:
         current = prior if isinstance(prior, dict) else {}
         detail = dict(exc.detail) if isinstance(exc.detail, dict) else {}
@@ -2161,6 +2161,10 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
         raise refuse("unbound_assignment", "role_kind_mismatch", "a review attempt serves exactly one assurance obligation", record='admission refusal')
     if binding["role"] != "review" and "assurance" in kinds:
         raise refuse("unbound_assignment", "role_kind_mismatch", "only a review attempt serves an assurance obligation", record='admission refusal')
+    from .assurance import reserve_capacity
+    for served in binding["serves"]:
+        if rows[served]["kind"] == "assurance":
+            reserve_capacity(rows[served], {**ctx, "accepted_map": state}, seq=state["seq"] + 1)
     if binding["role"] == "investigate" and not (body.get("resolves") and body.get("stop_condition")):
         raise refuse("unbound_assignment", "missing_resolves", "an investigation names resolves and stop_condition", record='admission refusal')
     if binding["role"] == "implement":
@@ -2242,12 +2246,12 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
 @input_record("disposition")
 def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
     """One disposition for a settled implementation result; a record, never a deletion."""
-    record = _exact(request, {"admission", "integrated_into", "discarded", "reason", "attestation", "capacity"},
+    record = _exact(request, {"admission", "integrated_into", "discarded", "reason", "attestation"},
                     {"admission"}, "disposition", code="obligation_unaccounted")
     key = record["admission"]
-    if row.get("role") not in ROLES or key in _outstanding(ctx) or row.get("state") == "deferred":
+    if row.get("role") != "implement" or key in _outstanding(ctx) or row.get("state") == "deferred":
         raise refuse("obligation_unaccounted", "disposition_invalid",
-                     "only a settled result takes a disposition", admission=key)
+                     "only a settled implementation result takes a disposition", admission=key)
     if row.get("disposition") is not None:
         raise refuse("obligation_unaccounted", "disposition_invalid", "a result has exactly one disposition",
                      admission=key)
@@ -2257,37 +2261,6 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
     for field in ("reason", "attestation"):
         if field in record:
             _text(record[field], field, code="obligation_unaccounted", detail="disposition_invalid", limit=bound("disposition", field))
-    if row.get("role") != "implement":
-        if record.get("discarded") is not True or "reason" not in record or "capacity" not in record or row.get("report") is not None:
-            raise refuse("obligation_unaccounted", "disposition_invalid", "unconsumed reviews can only be discarded after a kernel-proved capacity refusal", admission=key)
-        capacity = _exact(record["capacity"], {"packet", "report"}, {"packet", "report"}, "capacity disposition")
-        from .records import report
-        packet = capacity["packet"]
-        if not isinstance(packet, dict) or packet.get("packet_id") != row.get("packet_id"):
-            raise refuse("obligation_unaccounted", "disposition_invalid", "capacity probe retains the exact admission packet", admission=key)
-        native = {"runtime": row["runtime"], **{field: row["native_binding"][field] for field in ("runId", "taskId", "dispatchId", "workerId")}}
-        observed = report(capacity["report"], packet, native)
-        if observed["status"] != "validated_observation":
-            raise refuse("obligation_unaccounted", "disposition_invalid", "capacity probe needs the validated served report", admission=key)
-        prior = ctx.get("map_state")
-        if prior is None or len(row.get("serves", [])) != 1:
-            raise refuse("obligation_unaccounted", "disposition_invalid", "capacity probe needs its served map", admission=key)
-        served = row["serves"][0]
-        renew = ctx.get("renewal_request", [])
-        if not isinstance(renew, list) or not any(isinstance(entry, dict) and entry.get("id") == served for entry in renew):
-            raise refuse("obligation_unaccounted", "disposition_invalid",
-                         "a capacity discard renews its served row in the same checkpoint", admission=key, obligation=served)
-        ob = next((item for item in prior["obligations"] if item["id"] == served), None)
-        from .assurance import capacity_refusal
-        if ob is not None:
-            for field, limit in (("receipts", MAX_RECEIPTS), ("findings", MAX_FINDINGS)):
-                if len(ob.get(field, [])) == limit:
-                    failure = capacity_refusal(ob, ctx, seq=seq, field=field, retained=limit, proposed=limit + 1)
-                    return {"kind": "discarded", "reason": record["reason"], "seq": seq,
-                            "capacity_refusal": deepcopy(failure.detail), "report": deepcopy(observed)}
-        raise refuse("obligation_unaccounted", "disposition_invalid", "the stored history has capacity; consume the report before renewal", admission=key)
-    if "capacity" in record:
-        raise refuse("obligation_unaccounted", "disposition_invalid", "capacity probes apply only to unconsumed review results", admission=key)
     if "discarded" in record:
         if record["discarded"] is not True or "reason" not in record:
             raise refuse("obligation_unaccounted", "disposition_invalid", "discarding a result needs a reason",

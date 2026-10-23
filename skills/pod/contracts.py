@@ -237,12 +237,8 @@ TABLE["revision authority"] = definition({"provenance": choice(("user_direct",))
                                           "question": text(), "channel": choice(("session", "relayed")),
                                           "relay": {"type": "object"}}, ("provenance", "instruction"))
 TABLE["disposition"] = definition({"admission": {"type": "text"}, "integrated_into": text(128),
-                                   "discarded": {"type": "boolean"}, "reason": text(1024), "attestation": text(1024),
-                                   "capacity": record("capacity disposition")},
+                                   "discarded": {"type": "boolean"}, "reason": text(1024), "attestation": text(1024)},
                                   ("admission",))
-TABLE["capacity disposition"] = definition({"packet": {"type": "object", "form": "exact frozen admission packet"},
-    "report": record("report")}, ("packet", "report"),
-    only="settled unconsumed review/investigation; stored served history is full; same checkpoint renews that row")
 TABLE["objective source"] = definition({"ref": text(256)}, ("ref",))
 TABLE["user source"] = definition({"instruction": _OWNER_INSTRUCTION, "ref": text(256), "question": _ANY,
                                    "channel": choice(("session", "relayed")), "relay": {"type": "object"}},

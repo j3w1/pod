@@ -1484,8 +1484,6 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if issue_revision is not None:
             ctx["issue_revision"] = issue_revision
         if dispositions:
-            ctx["map_state"] = prior_map
-            ctx["renewal_request"] = proposed.get("renew", [])
             if prior_map is None:
                 raise refuse("obligation_unaccounted", "disposition_invalid",
                              "dispositions follow admissions under a map", record='checkpoint map transition')
@@ -2177,8 +2175,6 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         map_state = map_of(state)
         if map_state is None:
             raise refuse("unbound_assignment", "no_map", "a report joins an obligation map", record='consume report')
-        if (row.get("disposition") or {}).get("capacity_refusal"):
-            raise PodError("report_dispositioned", "This capacity-blocked report was discarded; renew and admit a fresh attempt")
         ctx = kernel_context(project, objective, state, authority.get("native"))
         ctx["operation"] = "report"
         try:

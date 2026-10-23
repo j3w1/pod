@@ -11,6 +11,7 @@ from pod.util import encoded
 from tests.issue41_support import ProductionCase
 from tests import kernel_support as boundaries
 from tests.common import proof
+from tests.records_support import start_before_reservations
 
 
 def size(value):
@@ -35,10 +36,12 @@ class RecordsCapacityTests(unittest.TestCase):
         sources = [source_identity(case.project, path.relative_to(case.project).as_posix())
                    for path in sorted((case.project / "src").glob("source*"))]
         cls.path = objective_root(case.project, "objective") / "context.json"
+        # Existing reviews were admitted under the preceding admission rules.
+        # Their report ingestion and every storage boundary use the current code.
         attempts = []
         for group in range(12):
             frozen = case.packet(["A"], role="review", sources=sources)
-            admission = case.start(f"seed-review-{group}", frozen)["admission"]; case.settle(admission)
+            admission = start_before_reservations(case, f"seed-review-{group}", frozen)["admission"]; case.settle(admission)
             attempts.append(admission["admission_id"])
             state = _read(cls.path)
             start, stop = ((0, 32) if group == 0 else (32, 53) if group == 1 else (53, 53))
@@ -80,7 +83,7 @@ class RecordsCapacityTests(unittest.TestCase):
         cls.metrics = {"fixture": "sanitized-96-row", "before": {**cls.measure(),
             "full_map_request_bytes": size(case.core(obligations=cls.before["checkpoint"]["obligations"]))}, "groups": []}
         frozen = case.packet(["A"], role="review", sources=sources)
-        admission = case.start("original-capacity-review", frozen)["admission"]; case.settle(admission)
+        admission = start_before_reservations(case, "original-capacity-review", frozen)["admission"]; case.settle(admission)
         cls.original = admission["admission_id"]
         report_body = {"schema": "pod-report/v1", "assignment": frozen["packet_id"], "attempt": admission["native_binding"]["dispatchId"],
             "candidate": case.candidate, "outcome": "succeeded", "scope": frozen["body"]["scope"], "files": [], "checks": ["unit"],
@@ -89,17 +92,58 @@ class RecordsCapacityTests(unittest.TestCase):
             return size({"project": str(case.project), "objective": "objective", "admission_id": admission["admission_id"],
                          "packet": frozen, "report": report_body, "map": request_map, **({"triage": findings} if findings is not None else {})})
         for group in range(7):
+            if group == 1:
+                # The original three findings are now consumed. New admissions
+                # must reserve capacity normally, so follow the exact renewal.
+                before = cls.files()
+                try:
+                    case.start("post-upgrade-review", case.packet(["A"], role="review", sources=sources))
+                except PodError as exc:
+                    cls.admission_refusal = exc
+                else:
+                    raise AssertionError("review admitted without its full finding budget")
+                cls.admission_atomic = cls.files() == before
+                cls.renew_request = deepcopy(cls.admission_refusal.detail["next_action"])
+                cls.renew_seq = _read(cls.path)["checkpoint"]["seq"] + 1
+                action = deepcopy(cls.renew_request)
+                action["renew"][0]["as"] = "A2"
+                case.write(**action)
+                frozen = case.packet(["A2"], role="review", sources=sources)
+                admission = case.start("post-upgrade-review", frozen)["admission"]; case.settle(admission)
+                cls.fresh = admission["admission_id"]
+                report_body.update(assignment=frozen["packet_id"], attempt=admission["native_binding"]["dispatchId"])
+            served = "A" if group == 0 else "A2"
             state = _read(cls.path)
             key = f"NEW{group}"
-            correction = {"kind": "correction", "provenance": "coordinator", "parent": "A", "state": "waiting", "check": "repair this group",
+            correction = {"kind": "correction", "provenance": "coordinator", "parent": served, "state": "waiting", "check": "repair this group",
                           "wait": {"class": "sequenced", "referent": "O1"}}
-            request_map = {"seq": state["checkpoint"]["seq"] + 1, "update": {"A": {"state": "blocked_external", "external": {
+            request_map = {"seq": state["checkpoint"]["seq"] + 1, "update": {served: {"state": "blocked_external", "external": {
                 "party": "provider", "need": "fixture review slot", "unblocks_when": "available"}}, key: correction}}
             findings = [{"finding": f"new-{group}-{index}", "severity": "major", "triage": "required_correction", "correction": key,
                          "summary": "genuine report consumption in the synthetic capacity fixture"} for index in range(3 if group == 0 else 1)]
             request_size = request_bytes(request_map, findings)
             case.report(admission, frozen, map=request_map, triage=findings)
             cls.metrics["groups"].append({"request_bytes": request_size, **cls.measure()})
+            if group == 0:
+                # Exercise physical overflow before renewal archives the old assurance.
+                state = _read(cls.path)
+                physical_before = cls.files()
+                updates = {}
+                for index in range(17):
+                    row = case.sub(f"LARGE{index}")
+                    row["check"] = "large legal-size check " + "c" * 480
+                    receipt = proof(row["id"], case.candidate, definition=row, policy_revision=policy)
+                    receipt.update(command="c" * 512, result="r" * 512)
+                    row["evidence"] = [receipt]
+                    updates[row["id"]] = row
+                try:
+                    case.report(admission, frozen, map={"seq": state["checkpoint"]["seq"] + 1, "update": updates})
+                except PodError as exc:
+                    cls.physical_refusal = exc
+                else:
+                    raise AssertionError("physical capacity refusal missing")
+                cls.metrics["physical_refusal"] = {"code": cls.physical_refusal.code, "detail": cls.physical_refusal.detail,
+                    "request_bytes": request_bytes({"seq": state["checkpoint"]["seq"] + 1, "update": updates}), "unchanged": cls.files() == physical_before}
         cls.after = _read(cls.path)
         cls.files_before_refusal = cls.files()
         state = _read(cls.path)
@@ -112,22 +156,6 @@ class RecordsCapacityTests(unittest.TestCase):
             raise AssertionError("129-live refusal missing")
         cls.metrics["refusal"] = {"code": cls.refusal.code, "detail": cls.refusal.detail,
                                  "unchanged": cls.files() == cls.files_before_refusal}
-        updates = {}
-        for index in range(17):
-            row = case.sub(f"LARGE{index}")
-            row["check"] = "large legal-size check " + "c" * 480
-            receipt = proof(row["id"], case.candidate, definition=row, policy_revision=policy)
-            receipt.update(command="c" * 512, result="r" * 512)
-            row["evidence"] = [receipt]
-            updates[row["id"]] = row
-        try:
-            case.report(admission, frozen, map={"seq": state["checkpoint"]["seq"] + 1, "update": updates})
-        except PodError as exc:
-            cls.physical_refusal = exc
-        else:
-            raise AssertionError("physical capacity refusal missing")
-        cls.metrics["physical_refusal"] = {"code": cls.physical_refusal.code, "detail": cls.physical_refusal.detail,
-            "request_bytes": request_bytes({"seq": state["checkpoint"]["seq"] + 1, "update": updates}), "unchanged": cls.files() == cls.files_before_refusal}
         print("records_capacity=" + json.dumps(cls.metrics, sort_keys=True))
 
     @classmethod
@@ -174,3 +202,22 @@ class RecordsCapacityTests(unittest.TestCase):
         self.assertTrue(self.metrics["refusal"]["unchanged"])
         self.assertEqual(self.metrics["physical_refusal"]["code"], "record_too_large")
         self.assertTrue(self.metrics["physical_refusal"]["unchanged"])
+
+    def test_post_upgrade_admission_renews_before_recording_further_groups(self):
+        detail = self.admission_refusal.detail
+        self.assertEqual(detail["detail"], "finding_limit")
+        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
+                         {"retained": 56, "proposed": 88, "reserved": 32, "limit": 64})
+        self.assertEqual(self.renew_request, {"seq": self.renew_seq, "renew": [{
+            "id": "A", "as": "<fresh-id>", "state": "blocked_external", "external": {
+                "party": "provider", "need": "fixture review slot", "unblocks_when": "available"}}]})
+        self.assertTrue(self.admission_atomic)
+        rows = {row["id"]: row for row in self.after["checkpoint"]["obligations"]}
+        self.assertEqual((rows["A"]["state"], rows["A2"]["renews"]), ("renewed", "A"))
+        self.assertEqual(len(rows["A"]["findings"]), 56)
+        self.assertEqual(len(rows["A2"]["findings"]), 6)
+        self.assertNotEqual(self.fresh, self.original)
+        self.assertEqual(rows["A2"]["receipts"][0]["evidence"]["attempt"], self.fresh)
+        for group in range(1, 7):
+            self.assertEqual(rows[f"NEW{group}"]["finding"]["attempt"], self.fresh)
+            self.assertEqual(rows[f"NEW{group}"]["parent"], "A2")
