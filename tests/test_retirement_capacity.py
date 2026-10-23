@@ -149,8 +149,8 @@ class RetirementCapacityTests(RetirementCase):
         self.assertIn("record-compaction", refused["next_action"])
         request = {"project": str(self.project), "objective": "objective"}
         detected = run("record-compaction", request)
-        decision = detected["next_action"]["request"]["decision"]
-        decision["instruction"] = "Compact settled objective history before retirement"
-        self.assertEqual(run("record-compaction", {**request, "decision": decision})["status"], "compacted")
+        maintenance = detected["next_action"]["request"]["request"]
+        maintenance["reason"] = "Compact settled objective history before retirement"
+        self.assertEqual(run("record-compaction", {**request, "request": maintenance})["status"], "compacted")
         self.assertEqual(self.state(), state)
         self.assertEqual(self.retire(self.decide())["status"], "retired")

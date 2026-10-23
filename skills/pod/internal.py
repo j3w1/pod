@@ -629,9 +629,10 @@ def _op_historical_retirement(request: dict) -> dict:
 
 
 def _op_record_compaction(request: dict) -> dict:
-    exact(request, {"project", "objective", "decision"}, {"project", "objective"}, name="request")
+    exact(request, {"project", "objective", "request", "decision"}, {"project", "objective"}, name="request")
     from .history import record_compaction
-    return record_compaction(Path(request["project"]), request["objective"], decision=request.get("decision"))
+    return record_compaction(Path(request["project"]), request["objective"],
+                             request=request.get("request"), decision=request.get("decision"))
 
 
 def _op_cleanup_plan(request: dict) -> dict:

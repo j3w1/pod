@@ -1,4 +1,4 @@
-"""Owner-scoped over-limit maintenance, exact replay and refusal invariants (R121)."""
+"""Session compaction decisions, exact replay and refusal invariants (R121)."""
 from copy import deepcopy
 import json
 import os
@@ -40,7 +40,7 @@ class RecordCompactionTests(KernelCase):
 
     def decide(self):
         found = self.operate()
-        decision = found["next_action"]["request"]["decision"]
+        decision = self.unoffered_decision(found)
         decision["instruction"] = "Compact settled history of this exact objective"
         return decision
 
@@ -125,12 +125,12 @@ class RecordCompactionTests(KernelCase):
     def test_detection_receipt_allowance_covers_the_largest_owner_instruction(self):
         self.arrange()
         detected = self.operate()
-        decision = detected["next_action"]["request"]["decision"]
-        # Each allowed character needs six JSON bytes; this reaches the allowance.
+        decision = self.unoffered_decision(detected)
+        # Session instructions fit within the larger declared-request allowance.
         decision["instruction"] = "\x01" * 1024
         result = self.operate(decision)
         self.assertEqual(result["status"], "compacted")
-        self.assertEqual(result["proposed_bytes"], detected["proposed_bytes"])
+        self.assertLessEqual(result["proposed_bytes"], detected["proposed_bytes"])
         self.assertEqual(capacity(self.path, self.state)["maintenance"][0]["authority"]["instruction"],
                          decision["instruction"])
         self.assertEqual(_read(self.path), self.state)
