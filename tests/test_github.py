@@ -12,7 +12,7 @@ from unittest.mock import patch
 from pod.config import effective, personal_path
 from pod.errors import PodError
 from pod.gitio import worktree_inventory, worktree_rows
-from pod.github import (AMENDMENT_JQ, GhPort, ISSUE_FIELDS, PR_FIELDS, RUN_FIELDS,
+from pod.github import (AMENDMENT_JQ, GhPort, ISSUE_FIELDS, ISSUE_REOPEN_QUERY, PR_FIELDS, RUN_FIELDS,
                         MUTATION_TIMEOUT_S, flip_pod_checkbox, gh_allowed, git_allowed,
                         issue_intake, issue_recheck, issue_recheck_live, pod_lines,
                         pod_ref_number, repository_context, repository_reads)
@@ -60,6 +60,63 @@ def repository(root: Path, remote: str = "https://github.com/acme/widgets.git") 
     worktree = root / "objective"
     git(main, "worktree", "add", "-b", "orca/issue-7", str(worktree))
     return main, worktree
+
+
+class IssueReopenTimelineTests(unittest.TestCase):
+    def request(self):
+        return ["api", "graphql", "-f", "query=" + ISSUE_REOPEN_QUERY, "-f", "owner=acme",
+                "-f", "name=widgets", "-F", "number=7"]
+
+    def response(self):
+        return {"data": {"repository": {"nameWithOwner": "acme/widgets", "issue": {
+            "number": 7, "url": "https://github.com/acme/widgets/issues/7", "timelineItems": {"nodes": [
+                {"__typename": "ReopenedEvent", "createdAt": "2026-10-23T09:03:56Z"}]}}}}}
+
+    def test_latest_reopen_is_one_exact_bounded_read_only_query(self):
+        with patch.object(GhPort, "_gh", return_value=completed(json.dumps(self.response()))) as command:
+            result = GhPort(None).issue_reopened_at(repository="acme/widgets", number=7)
+        self.assertEqual(result, "2026-10-23T09:03:56Z")
+        command.assert_called_once_with(self.request(), mutation=False)
+        self.assertTrue(gh_allowed(self.request()))
+        self.assertIn("timelineItems(last:1,itemTypes:[REOPENED_EVENT])", ISSUE_REOPEN_QUERY)
+        for request in ([*self.request(), "--paginate"],
+                        [*self.request()[:3], "query=" + ISSUE_REOPEN_QUERY.replace("last:1", "last:100"), *self.request()[4:]],
+                        [*self.request()[:3], "query=" + ISSUE_REOPEN_QUERY + " mutation{}", *self.request()[4:]],
+                        [*self.request()[:5], "owner=acme/other", *self.request()[6:]]):
+            self.assertFalse(gh_allowed(request))
+
+    def test_empty_timeline_remains_absent_and_zoned_event_is_normalized(self):
+        response = self.response()
+        nodes = response["data"]["repository"]["issue"]["timelineItems"]["nodes"]
+        nodes[0]["createdAt"] = "2026-10-23T10:03:56+01:00"
+        with patch.object(GhPort, "_gh_json", return_value=response):
+            self.assertEqual(GhPort(None).issue_reopened_at(repository="acme/widgets", number=7), "2026-10-23T09:03:56Z")
+        nodes.clear()
+        with patch.object(GhPort, "_gh_json", return_value=response):
+            self.assertIsNone(GhPort(None).issue_reopened_at(repository="acme/widgets", number=7))
+
+    def test_inconsistent_identity_partial_errors_and_extra_nodes_refuse(self):
+        for field in ("repository", "number", "url", "errors", "count", "event", "missing", "time", "naive"):
+            with self.subTest(field=field):
+                response = self.response(); repo = response["data"]["repository"]; issue = repo["issue"]
+                nodes = issue["timelineItems"]["nodes"]
+                if field == "repository": repo["nameWithOwner"] = "other/widgets"
+                elif field == "number": issue["number"] = 8
+                elif field == "url": issue["url"] = "https://github.com/other/widgets/issues/7"
+                elif field == "errors": response["errors"] = [{"message": "partial result"}]
+                elif field == "count": nodes *= 2
+                elif field == "event": nodes[0]["__typename"] = "ClosedEvent"
+                elif field == "missing": nodes[0].pop("createdAt")
+                elif field == "time": nodes[0]["createdAt"] = "unknown"
+                else: nodes[0]["createdAt"] = "2026-10-23T09:03:56"
+                with patch.object(GhPort, "_gh_json", return_value=response), self.assertRaises(PodError) as caught:
+                    GhPort(None).issue_reopened_at(repository="acme/widgets", number=7)
+                self.assertEqual(caught.exception.code, "gh_contract")
+
+    def test_unreadable_timeline_is_not_reported_as_no_reopen(self):
+        with patch.object(GhPort, "_gh", return_value=completed(returncode=1)), self.assertRaises(PodError) as caught:
+            GhPort(None).issue_reopened_at(repository="acme/widgets", number=7)
+        self.assertEqual(caught.exception.code, "remote_read_failed")
 
 
 class IssuePort:

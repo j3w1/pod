@@ -235,11 +235,11 @@ def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None
     from .pod_mapping import observe, read_current, scope_hash
     if context is not None and observe_mapping:
         observe(context, ledger, source, body, mapping_check=mapping_check)
-    lines = {str(number): [line["ticked"] for line in rows] for number, rows in pod_lines(body).items()}
+    lines = {str(number): [line["ticked"] for line in rows] for number, rows in pod_lines(body, seal=source.get("role") == "SEAL").items()}
     ledger["facts"] = {"source": digest(source), "body_sha256": _hash(body), "lines": lines,
                        "blocks": {str(number): [block["sha256"] for block in blocks]
-                                  for number, blocks in pod_blocks(body).items()}}
-    ledger["facts"]["mapping_scope_sha256"] = scope_hash(body)
+                                  for number, blocks in pod_blocks(body, seal=source.get("role") == "SEAL").items()}}
+    ledger["facts"]["mapping_scope_sha256"] = scope_hash(body, seal=source.get("role") == "SEAL")
     ledger["facts"]["mapping_source_current"] = read_current(source, body, mapping_check)
     ledger["read"] = {"status": "read", "reason": None}
     if context is not None:
@@ -316,7 +316,7 @@ def bind_criterion_scopes(state: dict, previous: dict, *, verified: dict | None 
                 entry = {key: deepcopy(value) for key, value in retained.items() if key != "proofs"}
                 entry["definition"] = row["definition"]
             earlier = {**row, "receipts": [], "evidence": []}
-        number = pod_ref_number(row.get("source", {}).get("ref"))
+        number = pod_ref_number(row.get("source", {}).get("ref"), seal=(source or {}).get("role") == "SEAL")
         blocks = facts.get("blocks", {}).get(str(number), [])
         observed = None
         if (facts.get("source") == digest(source) and len(blocks) == 1
@@ -383,7 +383,7 @@ def mapping(map_state: dict | None, *, source: dict | None = None, facts: dict |
     ctx = {"pod_mapping_source": source, "pod_mapping_facts": facts, "pod_mapping_read": read or {}}
     result = {}
     for criterion in (map_state or {}).get("obligations", []):
-        number = pod_ref_number(effective_ref(criterion, ctx))
+        number = pod_ref_number(effective_ref(criterion, ctx), seal=(source or {}).get("role") == "SEAL")
         if number is not None:
             result.setdefault(number, []).append(criterion)
     return result
@@ -561,13 +561,15 @@ def _block(exc: PodError, *, row: str = "B2") -> dict:
 
 
 def _source_check(result: dict) -> None:
-    # CLOSED takes precedence for ticks even when the ordinary recheck reports
-    # body drift first. There is no allow_closed path for this operation.
-    reason = ("closed_issue_requires_intent_reconciliation" if result.get("state") == "CLOSED"
-              else result.get("reason"))
+    completed = result.get("state") == "CLOSED" and result.get("state_reason") == "COMPLETED"
+    material = result.get("body_changed") or result.get("amendment_changed")
+    if completed and not material:
+        return  # Completion ends no proof or authorship checks, and needs no reopen.
+    reason = (result.get("reason") if completed and material else
+              "closed_issue_requires_intent_reconciliation" if result.get("state") == "CLOSED" else result.get("reason"))
     if result.get("state") == "CLOSED" or result["status"] != "current":
-        raise PodError("issue_reconciliation_required", "Reconcile the bound PES source before ticking",
-                       {"reason": reason})
+        raise PodError("issue_reconciliation_required", "The project lead must reconcile the bound source before ticking",
+                       {"reason": reason, "next_action": "the project lead restores current source facts; completed-source ticks need no owner decision"})
 
 
 class _ReadbackPort:
@@ -639,9 +641,9 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
     except PodError as exc:
         request["block"] = _block(exc, row="A3" if exc.code == "repository_mismatch" else
                                   "B5" if exc.code == "issue_access_unavailable" else "B3"
-                                  if (exc.detail or {}).get("reason") == "closed_issue_requires_intent_reconciliation" else "B2")
+                                  if (exc.detail or {}).get("reason") in ("closed_issue_requires_intent_reconciliation", "closed_issue_not_completed") else "B2")
         if live is not None:
-            lines = pod_lines(live["body"]).get(pod, [])
+            lines = pod_lines(live["body"], seal=source.get("role") == "SEAL").get(pod, [])
             request["readback"] = {"body_sha256": _hash(live["body"]), "state": live["state"],
                                    "ticked": lines[0]["ticked"] if len(lines) == 1 else None}
         # This is a new, pre-send refusal, not a result for an existing intent.
@@ -665,7 +667,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                     unread = {"status": "not_read", "reason": exc.code}
                     mapping_changed = mapping_changed or ticks["read"] != unread
                     ticks["read"] = unread
-            if row is not None or live is not None and pod in pod_lines(live["body"]):
+            if row is not None or live is not None and pod in pod_lines(live["body"], seal=source.get("role") == "SEAL"):
                 ticks["requests"][key] = deepcopy(request)
                 if live is not None:
                     _facts(ticks, {**source, "body_sha256": _hash(live["body"])}, live["body"],
@@ -691,8 +693,8 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
         pending = next((row for row in ledger["requests"].values() if row["phase"] != "completed"), None)
         if pending is not None:
             raise _pending_error(pending, "Recover the pending PoD request before another tick")
-        lines = pod_lines(body).get(pod, [])
-        if not lines and pod not in mapping(store.map_of(state)) and key not in ledger["authors"]:
+        lines = pod_lines(body, seal=source.get("role") == "SEAL").get(pod, [])
+        if not lines and pod not in mapping(store.map_of(state), source=source) and key not in ledger["authors"]:
             raise PodError("line_missing", "No PoD line, mapping or authorship for this number",
                            {"pod": pod, "direction": request["direction"],
                             "code": "line_missing", "reason": "line_missing", "row": "C2",
@@ -712,7 +714,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
             if row is None or not row["criteria"] and not lines[0]["ticked"]:
                 request["block"] = {"code": "unmapped", "reason": "unmapped", "row": "D1"}
         else:
-            intended = flip_pod_checkbox(body, lines[0]["offset"], row["direction"] == "tick")
+            intended = flip_pod_checkbox(body, lines[0]["offset"], row["direction"] == "tick", seal=source.get("role") == "SEAL")
             request.update(intended=_hash(intended), phase="intent", readback=None, intent_at=time())
         ledger["requests"][key] = request
         store._write(path, state)
@@ -817,13 +819,13 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
         if failure is not None:
             request["block"] = _block(failure, row="A3" if failure.code == "repository_mismatch" else "B5"
                                       if failure.code == "issue_access_unavailable" else "B3"
-                                      if (failure.detail or {}).get("reason") == "closed_issue_requires_intent_reconciliation" else "B2")
+                                      if (failure.detail or {}).get("reason") in ("closed_issue_requires_intent_reconciliation", "closed_issue_not_completed") else "B2")
         elif held_refusal:
             request["block"] = {"code": "github_write_refused", "reason": "github_write_refused", "row": "E2",
                                 "status": result["status"], "message": result.get("message", "")}
         else:
             request["block"] = None
-        states = pod_lines(live["body"]).get(int(key), []) if live else []
+        states = pod_lines(live["body"], seal=source.get("role") == "SEAL").get(int(key), []) if live else []
         request.update(phase="result" if live is None else "completed", result=result,
                        readback={"body_sha256": now, "state": live["state"] if live else None,
                                  "ticked": states[0]["ticked"] if len(states) == 1 else None})
@@ -859,7 +861,8 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
     receipt = {"pod": int(key), "direction": request["direction"], "before": request["before"],
                "intended": request["intended"], "result": result,
                "readback": request["readback"], "rebind": rebind,
-               "authorship": ledger["authors"].get(key, "not_pod"), "recovered": recovering}
+               "authorship": ledger["authors"].get(key, "not_pod"), "recovered": recovering,
+               "source_completed": bool(checked and checked.get("state") == "CLOSED" and checked.get("state_reason") == "COMPLETED")}
     if failure is not None:
         failure.detail = {**(failure.detail or {}), "receipt": receipt, "pod_ticks": view}
         raise failure

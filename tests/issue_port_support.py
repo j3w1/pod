@@ -22,6 +22,7 @@ class RecordingIssuePort:
     def __init__(self, *, title="PES: Implement widgets", body="- [ ] **PoD#1",
                  state="OPEN", amendments=None, updated="2026-10-01T00:00:00Z"):
         self.title, self.body, self.state, self.updated = title, body, state, updated
+        self.state_reason = None
         self.amendments = deepcopy(amendments) if amendments is not None else {}
         self.calls = []
         self.writes = []
@@ -46,7 +47,7 @@ class RecordingIssuePort:
             self._readback_pending = False
             if self.readback_override is not None:
                 body, self.readback_override = self.readback_override, None
-        return {"number": number, "title": self.title, "body": body, "state": self.state,
+        return {"number": number, "title": self.title, "body": body, "state": self.state, "stateReason": self.state_reason,
                 "url": f"https://github.com/{repository}/issues/{number}", "updatedAt": self.updated}
 
     def amendment(self, *, repository, number, comment):

@@ -948,6 +948,10 @@ class ChainTests(ClosureCase):
         self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
                          ("closed", "closed"))
         self.assertEqual((self.swept(result, "successor")["party"], result["counts"]["closed"]), (None, 2))
+        source = self.swept(result, "successor")["source_issues"][0]
+        self.assertEqual((source["outcome"], source["prior_condition"], source["observed_with"]),
+                         ("already_completed", "source_changed", "objective"))
+        self.assertEqual(self.swept(result)["source_issues"][0]["outcome"], "closed")
         # The continued predecessor keeps reading continued, with its own entry beside its frozen record.
         shown = self.status()
         self.assertEqual((shown["readiness"]["state"], shown["evidence_closure"]["relation"],
@@ -1444,8 +1448,14 @@ class SweepTests(ClosureCase):
                          (0, "pod-cli/v5", "swept", 2))
         self.assertEqual([sorted(row) for row in result["repositories"]],
                          [["objectives", "path", "reason", "repo_key", "repository", "status"]] * 2)
-        self.assertEqual({tuple(sorted(row)) for repository in result["repositories"]
-                          for row in repository["objectives"]}, {("conditions", "objective", "outcome", "party")})
+        for repository in result["repositories"]:
+            for row in repository["objectives"]:
+                expected = {"conditions", "objective", "outcome", "party"}
+                if row["outcome"] == "closed":
+                    expected |= {"source_issues", "parents_open"}
+                    self.assertIsInstance(row["source_issues"], list)
+                    self.assertIsInstance(row["parents_open"], list)
+                self.assertEqual(set(row), expected)
         self.assertTrue(result["next_safe_action"])
         self.assertEqual(result["counts"], {"closed": 2, "already_closed": 0, "not_proved": 1, "unverified": 1,
                                             "skipped": 0})
@@ -1640,7 +1650,7 @@ class SweepTests(ClosureCase):
                              code="cleanup_worker_unavailable")
                 self.assertEqual(self.everything(), before)
 
-    def test_the_sweep_needs_no_terminal_or_run_binding_and_mutates_nothing(self):
+    def test_the_sweep_needs_no_terminal_or_run_binding_and_only_completes_its_source(self):
         self.shipped()
         os.environ.pop("ORCA_TERMINAL_HANDLE", None)
         self.binding_failure = True  # No Run binding either: run-current fails.
@@ -1652,6 +1662,9 @@ class SweepTests(ClosureCase):
         self.assertNotIn(["orchestration", "run-current", "--json"], self.native_calls)
         self.assertEqual((len(self.port.starts), self.mutations), (starts, []))
         self.assertFalse([call for call in self.remote.calls[calls:] if call[0] in MUTATIONS])
+        self.assertEqual([call for call in self.remote.calls[calls:] if call[0] == "issue_close"],
+                         [("issue_close", "acme/example", 82)])
+        self.assertEqual(self.swept(result)["source_issues"][0]["outcome"], "closed")
         self.assertEqual(git(self.project, "for-each-ref"), refs)
         added = set(self.everything()) - set(before)
         self.assertEqual([name.rsplit("/", 1)[1] for name in added], [FILE])

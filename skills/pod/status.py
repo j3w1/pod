@@ -363,7 +363,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     except PodError as exc:
         result.update({"status": "blocked", "blocker": exc.code,
                        "next_safe_action": ("Run internal record-compaction for this exact project and objective; "
-                                            "owner-scoped detection can read an over-limit record." if exc.code == "record_too_large"
+                                            "bounded detection by the project lead can read an over-limit record." if exc.code == "record_too_large"
                                             else "inspect the objective state")})
         if objective is not None:
             result["readiness"] = unavailable(exc.code, f"the objective record cannot be read ({exc.code})")

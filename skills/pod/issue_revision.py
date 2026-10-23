@@ -121,15 +121,16 @@ def _lines(project: Path, source: dict) -> dict[str, str]:
     if (type(live.get("number")) is not int or live["number"] != source["number"]
             or identity != {key: source[key] for key in ("repository", "number", "locator")}):
         raise refuse("live_source_identity")
-    return {ref: block["text"] for ref, block in _source_blocks(live["body"]).items()}
+    return {ref: block["text"] for ref, block in _source_blocks(
+        live["body"], seal=source.get("role") == "SEAL").items()}
 
 
-def _source_blocks(body: str) -> dict:
+def _source_blocks(body: str, *, seal: bool = False) -> dict:
     from .github import pod_blocks
-    lines = pod_blocks(body)
+    lines = pod_blocks(body, seal=seal)
     if not lines or len(lines) > 64 or any(len(rows) != 1 for rows in lines.values()):
         raise refuse("source_pod_mapping")
-    return {f"PoD#{number}": rows[0]
+    return {f"{'AC' if seal and rows[0]['text'].startswith('**AC') else 'PoD#'}{number}": rows[0]
             for number, rows in lines.items()}
 
 
@@ -140,10 +141,10 @@ def source_check(ref: str, text: str) -> str:
     return f"{ref} complete source block sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
 
 
-def criteria_view(body: str) -> dict:
+def criteria_view(body: str, *, seal: bool = False) -> dict:
     """Bounded current-body DATA on the existing intake read, never approval."""
     try:
-        blocks = _source_blocks(body)
+        blocks = _source_blocks(body, seal=seal)
     except PodError:
         return {"status": "unavailable", "reason": "source_pod_mapping", "criteria": []}
     return {"status": "ready", "reason": None, "criteria": [
@@ -339,7 +340,8 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
                       if slot["acceptance"] is not None)
     if set(bodies) - referenced:
         raise refuse("body_data_unreferenced")
-    parsed = {key: pod_blocks(body) for key, body in bodies.items()}
+    seal = (prior.get("objective_source") or {}).get("role") == "SEAL"
+    parsed = {key: pod_blocks(body, seal=seal) for key, body in bodies.items()}
     resolved, retained = {}, {}
     for row in rows:
         fact = {"id": row["id"], "definition": row["definition"], "status": "unknown",
@@ -362,7 +364,7 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
                 recovered = []
                 for binding in bindings:
                     blocks = parsed.get(binding["body_sha256"], {}).get(
-                        pod_ref_number(row.get("source", {}).get("ref")), [])
+                        pod_ref_number(row.get("source", {}).get("ref"), seal=seal), [])
                     if len(blocks) != 1:
                         break
                     recovered.append({"definition": row["definition"], "source_digest": binding["source_digest"],
@@ -395,7 +397,8 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
                 reason = "historical_body_unavailable"
                 break
             for source_digest, source in available:
-                blocks = parsed[source["body_sha256"]].get(pod_ref_number(row.get("source", {}).get("ref")), [])
+                blocks = parsed[source["body_sha256"]].get(
+                    pod_ref_number(row.get("source", {}).get("ref"), seal=seal), [])
                 if len(blocks) != 1:
                     reason = "prior_pod_scope_unavailable"
                     break
@@ -548,8 +551,10 @@ class Revision:
         self.criteria = [current[key] for key in self.lines]
         from .pod_ticks import mapping
         from .github import pod_ref_number
-        mapped = mapping({"obligations": rows, "revision_decisions": [{"operation": OPERATION, "criteria": self.criteria}]})
-        expected = {pod_ref_number(item["ref"]): item["id"] for item in self.criteria}
+        mapped = mapping({"obligations": rows, "revision_decisions": [
+            {"operation": OPERATION, "criteria": self.criteria}]}, source=self.source)
+        expected = {pod_ref_number(item["ref"], seal=self.source.get("role") == "SEAL"): item["id"]
+                    for item in self.criteria}
         if (set(mapped) != set(expected) or any(len(mapped[number]) != 1
                 or mapped[number][0]["id"] != key for number, key in expected.items())):
             raise refuse("current_source_mapping_ambiguous")
@@ -636,9 +641,11 @@ def _validate_decision(row: dict, checkpoint: dict) -> None:
     if not isinstance(row["criteria"], list) or not row["criteria"] or len(row["criteria"]) > 64:
         raise refuse("stored_criteria_mapping")
     ids, refs = set(), set()
+    ref_prefix = r"(?:PoD#|AC)" if row["source"].get("role") == "SEAL" else r"PoD#"
     for criterion in row["criteria"]:
         exact(criterion, {"id", "ref", "check", "definition"}, {"id", "ref", "check"}, name="issue criterion mapping")
-        if criterion["id"] in ids or criterion["ref"] in refs or not re.fullmatch(r"PoD#(?:0|[1-9][0-9]{0,8})", criterion["ref"]):
+        if (criterion["id"] in ids or criterion["ref"] in refs
+                or not re.fullmatch(ref_prefix + r"(?:0|[1-9][0-9]{0,8})", criterion["ref"])):
             raise refuse("stored_criteria_mapping")
         obligations._ident(criterion["id"], "criterion")
         bounded_text(criterion["check"], name="criterion check", limit=512)

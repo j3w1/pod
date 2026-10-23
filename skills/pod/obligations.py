@@ -2014,6 +2014,12 @@ def _close(state: dict, ctx: dict) -> dict:
                      next_action="settle each pending or UNKNOWN Governor row from Pod's readback with "
                                  "governor-reconcile, or record its outcome with the evidence it needs, then close")
     closure = {"seq": state["seq"], "revision": state["revision"]}
+    # The ledger supplies the clock only to a new write; replay retains the recorded instant verbatim.
+    recorded = state.get("closure")
+    stamp = recorded.get("at") if recorded is not None else ctx.get("closure_at")
+    if stamp is not None:
+        from .util import normalize_timestamp
+        closure["at"] = normalize_timestamp(stamp, field="Closure time", code="obligation_invalid")
     if ctx.get("closure_preserved"):
         # Superseded derived validations a delivered objective's closure preserved UNKNOWN (C11); the journal
         # keeps them exactly as recorded.
@@ -2027,7 +2033,11 @@ PRESERVED_FIELDS = {"record", "kind", "recorded", "outcome", "reason", "pr", "me
 
 def _closure_record(value: object) -> dict:
     """A stored closure: its sequence, revision and report, and optionally the rows it preserved (C11)."""
-    closed = _exact(value, CLOSURE_FIELDS | {"preserved"}, CLOSURE_FIELDS, "closure")
+    closed = _exact(value, CLOSURE_FIELDS | {"preserved", "at"}, CLOSURE_FIELDS, "closure")
+    if "at" in closed:
+        from .util import normalize_timestamp
+        if normalize_timestamp(closed["at"], field="Closure time", code="obligation_invalid") != closed["at"]:
+            raise refuse("obligation_invalid", "malformed", "closure retains its recorded UTC time", record="closure")
     rows = closed.get("preserved")
     if "preserved" in closed and (
             not isinstance(rows, list) or not 0 < len(rows) <= 64
@@ -2455,11 +2465,20 @@ def serialization_flags(prior: dict | None, state: dict) -> list[dict]:
     return flags
 
 
+def retained_history(state: dict) -> list[dict]:
+    """Read-only counts of the fully hydrated history on frozen rows."""
+    return [{"id": ob["id"], "state": ob["state"], "retained_receipts": len(ob.get("receipts", [])),
+             "retained_findings": len(ob.get("findings", []))}
+            for ob in state["obligations"] if ob["state"] in FROZEN]
+
+
 def status_projection(state: dict | None, ctx: dict) -> dict:
     """Human and JSON status for the map: every state with its referent."""
     if not isinstance(state, dict) or state.get("obligations") is None:
         return {"map": None, "lines": ["Map        none (kernel inert)"]}
     rows = state["obligations"]
+    retained = retained_history(state)
+    history = {row["id"]: row for row in retained}
     counts = {name: sum(ob["state"] == name for ob in rows) for name in STATES}
     lines = [f"Objective  rev {state['revision']} · seq {state['seq']} · "
              + ("closed" if state.get("closure") else "open"),
@@ -2482,6 +2501,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                 detail += " (" + channel["channel"] + ("; earlier record" if channel.get("channel_recorded") is False else "") + ")"
         else:
             detail = ob.get("check") or ob.get("resolves") or ""
+        if ob["id"] in history:
+            counts_kept = history[ob["id"]]
+            detail = f"{counts_kept['retained_receipts']} receipt(s), {counts_kept['retained_findings']} finding(s) retained; " + detail
         lines.append(f"  {ob['id']:<4} {ob['state']:<16} {detail}"[:160])
     for key, row in sorted(_admissions(ctx).items()):
         if row.get("role") == "implement" and row.get("disposition"):
@@ -2513,6 +2535,7 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                     "coordinator_slot": state.get("coordinator_slot"),
                     "quiescence": state.get("quiescence"), "closure": state.get("closure"),
                     "delivery": state.get("delivery"),
+                    "retained_history": retained,
                     "observations": state.get("observations"), "label": label,
                     "obligations": [{"id": ob["id"], "state": ob["state"],
                                      "referent": referent(ob),
