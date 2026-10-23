@@ -775,6 +775,206 @@ class DiscoveryTests(WindowCase):
         self.assertEqual(handoff.run_scope(self.project, "objective", "run")["unreadable"], 12)
         self.assertEqual(self.snapshot(), before)
 
+    def compacted_history_respects_deadline(self, *, peer, cost="chunks"):
+        from pod import history
+        from pod.ledger import _write
+        from tests.history_support import synthetic_state
+        self.establish(admissions=False)
+        path = objective_root(self.project, "synthetic-capacity") / "context.json"
+        _write(path, synthetic_state())  # The production writer creates real immutable history chunks.
+        logical = history.load_context(path)
+        self.assertIn("history", json.loads(path.read_text()))
+        self.lose()
+        clock, starts, load = {"now": 0.0}, [], history.ChunkStore._load
+        context_bytes, directory, open_file = history._context_bytes, history.ChunkStore.directory, os.open
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        def spend():
+            starts.append(clock["now"])
+            clock["now"] += 3.0  # Cost per real file operation; checks themselves never advance time.
+
+        def measured_open(*args, **kwargs):
+            spend()
+            return open_file(*args, **kwargs)
+
+        def measured(store, *args, **kwargs):
+            if cost == "chunks":
+                spend()
+            return load(store, *args, **kwargs)
+
+        def measured_context(*args, **kwargs):
+            if cost != "context":
+                return context_bytes(*args, **kwargs)
+            with patch("pod.history.os.open", side_effect=measured_open):
+                return context_bytes(*args, **kwargs)
+
+        @contextmanager
+        def measured_directory(store, *args, **kwargs):
+            if cost == "history":
+                with patch("pod.history.os.open", side_effect=measured_open), \
+                        directory(store, *args, **kwargs) as fd:
+                    yield fd
+            else:
+                with directory(store, *args, **kwargs) as fd:
+                    yield fd
+
+        before = self.snapshot()
+        rows = [{"objective": "objective" if peer else "synthetic-capacity", "phase": "open"}]
+        with patch.object(window, "Budget", Clock), patch.object(history.ChunkStore, "_load", measured), \
+                patch.object(history, "_context_bytes", side_effect=measured_context), \
+                patch.object(history.ChunkStore, "directory", measured_directory):
+            window.discover(rows, project=self.project)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.host_requests, [])
+        self.assertEqual(self.mutations, [])
+        self.assertTrue(starts)
+        self.assertTrue(all(start < window.DISCOVERY_SECONDS for start in starts), starts)
+        continuation = rows[0].get("continuation", {})
+        self.assertEqual((continuation.get("status"), continuation.get("condition")),
+                         ("unknown", "discovery_budget"))
+        # Exiting discovery resets its deadline; ordinary hydration still proves the complete logical record.
+        self.assertEqual(history.load_context(path), logical)
+
+    def test_one_deadline_stops_compacted_peer_chunk_reads(self):
+        self.compacted_history_respects_deadline(peer=True)
+
+    def test_one_deadline_stops_compacted_objective_reread_chunk_reads(self):
+        self.compacted_history_respects_deadline(peer=False)
+
+    def test_one_deadline_stops_context_directory_reads(self):
+        self.compacted_history_respects_deadline(peer=False, cost="context")
+
+    def test_one_deadline_stops_history_directory_reads(self):
+        self.compacted_history_respects_deadline(peer=True, cost="history")
+
+    def verifier_setting_spends_budget(self, *, reread):
+        from pod import config
+        self.establish(admissions=False)
+        self.lose()
+        clock, settings, read_yaml = {"now": 0.0}, [], config.read_yaml
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        def setting(*args, **kwargs):
+            settings.append(clock["now"])
+            result = read_yaml(*args, **kwargs)
+            if len(settings) == (2 if reread else 1):
+                clock["now"] = window.DISCOVERY_SECONDS
+            return result
+
+        before = self.snapshot()
+        with patch.object(window, "Budget", Clock), patch.object(config, "read_yaml", side_effect=setting):
+            continuation = self.listed()
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "discovery_budget"))
+        self.assertEqual(len(settings), 2 if reread else 1)
+        self.assertEqual(self.host_requests, [])
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.mutations, [])
+        if not reread:
+            self.assertEqual(self.native_calls, [])
+
+    def test_one_deadline_includes_the_initial_verifier_setting(self):
+        self.verifier_setting_spends_budget(reread=False)
+
+    def test_one_deadline_checks_the_verifier_setting_reread(self):
+        self.verifier_setting_spends_budget(reread=True)
+
+    def test_spent_objective_reread_prevents_worktree_metadata_reads(self):
+        from pod import ledger
+        self.establish(admissions=False)
+        self.lose()
+        clock, starts, load, is_dir = {"now": 0.0}, [], ledger.read, Path.is_dir
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        def reread(*args, **kwargs):
+            result = load(*args, **kwargs)
+            clock["now"] = window.DISCOVERY_SECONDS
+            return result
+
+        def directory(path):
+            starts.append(clock["now"])
+            return is_dir(path)
+
+        with patch.object(window, "Budget", Clock), patch.object(ledger, "read", side_effect=reread), \
+                patch.object(Path, "is_dir", directory):
+            continuation = self.listed()
+        self.assertTrue(all(start < window.DISCOVERY_SECONDS for start in starts), starts)
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "discovery_budget"))
+        self.assertEqual(self.host_requests, [])
+
+    def test_one_deadline_checks_each_scope_directory_metadata_read(self):
+        from pod import handoff
+        from pod.ledger import state_root
+        self.establish(admissions=False)
+        for index in range(12):
+            peer = state_root(self.project) / f"incomplete-peer-{index}"
+            peer.mkdir()
+            (peer / "context.json").write_text("{}")
+        clock, starts, scan = {"now": 0.0}, [], os.scandir
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        class Entry:
+            def __init__(self, entry):
+                self.entry, self.name, self.path = entry, entry.name, entry.path
+
+            def observe(self, function, *args, **kwargs):
+                starts.append(clock["now"])
+                clock["now"] += 3.0
+                return function(*args, **kwargs)
+
+            def is_symlink(self):
+                return self.observe(self.entry.is_symlink)
+
+            def is_dir(self, **kwargs):
+                return self.observe(self.entry.is_dir, **kwargs)
+
+        @contextmanager
+        def directory(path):
+            with scan(path) as entries:
+                yield (Entry(entry) for entry in entries)
+
+        with patch("pod.handoff.os.scandir", side_effect=directory):
+            with self.assertRaises(PodError) as caught:
+                handoff.run_scope(self.project, "objective", "run", budget=Clock(window.DISCOVERY_SECONDS))
+        self.assertEqual(caught.exception.code, "discovery_budget")
+        self.assertTrue(starts)
+        self.assertTrue(all(start < window.DISCOVERY_SECONDS for start in starts), starts)
+
+    def test_spent_verifier_request_budget_prevents_the_verifier_process(self):
+        self.establish(admissions=False)
+        self.lose()
+        clock, request = {"now": 0.0}, window._request
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = seconds
+
+        def measured(*args, **kwargs):
+            result = request(*args, **kwargs)
+            clock["now"] = window.DISCOVERY_SECONDS
+            return result
+
+        with patch.object(window, "Budget", Clock), patch.object(window, "_request", side_effect=measured):
+            continuation = self.listed()
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "discovery_budget"))
+        self.assertEqual(self.host_requests, [])
+
     def test_scope_checks_the_budget_between_retained_history_validations(self):
         from pod import ledger, obligations
         self.establish(admissions=False)

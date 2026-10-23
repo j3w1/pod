@@ -225,6 +225,7 @@ def _request(project: Path, objective: str, state: dict, facts: dict) -> dict:
 def verify_window(project: Path, objective: str, state: dict, facts: dict) -> dict:
     """The host's verified window verdict, or a lead-task refusal naming why not. Read-only on both sides."""
     from . import relay
+    from .orca import _DEADLINE
     command = _verifier(project)
     if not command:
         raise _refusal("window_verifier_unavailable", "no authorization_verifier is configured.")
@@ -232,6 +233,7 @@ def verify_window(project: Path, objective: str, state: dict, facts: dict) -> di
         request = _request(project, objective, state, facts)
     except PodError as exc:
         raise _refusal("window_unverified", f"the repository target could not be derived ({exc.code}).") from None
+    _step(_DEADLINE.get(), need=relay.TIMEOUT_S)
     try:
         verdict = relay.verify(command, request)
     except PodError as exc:
@@ -430,7 +432,10 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("objective_retired", "the owner's historical retirement ended this objective.", definitive=True)
     from .evidence_closure import present
     from .ledger import objective_root
-    if present(objective_root(project, objective)):
+    _step(budget)
+    root = objective_root(project, objective)
+    _step(budget)
+    if present(root):
         return fail("objective_closed", "the objective was closed by evidence.", definitive=True)
     if checkpoint.get("closure"):
         return fail("objective_closed", "the objective is closed.", definitive=True)
@@ -496,8 +501,11 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     try:
         if not recorded.is_dir():
             raise PodError("worktree_binding_changed", "missing")
+        _step(budget)
         _check_worktree_binding(recorded, workspace)
-    except PodError:
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
         return fail("worktree_changed", "the recorded worktree is missing, or its repository, key or branch differs.",
                     definitive=True)
     if not objective_only:
@@ -594,6 +602,8 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         try:
             result["window"] = verify_window(project, objective, state, facts)
         except PodError as exc:
+            if exc.code == DEADLINE_SPENT:
+                raise
             return fail(exc.detail["condition"], str(exc).split(": ", 1)[-1])
     if not objective_only:
         try:
@@ -769,10 +779,18 @@ def _public(verdict: dict) -> dict:
 def _verifier(project: Path) -> list | None:
     """The configured authorization verifier: one read of the personal configuration, and of nothing else (R108)."""
     from .config import personal_path, read_yaml
+    from .orca import _DEADLINE
+    budget = _DEADLINE.get()
+    _step(budget)
     try:
-        document = read_yaml(personal_path(project))
-    except PodError:
+        path = personal_path(project)
+        _step(budget)
+        document = read_yaml(path)
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
         return None
+    _step(budget)
     return (document or {}).get("authorization_verifier") or None
 
 
@@ -821,12 +839,25 @@ def discover(rows: list[dict], *, project: Path) -> None:
     opened = [row for row in rows if row.get("phase") == "open"]
     # Outside a live Orca terminal the list reads nothing more; inside one, only the verifier setting decides whether
     # a window route exists, and with none the list stays record-only.
-    if not opened or not os.environ.get("ORCA_TERMINAL_HANDLE") or not _enabled(project):
+    if not opened or not os.environ.get("ORCA_TERMINAL_HANDLE"):
         return
     budget = Budget(DISCOVERY_SECONDS)
     # Every Orca read from here, the first runtime read included, ends by the budget's deadline.
     with read_deadline(budget):
+        try:
+            if not _enabled(project):
+                return
+        except PodError as exc:
+            for row in opened:
+                _discovery_unknown(row, exc.code, "the bounded check did not finish")
+            return
         _discover(opened, project=project, budget=budget)
+
+
+def _discovery_unknown(row: dict, condition: str, message: str) -> None:
+    row["continuation"] = {"status": "unknown", "condition": condition,
+                           "message": "continuation unknown: " + message,
+                           "next_action": "pod status --objective " + row["objective"]}
 
 
 def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
@@ -834,10 +865,7 @@ def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
     from .operations import OrcaPort
     from .orca import current_run
 
-    def unknown(row: dict, condition: str, message: str) -> None:
-        row["continuation"] = {"status": "unknown", "condition": condition,
-                               "message": "continuation unknown: " + message,
-                               "next_action": "pod status --objective " + row["objective"]}
+    unknown = _discovery_unknown
 
     try:
         runtime = current_run(timeout=DISCOVERY_RUNTIME_TIMEOUT)["runtime"]
@@ -854,8 +882,13 @@ def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
             continue
         try:
             state = read(project, row["objective"])
+            budget.check()
             runtimes = set(_run_references(state).values()) if state else set()
-        except (PodError, KeyError, TypeError, OSError):
+        except PodError as exc:
+            if exc.code == DEADLINE_SPENT:
+                unknown(row, exc.code, "the bounded check did not finish")
+            continue
+        except (KeyError, TypeError, OSError):
             continue
         if not state or not state.get("checkpoint") or not runtimes or runtimes == {runtime}:
             continue
