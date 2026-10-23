@@ -44,6 +44,10 @@ def _check_worktree_binding(project: Path, binding: dict | None, current: dict |
     if current is None:
         from .github import repository_context
         current = repository_context(project, fresh=True)
+    from .orca import _DEADLINE
+    budget = _DEADLINE.get()
+    if budget is not None:
+        budget.check()
     current_repository = current["repository"]
     expected_repository = binding.get("repository")
     repository_matches = (current_repository is None and expected_repository is None

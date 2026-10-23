@@ -12,10 +12,12 @@ evidence. Every refusal is a task for the project lead, never an owner question.
 from __future__ import annotations
 
 from copy import deepcopy
+from contextvars import copy_context
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
+from threading import Lock, Thread
 
 from .errors import PodError
 from .orca import DEADLINE_SPENT
@@ -47,6 +49,9 @@ OBJECTIVE_LOSS = frozenset({"objective_continued", "objective_retired", "objecti
                             "identity_differs"})
 DISCOVERY_SECONDS = 15.0
 DISCOVERY_RUNTIME_TIMEOUT = 3
+# Only the listing thread takes this nonblocking startup guard; the worker never holds it.
+_DISCOVERY_START = Lock()
+_DISCOVERY_WORKER: Thread | None = None
 # A failed, timed-out or partial read leaves eligibility unproved: the list says `continuation unknown`, never a refusal.
 UNPROVED = frozenset({"runtime_unreadable", "owner_unreadable", "run_unverified", "workers_unreadable",
                       "scope_unreadable", "window_unverified", "binding_unstable", "peer_closure_unverified"})
@@ -234,6 +239,8 @@ def verify_window(project: Path, objective: str, state: dict, facts: dict) -> di
     try:
         request = _request(project, objective, state, facts)
     except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
         raise _refusal("window_unverified", f"the repository target could not be derived ({exc.code}).") from None
     _step(_DEADLINE.get(), need=relay.TIMEOUT_S)
     try:
@@ -280,10 +287,10 @@ def _receipt(project: Path, value: dict, *, consume: bool) -> None:
 # --------------------------------------------------------------------------- native reads
 
 class Budget:
-    """One bound on a discovery's wall time, the deadline of every Orca read inside `orca.read_deadline(budget)`.
+    """Discovery's publication deadline and cooperative early-stop budget.
 
-    Each read's timeout is clamped to the time left and none starts once it is spent, so no read outlives the budget;
-    local steps check it before they start, and the verifier starts only while its whole timeout still fits."""
+    A read can block past this deadline; the listing thread stops waiting and discards unfinished or late rows.
+    Native timeouts and local checks reduce work; the verifier needs its whole timeout before starting."""
 
     def __init__(self, seconds: float):
         import time
@@ -506,7 +513,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         _step(budget)
         _check_worktree_binding(recorded, workspace)
     except PodError as exc:
-        if exc.code == DEADLINE_SPENT:
+        if exc.code == DEADLINE_SPENT or budget is not None and exc.code != "worktree_binding_changed":
             raise
         return fail("worktree_changed", "the recorded worktree is missing, or its repository, key or branch differs.",
                     definitive=True)
@@ -794,7 +801,7 @@ def _verifier(project: Path) -> list | None:
         _step(budget)
         document = read_yaml(path)
     except PodError as exc:
-        if exc.code == DEADLINE_SPENT:
+        if exc.code == DEADLINE_SPENT or budget is not None:
             raise
         return None
     _step(budget)
@@ -842,23 +849,69 @@ def discover(rows: list[dict], *, project: Path) -> None:
     no window question and is left as it was. A failed, slow, partial or over-budget read never fails the list: the row
     reads `unknown` with its reason. Eligibility is the objective's; the command still checks its caller.
     """
+    from .github import repository_reads
     from .orca import read_deadline
+    global _DISCOVERY_WORKER
     opened = [row for row in rows if row.get("phase") == "open"]
     # Outside a live Orca terminal the list reads nothing more; inside one, only the verifier setting decides whether
     # a window route exists, and with none the list stays record-only.
     if not opened or not os.environ.get("ORCA_TERMINAL_HANDLE"):
         return
     budget = Budget(DISCOVERY_SECONDS)
-    # Every Orca read from here, the first runtime read included, ends by the budget's deadline.
-    with read_deadline(budget):
+    private = deepcopy(opened)
+    completed = [None] * len(private)
+    positions = {id(row): index for index, row in enumerate(private)}
+
+    def publish(row):
+        snapshot = deepcopy(row)
+        budget.check()
+        # One assignment publishes a completed snapshot. The list never reads the worker's mutable rows.
+        completed[positions[id(row)]] = snapshot
+
+    def work():
         try:
-            if not _enabled(project):
-                return
-        except PodError as exc:
+            # Context copies can share mutable values: give this worker its own repository identity cache.
+            with read_deadline(budget), repository_reads(isolated=True):
+                if _enabled(project):
+                    _discover(private, project=project, budget=budget, publish=publish)
+                else:
+                    for row in private:
+                        publish(row)
+        except BaseException as exc:
+            for index, row in enumerate(private):
+                if completed[index] is None:
+                    condition = exc.code if isinstance(exc, PodError) else "discovery_failed"
+                    reason = condition if isinstance(exc, PodError) else type(exc).__name__
+                    _discovery_unknown(row, condition, f"a read failed ({reason})")
+                    try:
+                        publish(row)
+                    except PodError:
+                        break  # No late result, including an exception, may become a verdict.
+
+    with read_deadline(budget):
+        context = copy_context()
+    worker = None
+    if _DISCOVERY_START.acquire(blocking=False):
+        try:
+            if _DISCOVERY_WORKER is None or not _DISCOVERY_WORKER.is_alive():
+                worker = Thread(target=context.run, args=(work,), daemon=True,
+                                name="pod-window-discovery")
+                _DISCOVERY_WORKER = worker
+                worker.start()
+        except Exception as exc:
             for row in opened:
-                _discovery_unknown(row, exc.code, "the bounded check did not finish")
+                _discovery_unknown(row, "discovery_failed", f"the discovery worker could not start ({type(exc).__name__})")
             return
-        _discover(opened, project=project, budget=budget)
+        finally:
+            _DISCOVERY_START.release()
+    if worker is not None:
+        worker.join(max(0.0, budget.remaining()))
+    for index, row in enumerate(opened):
+        snapshot = completed[index]
+        if snapshot is None:
+            _discovery_unknown(row, DEADLINE_SPENT, "the bounded check did not finish")
+        elif "continuation" in snapshot:
+            row["continuation"] = snapshot["continuation"]
 
 
 def _discovery_unknown(row: dict, condition: str, message: str) -> None:
@@ -867,7 +920,7 @@ def _discovery_unknown(row: dict, condition: str, message: str) -> None:
                            "next_action": "pod status --objective " + row["objective"]}
 
 
-def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
+def _discover(opened: list[dict], *, project: Path, budget: Budget, publish) -> None:
     from .ledger import read, _run_references
     from .operations import OrcaPort
     from .orca import current_run
@@ -878,55 +931,64 @@ def _discover(opened: list[dict], *, project: Path, budget: Budget) -> None:
         runtime = current_run(timeout=DISCOVERY_RUNTIME_TIMEOUT)["runtime"]
     except PodError as exc:
         for row in opened:
-            unknown(row, "orca_unreadable", f"Orca's current runtime could not be read ({exc.code})")
+            unknown(row, exc.code if exc.code == DEADLINE_SPENT else "orca_unreadable",
+                    f"Orca's current runtime could not be read ({exc.code})")
+            publish(row)
         return
     calls = 0
     for row in opened:
         try:
-            budget.check()
-        except PodError as exc:
-            unknown(row, exc.code, "the bounded check did not finish")
-            continue
-        try:
-            state = read(project, row["objective"])
-            budget.check()
-            runtimes = set(_run_references(state).values()) if state else set()
-        except PodError as exc:
-            if exc.code == DEADLINE_SPENT:
+            try:
+                budget.check()
+            except PodError as exc:
                 unknown(row, exc.code, "the bounded check did not finish")
-            continue
-        except (KeyError, TypeError, OSError):
-            continue
-        if not state or not state.get("checkpoint") or not runtimes or runtimes == {runtime}:
-            continue
-        workspace = (state["checkpoint"].get("worktree") or {}).get("path")
-        where = Path(workspace) if isinstance(workspace, str) and Path(workspace).is_dir() else project
-        try:
-            budget.check()
-            verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True, verify=False,
-                             budget=budget)
-            if verdict["status"] == "window_available" and not verdict.get("admission_read_failures"):
-                if calls >= DISCOVERY_CALLS:
-                    raise PodError(DEADLINE_SPENT, "The discovery verifier budget is spent")
-                calls += 1
-                verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True,
+                continue
+            try:
+                state = read(project, row["objective"])
+                budget.check()
+                runtimes = set(_run_references(state).values()) if state else set()
+            except PodError as exc:
+                unknown(row, exc.code, "the bounded check did not finish" if exc.code == DEADLINE_SPENT
+                        else f"a read failed ({exc.code})")
+                continue
+            except (KeyError, TypeError, OSError) as exc:
+                unknown(row, "discovery_failed", f"a read failed ({type(exc).__name__})")
+                continue
+            if not state or not state.get("checkpoint") or not runtimes or runtimes == {runtime}:
+                continue
+            workspace = (state["checkpoint"].get("worktree") or {}).get("path")
+            where = Path(workspace) if isinstance(workspace, str) and Path(workspace).is_dir() else project
+            try:
+                budget.check()
+                verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True, verify=False,
                                  budget=budget)
-        except PodError as exc:
-            unknown(row, exc.code, "the bounded check did not finish" if exc.code == DEADLINE_SPENT
-                    else f"a read failed ({exc.code})")
-            continue
-        if verdict["condition"] in QUIET:
-            continue
-        if verdict["status"] == "window_available" and verdict.get("admission_read_failures"):
-            unknown(row, "workers_unreadable", "; ".join(verdict["admission_read_failures"][:4]))
-            continue
-        if verdict["status"] != "window_available" and verdict["condition"] in UNPROVED:
-            # A read that failed is no refusal: the objective's eligibility is unknown until a read succeeds.
-            unknown(row, verdict["condition"], verdict["message"].rstrip("."))
-            continue
-        row["continuation"] = {"status": "available" if verdict["status"] == "window_available" else "unavailable",
-                               **{key: verdict[key] for key in ("condition", "message", "next_action", "command", "cwd",
-                                                                "pending") if key in verdict}}
+                if verdict["status"] == "window_available" and not verdict.get("admission_read_failures"):
+                    if calls >= DISCOVERY_CALLS:
+                        raise PodError(DEADLINE_SPENT, "The discovery verifier budget is spent")
+                    calls += 1
+                    verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True,
+                                     budget=budget)
+            except PodError as exc:
+                unknown(row, exc.code, "the bounded check did not finish" if exc.code == DEADLINE_SPENT
+                        else f"a read failed ({exc.code})")
+                continue
+            if verdict["condition"] in QUIET:
+                continue
+            if verdict["status"] == "window_available" and verdict.get("admission_read_failures"):
+                unknown(row, "workers_unreadable", "; ".join(verdict["admission_read_failures"][:4]))
+                continue
+            if verdict["status"] != "window_available" and verdict["condition"] in UNPROVED:
+                # A read that failed is no refusal: the objective's eligibility is unknown until a read succeeds.
+                unknown(row, verdict["condition"], verdict["message"].rstrip("."))
+                continue
+            row["continuation"] = {"status": "available" if verdict["status"] == "window_available" else "unavailable",
+                                   **{key: verdict[key] for key in ("condition", "message", "next_action", "command", "cwd",
+                                                                    "pending") if key in verdict}}
+        except BaseException as exc:
+            condition = exc.code if isinstance(exc, PodError) else "discovery_failed"
+            unknown(row, condition, f"a read failed ({type(exc).__name__})")
+        finally:
+            publish(row)
 
 
 # --------------------------------------------------------------------------- public command

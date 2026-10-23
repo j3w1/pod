@@ -8104,7 +8104,23 @@
         "tests.test_discovery_git_budget.GitBudgetChecks.test_an_early_timeout_keeps_the_original_failure",
         "tests.test_discovery_git_budget.GitBudgetChecks.test_without_a_deadline_errors_are_unchanged",
         "tests.test_discovery_git_budget.ReadTests.test_an_explicit_timeout_stays_below_both_limits",
-        "tests.test_discovery_git_budget.LocalGitTests.test_an_explicit_timeout_stays_below_both_limits"
+        "tests.test_discovery_git_budget.LocalGitTests.test_an_explicit_timeout_stays_below_both_limits",
+        "tests.test_discovery_bound.BoundTests.test_worker_has_private_rows_copied_context_and_isolated_repository_cache",
+        "tests.test_discovery_bound.BoundTests.test_late_available_verdict_is_discarded",
+        "tests.test_discovery_bound.BoundTests.test_late_refusal_is_discarded",
+        "tests.test_discovery_bound.BoundTests.test_only_rows_completed_before_the_deadline_are_applied",
+        "tests.test_discovery_bound.BoundTests.test_blocking_read_does_not_hold_the_list_past_its_deadline",
+        "tests.test_discovery_bound.BoundTests.test_a_second_call_starts_no_worker_while_the_first_read_is_blocked",
+        "tests.test_discovery_bound.BoundTests.test_initial_worker_exceptions_become_unknown_with_a_reason",
+        "tests.test_discovery_bound.BoundTests.test_row_worker_exceptions_become_unknown_with_a_reason",
+        "tests.test_discovery_bound.BoundTests.test_discovery_writes_no_file_cache_or_temporary_and_takes_no_file_lock",
+        "tests.test_discovery_bound.BoundTests.test_repository_deadline_is_rethrown_before_fallback_or_binding_refusal",
+        "tests.test_discovery_bound.BoundTests.test_request_target_deadline_is_not_translated_to_window_unverified",
+        "tests.test_discovery_bound.BoundTests.test_late_repository_identity_is_not_compared_as_a_definite_binding",
+        "tests.test_discovery_bound.BoundTests.test_repeated_catalog_reads_can_finish_late_without_publishing_a_verdict",
+        "tests.test_discovery_bound.BoundTests.test_worker_start_failure_is_unknown",
+        "tests.test_discovery_bound.BoundTests.test_unreadable_inventory_never_proves_a_worktree_refusal",
+        "tests.test_discovery_bound.BoundTests.test_in_memory_inventory_preserves_control_characters_in_worktree_paths"
       ],
       "status": "NOT_RUN"
     }

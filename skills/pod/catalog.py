@@ -182,10 +182,12 @@ def _default() -> tuple[dict, dict]:
     except OSError as exc:
         raise PodError("invalid_catalog", "Catalog cannot be read") from exc
     stamp = (info.st_ino, info.st_size, info.st_mtime_ns)
-    if _DEFAULT is None or _DEFAULT[0] != stamp:
+    snapshot = _DEFAULT
+    if snapshot is None or snapshot[0] != stamp:
         document = load()
-        _DEFAULT = (stamp, document, _index(document))
-    return _DEFAULT[1], _DEFAULT[2]
+        snapshot = (stamp, document, _index(document))
+        _DEFAULT = snapshot
+    return snapshot[1], snapshot[2]
 
 
 def _doc(document: dict | None) -> dict:
