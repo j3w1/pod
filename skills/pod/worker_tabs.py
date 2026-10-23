@@ -219,8 +219,9 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if admission.get("report") is None:
         from .util import route_hold, route_discarded, route_next_action
         if route_discarded(admission):
-            next_step = (f"Project lead: admission {admission['admission_id']} was terminally discarded; "
-                         "preserve its correction follow-up in the successor or repository task. "
+            follow_up = ("preserve its correction follow-up in the successor or repository task"
+                         if recorded_settlement else "its corrections remain in this objective's map")
+            next_step = (f"Project lead: admission {admission['admission_id']} was terminally discarded; {follow_up}. "
                          "This unreported tab has no standing close command.")
         elif recorded_settlement and route_hold(admission):
             next_step = route_next_action(admission, ended=True)

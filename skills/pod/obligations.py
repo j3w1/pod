@@ -1128,12 +1128,14 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     reopen = value.get("reopen") is True
     if reopen and authority is not None:
         owner_decision(authority, kind="question" if authority_kind == "question" else "reopen")
+    if closed and "route_settlements" in value:
+        held = [row for row in _admissions(ctx).values() if route_hold(row)]
+        raise refuse("objective_closed", "objective_closed", "a closed objective accepts no route settlement",
+                     record="route settlements", next_action=" ".join(
+                         route_next_action(row, ended=True) for row in held or [{}]))
     if closed and not (user and reopen):
         raise refuse("objective_closed", "objective_closed", "the objective is closed",
                      closure_revision=prior_map["closure"]["revision"])
-    if closed and "route_settlements" in value:
-        raise refuse("objective_closed", "objective_closed", "a closed objective accepts no route settlement",
-                     record="route settlements")
     if prior_map is not None and "obligations" not in value:
         # A checkpoint that leaves the map unchanged still revalidates it against current facts.
         value = {**value, "obligations": deepcopy(prior_map["obligations"])}

@@ -168,8 +168,9 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   follow-up in the successor or repository task; this ended record accepts no
   settlement write and supplies no close command.
 - For a terminally discarded, unreported review or investigation tab, the
-  project lead preserves its correction follow-up in the successor or repository
-  task. This tab has no standing close command.
+  corrections remain in this objective's map while it is open. After the record
+  ends, the project lead preserves its correction follow-up in the successor or
+  repository task. This tab has no standing close command.
 - For other unreported user-owned or external tabs, while the objective is open,
   recording the report makes the authorized close available, even if an
   implementation result was discarded. Until then, give no close command.

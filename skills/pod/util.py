@@ -496,12 +496,15 @@ def route_next_action(row: dict, *, ended: bool = False) -> str:
     implementation = row.get("role") == "implement"
     replacement = ("for an implementation, disposition it and record route_settlements basis redone "
                    "for a qualifying replacement; " if implementation else "")
-    decision = ("use decision accept with ordinary disposition integrated_into, or decision discard with ordinary disposition discarded"
-                if implementation else
-                "use decision accept for the later route evidence while the consumed report stands as recorded"
-                if row.get("report") is not None else
-                "use decision discard after native settlement, with corrections listing every known required finding as an ordinary correction id "
-                "(or [] with a reason explaining why none are known)")
+    if implementation:
+        decision = "use decision discard with ordinary disposition discarded"
+        if row.get("report") is not None or (row.get("result") or {}).get("base") is None:
+            decision = "use decision accept with ordinary disposition integrated_into, or decision discard with ordinary disposition discarded"
+    elif row.get("report") is not None:
+        decision = "use decision accept for the later route evidence while the consumed report stands as recorded"
+    else:
+        decision = ("use decision discard after native settlement, with corrections listing every known required finding as an ordinary correction id "
+                    "(or [] with a reason explaining why none are known)")
     return (f"Project lead: for admission {key}, consume its report with internal report after a matching readback; "
             + replacement + "otherwise record route_settlements basis lead_decision with the lead's source and "
             "reason in internal checkpoint: " + decision + ". " + LEAD_ROUTE_AUTHORITY)

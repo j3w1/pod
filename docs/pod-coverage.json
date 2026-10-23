@@ -4888,6 +4888,8 @@
         "tests.test_worker_tab_endings.RouteMismatchTabTests.test_open_external_route_mismatch_names_lead_before_and_after_discard",
         "tests.test_worker_tab_endings.RouteMismatchTabTests.test_start_receipt_only_mismatch_accepts_report_and_supplies_close",
         "tests.test_worker_tab_endings.RouteMismatchTabTests.test_discarded_start_receipt_only_mismatch_accepts_report_and_supplies_close",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_review_tab_keeps_corrections_on_open_and_ended_records",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_investigation_tab_keeps_corrections_on_open_and_ended_records",
         "tests.test_route_settlements.RouteWordingTests.test_every_route_mismatch_surface_names_lead_exact_step_and_no_owner",
         "tests.test_route_settlements.CapacityGuidanceTests.test_capacity_referent_and_next_action_name_the_same_held_admission",
         "tests.test_route_settlements.RenewalGuidanceTests.test_route_held_implementation_names_disposition_before_route_settlement",
@@ -8271,7 +8273,9 @@
       ],
       "offline_test": [
         "tests.test_route_settlements.ExplicitSettlementTests.test_lead_accept_needs_integration_and_releases_without_changing_observations",
-        "tests.test_route_settlements.ExplicitSettlementTests.test_lead_discard_releases_an_unreported_implementation_only_with_disposition"
+        "tests.test_route_settlements.ExplicitSettlementTests.test_lead_discard_releases_an_unreported_implementation_only_with_disposition",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_git_result_offers_only_discard_or_redone_lead_steps",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_result_without_git_base_offers_accept_by_attestation"
       ],
       "status": "NOT_RUN"
     },
@@ -8322,6 +8326,7 @@
         "tests.test_route_settlements.MatchingReportTests.test_refused_report_map_does_not_settle_the_route",
         "tests.test_route_settlements.ReviewDiscardTests.test_invalid_discard_cannot_release_a_same_write_renewal",
         "tests.test_route_settlements.SettlementReadTests.test_closed_map_refuses_settlement_even_with_reopen_authority",
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_closed_route_hold_status_names_the_lead_and_preserves_the_hold",
         "tests.test_route_settlements.SettlementReadTests.test_runtime_rebind_keeps_settlement_and_consumed_report_identity"
       ],
       "status": "NOT_RUN"
@@ -8354,7 +8359,11 @@
         "tests.test_route_settlements.CapacityGuidanceTests.test_capacity_referent_and_next_action_name_the_same_held_admission",
         "tests.test_route_settlements.RenewalGuidanceTests.test_route_held_implementation_names_disposition_before_route_settlement",
         "tests.test_route_settlements.RenewalGuidanceTests.test_matching_report_still_needs_implementation_disposition_before_renewal",
-        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_closed_route_hold_status_names_the_lead_and_preserves_the_hold"
+        "tests.test_worker_tab_endings.RouteMismatchTabTests.test_closed_route_hold_status_names_the_lead_and_preserves_the_hold",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_git_result_offers_only_discard_or_redone_lead_steps",
+        "tests.test_route_settlements.ExplicitSettlementTests.test_unreported_result_without_git_base_offers_accept_by_attestation",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_review_tab_keeps_corrections_on_open_and_ended_records",
+        "tests.test_route_settlements.ReviewDiscardTests.test_discarded_investigation_tab_keeps_corrections_on_open_and_ended_records"
       ],
       "status": "NOT_RUN"
     },

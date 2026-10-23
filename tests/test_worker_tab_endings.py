@@ -176,9 +176,15 @@ class RouteMismatchTabTests(EndedTabAssertions, TabCase):
         self.assertEqual(report.exception.code, "objective_closed")
         lead = {"admission": key, "basis": "lead_decision", "decision": "discard",
                 "source": {"reference": "repository-task/lead-decision"}, "reason": "the lead discards this result"}
-        with self.assertRaises(PodError) as checkpoint:
-            self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, route_settlements=[lead])
-        self.assertEqual(checkpoint.exception.code, "objective_closed")
+        for extra in ({}, {"reopen": True, "revision_authority": {"provenance": "user_direct", "instruction": "reopen"}}):
+            with self.subTest(reopen=bool(extra)), self.assertRaises(PodError) as checkpoint:
+                self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, route_settlements=[lead], **extra)
+            error = checkpoint.exception
+            self.assertEqual(error.code, "objective_closed")
+            self.assertEqual(error.detail["referent"], {"record": "route settlements"})
+            self.assertEqual(error.detail["next_action"], view["next_action"])
+            for unavailable in ("owner", "user", "reopen", "internal report", "internal checkpoint"):
+                self.assertNotIn(unavailable, error.detail["next_action"].lower())
         self.assertEqual(self.saved(), before)
         self.assertTrue(route_hold(read(self.project, "objective")["admissions"][key]))
 

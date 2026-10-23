@@ -270,9 +270,40 @@ class ExplicitSettlementTests(SettlementCase):
         self.assert_held(admission)
         self.c.report(admission, frozen, map=self.parked())
         self.flag(admission, frozen)
+        self.assertIn("decision accept with ordinary disposition integrated_into", route_next_action(self.row(admission)))
         self.refused_write("disposition_required", route_settlements=[self.lead(admission, "accept")])
         self.c.write(dispositions=[self.dispose(admission, "integrated_into")], route_settlements=[self.lead(admission, "accept")])
         self.assert_released(admission, "lead_decision")
+
+    def test_unreported_git_result_offers_only_discard_or_redone_lead_steps(self):
+        admission, frozen = self.original()
+        row = self.row(admission)
+        self.assertIsNone(row["report"])
+        self.assertIsNotNone(row["result"]["base"])
+        action = route_next_action(row)
+        self.assertIn("decision discard with ordinary disposition discarded", action)
+        self.assertIn("route_settlements basis redone", action)
+        self.assertNotIn("decision accept", action)
+        self.assertNotIn("integrated_into", action)
+        self.refused_write("disposition_invalid", **self.parked(),
+            dispositions=[self.dispose(admission, "integrated_into")], route_settlements=[self.lead(admission, "accept")])
+        self.flag(admission, frozen)
+        self.c.write(**self.parked(), dispositions=[self.dispose(admission)], route_settlements=[self.lead(admission)])
+        self.assertFalse(route_hold(self.row(admission)))
+        self.assertIsNone(self.row(admission)["report"])
+
+    def test_unreported_result_without_git_base_offers_accept_by_attestation(self):
+        admission, _ = self.original()
+        # Model the admission metadata of an implementation outside Git.
+        update_admission(self.c.project, "objective", owner="owner", admission_id=admission["admission_id"],
+                         update=lambda row: row["result"].update(base=None))
+        self.assertIn("decision accept with ordinary disposition integrated_into", route_next_action(self.row(admission)))
+        self.c.write(**self.parked(), dispositions=[self.dispose(admission, "integrated_into")],
+                     route_settlements=[self.lead(admission, "accept")])
+        row = self.row(admission)
+        self.assertEqual(row["disposition"]["validated"], "attestation")
+        self.assertIsNone(row["report"])
+        self.assertFalse(route_hold(row))
 
     def test_lead_discard_releases_an_unreported_implementation_only_with_disposition(self):
         admission, _ = self.original()
@@ -443,6 +474,54 @@ class ReviewDiscardTests(SettlementCase):
         self.assertEqual(next(row for row in self.c.stored() if row["id"] == "C")["check"], correction["check"])
         self.assertEqual(self.row(admission)["route_decision"]["settlements"][-1]["corrections"], ["C"])
 
+    def discarded_tab_guidance(self, role):
+        from pod.worker_tabs import project
+        serves = "A" if role == "review" else "S"
+        fields = {"resolves": "which correction is required?", "stop_condition": "a supported correction is identified"}
+        admission, _ = self.original((serves,), role=role, **(fields if role == "investigate" else {}))
+        correction = {"id": "C", "kind": "correction", "provenance": "coordinator", "parent": "A",
+                      "check": "repair the required finding from the refused attempt", **deepcopy(WAIT)}
+        rows = [dict(row, **deepcopy(WAIT)) if row["id"] == serves else row for row in self.c.stored()]
+        next(row for row in rows if row["id"] == serves).pop("executor", None)
+        self.c.write([*rows, correction], route_settlements=[self.lead(admission, corrections=["C"])])
+        row = self.row(admission)
+        binding = row["native_binding"]
+        before = self.files()
+        for ownership in ("user_owned", "external"):
+            facts = {"terminal_ownership": {"ownershipState": ownership, "releaseState": "released",
+                     "ownerDispatchId": binding["dispatchId"]},
+                     "terminal_readback": {"connected": True, "handle": binding["terminalHandle"]}}
+            for ended in (None, "closure", "continued_by", "historical_retirement"):
+                with self.subTest(ownership=ownership, ended=ended):
+                    state = self.state()
+                    if ended == "closure":
+                        state["checkpoint"]["closure"] = {"revision": state["checkpoint"]["revision"]}
+                    elif ended:
+                        state[ended] = {"recorded": True}
+                    tab = project(state, row, facts, settled=True)
+                    self.assertEqual(tab["row"], ownership)
+                    self.assertIsNone(tab["command"])
+                    self.assertIn("Project lead:", tab["wording"])
+                    self.assertIn(admission["admission_id"], tab["wording"])
+                    self.assertIn("no standing close command", tab["wording"])
+                    if ended:
+                        self.assertIn("successor or repository task", tab["wording"])
+                        self.assertNotIn("this objective's map", tab["wording"])
+                    else:
+                        self.assertIn("its corrections remain in this objective's map", tab["wording"])
+                        self.assertNotIn("successor or repository task", tab["wording"])
+                    for unavailable in ("owner", "reopen", "internal report", "internal checkpoint"):
+                        self.assertNotIn(unavailable, tab["wording"].lower())
+                    self.assertEqual(next(ob for ob in state["checkpoint"]["obligations"] if ob["id"] == "C")["check"],
+                                     correction["check"])
+        self.assertEqual(self.files(), before)
+
+    def test_discarded_review_tab_keeps_corrections_on_open_and_ended_records(self):
+        self.discarded_tab_guidance("review")
+
+    def test_discarded_investigation_tab_keeps_corrections_on_open_and_ended_records(self):
+        self.discarded_tab_guidance("investigate")
+
     def test_terminal_discard_refuses_every_later_report_before_native_reads(self):
         admission, frozen = self.review()
         self.c.write(**self.parked(["A"]), route_settlements=[self.discard(admission)])
@@ -568,11 +647,15 @@ class SettlementReadTests(SettlementCase):
         from pod.obligations import accept_write
         prior = self.state()["checkpoint"]
         prior["closure"] = {"revision": prior["revision"]}
-        with self.assertRaises(PodError) as caught:
-            accept_write(prior, {"reopen": True, "revision_authority": {"provenance": "user_direct", "instruction": "reopen"},
-                                 "route_settlements": []}, {})
-        self.assertEqual(caught.exception.code, "objective_closed")
-        self.assertEqual(caught.exception.detail["referent"], {"record": "route settlements"})
+        for extra in ({}, {"reopen": True, "revision_authority": {"provenance": "user_direct", "instruction": "reopen"}}):
+            with self.subTest(reopen=bool(extra)), self.assertRaises(PodError) as caught:
+                accept_write(prior, {"route_settlements": [], **extra}, {})
+            self.assertEqual(caught.exception.code, "objective_closed")
+            self.assertEqual(caught.exception.detail["referent"], {"record": "route settlements"})
+            self.assertIn("Project lead:", caught.exception.detail["next_action"])
+            self.assertIn("accepts no settlement write", caught.exception.detail["next_action"])
+            for unavailable in ("owner", "user", "reopen"):
+                self.assertNotIn(unavailable, caught.exception.detail["next_action"].lower())
 
     def test_admission_settlement_refusal_names_the_record(self):
         from pod.obligations import _route_settlements
@@ -666,37 +749,50 @@ class RouteWordingTests(unittest.TestCase):
             started = case.start("wording", frozen)
         admission = started["admission"]; key = admission["admission_id"]
         ack = acknowledge("admission", {"project": str(case.project), "objective": "objective"}, started)
-        cls.wordings.append(("bind acknowledgement", ack["next_action"], key, "implementation"))
+        cls.wordings.append(("bind acknowledgement", ack["next_action"], key, "unreported implementation"))
         case.settle(admission); case.tab_case = "external"
         with patch.object(case.port, "effective", {"agent": "codex", "model": "gpt-6-luna", "effort": "medium"}):
             try:
                 case.report(admission, frozen)
             except PodError as exc:
-                cls.wordings.append(("report refusal", exc.detail["next_action"], key, "implementation"))
+                cls.wordings.append(("report refusal", exc.detail["next_action"], key, "unreported implementation"))
         try:
             consume_report(case.project, "objective", owner="owner", admission_id=key, observation=None, route_mismatch=True)
         except PodError as exc:
-            cls.wordings.append(("consume refusal", exc.detail["next_action"], key, "implementation"))
+            cls.wordings.append(("consume refusal", exc.detail["next_action"], key, "unreported implementation"))
         cls.wordings.append(("Governor vocabulary", NEXT_ACTIONS["route_mismatch"], "<holding-admission>", "implementation"))
         prepared = case.op("governor-prepare", unit="default",
                            branch={"remote": "origin", "branch": "delivery", "base": "target"})["candidate"]
         case.authorization = {"schema": "pod-authorization/v1", "candidate": prepared["commit"], "tree": prepared["tree"],
             "scope": ["publish"], "authorized_by": "owner", "utc": "2026-01-01T00:00:00Z", "reference": "fixture-authorization"}
         governor = case.op("governor", action=case.action())
-        cls.wordings.append(("Governor action", governor["next_action"], key, "implementation"))
+        cls.wordings.append(("Governor action", governor["next_action"], key, "unreported implementation"))
         for reason in governor["reasons"]:
             if reason["code"] == "route_mismatch":
-                cls.wordings.append(("Governor reason", reason["detail"], key, "implementation"))
+                cls.wordings.append(("Governor reason", reason["detail"], key, "unreported implementation"))
         view = case.status()
-        cls.wordings.extend((name, text, key, "implementation") for name, text in (
+        cls.wordings.extend((name, text, key, "unreported implementation") for name, text in (
             ("status safe action", view["next_safe_action"]), ("status action", view["next_action"]),
             ("worker tab", view["worker_tabs"][0]["wording"]),
             ("map finalization", case.op("map")["finalization"]["next_action"])))
+        try:
+            case.write(renew=[{"id": "S", "as": "S2", **deepcopy(WAIT)}])
+        except PodError as exc:
+            cls.wordings.append(("implementation renewal refusal", exc.detail["next_action"], key, "unreported implementation"))
         case.write(case.finished_rows(), dispositions=[{"admission": key, "discarded": True, "reason": "superseded"}], close=True)
         ended = case.status()
         cls.wordings.extend((name, text, key, "ended") for name, text in (
             ("ended worker tab", ended["worker_tabs"][0]["wording"]),
             ("ended status safe action", ended["next_safe_action"]), ("ended status action", ended["next_action"])))
+        lead = {"admission": key, "basis": "lead_decision", "decision": "discard",
+                "source": {"reference": "repository-task/lead-decision"}, "reason": "the lead discards this result"}
+        for name, extra in (("closed settlement refusal", {}), ("closed settlement refusal with reopen", {
+                "reopen": True, "revision_authority": {"provenance": "user_direct", "instruction": "reopen"}})):
+            try:
+                case.write(seq=read(case.project, "objective")["checkpoint"]["seq"] + 1,
+                           route_settlements=[lead], **extra)
+            except PodError as exc:
+                cls.wordings.append((name, exc.detail["next_action"], key, "ended"))
         review = TabCase(); review.setUp(); cls.addClassCleanup(review.doCleanups)
         review.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
             "check": "review", "scope": {"paths": ["src"]}, "question": "is src right?", "candidate": review.candidate,
@@ -730,18 +826,23 @@ class RouteWordingTests(unittest.TestCase):
         self.assertEqual({name for name, *_ in self.wordings}, {"bind acknowledgement", "report refusal", "consume refusal",
             "Governor vocabulary", "Governor action", "Governor reason", "status safe action", "status action", "worker tab",
             "map finalization", "ended worker tab", "ended status safe action", "ended status action", "capacity refusal",
-            "renewal refusal", "settled discarded worker tab"})
+            "renewal refusal", "implementation renewal refusal", "settled discarded worker tab", "closed settlement refusal",
+            "closed settlement refusal with reopen"})
         for name, text, admission, role in self.wordings:
             with self.subTest(surface=name):
                 self.assertIn("Project lead:", text)
                 self.assertIn(admission, text)
                 self.assertNotIn("owner", text.lower())
+                self.assertNotIn("user", text.lower())
+                self.assertNotIn("reopen", text.lower())
                 self.assertNotIn("; The coordinator relays", text)
                 if role == "discarded":
                     self.assertIn("terminally discarded", text)
                     self.assertIn("no standing close command", text)
                     self.assertNotIn("route_settlements", text)
                     self.assertNotIn("internal checkpoint", text)
+                    self.assertIn("its corrections remain in this objective's map", text)
+                    self.assertNotIn("successor or repository task", text)
                 elif role == "ended":
                     self.assertIn("successor or repository task", text)
                     self.assertIn("accepts no settlement write", text)
@@ -759,5 +860,9 @@ class RouteWordingTests(unittest.TestCase):
                         self.assertNotIn("decision accept", text)
                     else:
                         self.assertIn("route_settlements basis redone", text)
-                        self.assertIn("decision accept with ordinary disposition integrated_into", text)
+                        if role == "unreported implementation":
+                            self.assertNotIn("decision accept", text)
+                            self.assertNotIn("integrated_into", text)
+                        else:
+                            self.assertIn("decision accept with ordinary disposition integrated_into", text)
                         self.assertIn("decision discard with ordinary disposition discarded", text)
