@@ -135,6 +135,8 @@ class ReopenTimingTests(TickCase):
         before = self.saved()
         effect = close_source_issues(self.project, "objective")["source_issues"][0]
         self.assertEqual((effect["outcome"], effect["reason"]), ("unverified", "source_reopen_unverified"))
+        self.assertIn("project's supported process", effect["next_action"])
+        self.assertNotIn("restores", effect["next_action"])
         self.assertEqual(len(self.issue.closes), 1)
         self.assertEqual(self.saved(), before)
 

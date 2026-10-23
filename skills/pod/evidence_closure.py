@@ -1727,7 +1727,7 @@ def _close_source_issue(project: Path, objective: str, raw: dict, *, remote, wri
     effect["next_action"] = ("the bound source issue is completed" if effect["outcome"] in ("closed", "already_completed")
                              else "the project lead reconciles the source issue's explicit reopen after Pod's closure; Pod will not re-close it automatically"
                              if effect["outcome"] == "reopened"
-                             else "the project lead restores the latest reopen timeline and recorded Pod closure time, then runs pod sweep; no owner completion decision is needed"
+                             else "the project lead checks the reopen timeline and recorded Pod closure evidence, then reconciles source completion through the project's supported process; Pod leaves the source unchanged while ordering is unverified"
                              if effect.get("reason") == "source_reopen_unverified"
                              else "the project lead resolves the named source condition, then runs pod sweep; no owner completion decision is needed")
     for parent in out["parents_open"]:
