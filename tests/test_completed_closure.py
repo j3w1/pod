@@ -162,6 +162,12 @@ class SourcePort(RecordingIssuePort):
         self.closes = []
         self.close_result = "accepted"
         self.close_hook = None
+        self.reopened_at = "2099-01-01T00:00:00Z"
+        self.reopen_reads = []
+
+    def issue_reopened_at(self, *, repository, number):
+        self.reopen_reads.append((repository, number))
+        return self.reopened_at
 
     def issue_close(self, *, source):
         self.closes.append(deepcopy(source))

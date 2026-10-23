@@ -7762,7 +7762,9 @@
         "tests.test_closure_fixes_b.LinkedCompletionTests.test_unknown_ancestry_and_retargeting_never_exempt_closure",
         "tests.test_closure_fixes_b.LinkedCompletionTests.test_target_movement_during_linked_read_grants_no_exemption",
         "tests.test_closure_fixes_b.LinkedCompletionTests.test_unnecessary_refresh_names_closing_on_the_retained_baseline",
-        "tests.test_closure_fixes_b.LinkedCompletionTests.test_unmerged_or_wrong_target_link_never_grants_completion_currency"
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_unmerged_or_wrong_target_link_never_grants_completion_currency",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_checkpoint_closes_with_linked_delivery_after_runtime_and_governance_change",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_report_closes_with_linked_delivery_after_runtime_and_governance_change"
       ],
       "status": "NOT_RUN"
     },
@@ -7774,7 +7776,14 @@
       "offline_test": [
         "tests.test_completed_closure.GovernanceCompletionTests.test_default_retarget_and_unknown_ancestry_never_grant_the_exemption",
         "tests.test_completed_closure.GovernanceCompletionTests.test_combined_delivery_and_closure_cannot_skip_finalization",
-        "tests.test_closure_fixes_a.DeliveryOnlyTests.test_dispositions_do_not_receive_the_delivery_only_exemption"
+        "tests.test_closure_fixes_a.DeliveryOnlyTests.test_dispositions_do_not_receive_the_delivery_only_exemption",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_checkpoint_without_link_keeps_rebind_and_closure_unwritten",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_report_without_link_keeps_rebind_and_consumption_unwritten",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_unmerged_link_after_runtime_change_still_refuses_without_writes",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_changed_generation_cannot_use_the_completion_exemption",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_checkpoint_finalization_refusal_does_not_persist_a_proved_rebind",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_report_finalization_refusal_does_not_persist_rebind_or_consumption",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_proposed_map_cannot_replace_the_authority_joined_baseline"
       ],
       "status": "NOT_RUN"
     },
@@ -7789,7 +7798,11 @@
         "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together",
         "tests.test_closure_fixes_a.ClaimedSourceTests.test_ordinary_successor_closure_closes_and_acknowledges_predecessor_source",
         "tests.test_closure_fixes_a.SourceIntentTests.test_older_ordinary_closure_observes_completed_source_without_conversion",
-        "tests.test_closure_fixes_a.SourceIntentTests.test_older_ordinary_closure_cannot_authorize_a_new_source_write"
+        "tests.test_closure_fixes_a.SourceIntentTests.test_older_ordinary_closure_cannot_authorize_a_new_source_write",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_with_an_unreadable_claimed_predecessor",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_with_an_unknown_schema_claimed_predecessor",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_when_the_claimed_chain_exceeds_its_bound",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_report_closure_records_its_time_and_completes_a_preclosure_reopen"
       ],
       "status": "NOT_RUN"
     },
@@ -7802,7 +7815,9 @@
         "tests.test_completed_closure.SourceClosingTests.test_refused_close_is_acknowledged_and_sweep_retries_it",
         "tests.test_completed_closure.SourceClosingTests.test_lost_close_response_uses_readback_and_never_resends_a_completed_issue",
         "tests.test_completed_closure.SourceClosingTests.test_unlanded_close_is_unknown_then_retried_by_sweep",
-        "tests.test_closure_fixes_a.ClaimedSourceTests.test_sweep_retries_predecessor_source_after_ordinary_successor_close"
+        "tests.test_closure_fixes_a.ClaimedSourceTests.test_sweep_retries_predecessor_source_after_ordinary_successor_close",
+        "tests.test_closure_fixes_c1.ClaimedSweepTests.test_narrowed_predecessor_sweep_retries_its_source_through_the_closed_tail",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_preclosure_reopen_retries_after_the_first_close_is_refused"
       ],
       "status": "NOT_RUN"
     },
@@ -7816,9 +7831,24 @@
         "tests.test_completed_closure.SourceClosingTests.test_reopened_or_unclosed_objective_cannot_send_a_source_effect",
         "tests.test_completed_closure.SourceClosingTests.test_source_changed_during_immediate_read_prevents_the_effect",
         "tests.test_closure_fixes_a.SourceIntentTests.test_source_reopen_is_preserved_by_effect_and_repeated_sweeps",
-        "tests.test_closure_fixes_a.SourceIntentTests.test_reopened_source_never_gets_its_first_automatic_close_either",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_reopen_before_pod_closure_allows_its_first_automatic_close",
         "tests.test_closure_fixes_a.ClaimedSourceTests.test_tail_record_change_during_predecessor_read_fences_the_write",
-        "tests.test_closure_fixes_a.ClaimedSourceTests.test_evidence_closed_source_reopen_stays_open_in_sweep"
+        "tests.test_closure_fixes_a.ClaimedSourceTests.test_evidence_closed_source_reopen_stays_open_in_sweep",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_reopen_while_work_is_in_progress_closes_normally",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_reopen_after_recorded_closure_stays_open_across_repeated_sweeps",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_equal_reopen_and_closure_times_are_not_later_intent",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_unreadable_reopen_timeline_is_a_lead_task_without_a_send",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_absent_reopen_event_does_not_authorize_a_send",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_malformed_reopen_time_does_not_authorize_a_send",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_legacy_closure_without_a_time_does_not_reclose_a_reopened_source",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_closure_time_is_recorded_once_and_replayed_without_the_new_clock",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_persisted_closure_time_requires_a_canonical_utc_instant",
+        "tests.test_closure_fixes_c1.ClaimedSweepTests.test_evidence_closure_uses_its_recorded_time_for_a_preclosure_reopen",
+        "tests.test_github.IssueReopenTimelineTests.test_latest_reopen_is_one_exact_bounded_read_only_query",
+        "tests.test_github.IssueReopenTimelineTests.test_empty_timeline_remains_absent_and_zoned_event_is_normalized",
+        "tests.test_github.IssueReopenTimelineTests.test_inconsistent_identity_partial_errors_and_extra_nodes_refuse",
+        "tests.test_github.IssueReopenTimelineTests.test_unreadable_timeline_is_not_reported_as_no_reopen",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_shared_context_carries_the_current_utc_closure_timestamp"
       ],
       "status": "NOT_RUN"
     },
@@ -7834,7 +7864,8 @@
         "tests.test_completed_closure.SourceClosingTests.test_duplicate_ticked_criteria_still_refuse_source_completion",
         "tests.test_closure_fixes_a.SourceIntentTests.test_sweep_memoizes_shared_sources_and_parents_and_reports_each_parent_once",
         "tests.test_closure_fixes_a.SourceIntentTests.test_shared_reopened_source_has_one_lead_task_and_one_read_per_sweep",
-        "tests.test_closure_fixes_a.SourceIntentTests.test_repeated_repository_selection_shares_observations_and_lead_tasks"
+        "tests.test_closure_fixes_a.SourceIntentTests.test_repeated_repository_selection_shares_observations_and_lead_tasks",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_shared_reopened_source_reads_one_timeline_per_sweep"
       ],
       "status": "NOT_RUN"
     },
@@ -7918,7 +7949,8 @@
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_evidence_closure.UndeliveredTests.test_no_recorded_delivery_pull_request_stays_open",
         "tests.test_completed_closure.GovernanceCompletionTests.test_unproved_closing_currency_names_the_lead_and_preserves_bytes",
-        "tests.test_closure_fixes_b.LinkedCompletionTests.test_missing_link_names_supported_lead_work_without_an_impossible_r93_step"
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_missing_link_names_supported_lead_work_without_an_impossible_r93_step",
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_direct_completion_without_merge_names_a_blocked_project_lead_task"
       ],
       "status": "NOT_RUN"
     },

@@ -47,6 +47,10 @@ CLOSING_PRS_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repositor
     "nameWithOwner issue(number:$number){number url closedByPullRequestsReferences(first:17,includeClosedPrs:true){"
     "nodes{number url state mergedAt mergeCommit{oid} baseRefName baseRepository{nameWithOwner}} "
     "pageInfo{hasNextPage}}}}}")
+# Only the latest reopen matters: earlier events cannot change its ordering against Pod's closure.
+ISSUE_REOPEN_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){"
+    "nameWithOwner issue(number:$number){number url timelineItems(last:1,itemTypes:[REOPENED_EVENT]){"
+    "nodes{__typename ... on ReopenedEvent{createdAt}}}}}}")
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
 _ISSUE_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)/?\Z")
 _COMMENT_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)\Z")
@@ -195,7 +199,8 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
             return False
     if stdin is not None:
         return False
-    if (len(argv) == 10 and argv[:4] == ["api", "graphql", "-f", "query=" + CLOSING_PRS_QUERY]
+    if (len(argv) == 10 and argv[:3] == ["api", "graphql", "-f"]
+            and argv[3] in ("query=" + CLOSING_PRS_QUERY, "query=" + ISSUE_REOPEN_QUERY)
             and argv[4] == "-f" and argv[5].startswith("owner=") and _name(argv[5][6:])
             and argv[6] == "-f" and argv[7].startswith("name=") and _name(argv[7][5:])
             and argv[8] == "-F" and re.fullmatch(r"number=[1-9][0-9]{0,8}", argv[9])):
@@ -705,6 +710,33 @@ class GhPort:
             raise PodError("issue_identity_mismatch", "GitHub returned a different or incomplete issue")
         return {"number": number, "url": rows["url"], "state": rows["state"], "state_reason": rows.get("stateReason"),
                 "body": rows["body"]}
+
+    def issue_reopened_at(self, *, repository: str, number: int) -> str | None:
+        """One bounded, read-only query for this exact issue's latest reopen event."""
+        from .util import normalize_timestamp
+        owner, name = repository.split("/")
+        response = self._gh_json(["api", "graphql", "-f", "query=" + ISSUE_REOPEN_QUERY,
+                                  "-f", "owner=" + owner, "-f", "name=" + name, "-F", f"number={number}"])
+        try:
+            if response.get("errors"):
+                raise ValueError
+            repo = response["data"]["repository"]
+            issue = repo["issue"]
+            identity = parse_issue_locator(issue["url"])
+            nodes = issue["timelineItems"]["nodes"]
+            if (repo["nameWithOwner"].casefold() != repository.casefold()
+                    or type(issue["number"]) is not int or issue["number"] != number
+                    or identity["number"] != number or identity["repository"].casefold() != repository.casefold()
+                    or not isinstance(nodes, list) or len(nodes) > 1):
+                raise ValueError
+            if not nodes:
+                return None
+            event = nodes[0]
+            if event["__typename"] != "ReopenedEvent":
+                raise ValueError
+            return normalize_timestamp(event["createdAt"], field="Issue reopen time", code="gh_contract")
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise PodError("gh_contract", "GitHub returned an inconsistent issue reopen timeline") from exc
 
     def pr_view(self, *, repository: str, number: int) -> dict:
         """One pull request by its number, read only: whether a delivery pull request merged (R145)."""

@@ -2014,6 +2014,12 @@ def _close(state: dict, ctx: dict) -> dict:
                      next_action="settle each pending or UNKNOWN Governor row from Pod's readback with "
                                  "governor-reconcile, or record its outcome with the evidence it needs, then close")
     closure = {"seq": state["seq"], "revision": state["revision"]}
+    # The ledger supplies the clock only to a new write; replay retains the recorded instant verbatim.
+    recorded = state.get("closure")
+    stamp = recorded.get("at") if recorded is not None else ctx.get("closure_at")
+    if stamp is not None:
+        from .util import normalize_timestamp
+        closure["at"] = normalize_timestamp(stamp, field="Closure time", code="obligation_invalid")
     if ctx.get("closure_preserved"):
         # Superseded derived validations a delivered objective's closure preserved UNKNOWN (C11); the journal
         # keeps them exactly as recorded.
@@ -2027,7 +2033,11 @@ PRESERVED_FIELDS = {"record", "kind", "recorded", "outcome", "reason", "pr", "me
 
 def _closure_record(value: object) -> dict:
     """A stored closure: its sequence, revision and report, and optionally the rows it preserved (C11)."""
-    closed = _exact(value, CLOSURE_FIELDS | {"preserved"}, CLOSURE_FIELDS, "closure")
+    closed = _exact(value, CLOSURE_FIELDS | {"preserved", "at"}, CLOSURE_FIELDS, "closure")
+    if "at" in closed:
+        from .util import normalize_timestamp
+        if normalize_timestamp(closed["at"], field="Closure time", code="obligation_invalid") != closed["at"]:
+            raise refuse("obligation_invalid", "malformed", "closure retains its recorded UTC time", record="closure")
     rows = closed.get("preserved")
     if "preserved" in closed and (
             not isinstance(rows, list) or not 0 < len(rows) <= 64

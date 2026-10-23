@@ -1621,12 +1621,16 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
             return close_source_issues(project, objective, remote=remote, locked=True, _roots=roots)
     if _roots != roots:
         return _source_failure(objective, "chain_changed")
-    if problem is not None:
+    if problem is not None and present(root):
         return _source_failure(objective, problem[1])
     try:
         writable = _source_closure(project, objective, root, raw, before)
+        closed_at = (load(root)["tail"].get("at") if present(root)
+                     else (raw.get("checkpoint") or {}).get("closure", {}).get("at"))
         members = [(objective, root, raw, before)]
-        for row in chain:
+        # An ordinary tail's own closure authorizes its own source independently of a broken claimed chain.
+        # A partial lineage never authorizes effects on any predecessor.
+        for row in chain if problem is None else []:
             member, data = _read_record(row["root"])
             if member != row["raw"]:
                 raise PodError("closure_changed", "A chain member changed during closure validation")
@@ -1636,14 +1640,31 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
     snapshots = [(path, data) for _, path, _, data in members]
     out = {"source_issues": [], "parents_open": []}
     for name, path, record, data in members:
-        effect = _close_source_issue(project, name, record, remote=remote, writable=writable, snapshots=snapshots)
+        effect = _close_source_issue(project, name, record, remote=remote, writable=writable, snapshots=snapshots,
+                                     closed_at=closed_at)
         for key in out:
             out[key].extend(effect[key])
+    if problem is not None:
+        out["source_issues"].extend(_source_failure(objective, problem[1])["source_issues"])
     return _completed_sources(out)
 
 
+def _reopened_after_closure(reader, source: dict, closed_at: str | None, effect: dict) -> bool:
+    from .util import normalize_timestamp
+    try:
+        reopened_at = normalize_timestamp(reader.issue_reopened_at(
+            repository=source["repository"], number=source["number"]),
+            field="Issue reopen time", code="source_reopen_unverified")
+        closure_at = normalize_timestamp(closed_at, field="Pod closure time", code="source_reopen_unverified")
+    except (PodError, AttributeError) as exc:
+        raise PodError("source_reopen_unverified", "The latest reopen and Pod closure times must be readable") from exc
+    effect.update(reopened_at=reopened_at, pod_closed_at=closure_at)
+    return datetime.fromisoformat(reopened_at.replace("Z", "+00:00")) > datetime.fromisoformat(
+        closure_at.replace("Z", "+00:00"))
+
+
 def _close_source_issue(project: Path, objective: str, raw: dict, *, remote, writable: bool,
-                        snapshots: list[tuple[Path, bytes]]) -> dict:
+                        snapshots: list[tuple[Path, bytes]], closed_at: str | None) -> dict:
     out = {"source_issues": [], "parents_open": []}
     effect = {"objective": objective, "locator": None, "outcome": "unverified"}
     try:
@@ -1661,7 +1682,7 @@ def _close_source_issue(project: Path, objective: str, raw: dict, *, remote, wri
         if live["state"] == "CLOSED":
             effect.update(outcome="already_completed" if checked.get("state_reason") == "COMPLETED" else "closed_other_reason",
                           state=live["state"], state_reason=checked.get("state_reason"))
-        elif checked.get("state_reason") == "REOPENED":
+        elif checked.get("state_reason") == "REOPENED" and _reopened_after_closure(reader, source, closed_at, effect):
             effect.update(outcome="reopened", reason="source_reopened", state="OPEN", state_reason="REOPENED")
         else:
             if not writable:
@@ -1704,8 +1725,10 @@ def _close_source_issue(project: Path, objective: str, raw: dict, *, remote, wri
                       ("objective_not_closed", "closure_changed", "source_changed", "source_unproved") else "unverified",
                       reason=getattr(exc, "code", "source_effect_unavailable"))
     effect["next_action"] = ("the bound source issue is completed" if effect["outcome"] in ("closed", "already_completed")
-                             else "the project lead reconciles the source issue's explicit reopen; Pod will not re-close it automatically"
+                             else "the project lead reconciles the source issue's explicit reopen after Pod's closure; Pod will not re-close it automatically"
                              if effect["outcome"] == "reopened"
+                             else "the project lead restores the latest reopen timeline and recorded Pod closure time, then runs pod sweep; no owner completion decision is needed"
+                             if effect.get("reason") == "source_reopen_unverified"
                              else "the project lead resolves the named source condition, then runs pod sweep; no owner completion decision is needed")
     for parent in out["parents_open"]:
         parent["objective"] = objective
@@ -1768,6 +1791,7 @@ class _SweepRemote:
         self.project, self.source_reader = project, remote
         self.remote = _Remote(project, remote)
         self.issues, self.states, self.parent_tasks = (observations[key] for key in ("issues", "states", "parents"))
+        self.reopens = observations["reopens"]
 
     def _source(self):
         if self.source_reader is None:
@@ -1786,7 +1810,7 @@ class _SweepRemote:
                 raise value
             return deepcopy(value)
         try:
-            reader = self._source() if method == "issue" else self.remote.get()
+            reader = self._source() if method in ("issue", "issue_reopened_at") else self.remote.get()
             value = getattr(reader, method)(**arguments)
         except PodError as exc:
             if len(cache) < MAX_LISTED:
@@ -1803,10 +1827,14 @@ class _SweepRemote:
     def issue_state(self, **arguments):
         return self._read("issue_state", arguments, self.states)
 
+    def issue_reopened_at(self, **arguments):
+        return self._read("issue_reopened_at", arguments, self.reopens)
+
     def issue_close(self, *, source):
         key = (source["repository"].casefold(), source["number"])
         self.issues.pop(key, None)
         self.states.pop(key, None)
+        self.reopens.pop(key, None)
         self.parent_tasks.pop(source["locator"].casefold(), None)
         return self._source().issue_close(source=source)
 
@@ -1865,7 +1893,8 @@ def _unavailable(target: Path, reason: str) -> dict:
 
 def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str], list[dict]]:
     """The records one sweep visits: each named objective resolved directly from its own record, or else every
-    record of the repository through the sweep's own bounded scan (never a presentation list). Returns the rows
+    record of the repository through the sweep's own bounded scan (never a presentation list). A named continued
+    predecessor also resolves its already-closed reciprocal tail for source retries. Returns the rows
     (`objective`, `phase`), the named objectives that have no record, and what kept the scan from reading every
     record (empty when it read them all)."""
     from .ledger import _record_exists, objective_root
@@ -1882,6 +1911,12 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
             except PodError:
                 phase = "open"  # Its closure reports why it cannot be read.
             rows.append({"objective": name, "phase": phase})
+            if phase == "continued" and _record_class(raw) in SUPPORTED:
+                from .succession import chain_state
+                successor = chain_state(target, raw)
+                tail = successor.get("objective")
+                if successor["state"] == "successor_closed" and tail is not None:
+                    rows.append({"objective": tail, "phase": "closed"})
         return rows, missing, []
     found, problems = _scan(target, orphans=True)
     return [{"objective": row["objective"], "phase": _phase(row["root"], row["raw"])} for row in found], [], problems
@@ -1927,7 +1962,7 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
         raise PodError("sweep_scope_unavailable", f"A sweep names at most {MAX_LISTED} repositories and objectives")
     out = {"schema": "pod-cli/v5", "status": "swept", "repositories": [],
            "counts": {name: 0 for name in RESULTS}, "next_safe_action": None}
-    observations = {key: {} for key in ("issues", "states", "parents")}
+    observations = {key: {} for key in ("issues", "states", "parents", "reopens")}
     for target in targets:
         if not target.is_dir():
             out["repositories"].append(_unavailable(target, "the path is not a directory"))

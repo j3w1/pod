@@ -56,13 +56,14 @@ class SourceIntentTests(TickCase):
         self.assertEqual(len(self.issue.closes), 1)
         self.assertEqual(self.saved(), before)
 
-    def test_reopened_source_never_gets_its_first_automatic_close_either(self):
+    def test_reopen_before_pod_closure_allows_its_first_automatic_close(self):
         self.ready()
         self.issue.state_reason = "REOPENED"
+        self.issue.reopened_at = "2000-01-01T00:00:00Z"
         result = self.write(close=True)
         self.assertTrue(result["checkpoint"]["closure"])
-        self.assertEqual(result["source_issues"][0]["outcome"], "reopened")
-        self.assertEqual(self.issue.closes, [])
+        self.assertEqual(result["source_issues"][0]["outcome"], "closed")
+        self.assertEqual(len(self.issue.closes), 1)
 
     def test_shared_reopened_source_has_one_lead_task_and_one_read_per_sweep(self):
         self.ready(); self.write(close=True); self.copy_closed("another")
@@ -232,6 +233,7 @@ class ClaimedSourceTests(ClosureCase):
         self.assertEqual(close_by_evidence(self.project, "objective", caller="lead", remote=self.remote)["status"], "closed")
         before = self.files()
         issue.update(state="OPEN", state_reason="REOPENED")
+        self.remote.issue_reopened_at = lambda **arguments: "2099-01-01T00:00:00Z"
         result = sweep(self.project, remote=self.remote)
         row = result["repositories"][0]["objectives"][0]
         self.assertEqual((row["party"], row["source_issues"][0]["reason"]), ("lead", "source_reopened"))
