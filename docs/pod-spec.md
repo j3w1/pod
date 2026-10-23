@@ -10,7 +10,7 @@ Requirements use **B** for behavior, **H** for hard authorization and **I** for 
 
 - [Coordination and obligations](spec/coordination.md)
 - [Models](spec/models.md): [routing](spec/models/routing.md), [preferences](spec/models/preferences.md) and [catalog](spec/models/catalog.md)
-- [Orca integration and recovery](spec/orca.md)
+- [Orca integration and recovery](spec/orca.md), including [route settlement](spec/orca.md#r160--settle-each-recorded-route-mismatch-occurrence) and [bounded record maintenance](spec/orca.md#r121--keep-settled-history-immutable-outside-the-bounded-context-record)
 - [Assurance and evidence](spec/assurance.md)
 - [Delivery and cleanup](spec/delivery.md), including [closure as delivery](spec/delivery.md#r144--closure-is-part-of-delivery) and [evidence closure](spec/orca.md#r145--close-delivered-work-by-evidence-when-its-coordinator-is-gone)
 - [Interfaces and installation](spec/interface.md), including the [self-healing sweep](spec/interface.md#r148--sweep-provably-delivered-open-objectives)
