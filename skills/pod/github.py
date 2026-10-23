@@ -258,6 +258,7 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
 
 
 def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
+    from .orca import _DEADLINE
     allowed = (
         argv == ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]
         or argv == ["worktree", "list", "--porcelain"]
@@ -267,10 +268,14 @@ def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
     if not allowed:
         raise PodError("unsupported_git_operation", "Project discovery accepts only bounded Git reads")
     # Discovery reads this host's Git only, so its failures are local, never a remote contract (`_run`).
+    budget = _DEADLINE.get()
     try:
-        completed = subprocess.run([str(git_executable()), *argv], capture_output=True, text=True, timeout=timeout,
+        completed = subprocess.run([str(git_executable()), *argv], capture_output=True, text=True,
+                                   timeout=timeout if budget is None else budget.limit(timeout),
                                    check=False, cwd=str(project))
     except (OSError, subprocess.TimeoutExpired) as exc:
+        if budget is not None and isinstance(exc, subprocess.TimeoutExpired):
+            budget.check()
         raise PodError("git_unavailable", "Git did not answer the repository discovery read") from exc
     except UnicodeDecodeError:
         raise PodError("git_contract", "Git discovery output is not valid UTF-8") from None
