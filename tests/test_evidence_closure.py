@@ -948,6 +948,10 @@ class ChainTests(ClosureCase):
         self.assertEqual((self.swept(result, "successor")["outcome"], self.swept(result)["outcome"]),
                          ("closed", "closed"))
         self.assertEqual((self.swept(result, "successor")["party"], result["counts"]["closed"]), (None, 2))
+        source = self.swept(result, "successor")["source_issues"][0]
+        self.assertEqual((source["outcome"], source["prior_condition"], source["observed_with"]),
+                         ("already_completed", "source_changed", "objective"))
+        self.assertEqual(self.swept(result)["source_issues"][0]["outcome"], "closed")
         # The continued predecessor keeps reading continued, with its own entry beside its frozen record.
         shown = self.status()
         self.assertEqual((shown["readiness"]["state"], shown["evidence_closure"]["relation"],

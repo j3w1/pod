@@ -1041,9 +1041,10 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                 if verdict["status"] in ("eligible", "refused") and "completion" not in verdict:
                     from .evidence_closure import LEAD_ACTION
                     # Early record-only refusals keep their precedence and perform no new native read.
+                    action = "The project lead resolves this condition: " + verdict["next_action"] + " " + LEAD_ACTION
                     verdict.update(completion={"status": "unverified", "conditions": [{
                         "code": verdict["condition"], "status": "unverified", "message": verdict["message"]}]},
-                        party="lead", next_action=LEAD_ACTION,
+                        party="lead", next_action=action,
                         abandonment="R112 remains an optional abandonment route, never delivered history.")
                 results.append(verdict)
                 continue

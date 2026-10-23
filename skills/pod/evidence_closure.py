@@ -1301,6 +1301,16 @@ def _closed_effects(project: Path, objective: str, result: dict, chain: list[dic
             effects = close_source_issues(project, member["objective"], remote=remote, locked=True)
             for key in ("source_issues", "parents_open"):
                 result[key].extend(effects[key])
+    completed = {row["locator"].casefold(): row for row in result["source_issues"]
+                 if row.get("locator") and row["outcome"] in ("closed", "already_completed")}
+    for row in result["source_issues"]:
+        # Several chain members can bind the same issue. A later member's exact completed readback settles
+        # an earlier source-drift refusal as a no-op too; no proof, receipt or provider write is transferred.
+        if row.get("reason") == "source_changed" and (row.get("locator") or "").casefold() in completed:
+            observed = completed[row["locator"].casefold()]
+            row.update(outcome="already_completed", state="CLOSED", state_reason="COMPLETED",
+                       prior_condition=row.pop("reason"), observed_with=observed["objective"],
+                       next_action="the bound source issue is completed")
     return result
 
 

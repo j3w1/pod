@@ -7768,7 +7768,8 @@
       ],
       "offline_test": [
         "tests.test_completed_closure.SourceClosingTests.test_checkpoint_closes_source_and_sweep_replays_without_rewriting_pod",
-        "tests.test_completed_closure.SourceClosingTests.test_report_closure_has_the_same_source_effect_and_acknowledgement"
+        "tests.test_completed_closure.SourceClosingTests.test_report_closure_has_the_same_source_effect_and_acknowledgement",
+        "tests.test_evidence_closure.ChainTests.test_a_claimed_predecessor_and_its_claim_only_successor_close_together"
       ],
       "status": "NOT_RUN"
     },
