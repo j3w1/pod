@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from pod.internal import run
 from pod.ledger import read
+from pod.window import primary_action
 from tests.test_owner_handoff import HandoffCase
 from tests.test_succession import SuccessionCase
 from tests.test_window_continuation import WindowCase
@@ -18,7 +19,8 @@ CLAIM_STEP = "rerun the same internal succession claim to complete it"
 
 
 class ReservedSuccessorStatusTests(WindowCase, SuccessionCase):
-    def test_window_step_comes_before_completing_a_reserved_claim(self):
+    def reserved_after_window(self):
+        """A reserved claim whose successor coordinator a window ended, read from a new terminal on a later runtime."""
         self.predecessor()
         self.successor()
         decision = self.decide()
@@ -43,6 +45,10 @@ class ReservedSuccessorStatusTests(WindowCase, SuccessionCase):
             self.current.update(coordinator_handle="third", consumer_generation=2)
             return {"runtime": self.port.runtime, "exit": 0, "error": None, "result": {}}
 
+        return decision, read_native, move
+
+    def test_window_step_comes_before_completing_a_reserved_claim(self):
+        decision, read_native, move = self.reserved_after_window()
         with patch("pod.orca.read_command", side_effect=read_native), \
                 patch("pod.orca.mutate_command", side_effect=move):
             before = self.status(objective="successor")
@@ -70,6 +76,19 @@ class ReservedSuccessorStatusTests(WindowCase, SuccessionCase):
         link = read(self.project, "objective")["continued_by"]
         self.assertEqual((link["objective"], link["owner"], link["instruction"]),
                          ("successor", decision["successor_owner"], decision["instruction"]))
+
+    def test_an_unavailable_window_keeps_its_lead_task_before_the_claim(self):
+        _, read_native, _ = self.reserved_after_window()
+        self.host.update(mode="denied", condition="window_not_authorized")
+        with patch("pod.orca.read_command", side_effect=read_native):
+            result = self.status(objective="successor")
+        window = result["window_continuation"]
+        self.assertEqual((window["status"], window["condition"]), ("window_unavailable", "window_not_authorized"))
+        self.assertEqual(result["succession"]["state"], "claim_incomplete")
+        self.assertEqual((result["next_action"], result["next_safe_action"]),
+                         (primary_action(window), primary_action(window)))
+        self.assertTrue(result["next_action"].startswith(window["next_action"]))
+        self.assertNotIn(CLAIM_STEP, result["next_action"])
 
 
 if __name__ == "__main__":
