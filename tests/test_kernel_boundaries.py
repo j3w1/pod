@@ -886,7 +886,7 @@ class LifecycleTests(KernelCase):
             with self.subTest(mutation=name):
                 self.refused("objective_closed", "objective_closed", call)
         self.assertEqual(list(objective_root(self.project, "objective").glob("governor.json")), [])
-        reopened = self.write([*rows, {"id": "N", "kind": "criterion", "provenance": "user_direct",
+        reopened = self.write([*self.stored(), {"id": "N", "kind": "criterion", "provenance": "user_direct",
                                        "source": {"instruction": "also support CSV"}, "check": "CSV works",
                                        "state": "active", "executor": "coordinator"}],
                               reopen=True, revision_authority={"provenance": "user_direct",

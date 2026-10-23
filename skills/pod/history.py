@@ -96,11 +96,17 @@ def _positions(state):
     checkpoint = state.get("checkpoint")
     if isinstance(checkpoint, dict):
         obligations = checkpoint.get("obligations")
-        for ob in obligations if isinstance(obligations, list) else []:
+        for index, ob in enumerate(obligations if isinstance(obligations, list) else []):
+            yield obligations, index
+            ob = obligations[index]  # Hydration of the outer row precedes nested positions.
             receipts = ob.get("receipts") if isinstance(ob, dict) else None
             if isinstance(receipts, list):
                 for index in range(len(receipts)):
                     yield receipts, index
+            findings = ob.get("findings") if isinstance(ob, dict) else None
+            if isinstance(findings, list):
+                for index in range(len(findings)):
+                    yield findings, index
         history = checkpoint.get("governance_history")
         for field in ("candidates", "decisions"):
             entries = history.get(field) if isinstance(history, dict) else None
@@ -148,7 +154,21 @@ def compact(logical_state, *, protected_admissions=(), force=False,
     checkpoint = logical_state.get("checkpoint") or {}
     current = checkpoint.get("candidate")
     target = record.get("checkpoint") or {}
-    for old_ob, new_ob in zip(checkpoint.get("obligations", []), target.get("obligations", [])):
+    logical_rows = {row["id"]: row for row in checkpoint.get("obligations", [])
+                    if isinstance(row, dict) and isinstance(row.get("id"), str)}
+    for index, (old_ob, new_ob) in enumerate(zip(checkpoint.get("obligations", []), target.get("obligations", []))):
+        if old_ob.get("state") in ("withdrawn", "renewed"):
+            target["obligations"][index] = reference(old_ob)
+            continue
+        if old_ob.get("kind") == "assurance" and old_ob.get("findings") and type(checkpoint.get("seq")) is int:
+            from .assurance import validate_findings
+            try:
+                validate_findings(old_ob, logical_rows, seq=checkpoint["seq"])
+            except PodError:
+                pass  # Unvalidated observations cannot authorize a new history position.
+            else:
+                for finding_index, finding in enumerate(old_ob["findings"]):
+                    new_ob["findings"][finding_index] = reference(finding)
         selected = {json.dumps(item, sort_keys=True) for item in old_ob.get("evidence", [])}
         for index, receipt in enumerate(old_ob.get("receipts", [])):
             evidence = receipt.get("evidence") or {}
@@ -302,7 +322,11 @@ def _hydrate(record, loader):
             continue
         if metadata is None:
             _fail("history_invalid", "References require the physical-format discriminator")
-        parent[key] = _expand(value, loader, cache)
+        expanded = _expand(value, loader, cache)
+        if (isinstance(expanded, dict) and any(is_reference(item)
+                for field in ("receipts", "findings") for item in expanded.get(field, []))):
+            _fail("history_integrity", "Whole history rows cannot contain nested references")
+        parent[key] = expanded
     # Do not recursively expand pointers returned by a chunk, including inside typed rows.
     if any(is_reference(parent[key]) for parent, key in _positions(state)):
         _fail("history_integrity", "Recursive history references are forbidden")
@@ -540,6 +564,8 @@ def _moved(record):
     counts["governance"] = sum(is_reference(row) for entries in checkpoint.get("governance_history", {}).values() for row in entries)
     counts["revision_decisions"] = sum(is_reference(row) for row in checkpoint.get("revision_decisions", []))
     counts["retirement"] = int(is_reference(record.get("historical_retirement")))
+    counts["obligations"] = sum(is_reference(row) for row in checkpoint.get("obligations", []))
+    counts["findings"] = sum(is_reference(item) for row in checkpoint.get("obligations", []) for item in row.get("findings", []))
     return counts
 
 

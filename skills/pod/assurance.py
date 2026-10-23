@@ -138,10 +138,10 @@ def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
 
 def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
     """One persisted evidence/history contract for ordinary writes and closure reads."""
-    from .obligations import MAX_EVIDENCE, _exact, _text, _path, refuse
+    from .obligations import MAX_RECEIPTS, _exact, _text, _path, refuse
     from .records import _sha256
     history = ob.get("receipts")
-    if not isinstance(history, list) or len(history) > MAX_EVIDENCE:
+    if not isinstance(history, list) or len(history) > MAX_RECEIPTS:
         raise refuse("obligation_invalid", "malformed", "receipt history is a bounded recorded list", obligation=ob["id"])
     identity = "attempt" if ob["kind"] == "assurance" else "reference"
     receipts = {}
@@ -214,9 +214,11 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
     return tuple(unverifiable)
 
 
-def validate_findings(ob: dict, rows: dict, *, seq: int) -> None:
+def validate_findings(ob: dict, rows: dict, *, seq: int, lineage=None) -> None:
     """Parse immutable triage records on ordinary writes and closure reads."""
     from .obligations import MAX_FINDINGS, MAX_REPORT_FINDINGS, SEVERITIES, TRIAGE, _exact, _text, _ident, refuse
+    from .lineage import Lineage
+    lineage = lineage if lineage is not None else Lineage(rows)
     findings = ob.get("findings", [])
     if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
         raise refuse("obligation_invalid", "malformed", "finding history is a bounded list", obligation=ob["id"])
@@ -250,7 +252,7 @@ def validate_findings(ob: dict, rows: dict, *, seq: int) -> None:
             if field in row: _text(row[field], field, limit=1024, obligation=ob["id"])
         if row["triage"] == "required_correction":
             correction = rows.get(row.get("correction")) if isinstance(row.get("correction"), str) else None
-            if correction is None or correction["kind"] != "correction" or correction.get("parent") != ob["id"] or "proposal" in row:
+            if correction is None or correction["kind"] != "correction" or lineage.effective(correction.get("parent")) != lineage.effective(ob["id"]) or "proposal" in row:
                 raise refuse("obligation_invalid", "no_parent", "required finding retains its correction", obligation=ob["id"])
         elif "correction" in row or row["severity"] in ("blocker", "major") and not row.get("reason"):
             raise refuse("obligation_invalid", "malformed", "advisory finding retains its reason and proposal", obligation=ob["id"])
@@ -269,11 +271,11 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
                     *, reported_attempt: str | None = None, seq: int) -> list[dict]:
     """Keep immutable receipt identities even when a caller omits the selected evidence.
 
-    History is inside the existing obligation record, bounded by MAX_EVIDENCE, and is
+    History is inside the existing obligation record, bounded by MAX_RECEIPTS, and is
     never evicted or accepted from the caller. Full history refuses another receipt;
     it cannot silently make a forgotten receipt new again.
     """
-    from .obligations import MAX_EVIDENCE, _admissions, _exact, _text, refuse
+    from .obligations import MAX_RECEIPTS, _admissions, _exact, _text, refuse
     identity = "attempt" if ob["kind"] == "assurance" else "reference"
     receipts = {item["evidence"][identity]: deepcopy(item) for item in (prior or {}).get("receipts", [])}
     if reported_attempt is not None:
@@ -322,11 +324,66 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
         evidence = {**base, "governance": stamp}
         receipts[key] = {**(previous or {}), "evidence": evidence}
         stamped.append(evidence)
-    if len(receipts) > MAX_EVIDENCE:
-        raise refuse("obligation_invalid", "receipt_limit", "the bounded receipt history is full",
-                     obligation=ob["id"])
+    reserved = len(pending_serving(ob, ctx)) if ob["kind"] == "assurance" else 0
+    retained = len((prior or {}).get("receipts", []))
+    if len(receipts) > MAX_RECEIPTS or len(receipts) > retained and len(receipts) + reserved > MAX_RECEIPTS:
+        raise capacity_refusal(ob, ctx, seq=seq, field="receipts",
+                               retained=retained, proposed=len(receipts) + reserved, prior=prior, reserved=reserved)
     ob["receipts"] = list(receipts.values())
     return stamped
+
+
+def pending_serving(ob: dict, ctx: dict) -> list[str]:
+    """Keep result reservations until consumption or disposition.
+
+    A recorded route mismatch does not release them: Pod still accepts a report
+    whose worker-show route matches, and the Governor already holds a mismatched
+    objective for its route decision.
+    """
+    from .obligations import _admissions, _outstanding
+    outstanding = set(_outstanding(ctx))
+    return [key for key, row in _admissions(ctx).items()
+            if ob["id"] in (row.get("serves") or []) and row.get("state") != "deferred"
+            and row.get("disposition") is None and (key in outstanding or row.get("report") is None)]
+
+
+def reserve_capacity(ob: dict, ctx: dict, *, seq: int):
+    """Admit only when every pending result, including this one, fits in full."""
+    from .obligations import MAX_RECEIPTS, MAX_FINDINGS, MAX_REPORT_FINDINGS
+    attempts = len(pending_serving(ob, ctx)) + 1
+    for field, per_attempt, limit in (("receipts", 1, MAX_RECEIPTS), ("findings", MAX_REPORT_FINDINGS, MAX_FINDINGS)):
+        retained = len(ob.get(field, []))
+        reserved = per_attempt * attempts
+        if retained + reserved > limit:
+            raise capacity_refusal(ob, ctx, seq=seq, field=field, retained=retained,
+                                   proposed=retained + reserved, reserved=reserved)
+
+
+def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int, proposed: int, prior=None, reserved=0):
+    """The same accepted-state renewal route for admission, report and checkpoint."""
+    from .obligations import MAX_RECEIPTS, MAX_FINDINGS, refuse
+    pending = pending_serving(ob, ctx)
+    replacement = {"id": ob["id"], "as": "<fresh-id>"}
+    rows = (ctx.get("accepted_map") or ctx.get("map_state") or {}).get("obligations", [])
+    basis = next((row for row in rows if row["id"] == ob["id"]), prior if prior is not None else ob)
+    if basis.get("state") in ("waiting", "blocked_external"):
+        state_field = "wait" if basis["state"] == "waiting" else "external"
+        replacement.update(state=basis["state"], **{state_field: deepcopy(basis[state_field])})
+    else:
+        held = next((row["id"] for row in rows if row["id"] != ob["id"]
+                     and row.get("state") == "active" and row.get("executor") == "coordinator"), None)
+        if held:
+            replacement.update(state="waiting", wait={"class": "sequenced", "referent": held})
+        else:
+            replacement.update(state="active", executor="coordinator")
+    return refuse("obligation_invalid", "receipt_limit" if field == "receipts" else "finding_limit",
+                  "retained history and reserved serving capacity exceed the bound",
+                  obligation=ob["id"], retained=retained, proposed=proposed,
+                  reserved=reserved,
+                  limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
+                  **({"admission": pending[0]} if pending else {}),
+                  next_action=(f"settle and consume the report for admission {pending[0]} before retrying this write"
+                               if pending else {"seq": seq, "renew": [replacement]}))
 
 
 def binding_current(binding: Any, ctx: dict) -> bool:
@@ -453,6 +510,8 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
 def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) -> bool:
     """Whether a satisfied obligation's evidence is passing and currently valid (R41)."""
     from .obligations import _admissions, _outstanding, definition_id
+    if ob.get("state") == "renewed":
+        return False
     current = ctx.get("candidate") if candidate is None else candidate
     rows = ob.get("evidence", [])
     if not rows:
@@ -481,7 +540,7 @@ def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) 
                      or finding["resolved_seq"] < finding["recorded_seq"]
                      or proof_seq <= finding["resolved_seq"]
                      or admitted_seq <= finding["resolved_seq"])
-                for finding in ob.get("findings", []))
+                for finding in (ctx["lineage"].findings(ob["id"]) if ctx.get("lineage") else ob.get("findings", [])))
             if (not _review_assignment(ob, admission) or row["attempt"] in _outstanding(ctx)
                     or not review_completed(admission) or admission.get("candidate") != row.get("candidate")
                     or (admission.get("binding") or {}).get("definitions", {}).get(ob["id"]) != row["definition"]
@@ -565,6 +624,12 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
     """
     from .obligations import (MAX_FINDINGS, MAX_REPORT_FINDINGS, PROPOSAL_SOURCES, SEVERITIES, _admissions,
                               _exact, _ident, _text, expand_update, refuse)
+    ctx["report_request_entries"] = (len(value["update"]) if isinstance(value.get("update"), dict)
+                                     else len(value["obligations"]) if isinstance(value.get("obligations"), list) else 0)
+    if isinstance(value.get("obligations"), list):
+        from .obligations import MAX_OBLIGATIONS, row_bounds
+        if len(value["obligations"]) > MAX_OBLIGATIONS:
+            row_bounds(value["obligations"], request=True)
     value = expand_update(state, value)
     base = {key: value[key] for key in value if key in ("seq", "obligations", "proposals")}
     obligations = [dict(row) for row in base.get("obligations", state["obligations"])]
@@ -649,13 +714,11 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
                          obligation=assurance_id, attempt=admission_id,
                          next_action="preserve every recorded finding; a completed review attempt at its finding "
                                      "bound cannot be extended or its stored findings regrouped")
-        if len(stored) + len(records) > MAX_FINDINGS:
-            raise refuse("obligation_invalid", "finding_limit",
-                         "the bounded finding history is full", obligation=assurance_id,
-                         retained=len(stored), proposed=len(stored) + len(records), limit=MAX_FINDINGS,
-                         next_action="preserve every stored finding and the unconsumed report; report this "
-                                     "capacity blocker to the maintainer, since no supported write can add "
-                                     "another finding beyond this assurance's retained history bound")
+        reserved = MAX_REPORT_FINDINGS * len(pending_serving(assurance, ctx))
+        if len(stored) + len(records) + reserved > MAX_FINDINGS:
+            raise capacity_refusal(assurance, {**ctx, "map_state": state}, seq=state["seq"] + 1, field="findings",
+                                   retained=len(stored), proposed=len(stored) + len(records) + reserved, reserved=reserved,
+                                   prior=next(row for row in state["obligations"] if row["id"] == assurance_id))
         assurance["findings"] = list(stored) + records
         written.add(assurance_id)
     if admission.get("role") == "review":
@@ -685,9 +748,11 @@ def label_qualification(state: dict | None, ctx: dict, candidate: str | None) ->
     if not isinstance(state, dict) or state.get("obligations") is None:
         return {"label": "WITHHELD", "assurance_unbound": [{"obligation": None, "gap": "none_recorded"}],
                 "withdrawn": [], "required": False}
+    from .lineage import Lineage
+    ctx = {**ctx, "lineage": Lineage(state["obligations"])}
     gov = bound_governance_digest(state)
     rows = [ob for ob in state["obligations"] if ob["kind"] == "assurance"]
-    live = [ob for ob in rows if ob["state"] != "withdrawn"]
+    live = [ob for ob in rows if ob["state"] not in ("withdrawn", "renewed")]
     gaps = []
     if not live:
         gaps.append({"obligation": None, "gap": "none_recorded"})

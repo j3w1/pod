@@ -13,6 +13,7 @@ import re
 from .contracts import IDENTIFIER, bound, fields, input_record, required
 from .errors import PodError
 from .util import digest, exact
+from .lineage import FROZEN, Lineage
 
 _TARGET = re.compile(r"PoD#([0-9]{1,9})\Z")
 _LEGACY_REF = re.compile(r"PoD ([0-9]{1,9}):")
@@ -77,6 +78,13 @@ def validate(row: dict) -> None:
         raise _hold("association_invalid", row.get("id"))
 
 
+def validate_epoch(row: dict, *, seq: int, lineage) -> None:
+    if "pod_mapping" in row:
+        introduced = min(item["introduced_seq"] for item in lineage.family(row["id"]))
+        if not introduced <= row["pod_mapping"]["accepted_seq"] <= seq:
+            raise _hold("association_invalid", row["id"])
+
+
 def scope_hash(body: str) -> str:
     """Whole body, masking only checkbox bytes recognized by the existing parser."""
     from .github import pod_lines
@@ -111,7 +119,7 @@ def current(row: dict, ctx: dict) -> bool:
 
 def effective_ref(row: dict, ctx: dict | None = None) -> str | None:
     """One live association predicate; withdrawn history remains in the map."""
-    if row.get("kind") != "criterion" or row.get("state") == "withdrawn":
+    if row.get("kind") != "criterion" or row.get("state") in FROZEN:
         return None
     if "pod_mapping" in row:
         return row["pod_mapping"]["ref"] if current(row, ctx or {}) else None
@@ -145,6 +153,8 @@ def observe(state: dict, ledger: dict, source: dict, body: str, *, mapping_check
     observed_hash, observed_scope = _hash(body), scope_hash(body)
     diverged = False
     for row in checkpoint.get("obligations", []):
+        if row.get("state") in FROZEN:
+            continue
         association = row.get("pod_mapping")
         if association is None or association["invalidated"]:
             continue
@@ -250,7 +260,7 @@ def prepare(state: dict, source: dict | None, value: object, body: str) -> dict:
         old_ref = _LEGACY_REF.match((row or {}).get("source", {}).get("ref", ""))
         number_text = _TARGET.fullmatch(target)[1]
         number = int(number_text)
-        if (row is None or row["kind"] != "criterion" or row["state"] == "withdrawn"
+        if (row is None or row["kind"] != "criterion" or row["state"] in FROZEN
                 or old_ref is None or old_ref[1] != number_text):
             raise _hold("target_not_original_criterion", key)
         if row.get("pod_mapping") is not None:
@@ -303,7 +313,8 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
                               for key in ("repository", "number", "locator"))
             or ctx.get("criteria") != [item["ref"] for item in approved]):
         return set()
-    selected = {item["id"] for item in approved}
+    lineage = Lineage(rows)
+    selected = {lineage.effective(item["id"]) for item in approved}
     accepted = {row["id"]: row for row in (prior or {}).get("obligations", [])}
     authority = ctx.get("revision_authority")
     owner_write = (not same_write and ctx.get("operation") == "checkpoint"
@@ -322,7 +333,8 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
     # Historical retirement follows the actual accepted definition and its
     # separate owner authority. It grants neither a new check nor passing proof.
     for item in approved:
-        row = rows.get(item["id"])
+        key = lineage.effective(item["id"])
+        row = rows.get(key)
         if (row is None or (row["kind"], row["provenance"]) != ("criterion", "objective")
                 or row["source"] != {"ref": item["ref"]}
                 or (same_write and (row["check"] != item["check"]
@@ -330,7 +342,7 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
                 or row["definition"] != definition_id(row)):
             return set()
         if not same_write:
-            earlier = accepted.get(item["id"])
+            earlier = accepted.get(Lineage(accepted).effective(item["id"]))
             if (earlier is None or (earlier["kind"], earlier["provenance"], earlier["source"])
                     != ("criterion", "objective", {"ref": item["ref"]})
                     or earlier["definition"] != definition_id(earlier)
@@ -342,11 +354,11 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
         number = pod_ref_number(effective_ref(row, ctx))
         if number is not None:
             mapped.setdefault(number, []).append(row["id"])
-    expected = {pod_ref_number(item["ref"]): [item["id"]] for item in approved
-                if rows[item["id"]]["state"] != "withdrawn"}
+    expected = {pod_ref_number(item["ref"]): [lineage.effective(item["id"])] for item in approved
+                if rows[lineage.effective(item["id"])]["state"] not in FROZEN}
     if (mapped != expected or any(row["id"] not in selected for row in rows.values()
                                   if (row["kind"], row["provenance"]) == ("criterion", "objective")
-                                  and row["state"] != "withdrawn")):
+                                  and row["state"] not in FROZEN)):
         return set()
     previous = {row["id"]: row for row in decision["previous"]["obligations"]}
     result = set()
@@ -374,6 +386,11 @@ def write(prior: dict | None, value: dict, rows: dict, ctx: dict, seq: int) -> N
         raise _hold("checkpoint_only")
     for key, row in rows.items():
         earlier = prior_rows.get(key, {})
+        if earlier.get("state") in FROZEN or row["state"] == "renewed":
+            continue
+        renewal = row.get("renews") if key not in prior_rows else None
+        if renewal:
+            earlier = prior_rows[renewal]
         stored = earlier.get("pod_mapping")
         raw = raw_rows[key]
         if "pod_mapping" in raw and raw["pod_mapping"] != stored:
@@ -388,7 +405,7 @@ def write(prior: dict | None, value: dict, rows: dict, ctx: dict, seq: int) -> N
                             and facts.get("mapping_scope_sha256") == stored["scope_sha256"])
             observed_divergence = ctx.get("pod_mapping_read", {}).get("reason") in (
                 "issue_body_changed", "issue_amendment_changed")
-            if observed_divergence or definition_id(row) != earlier.get("definition") or not pending_tick and (
+            if observed_divergence or not renewal and definition_id(row) != earlier.get("definition") or not pending_tick and (
                     source is not None and source != stored["current_source"] or (
                     facts is not None and (facts["source"] != digest(stored["current_source"])
                                            or facts.get("mapping_scope_sha256") is not None
@@ -401,8 +418,7 @@ def write(prior: dict | None, value: dict, rows: dict, ctx: dict, seq: int) -> N
             row["pod_mapping"] = deepcopy(repairs[key])
         if "pod_mapping" in row:
             validate(row)
-            if not row["introduced_seq"] <= row["pod_mapping"]["accepted_seq"] <= seq:
-                raise _hold("association_invalid", key)
+            validate_epoch(row, seq=seq, lineage=ctx["lineage"])
             if row["state"] == "satisfied":
                 if not current(row, ctx):
                     raise _hold("mapping_invalidated" if row["pod_mapping"]["invalidated"] else "mapping_binding_unavailable", key)

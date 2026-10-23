@@ -23,7 +23,7 @@ LINES = r"([1-9][0-9]{0,6})(?:-([1-9][0-9]{0,6}))?\Z"
 GOVERNANCE_PATHS = (".pod/config.yaml", "AGENTS.md", "CLAUDE.md")
 KINDS = ("criterion", "delivery", "assurance", "correction", "steer", "subgoal")
 PROVENANCES = ("objective", "user_direct", "project_policy", "coordinator")
-STATES = ("unassigned", "active", "waiting", "blocked_external", "satisfied", "withdrawn")
+STATES = ("unassigned", "active", "waiting", "blocked_external", "satisfied", "withdrawn", "renewed")
 WAIT_CLASSES = ("dependency", "contract_unsettled", "sequenced", "ownership", "capacity",
                 "integration_pending", "input_unavailable", "authority", "user_hold")
 PARTIES = ("owner", "user", "provider", "third_party")
@@ -74,17 +74,20 @@ _PATH = {"type": "text", "max_length": 512, "nonempty": True,
 _GIT = {"type": "text", "form": "resolvable Git commit object id (40 or 64 lower-case hex)"}
 _DIGEST = {"type": "text", "pattern": r"[0-9a-f]{64}\Z", "max_length": 64}
 _MAP_FIELDS = {
-    "seq": {"type": "integer", "minimum": 1}, "obligations": items(96, record("obligation")),
+    "seq": {"type": "integer", "minimum": 1}, "obligations": {**items(512, record("obligation")), "max_live": 128},
     "proposals": items(64, record("proposal")), "governance": record("governance"),
     "governance_refresh": {"type": "boolean"}, "revision_authority": record("revision authority"),
     "reopen": {"type": "boolean"}, "close": {"type": "boolean"}, "rebind": {"type": "list"},
     "dispositions": items(16, record("disposition")), "delivery": {"type": "object"},
-    "update": {"type": "object", "max_items": 96, "form": "obligation ids mapped to field updates; state changes clear conflicting state fields"},
+    "update": {"type": "object", "max_items": 128, "form": "obligation ids mapped to field updates; state changes clear conflicting state fields"},
+    "renew": {**items(16, record("renewal request")), "only": "checkpoint"},
     "reuse": {"type": "object"}, "acceptances": items(16, record("acceptance request")),
     "mapping_repair": record("mapping repair"),
 }
 
 TABLE = {
+    "renewal request": definition({"id": ident(), "as": ident(), "state": choice(STATES),
+        "wait": record("wait"), "executor": text(128), "external": record("external")}, ("id", "as")),
     "mapping repair": definition({
         "original_body": {"type": "text", "max_length": 524288, "max_bytes": 524288, "encoding": "UTF-8", "nul": False},
         "targets": {"type": "object", "min_items": 1, "max_items": 64,
@@ -150,7 +153,9 @@ TABLE = {
         "wait": record("wait"), "external": record("external"), "withdrawal": record("withdrawal"),
         "evidence": items(16, {"type": "object", "form": "attempt reference, short evidence or detailed evidence"}),
         "adopts": ident(), "reuse": _ANY, "findings": items(64, _ANY), "finding": _ANY,
-        "definition": _ANY, "receipts": _ANY, "proof_scope": items(64, _PATH),
+        "definition": _ANY, "receipts": {**items(64, _ANY), "stored_only": True}, "proof_scope": items(64, _PATH),
+        "renews": {**ident(), "stored_only": True},
+        "renewal": {"type": "object", "stored_only": True, "form": "by: successor id, seq: renewal sequence, definition: copied identity, was_satisfied: prior state fact"},
         "acceptances": {**items(16, record("acceptance")), "stored_only": True},
         "pod_mapping": {**record("pod mapping"), "stored_only": True},
     }, ("id", "kind", "provenance")),

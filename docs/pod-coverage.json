@@ -4456,7 +4456,7 @@
         "tests.test_history.SidecarTests.test_unknown_route_and_failed_receipts_stay_inline",
         "tests.test_history.SidecarTests.test_native_settlement_and_production_projections_are_identical",
         "tests.test_history.SidecarTests.test_real_closed_snapshot_contract_is_identical",
-        "tests.test_history.SidecarTests.test_sixteen_receipt_logical_limit_still_refuses_seventeenth",
+        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
         "tests.test_history.SidecarTests.test_store_roundtrip_and_write_once",
         "tests.test_history.SidecarTests.test_missing_chunk_refuses",
         "tests.test_history.SidecarTests.test_tampered_chunk_refuses",
@@ -4499,7 +4499,7 @@
         "tests.test_history.SidecarTests.test_unknown_route_and_failed_receipts_stay_inline",
         "tests.test_history.SidecarTests.test_native_settlement_and_production_projections_are_identical",
         "tests.test_history.SidecarTests.test_real_closed_snapshot_contract_is_identical",
-        "tests.test_history.SidecarTests.test_sixteen_receipt_logical_limit_still_refuses_seventeenth",
+        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
         "tests.test_history.SidecarTests.test_store_roundtrip_and_write_once",
         "tests.test_history.SidecarTests.test_missing_chunk_refuses",
         "tests.test_history.SidecarTests.test_tampered_chunk_refuses",
@@ -4619,7 +4619,7 @@
         "tests.test_history.SidecarTests.test_unknown_route_and_failed_receipts_stay_inline",
         "tests.test_history.SidecarTests.test_native_settlement_and_production_projections_are_identical",
         "tests.test_history.SidecarTests.test_real_closed_snapshot_contract_is_identical",
-        "tests.test_history.SidecarTests.test_sixteen_receipt_logical_limit_still_refuses_seventeenth",
+        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
         "tests.test_history.SidecarTests.test_store_roundtrip_and_write_once",
         "tests.test_history.SidecarTests.test_missing_chunk_refuses",
         "tests.test_history.SidecarTests.test_tampered_chunk_refuses",
@@ -7520,6 +7520,167 @@
         "tests.test_cleanup_completed.CompletedRemainingRefTests.test_pending_packed_lock_holds_the_remaining_ref",
         "tests.test_cleanup_completed.CompletedRemainingRefTests.test_pending_loose_lock_holds_the_remaining_ref",
         "tests.test_cleanup_completed.CompletedRemainingRefTests.test_pending_reflog_lock_holds_the_remaining_ref"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A501",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_renewal.RowAndHistoryTests.test_genuine_previous_reader_refuses_seventeen_while_current_accepts"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A502",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_receipts.ReceiptBoundaryTests.test_65th_report_refuses_atomically_with_exact_renewal_request",
+        "tests.test_obligations.ProofIntegrityTests.test_ordinary_receipt_requires_definition_and_history_never_evicts",
+        "tests.test_records_reservations.ReceiptReservationTests.test_full_history_refuses_before_an_outcome_or_native_launch",
+        "tests.test_records_reservations.ReceiptReservationTests.test_sibling_result_states_reserve_until_consumed",
+        "tests.test_records_reservations.ReceiptReservationTests.test_multiple_pending_reviews_reserve_separately",
+        "tests.test_records_reservations.AcceptedRenewalAdviceTests.test_receipt_refusal_uses_accepted_coordinator_slot",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
+        "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
+        "tests.test_records_reservations.FindingReservationTests.test_incremental_old_report_cannot_take_a_pending_reviews_finding_budget",
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_its_reservation_and_renewal_hold",
+        "tests.test_records_refused_reports.RefusedReportTests.test_failed_without_report_names_consumption_and_keeps_renewal_blocked",
+        "tests.test_records_refused_reports.RefusedReportTests.test_sibling_states_never_release_a_hold_without_consumption_or_disposition",
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_the_reserved_checkpoint_receipt"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A503",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_boundaries.RenewalTickTests.test_tick_pending_transfers_requirement_scope_without_proofs",
+        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
+        "tests.test_records_renewal.RowAndHistoryTests.test_receipt_selection_and_criterion_proof_bounds_stay_independent"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A504",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_renewal.RenewalTests.test_objective_and_coordinator_copy_history_and_waits",
+        "tests.test_records_renewal.RenewalTests.test_user_copy_keeps_adoption_and_acceptances_and_allows_later_revision",
+        "tests.test_records_boundaries.RenewalAssuranceTests.test_policy_renewal_without_owner_decision_remains_required",
+        "tests.test_records_corrections.TerminalCitationTests.test_terminal_policy_citations_follow_adoption_and_refresh_without_changing_identity",
+        "tests.test_records_corrections.TerminalCitationTests.test_renewal_in_adoption_or_refresh_checkpoint_relocates_generated_policy_tip"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A505",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_renewal.RenewalTests.test_definition_override_names_every_field_and_bad_links_refuse",
+        "tests.test_records_renewal.RenewalTests.test_frozen_rows_omitted_or_exact_and_fresh_children_name_tip",
+        "tests.test_records_renewal.RowAndHistoryTests.test_every_context_read_validates_the_frozen_renewal_digest",
+        "tests.test_records_renewal.RenewalTests.test_renewal_accepts_exact_or_restatable_rows_and_names_state_conflicts"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A506",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_boundaries.RenewalAssuranceTests.test_assurance_and_correction_renewal_keep_review_order",
+        "tests.test_records_renewal.RenewalTests.test_closure_retains_renewed_rows_and_requires_fresh_tip_proof",
+        "tests.test_records_corrections.AdmissionLineageTests.test_reopening_or_renewing_predecessor_correction_allows_fresh_tip_review"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A507",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_boundaries.RenewalTickTests.test_candidate_move_independently_unticks_pending_renewal",
+        "tests.test_records_boundaries.RenewalTickTests.test_pending_renewal_never_supplies_evidence_closure_source_proof",
+        "tests.test_records_boundaries.RenewalMappingTests.test_verified_r149_mapping_keeps_approved_ids_through_renewal",
+        "tests.test_records_boundaries.RenewalTickTests.test_independent_source_policy_dependency_environment_changes_end_pending",
+        "tests.test_records_renewal.RenewalTests.test_pending_proof_distinguishes_satisfied_and_reopened_sibling_states",
+        "tests.test_records_boundaries.RenewalTickTests.test_reopened_proof_keeps_due_untick_through_renewal",
+        "tests.test_records_boundaries.RenewalTickTests.test_successive_renewal_holds_but_reopening_tip_proof_ends_hold",
+        "tests.test_records_boundaries.RenewalMappingTests.test_mapping_epoch_bound_uses_root_only_for_renewal_copies"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A508",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_receipts.ReceiptBoundaryTests.test_consumption_then_renewal_keeps_history_without_replacement_proof",
+        "tests.test_records_renewal.RenewalTests.test_renewal_refusals_and_pending_results",
+        "tests.test_records_receipts.ReceiptBoundaryTests.test_historical_review_cannot_be_discarded",
+        "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
+        "tests.test_records_corrections.InvestigationCapacityTests.test_full_ordinary_history_never_allows_investigation_discard",
+        "tests.test_records_refused_reports.RefusedReportTests.test_consumable_review_keeps_its_slot_and_records_its_finding"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A509",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_renewal.RowAndHistoryTests.test_512_hydrated_rows_keep_384_omitted_terminal_rows",
+        "tests.test_records_renewal.RowAndHistoryTests.test_request_update_and_live_overflows_report_distinct_counts",
+        "tests.test_records_corrections.LineageReadTests.test_persisted_rows_share_one_lineage_for_all_finding_checks"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A510",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_capacity.RecordsCapacityTests.test_acceptance_shape_and_original_three_findings_share_one_new_correction",
+        "tests.test_records_capacity.RecordsCapacityTests.test_post_upgrade_admission_renews_before_recording_further_groups",
+        "tests.test_records_capacity.RecordsCapacityTests.test_group_metrics_follow_the_renewed_assurance_tip"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A511",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_renewal.RowAndHistoryTests.test_terminal_rows_and_unresolved_findings_archive_whole_values",
+        "tests.test_records_renewal.RowAndHistoryTests.test_previous_reader_refuses_renewed_state_and_larger_counts_without_rewrite"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A512",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_records_capacity.RecordsCapacityTests.test_subsequent_groups_preserve_every_historical_row_and_receipt"
       ],
       "status": "NOT_RUN"
     }

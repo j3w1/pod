@@ -171,18 +171,18 @@ class SidecarTests(unittest.TestCase):
         self.assertEqual(report_projection(second, ctx()), report_projection(restored["checkpoint"], ctx()))
         self.assertEqual(second["closure"], restored["checkpoint"]["closure"])
 
-    def test_sixteen_receipt_logical_limit_still_refuses_seventeenth(self):
+    def test_sixty_four_receipt_logical_limit_refuses_sixty_fifth(self):
         from pod.assurance import _stamp_evidence
         from tests.test_obligations import ctx, proof
-        receipts = [{"evidence": proof("O1", "c0", reference=f"proof-{i}"), "accepted_seq": 1} for i in range(16)]
+        receipts = [{"evidence": proof("O1", "c0", reference=f"proof-{i}"), "accepted_seq": 1} for i in range(64)]
         state = _empty()
         ob = {"id": "O1", "kind": "criterion", "evidence": [], "receipts": receipts}
         state["checkpoint"] = {"candidate": "c1", "obligations": [ob]}
         record, chunks = compact(state, force=True)
         restored = hydrate(record, chunks.__getitem__)["checkpoint"]["obligations"][0]
-        self.assertEqual(len(restored["receipts"]), 16)
+        self.assertEqual(len(restored["receipts"]), 64)
         for prior in (ob, restored):
-            new = {**deepcopy(prior), "evidence": [proof("O1", reference="seventeenth")]}
+            new = {**deepcopy(prior), "evidence": [proof("O1", reference="sixty-fifth")]}
             with self.assertRaises(PodError) as caught:
                 _stamp_evidence(new, prior, ctx(), "1" * 64, False, seq=20)
             self.assertEqual(caught.exception.detail["detail"], "receipt_limit")

@@ -11,6 +11,7 @@ from pod.ledger import _read, objective_root
 from pod.obligations import MAX_FINDINGS, MAX_REPORT_FINDINGS
 from tests.issue41_support import ProductionCase
 from tests import kernel_support as boundaries
+from tests.records_support import start_before_reservations
 
 
 class AssuranceCapacityTests(unittest.TestCase):
@@ -50,7 +51,7 @@ class AssuranceCapacityTests(unittest.TestCase):
 
         def begin(name):
             packet = case.packet(["A"], role="review")
-            admission = case.start(name, packet)["admission"]
+            admission = start_before_reservations(case, name, packet)["admission"]
             case.settle(admission)
             return admission, packet
 
@@ -156,10 +157,36 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["detail"], "finding_limit")
         self.assertEqual(caught.exception.detail["referent"]["limit"], 64)
         action = caught.exception.detail["next_action"]
-        self.assertIn("maintainer", action)
-        self.assertIn("no supported write", action)
-        self.assertNotIn("consolidate", action)
+        self.assertEqual(action["seq"], _read(self.path)["checkpoint"]["seq"] + 1)
+        self.assertEqual(action["renew"], [{"id": "A", "as": "<fresh-id>", "state": "waiting",
+                                            "wait": {"class": "sequenced", "referent": "O1"}}])
         self.assertEqual(self.files(), before)
+
+    def test_new_admission_reserves_the_full_finding_budget(self):
+        # Consume the preceding pending result, so refusal is about the new
+        # attempt's 32-record budget, not an older pending result.
+        admission, packet = self.restore(63)
+        self.case.report(admission, packet, outcome="failed", map={"seq": _read(self.path)["checkpoint"]["seq"] + 1,
+            "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}})
+        packet = self.case.packet(["A"], role="review")
+        before = self.files()
+        workers = deepcopy(self.case.port.workers)
+        with self.assertRaises(PodError) as caught:
+            self.case.start("must-renew-first", packet)
+        detail = caught.exception.detail
+        self.assertEqual(detail["detail"], "finding_limit")
+        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
+                         {"retained": 63, "proposed": 95, "reserved": 32, "limit": 64})
+        action = detail["next_action"]
+        self.assertEqual(action, {"seq": _read(self.path)["checkpoint"]["seq"] + 1,
+            "renew": [{"id": "A", "as": "<fresh-id>", "state": "waiting",
+                       "wait": {"class": "sequenced", "referent": "O1"}}]})
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.case.port.workers, workers)
+        action["renew"][0]["as"] = "A2"
+        self.case.write(**action)
+        fresh = self.case.start("review-renewal", self.case.packet(["A2"], role="review"))
+        self.assertEqual(fresh["admission"]["serves"], ["A2"])
 
     def test_report_33_refuses_even_with_32_history_slots_remaining(self):
         admission, packet = self.restore(32)
@@ -249,11 +276,12 @@ class AssuranceCapacityTests(unittest.TestCase):
         with self.assertRaises(PodError) as caught:
             self.case.write(rows)
         self.assertEqual(caught.exception.detail["detail"], "evidence_invalidated")
-        frozen = self.case.packet(["A"], role="review")
+        self.case.write(renew=[{"id": "A", "as": "A2"}])
+        frozen = self.case.packet(["A2"], role="review")
         fresh = self.case.start("admitted-after-new-resolution", frozen)["admission"]
         self.case.settle(fresh)
         rows = self.case.stored()
-        assurance = next(row for row in rows if row["id"] == "A")
+        assurance = next(row for row in rows if row["id"] == "A2")
         assurance.pop("executor")
         assurance.update(state="satisfied", evidence=[{"attempt": fresh["admission_id"]}])
         self.case.report(fresh, frozen, map={"obligations": rows})

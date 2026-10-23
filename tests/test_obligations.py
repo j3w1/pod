@@ -731,19 +731,19 @@ class ProofIntegrityTests(unittest.TestCase):
         self.assertEqual(len(by_id(qualified, "O1")["receipts"]), 2)
 
     def test_ordinary_receipt_requires_definition_and_history_never_evicts(self):
-        from pod.obligations import MAX_EVIDENCE
+        from pod.obligations import MAX_RECEIPTS
         missing = proof("S"); missing.pop("definition")
         refused(self, "obligation_invalid", "evidence_unbound", accept_write, None,
                 intake(ob("S", "satisfied", evidence=[missing])), ctx())
         state = accept_write(None, intake(ob("S")), ctx())
-        for index in range(MAX_EVIDENCE):
+        for index in range(MAX_RECEIPTS):
             rows = rows_of(state)
             s = next(row for row in rows if row["id"] == "S")
             s["evidence"] = [proof("S", reference=f"log-{index}")]
             state = accept_write(state, write(state, rows), ctx())
         s["evidence"] = [proof("S", reference="one-too-many")]
         refused(self, "obligation_invalid", "receipt_limit", accept_write, state, write(state, rows), ctx())
-        self.assertEqual(len(by_id(state, "S")["receipts"]), MAX_EVIDENCE)
+        self.assertEqual(len(by_id(state, "S")["receipts"]), MAX_RECEIPTS)
 
 
 class AssuranceTests(unittest.TestCase):
@@ -927,7 +927,7 @@ class LifecycleTests(unittest.TestCase):
                 write(closed, rows, governance_refresh=True), ctx())
         refused(self, "objective_closed", "objective_closed", accept_write, closed,
                 write(closed, rows, revision_authority={"provenance": "user_direct", "instruction": "x"}), ctx())
-        reopened = accept_write(closed, write(closed, [*rows, ob(
+        reopened = accept_write(closed, write(closed, [*rows_of(closed), ob(
             "N", "active", kind="criterion", provenance="user_direct",
             source={"instruction": "also support CSV"})], reopen=True,
             revision_authority={"provenance": "user_direct", "instruction": "also support CSV"}), ctx())
@@ -968,7 +968,7 @@ class LifecycleTests(unittest.TestCase):
         rows = rows_of(done)
         rows[0].pop("withdrawal")
         rows[0].update(state="active", executor="coordinator")
-        refused(self, "obligation_invalid", "withdrawal_unauthorized", accept_write, done, write(done, rows), ctx())
+        refused(self, "obligation_invalid", "terminal_frozen", accept_write, done, write(done, rows), ctx())
 
 
 class ObservationTests(unittest.TestCase):

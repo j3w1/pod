@@ -635,7 +635,7 @@ class RepairTests(CallerCase):
         self.settled_request("checkpoint")
 
     def test_wait_refusal_names_every_restatement_up_to_the_map_bound(self):
-        count = self.contracts["map"]["fields"]["obligations"]["max_items"]
+        count = self.contracts["map"]["fields"]["obligations"]["max_live"]
         rows = [self.criterion(), *[self.sub("D" + str(index), wait={"class": "dependency", "referent": "O1"})
                                    for index in range(count - 1)]]
         self.ok("checkpoint", self.owned(value=self.core(obligations=rows, governance={"base_ref": "target"})))

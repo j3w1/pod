@@ -685,6 +685,10 @@ def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _P
                       "withdrawn, at least one satisfied, and a verified delivery record of its own or its "
                       "completed claimed chain; each claim-only successor needs its own criteria satisfied.")
         return
+    for current in [state, *[member.get("raw") for member in members or [] if member.get("kind") == "current"]]:
+        if any(ob.get("kind") == "criterion" and "renews" in ob and ob.get("state") not in ("satisfied", "withdrawn", "renewed")
+               for ob in ((current or {}).get("checkpoint") or {}).get("obligations", [])):
+            proof.add("not_proved", "renewal_pending", "Renewed criteria need fresh proof before evidence closure; existing issue ticks do not prove the replacement.")
     proof.facts["sources"] = []
     for issue, bound_by in issues:
         facts = {"locator": issue["locator"], "repository": issue["repository"], "number": issue["number"],
@@ -723,7 +727,9 @@ def _direct_source(objective: str, state: dict | None, members: list[dict] | Non
                                   for row in members or [] if row["relation"] == "predecessor"]
     for name, current in rows:
         mapped = map_of(current) if current is not None else None
-        criteria = [ob for ob in (mapped or {}).get("obligations") or [] if ob.get("kind") == "criterion"]
+        from .lineage import Lineage
+        lineage = Lineage((mapped or {}).get("obligations") or [])
+        criteria = [ob for ob in lineage.rows.values() if ob.get("kind") == "criterion" and lineage.effective(ob["id"]) == ob["id"]]
         if (not criteria or not all(ob.get("state") in ("satisfied", "withdrawn") for ob in criteria)
                 or not any(ob.get("state") == "satisfied" for ob in criteria)):
             return False, name

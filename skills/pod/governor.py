@@ -1127,7 +1127,7 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         if verdict["purpose"] == "release":
             required_audits = {ob["id"] for ob in (map_of(state) or {}).get("obligations", [])
                               if ob["kind"] == "assurance" and ob["provenance"] == "project_policy"
-                              and ob["state"] != "withdrawn" and not ob.get("source", {}).get("gone")
+                              and ob["state"] not in ("withdrawn", "renewed") and not ob.get("source", {}).get("gone")
                               and ob.get("unit") in (None, proposal["unit"])}
             if required_audits:
                 from .ledger import kernel_view

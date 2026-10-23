@@ -350,7 +350,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             "coordinator": ("SKILL.md", "pool edits never change them"),
             "lifecycle": ("SKILL.md", "orca owns runs, tasks, dispatches"),
             "helpers_and_acceptance": ("SKILL.md", "helpers validate admission and record evidence"),
-            "obligations": ("SKILL.md", "every obligation satisfied or validly withdrawn with reason"),
+            "obligations": ("SKILL.md", "every live obligation satisfied or validly withdrawn with reason"),
             "final_report": ("SKILL.md", "a final report, final-candidate gates"),
             "required_review": ("SKILL.md", "independent review required by work/project"),
             "delivery": ("SKILL.md", "governor-recorded delivery"),

@@ -237,6 +237,13 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported", "Admissions are malformed")
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict):
+        if checkpoint_value.get("obligations") is not None:
+            from .obligations import row_bounds
+            from .lineage import Lineage
+            row_bounds(checkpoint_value["obligations"])
+            if any(isinstance(row, dict) and ("renews" in row or "renewal" in row or row.get("state") == "renewed")
+                   for row in checkpoint_value["obligations"]):
+                Lineage(checkpoint_value["obligations"])
         if "issue_revision_data" in checkpoint_value:
             raise PodError("state_unsupported", "Transient issue body DATA cannot be stored in a checkpoint")
         from .issue_revision import requested, validate_decision
@@ -1162,7 +1169,7 @@ def map_read(project: Path, objective: str) -> dict:
     for ob in map_state["obligations"]:
         if ob["kind"] != "assurance":
             continue
-        if map_state.get("closure") or ob["state"] == "withdrawn":
+        if map_state.get("closure") or ob["state"] in ("withdrawn", "renewed"):
             status = "terminal"
         elif ob["state"] == "satisfied" and evidence_valid(ob, ctx, gov):
             status = "bound"
