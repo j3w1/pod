@@ -150,7 +150,7 @@ def observe(state: dict, ledger: dict, source: dict, body: str, *, mapping_check
     if source != checkpoint.get("objective_source"):
         return False
     previous = ledger.get("facts")
-    observed_hash, observed_scope = _hash(body), scope_hash(body)
+    observed_hash, observed_scope = _hash(body), scope_hash(body, seal=source.get("role") == "SEAL")
     diverged = False
     for row in checkpoint.get("obligations", []):
         if row.get("state") in FROZEN:
@@ -239,11 +239,12 @@ def prepare(state: dict, source: dict | None, value: object, body: str) -> dict:
     requested = request(value)
     if source is None or _hash(body) != source["body_sha256"]:
         raise _hold("current_binding_unavailable")
+    seal = source.get("role") == "SEAL"
     original = requested["original_body"]
     # Hypothetical replacement has the same offsets. The existing canonical
     # parser, unchanged, decides which candidates are outside fences/column zero.
     hypothetical = _LEGACY_LINE.sub(lambda match: match[0].replace("**PoD ", "**PoD#", 1), original)
-    recognized = {line["offset"] for lines in pod_lines(hypothetical).values() for line in lines}
+    recognized = {line["offset"] for lines in pod_lines(hypothetical, seal=seal).values() for line in lines}
     original_lines = [match for match in _LEGACY_LINE.finditer(original) if match.start() + 3 in recognized]
     amended = list(original)
     for match in original_lines:
@@ -253,7 +254,7 @@ def prepare(state: dict, source: dict | None, value: object, body: str) -> dict:
     if "".join(amended) != body:
         raise _hold("body_not_label_only")
     rows = {row["id"]: row for row in (state.get("checkpoint") or {}).get("obligations", [])}
-    original_hash, accepted_scope, current_lines = _hash(original), scope_hash(body), pod_lines(body)
+    original_hash, accepted_scope, current_lines = _hash(original), scope_hash(body, seal=seal), pod_lines(body, seal=seal)
     result = {}
     for key, target in requested["targets"].items():
         row = rows.get(key)
@@ -308,6 +309,7 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
         decision, checkpoint = decisions[-1], prior
     validate_decision(decision, checkpoint)
     source = ctx.get("pod_mapping_source")
+    seal = (source or {}).get("role") == "SEAL"
     approved = decision["criteria"]
     if (source is None or any(source[key] != decision["source"][key]
                               for key in ("repository", "number", "locator"))
@@ -351,10 +353,10 @@ def superseded_originals(prior: dict | None, rows: dict, ctx: dict, *, seq: int 
                 return set()
     mapped = {}
     for row in rows.values():
-        number = pod_ref_number(effective_ref(row, ctx))
+        number = pod_ref_number(effective_ref(row, ctx), seal=seal)
         if number is not None:
             mapped.setdefault(number, []).append(row["id"])
-    expected = {pod_ref_number(item["ref"]): [lineage.effective(item["id"])] for item in approved
+    expected = {pod_ref_number(item["ref"], seal=seal): [lineage.effective(item["id"])] for item in approved
                 if rows[lineage.effective(item["id"])]["state"] not in FROZEN}
     if (mapped != expected or any(row["id"] not in selected for row in rows.values()
                                   if (row["kind"], row["provenance"]) == ("criterion", "objective")
