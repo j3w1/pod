@@ -239,6 +239,8 @@ class SealMappingTests(SealMappingCase):
         rows = self.stored()
         rows[0].pop("executor")
         rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        rows[1].pop("wait")
+        rows[1].update(state="active", executor="coordinator")
         self.write(rows)
         self.tick(1)
         current = self.stored()[1]["pod_mapping"]
@@ -264,8 +266,11 @@ class SealRevisionCase(IssueRevisionCase):
         self.issue.body += "\n- [ ] **AC2** new requirement"
         source = issue_intake(self.project, self.locator, port=self.issue, completion=True)["source"]
         rows = self.stored()
-        rows.append(self.criterion("waiting", id="O2", source={"ref": "AC2"}, check="**AC2** new requirement",
-                                   wait={"class": "sequenced", "referent": "O1"}))
+        held = next((row["id"] for row in rows if row.get("state") == "active"
+                     and row.get("executor") == "coordinator"), None)
+        added = {"id": "O2", "source": {"ref": "AC2"}, "check": "**AC2** new requirement"}
+        rows.append(self.criterion("active", **added) if held is None else
+                    self.criterion("waiting", **added, wait={"class": "sequenced", "referent": held}))
         return {"seq": read(self.project, "objective")["checkpoint"]["seq"] + 1,
                 "obligations": rows, "objective_source": source, "criteria": ["AC1", "AC2"],
                 "revision_authority": {"operation": "issue_revision", "provenance": "user_direct", "channel": "relayed",

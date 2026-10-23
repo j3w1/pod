@@ -273,7 +273,7 @@ def _op_issue_intake(request: dict) -> dict:
                           amendments=request.get("amendments"), completion=request.get("completion", False))
     from .issue_revision import criteria_view
     if result.get("source") is not None:
-        result["issue_revision_criteria"] = criteria_view(result["body"])
+        result["issue_revision_criteria"] = criteria_view(result["body"], seal=result["source"].get("role") == "SEAL")
     return result
 
 

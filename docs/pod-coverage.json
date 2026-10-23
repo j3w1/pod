@@ -7033,7 +7033,11 @@
         "tests.test_issue_mapping_questions.QuestionSiblingTests.test_canonical_relayed_question_closes_with_fresh_proof",
         "tests.test_issue_mapping_questions.QuestionSiblingTests.test_canonical_session_question_closes_with_fresh_proof",
         "tests.test_issue_mapping_questions.QuestionSiblingTests.test_superseded_session_question_closes_with_fresh_proof",
-        "tests.test_issue_mapping_questions.QuestionSiblingTests.test_question_revision_then_relayed_withdrawal_keeps_readable_retirement"
+        "tests.test_issue_mapping_questions.QuestionSiblingTests.test_question_revision_then_relayed_withdrawal_keeps_readable_retirement",
+        "tests.test_closure_fixes_b.SealRevisionParserTests.test_live_revision_parser_uses_the_bound_seal_role",
+        "tests.test_closure_fixes_b.SealRevisionParserTests.test_historical_ac_scope_recovers_from_genuine_proof_sequence_only_for_bound_seal",
+        "tests.test_closure_fixes_b.SealRevisionParserTests.test_revision_capability_and_stored_validation_keep_exact_ac_references",
+        "tests.test_closure_fixes_b.SealRevisionTests.test_seal_issue_revision_preserves_unchanged_ac_and_stores_valid_ac_mapping"
       ],
       "status": "NOT_RUN"
     },
@@ -7749,7 +7753,16 @@
         "tests.test_completed_closure.GovernanceCompletionTests.test_delivery_only_write_after_governance_change_keeps_baseline",
         "tests.test_completed_closure.GovernanceCompletionTests.test_exact_merge_result_with_delivered_policy_does_not_adopt_it",
         "tests.test_completed_closure.GovernanceCompletionTests.test_report_closure_after_governance_change_uses_the_same_proof",
-        "tests.test_evidence_closure.DeliveryClosesTests.test_the_closing_checkpoint_after_its_merge_needs_no_owner_decision"
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_closing_checkpoint_after_its_merge_needs_no_owner_decision",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_linked_delivery_closes_after_governance_change_without_r93_or_owner_decision",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_exact_linked_result_with_changed_governance_keeps_baseline",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_report_closure_uses_linked_proof_and_consumes_the_bound_report",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_linked_proof_does_not_exempt_an_ordinary_write",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_missing_link_names_supported_lead_work_without_an_impossible_r93_step",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_unknown_ancestry_and_retargeting_never_exempt_closure",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_target_movement_during_linked_read_grants_no_exemption",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_unnecessary_refresh_names_closing_on_the_retained_baseline",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_unmerged_or_wrong_target_link_never_grants_completion_currency"
       ],
       "status": "NOT_RUN"
     },
@@ -7847,7 +7860,16 @@
         "tests.test_completed_closure.SourceClosingTests.test_seal_completion_binding_cannot_start_a_new_objective",
         "tests.test_completed_closure.SourceClosingTests.test_an_issue_bound_objective_cannot_rebind_to_a_seal",
         "tests.test_completed_closure.SealCompletionTests.test_extra_unmapped_handoff_still_holds_evidence_closure",
-        "tests.test_closure_fixes_a.SourceIntentTests.test_bound_seal_source_refresh_keeps_identity_and_refuses_another_issue"
+        "tests.test_closure_fixes_a.SourceIntentTests.test_bound_seal_source_refresh_keeps_identity_and_refuses_another_issue",
+        "tests.test_closure_fixes_b.SealParserTests.test_revision_and_scope_parsers_share_bound_seal_tick_recognition",
+        "tests.test_closure_fixes_b.SealParserTests.test_ac_and_pod_numeric_collision_remains_ambiguous_only_for_bound_seal",
+        "tests.test_closure_fixes_b.SealMappingParserTests.test_label_only_repair_scope_uses_bound_seal_recognition",
+        "tests.test_closure_fixes_b.SealMappingParserTests.test_mapping_observation_and_tick_facts_agree_for_a_bound_seal",
+        "tests.test_closure_fixes_b.SealRevisionParserTests.test_live_revision_parser_uses_the_bound_seal_role",
+        "tests.test_closure_fixes_b.SealRevisionParserTests.test_historical_ac_scope_recovers_from_genuine_proof_sequence_only_for_bound_seal",
+        "tests.test_closure_fixes_b.SealRevisionParserTests.test_revision_capability_and_stored_validation_keep_exact_ac_references",
+        "tests.test_closure_fixes_b.SealMappingTests.test_seal_repair_scope_masks_ac_ticks_and_observation_keeps_derived_association_current",
+        "tests.test_closure_fixes_b.SealRevisionTests.test_seal_issue_revision_preserves_unchanged_ac_and_stores_valid_ac_mapping"
       ],
       "status": "NOT_RUN"
     },
@@ -7895,7 +7917,8 @@
         "tests.test_completed_closure.CompletionGuidanceTests.test_capacity_and_governance_unavailable_name_the_lead_action",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
         "tests.test_evidence_closure.UndeliveredTests.test_no_recorded_delivery_pull_request_stays_open",
-        "tests.test_completed_closure.GovernanceCompletionTests.test_unproved_closing_currency_names_the_lead_and_preserves_bytes"
+        "tests.test_completed_closure.GovernanceCompletionTests.test_unproved_closing_currency_names_the_lead_and_preserves_bytes",
+        "tests.test_closure_fixes_b.LinkedCompletionTests.test_missing_link_names_supported_lead_work_without_an_impossible_r93_step"
       ],
       "status": "NOT_RUN"
     },
