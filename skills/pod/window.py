@@ -30,7 +30,9 @@ HOST_CONDITIONS = ("window_not_found", "window_ambiguous", "window_not_authorize
 COMMAND = "pod continue --objective {} --json"
 LEAD = "A task for the project lead, never an owner question: "
 ROW = {"provenance", "state", "from_runtime", "to_runtime", "at", "from_owner", "to_owner", "run", "window",
-       "admissions", "abort_reason"}
+       "admissions", "completion", "attempts", "abort_reason"}
+ATTEMPT_FIELDS = {"to_owner", "at", "abort_reason", "run_before"}
+MAX_ATTEMPTS = 4
 RUN_FIELDS = {"id", "before", "after"}
 ADMISSION_FIELDS = {"id", "state", "verdict", "reason", "runtime", "status", "outcome"}
 VERDICTS = ("settled", "unknown", "absent")
@@ -39,7 +41,11 @@ DISCOVERY_CALLS = 16
 OBJECTIVE_LOSS = frozenset({"objective_continued", "objective_retired", "objective_closed", "owner_live",
                             "coordinator_lost_outside_window", "run_missing", "run_rebound_elsewhere", "run_shared",
                             "identity_differs"})
-DISCOVERY_SECONDS = 20.0
+DISCOVERY_SECONDS = 15.0
+DISCOVERY_RUNTIME_TIMEOUT = 3
+# No window question: the ordinary paths apply unchanged.
+QUIET = frozenset({"runtime_unchanged", "objective_continued", "objective_retired", "objective_closed",
+                   "window_verifier_unavailable"})
 
 # Each lead-task condition names what to resolve; none asks the owner.
 NEXT = {
@@ -80,6 +86,8 @@ NEXT = {
     "identity_differs": "a bound admission's native identity differs from its record; differing identities cannot be "
                         "continued; use an existing recovery path",
     "history_full": "the eight-entry continuity history is full; continue in a successor objective",
+    "attempts_full": "this continuation was attempted and ended too many times; inspect its recorded attempts and "
+                     "use an existing recovery path",
     "binding_unstable": "Orca's Run binding or runtime changed during the check; retry the same command",
     "window_verifier_unavailable": "configure the host's authorization_verifier; Pod cannot verify a window without it",
     "window_unverified": "the host verifier gave no usable answer; repair it and retry the same command",
@@ -135,15 +143,25 @@ def validate_entry(row: dict) -> None:
                     or type(part["generation"]) is not int or part["generation"] < 0):
                 raise ValueError(key)
         _validate_window(row["window"])
-        admissions = row["admissions"]
-        if not isinstance(admissions, list) or len(admissions) > 256:
-            raise ValueError("admissions")
-        for item in admissions:
-            if (not isinstance(item, dict) or set(item) != ADMISSION_FIELDS or not _text(item["id"], 128)
-                    or item["verdict"] not in VERDICTS
-                    or any(item[key] is not None and not _text(item[key]) for key in ("state", "reason", "runtime",
-                                                                                     "status", "outcome"))):
-                raise ValueError("admission")
+        _validate_readback(row["admissions"])
+        completion = row["completion"]
+        if (row["state"] == "done") != isinstance(completion, dict):
+            raise ValueError("completion")
+        if completion is not None:
+            if set(completion) != {"at", "admissions"} or not _text(completion["at"]):
+                raise ValueError("completion")
+            _validate_readback(completion["admissions"])
+        attempts = row["attempts"]
+        if not isinstance(attempts, list) or len(attempts) > MAX_ATTEMPTS:
+            raise ValueError("attempts")
+        for item in attempts:
+            before = item.get("run_before") if isinstance(item, dict) else None
+            if (not isinstance(item, dict) or set(item) != ATTEMPT_FIELDS or not _text(item["to_owner"])
+                    or not _text(item["at"]) or not _text(item["abort_reason"])
+                    or not isinstance(before, dict) or set(before) != {"coordinator", "generation"}
+                    or before["coordinator"] is not None and not _text(before["coordinator"], 256)
+                    or type(before["generation"]) is not int):
+                raise ValueError("attempt")
         if row["abort_reason"] is not None and not _text(row["abort_reason"]):
             raise ValueError("abort")
         if (row["state"] == "aborted") != (row["abort_reason"] is not None):
@@ -152,6 +170,17 @@ def validate_entry(row: dict) -> None:
             raise ValueError("decision")
     except (KeyError, TypeError, ValueError, PodError):
         raise PodError("state_unsupported", "Window continuation history is malformed") from None
+
+
+def _validate_readback(admissions: object) -> None:
+    if not isinstance(admissions, list) or len(admissions) > 256:
+        raise ValueError("admissions")
+    for item in admissions:
+        if (not isinstance(item, dict) or set(item) != ADMISSION_FIELDS or not _text(item["id"], 128)
+                or item["verdict"] not in VERDICTS
+                or any(item[key] is not None and not _text(item[key]) for key in ("state", "reason", "runtime",
+                                                                                 "status", "outcome"))):
+            raise ValueError("admission")
 
 
 def _history(state: dict) -> list:
@@ -234,7 +263,27 @@ def _receipt(project: Path, value: dict, *, consume: bool) -> None:
 
 # --------------------------------------------------------------------------- native reads
 
-def _admissions(state: dict, *, runtime: str, port) -> tuple[list[dict], list[str]]:
+class Budget:
+    """One bound on a discovery's wall time, checked before every native read and the verifier.
+
+    A single read in progress keeps its own timeout, so the bound is the budget plus at most one read."""
+
+    def __init__(self, seconds: float):
+        import time
+        self._clock = time.monotonic
+        self.deadline = self._clock() + seconds
+
+    def check(self, *, need: float = 0.0) -> None:
+        if self.deadline - self._clock() <= need:
+            raise PodError("discovery_budget", "The discovery time budget is spent")
+
+
+def _step(budget: "Budget | None", need: float = 0.0) -> None:
+    if budget is not None:
+        budget.check(need=need)
+
+
+def _admissions(state: dict, *, runtime: str, port, budget: "Budget | None" = None) -> tuple[list[dict], list[str]]:
     """Fresh readback of every outstanding admission; identities compared exactly, nothing settled or stamped."""
     from .ledger import _native_assignment_settled
     from .orca import worker_rows
@@ -251,6 +300,7 @@ def _admissions(state: dict, *, runtime: str, port) -> tuple[list[dict], list[st
         elif row["state"] == "reserved":
             run = row["run_id"]
             if run not in fleets:
+                _step(budget)
                 try:
                     fleets[run] = worker_rows(run)
                 except PodError as exc:
@@ -271,6 +321,7 @@ def _admissions(state: dict, *, runtime: str, port) -> tuple[list[dict], list[st
                     item.update(verdict="absent", reason="no Dispatch for the reserved Task")
         else:
             binding = row.get("native_binding") or {}
+            _step(budget)
             try:
                 shown = port.show_worker(binding["dispatchId"])
             except (PodError, KeyError) as exc:
@@ -314,12 +365,14 @@ def _cwd_toplevel() -> str | None:
 # --------------------------------------------------------------------------- detection
 
 def detect(project: Path, objective: str, state: dict, *, port, caller: str | None = None,
-           objective_only: bool = False, verify: bool = True) -> dict:
+           objective_only: bool = False, verify: bool = True, budget: "Budget | None" = None) -> dict:
     """Fresh facts only; no writes and no native mutation.
 
-    `objective_only` answers whether the objective is eligible, for listings, without caller checks. Otherwise the
-    caller must be the live terminal in the recorded worktree that would run the continuation.
+    `objective_only` answers whether the objective is eligible, for listings and status, without caller checks: the
+    recorded worktree is still checked, and a pending attempt is reported rather than refused. Otherwise the caller
+    must be the live terminal in the recorded worktree that would run the continuation. `budget` bounds discovery.
     """
+    from .relay import TIMEOUT_S
     from .ledger import _run_references, CONTINUITY_HISTORY
     from .orca import current_run, run_show, terminal_identity, worker_rows
     from .handoff import run_scope, unfinished as handoff_unfinished
@@ -368,8 +421,11 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     if handoff is not None and handoff["state"] == "pending":
         return fail("handoff_pending", "an owner handoff is pending.")
     pending = unfinished(state)
-    if pending is not None and pending["state"] == "pending" and pending["to_owner"] != caller:
-        if terminal_identity(pending["to_owner"])["state"] != "lost":
+    if pending is not None and pending["state"] == "pending":
+        _step(budget)
+        holder_live = terminal_identity(pending["to_owner"])["state"] != "lost"
+        result["pending"] = {"to_owner": pending["to_owner"], "live": holder_live, "at": pending["at"]}
+        if not objective_only and pending["to_owner"] != caller and holder_live:
             return fail("pending_other_caller", "another terminal holds the pending continuation.")
     if not objective_only:
         if not caller:
@@ -385,6 +441,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
             return fail("binding_unstable", "the terminal and Run reads came from different runtimes.")
         runtime = first["runtime"]
     else:
+        _step(budget)
         try:
             runtime = run_show(run_id)["runtime"]
         except PodError as exc:
@@ -396,8 +453,17 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     facts["current_runtime"] = runtime
     if runtime in runtimes:
         return fail("runtime_unchanged", "Orca's runtime is the recorded one.")
+    from .operations import _check_worktree_binding
+    recorded = Path(workspace["path"])
+    # The recorded worktree itself must still be that repository, key, path and branch, whoever reads.
+    try:
+        if not recorded.is_dir():
+            raise PodError("worktree_binding_changed", "missing")
+        _check_worktree_binding(recorded, workspace)
+    except PodError:
+        return fail("worktree_changed", "the recorded worktree is missing, or its repository, key or branch differs.",
+                    definitive=True)
     if not objective_only:
-        from .operations import _check_worktree_binding
         try:
             _check_worktree_binding(project, workspace)
         except PodError:
@@ -405,6 +471,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         top = _cwd_toplevel()
         if top is None or Path(top).resolve() != Path(workspace["path"]).resolve():
             return fail("worktree_changed", "this terminal does not run in the recorded worktree.", definitive=True)
+    _step(budget)
     previous = terminal_identity(owner)
     if previous["state"] == "live":
         return fail("owner_live", "Orca reports the recorded coordinator live.", definitive=True)
@@ -413,6 +480,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                     "current runtime.", definitive=True)
     if previous["state"] != "lost":
         return fail("owner_unreadable", "Orca could not read the recorded coordinator's handle.")
+    _step(budget)
     try:
         shown = run_show(run_id)
     except PodError as exc:
@@ -443,16 +511,19 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         if any((row.get("native_binding") or {}).get("terminalHandle") == caller
                for row in state["admissions"].values()):
             return fail("caller_is_worker", "this terminal is a worker of this objective.", definitive=True)
-    try:
-        fleet = worker_rows(run_id)
-    except PodError as exc:
-        return fail("workers_unreadable", f"the Run's worker list could not be read ({exc.code}).")
-    if fleet["runtime"] != runtime or fleet.get("complete") is not True:
-        return fail("workers_unreadable", "the worker list does not prove complete current-runtime scope.")
-    if caller and any(part.get(key) == caller for row in fleet["workers"] if isinstance(row, dict)
-                      for part in (row, row.get("worker"), row.get("projection")) if isinstance(part, dict)
-                      for key in ("terminalHandle", "agentTerminalHandle")):
-        return fail("caller_is_worker", "this terminal has a worker binding on this Run.", definitive=True)
+    if not objective_only:
+        # The caller's worker exclusion needs the Run's whole worker list; eligibility alone does not.
+        try:
+            fleet = worker_rows(run_id)
+        except PodError as exc:
+            return fail("workers_unreadable", f"the Run's worker list could not be read ({exc.code}).")
+        if fleet["runtime"] != runtime or fleet.get("complete") is not True:
+            return fail("workers_unreadable", "the worker list does not prove complete current-runtime scope.")
+        if any(part.get(key) == caller for row in fleet["workers"] if isinstance(row, dict)
+               for part in (row, row.get("worker"), row.get("projection")) if isinstance(part, dict)
+               for key in ("terminalHandle", "agentTerminalHandle")):
+            return fail("caller_is_worker", "this terminal has a worker binding on this Run.", definitive=True)
+    _step(budget)
     scope = run_scope(project, objective, run_id)
     if scope["objectives"]:
         result["other_objectives"] = scope["objectives"][:8]
@@ -463,7 +534,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     if scope.get("unverifiable"):
         return fail("peer_history_unverifiable", "peer history cannot prove closure: "
                     + ", ".join(scope["unverifiable"][:8]) + ".")
-    admissions, differs = _admissions(state, runtime=runtime, port=port)
+    admissions, differs = _admissions(state, runtime=runtime, port=port, budget=budget)
     if differs:
         result["differs"] = differs[:16]
         return fail("identity_differs", "a bound admission identity differs: " + ", ".join(differs[:4]) + ".",
@@ -473,6 +544,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     result.update(branch=branch, admissions=admissions,
                   run={"id": run_id, "before": {"coordinator": holder, "generation": held}})
     if verify:
+        _step(budget, need=TIMEOUT_S)
         try:
             result["window"] = verify_window(project, objective, state, facts)
         except PodError as exc:
@@ -541,12 +613,21 @@ def continue_objective(project: Path, objective: str, *, owner: str, port) -> di
         now = datetime.now(timezone.utc).isoformat()
         record = state["checkpoint"].get("continuity") or {"binding": None, "history": []}
         if pending is None or pending["state"] == "aborted":
+            attempts = []
+            if pending is not None:
+                # A replacement keeps every earlier attempt's caller, time, reason and Run facts, within a bound.
+                attempts = [*pending["attempts"], {"to_owner": pending["to_owner"], "at": pending["at"],
+                                                   "abort_reason": pending["abort_reason"],
+                                                   "run_before": dict(pending["run"]["before"])}]
+                if len(attempts) > MAX_ATTEMPTS:
+                    raise _refusal("attempts_full", f"{len(attempts) - 1} earlier attempts are already recorded.")
             entry = {"provenance": PROVENANCE, "state": "pending", "from_runtime": facts["recorded_runtime"],
                      "to_runtime": facts["current_runtime"], "at": now, "from_owner": facts["from_owner"],
                      "to_owner": owner, "run": {**verdict["run"], "after": None}, "window": verdict["window"],
-                     "admissions": verdict["admissions"], "abort_reason": None}
-            if pending is not None and pending["state"] == "aborted" and pending is unfinished(state):
-                # A replacement attempt reuses the aborted row's position; its reason stays in the result.
+                     "admissions": verdict["admissions"], "completion": None, "attempts": attempts,
+                     "abort_reason": None}
+            if pending is not None:
+                # The replacement takes the ended attempt's position, which `attempts` now records.
                 index = record["history"].index(pending)
                 record["history"][index] = entry
             else:
@@ -558,7 +639,7 @@ def continue_objective(project: Path, objective: str, *, owner: str, port) -> di
             # Both the pending and the done record must fit before the receipt is consumed.
             projected = _completed_state(deepcopy(state), entry=record["history"].index(entry), owner=owner,
                                          facts=facts, after={"coordinator": owner, "generation": 2 ** 31},
-                                         admissions=verdict["admissions"])
+                                         admissions=verdict["admissions"], at=now)
             from .ledger import _validate_context
             _validate_context(projected)
             prepare_context(path, {**projected, "revision": projected["revision"] + 1})
@@ -604,13 +685,15 @@ def continue_objective(project: Path, objective: str, *, owner: str, port) -> di
         if stable(final["window"], {**final["facts"], "from_owner": pending["from_owner"]}, repo_key) != bound:
             raise _refusal("window_changed", "the host's answer changed during the continuation.")
         index = record["history"].index(pending)
-        _completed_state(state, entry=index, owner=owner, facts=final["facts"],
-                         after=final["run"]["before"], admissions=final["admissions"])
+        _completed_state(state, entry=index, owner=owner, facts=final["facts"], after=final["run"]["before"],
+                         admissions=final["admissions"], at=datetime.now(timezone.utc).isoformat())
         _write(path, state)
         return {"status": "continued", "objective": objective, "window_continuation": record["history"][index]}
 
 
-def _completed_state(state: dict, *, entry: int, owner: str, facts: dict, after: dict, admissions: list) -> dict:
+def _completed_state(state: dict, *, entry: int, owner: str, facts: dict, after: dict, admissions: list,
+                     at: str) -> dict:
+    """The done write. The pending row's initial readback stays; the completion readback is added beside it."""
     record = state["checkpoint"]["continuity"]
     row = record["history"][entry]
     state["owner"] = owner
@@ -620,17 +703,26 @@ def _completed_state(state: dict, *, entry: int, owner: str, facts: dict, after:
         ref["runtime"] = facts["current_runtime"]
     record["binding"] = {"run": facts["run"], "coordinator": owner, "generation": after["generation"]}
     row.update(state="done", to_runtime=facts["current_runtime"], to_owner=owner,
-               run={**row["run"], "after": dict(after)}, admissions=admissions)
+               run={**row["run"], "after": dict(after)}, completion={"at": at, "admissions": admissions})
     return state
 
 
 def _public(verdict: dict) -> dict:
     keep = ("status", "condition", "message", "next_action", "facts", "command", "cwd", "branch", "definitive",
-            "other_objectives", "differs")
+            "other_objectives", "differs", "pending")
     return {key: verdict[key] for key in keep if key in verdict}
 
 
 # --------------------------------------------------------------------------- status
+
+def _enabled(project: Path) -> bool:
+    """A host without an authorization verifier offers no window route; its existing paths stay exactly as they were."""
+    from .config import effective
+    try:
+        return bool(effective(project)["preferences"].get("authorization_verifier"))
+    except PodError:
+        return False
+
 
 def status_block(project: Path, objective: str, state: dict, *, port=None) -> dict | None:
     """The block `pod status --objective` and the non-owner refusal show; None when no window question arises.
@@ -639,11 +731,12 @@ def status_block(project: Path, objective: str, state: dict, *, port=None) -> di
     (for example the project lead) sees the objective's real state rather than its own location.
     """
     from .operations import OrcaPort
-    if not state or not state.get("owner") or os.environ.get("ORCA_TERMINAL_HANDLE") in (None, state["owner"]):
+    if (not state or not state.get("owner") or os.environ.get("ORCA_TERMINAL_HANDLE") in (None, state["owner"])
+            or not _enabled(project)):
         return None
     port = port or OrcaPort(project)
     verdict = detect(project, objective, state, port=port, objective_only=True)
-    if verdict["condition"] in ("runtime_unchanged", "objective_continued", "objective_retired", "objective_closed"):
+    if verdict["condition"] in QUIET:
         return None
     block = _public(verdict)
     if verdict["status"] == "window_available":
@@ -653,32 +746,40 @@ def status_block(project: Path, objective: str, state: dict, *, port=None) -> di
     return block
 
 
-def discover(rows: list[dict], *, project: Path) -> None:
-    """Annotate open listing rows with objective-level eligibility, within a bounded budget. Read-only.
+def primary_action(block: dict) -> str:
+    """The next action a window block puts first: the step, or its lead task; owner handoff stays optional."""
+    if block["status"] == "window_available":
+        return block["next_action"]
+    return block["next_action"] + " An owner handoff or successor claim stays optional, each with its own decision."
 
-    One current-runtime read decides which rows need more: a row whose recorded runtime is Orca's current one has no
-    window question and is left as it was. Eligibility is the objective's; the command still checks its caller.
+
+def discover(rows: list[dict], *, project: Path) -> None:
+    """Annotate open listing rows with objective-level eligibility, within one bounded budget. Read-only.
+
+    One short current-runtime read decides which rows need more: a row whose recorded runtime is Orca's current one has
+    no window question and is left as it was. A failed, slow or partial read never fails the list: the row reads
+    `unknown` with its reason. Eligibility is the objective's; the command still checks its caller.
     """
-    import time
     from .ledger import read, _run_references
     from .operations import OrcaPort
     from .orca import current_run
     opened = [row for row in rows if row.get("phase") == "open"]
-    if not opened:
+    if not opened or not os.environ.get("ORCA_TERMINAL_HANDLE") or not _enabled(project):
+        # Outside a live Orca terminal, or on a host with no verifier, the list stays record-only.
         return
-    unavailable = None
-    if not os.environ.get("ORCA_TERMINAL_HANDLE"):
-        unavailable = ("not_in_orca", "window continuation is checked only from a live Orca terminal")
-    else:
-        try:
-            runtime = current_run()["runtime"]
-        except PodError as exc:
-            unavailable = ("orca_unreadable", f"Orca's current runtime could not be read ({exc.code})")
-    if unavailable is not None:
+    budget = Budget(DISCOVERY_SECONDS)
+
+    def unknown(row: dict, condition: str, message: str) -> None:
+        row["continuation"] = {"status": "unknown", "condition": condition,
+                               "message": "continuation unknown: " + message,
+                               "next_action": "pod status --objective " + row["objective"]}
+
+    try:
+        runtime = current_run(timeout=DISCOVERY_RUNTIME_TIMEOUT)["runtime"]
+    except PodError as exc:
         for row in opened:
-            row["continuation"] = {"status": "unavailable", "condition": unavailable[0], "message": unavailable[1]}
+            unknown(row, "orca_unreadable", f"Orca's current runtime could not be read ({exc.code})")
         return
-    deadline = time.monotonic() + DISCOVERY_SECONDS
     calls = 0
     for row in opened:
         try:
@@ -686,28 +787,29 @@ def discover(rows: list[dict], *, project: Path) -> None:
             runtimes = set(_run_references(state).values()) if state else set()
         except (PodError, KeyError, TypeError, OSError):
             continue
-        if not state or not state.get("checkpoint") or runtimes == {runtime} or not runtimes:
-            continue
-        if calls >= DISCOVERY_CALLS or time.monotonic() >= deadline:
-            row["continuation"] = {"status": "unchecked", "condition": "discovery_budget",
-                                   "next_action": "pod status --objective " + row["objective"]}
+        if not state or not state.get("checkpoint") or not runtimes or runtimes == {runtime}:
             continue
         workspace = (state["checkpoint"].get("worktree") or {}).get("path")
         where = Path(workspace) if isinstance(workspace, str) and Path(workspace).is_dir() else project
         try:
-            verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True, verify=False)
+            budget.check()
+            verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True, verify=False,
+                             budget=budget)
             if verdict["status"] == "window_available":
+                if calls >= DISCOVERY_CALLS:
+                    raise PodError("discovery_budget", "The discovery verifier budget is spent")
                 calls += 1
-                verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True)
+                verdict = detect(where, row["objective"], state, port=OrcaPort(where), objective_only=True,
+                                 budget=budget)
         except PodError as exc:
-            row["continuation"] = {"status": "unchecked", "condition": exc.code,
-                                   "next_action": "pod status --objective " + row["objective"]}
+            unknown(row, exc.code, "the bounded check did not finish" if exc.code == "discovery_budget"
+                    else f"a read failed ({exc.code})")
             continue
-        if verdict["condition"] in ("runtime_unchanged", "objective_continued", "objective_retired", "objective_closed"):
+        if verdict["condition"] in QUIET:
             continue
         row["continuation"] = {"status": "available" if verdict["status"] == "window_available" else "unavailable",
-                               **{key: verdict[key] for key in ("condition", "message", "next_action", "command", "cwd")
-                                  if key in verdict}}
+                               **{key: verdict[key] for key in ("condition", "message", "next_action", "command", "cwd",
+                                                                "pending") if key in verdict}}
 
 
 # --------------------------------------------------------------------------- public command

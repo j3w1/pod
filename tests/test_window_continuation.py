@@ -230,6 +230,64 @@ class ContinuationTests(WindowCase):
         self.assertEqual((entry["state"], entry["to_owner"]), ("done", "third"))
         self.assertEqual(len(self.rows()), 1)
         self.assertEqual(self.state()["owner"], "third")
+        self.assertEqual([(item["to_owner"], item["abort_reason"]) for item in entry["attempts"]],
+                         [("next", "pending caller handle stale or gone")])
+
+    def test_a_refused_run_use_ends_the_attempt_and_the_retry_keeps_it(self):
+        self.establish()
+        self.lose()
+        self.mode = "refused"
+        code, refused = self.command()
+        self.assertEqual((code, refused["condition"], refused["continuation_state"]), (1, "run_use_failed", "aborted"))
+        self.mode = "success"
+        entry = self.resume()["window_continuation"]
+        self.assertEqual(entry["state"], "done")
+        self.assertEqual([(item["to_owner"], item["abort_reason"]) for item in entry["attempts"]],
+                         [("next", "run-use refused")])
+
+    def test_the_initial_readback_stays_beside_the_completion_readback(self):
+        self.establish()
+        self.lose()
+        def landing(argv, **kwargs):
+            result = self.mutate(argv, **kwargs)
+            self.settle(self.admission)  # The worker settles between the pending and the done write.
+            return result
+        with patch("pod.orca.mutate_command", side_effect=landing):
+            entry = self.resume()["window_continuation"]
+        (initial,), (final,) = entry["admissions"], entry["completion"]["admissions"]
+        self.assertEqual((initial["verdict"], initial["outcome"]), ("unknown", "in_progress"))
+        self.assertEqual((final["verdict"], final["outcome"]), ("settled", "succeeded"))
+        self.assertGreaterEqual(entry["completion"]["at"], entry["at"])
+
+    def test_a_pending_continuation_fences_a_successor_claim(self):
+        self.establish()
+        self.lose()
+        with patch("pod.orca.mutate_command", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): self.resume()
+        self.assertEqual(self.rows()[-1]["state"], "pending")
+        from pod.internal import run as internal
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        self.current = {"id": "run-s", "coordinator_handle": "third", "consumer_generation": 1}
+        internal("checkpoint", {"project": str(self.project), "objective": "successor", "owner": "third",
+                                "value": self.core(obligations=[self.criterion()],
+                                                   governance={"base_ref": "refs/remotes/origin/target"})})
+        verdict = internal("succession", {"project": str(self.project), "objective": "successor", "owner": "third",
+                                          "predecessor": "objective"})
+        self.assertEqual(verdict["condition"], "predecessor_continuation_pending")
+        self.assertEqual(self.rows()[-1]["state"], "pending")
+
+    def test_the_pending_claimant_sees_its_own_resumable_step(self):
+        self.establish()
+        self.lose()
+        self.mode = "lost"
+        self.command()
+        self.mode = "success"
+        own = self.status()["window_continuation"]
+        self.assertEqual((own["status"], own["caller"], own["pending"]["to_owner"]),
+                         ("window_available", {"ready": True}, "next"))
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        other = self.status()["window_continuation"]
+        self.assertEqual((other["status"], other["caller"]["condition"]), ("window_available", "pending_other_caller"))
 
     def test_same_caller_resumes_after_an_interruption_before_run_use(self):
         self.establish()
@@ -297,16 +355,45 @@ class ContinuationTests(WindowCase):
         self.establish()
         self.lose()
         rows = [{"objective": "objective", "phase": "open"}]
-        with patch.dict(os.environ):
+        with patch.dict(os.environ), patch("pod.orca.read_command", side_effect=AssertionError("no Orca read")):
             os.environ.pop("ORCA_TERMINAL_HANDLE")
             window.discover(rows, project=self.project)
-        self.assertEqual((rows[0]["continuation"]["status"], rows[0]["continuation"]["condition"]),
-                         ("unavailable", "not_in_orca"))
+        self.assertNotIn("continuation", rows[0])  # Outside Orca the list stays exactly record-only.
         rows = [{"objective": "objective", "phase": "open"}]
         with patch.object(window, "DISCOVERY_CALLS", 0):
             window.discover(rows, project=self.project)
         self.assertEqual((rows[0]["continuation"]["status"], rows[0]["continuation"]["condition"]),
-                         ("unchecked", "discovery_budget"))
+                         ("unknown", "discovery_budget"))
+        self.assertEqual(self.host_requests, [])
+
+    def test_a_failed_or_slow_orca_read_degrades_the_list_to_unknown(self):
+        self.establish()
+        self.lose()
+        from pod.listing import objective_list
+        with self.inside(), patch("pod.window.DISCOVERY_RUNTIME_TIMEOUT", 3), \
+                patch("pod.orca.current_run", side_effect=PodError("orca_unavailable", "timed out")):
+            listed = objective_list(self.project)
+        row = next(row for row in listed["objectives"] if row["objective"] == "objective")
+        self.assertEqual(listed["status"], "listed")
+        self.assertEqual((row["continuation"]["status"], row["continuation"]["condition"]), ("unknown", "orca_unreadable"))
+        self.assertTrue(row["continuation"]["message"].startswith("continuation unknown: "))
+
+    def test_the_budget_bounds_reads_inside_a_row_and_skips_the_verifier(self):
+        self.establish()
+        self.lose()
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self.now = 0.0
+                self._clock = self.tick
+                self.deadline = seconds
+            def tick(self):
+                self.now += 2.0  # Each native step costs two synthetic seconds; nothing sleeps.
+                return self.now
+        rows = [{"objective": "objective", "phase": "open"}]
+        with patch.object(window, "Budget", Clock):
+            window.discover(rows, project=self.project)
+        self.assertEqual((rows[0]["continuation"]["status"], rows[0]["continuation"]["condition"]),
+                         ("unknown", "discovery_budget"))
         self.assertEqual(self.host_requests, [])
 
     def test_stored_rows_validate_and_succession_lineage_recognizes_them(self):
@@ -356,6 +443,28 @@ class RefusalTests(WindowCase):
         self.terminals["owner"] = "stale"
         self.port.runtime = OLD; self.port.placement["runtime"] = OLD
         self.assert_lead_refusal("runtime_unchanged")
+
+    def test_a_denied_window_leads_every_non_owner_refusal_with_a_lead_task(self):
+        self.host.update(mode="denied", condition="window_not_authorized")
+        for name, call in self.boundary_calls("next").items():
+            with self.subTest(boundary=name):
+                with self.assertRaises(PodError) as caught:
+                    call()
+                detail = caught.exception.detail
+                self.assertEqual(detail["window_continuation"]["condition"], "window_not_authorized")
+                self.assertTrue(detail["next_action"].startswith(window.LEAD), detail["next_action"])
+                self.assertNotIn("Ask the Owner", detail["next_action"])
+        status = self.status()
+        self.assertTrue(status["next_action"].startswith(window.LEAD))
+        self.assertEqual(status["owner_handoff"]["status"], "handoff_available")  # R105 stays, optional.
+
+    def test_discovery_checks_the_recorded_worktree_itself(self):
+        from pod.listing import objective_list
+        git(self.project, "checkout", "-q", "-b", "renamed")
+        with self.inside():
+            row = next(row for row in objective_list(self.project)["objectives"] if row["objective"] == "objective")
+        self.assertEqual((row["continuation"]["status"], row["continuation"]["condition"]),
+                         ("unavailable", "worktree_changed"))
 
     def test_moved_repository_and_changed_worktree(self):
         moved = self.root / "moved"

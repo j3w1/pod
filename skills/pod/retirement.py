@@ -720,6 +720,9 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     try:
         if unfinished(state) is not None:
             return fail("handoff_pending", "The objective has an unfinished owner handoff.")
+        from .window import unfinished as window_unfinished
+        if (window_unfinished(state) or {}).get("state") == "pending":
+            return fail("handoff_pending", "The objective has a pending window continuation.")
         refs = sorted(_run_references(state))
         recorded, _ = _recorded(state)
         records = _governor_rows(project, objective)

@@ -363,13 +363,12 @@ def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: st
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)
     if verdict is not None:
         detail = {"owner_handoff": verdict, "next_action": verdict["next_action"]}
-        from .window import status_block
+        from .window import primary_action, status_block
         window = status_block(project, objective, state, port=port)
         if window is not None:
-            # The verified window route needs no owner decision and comes first (pod#110).
+            # The window route, or its lead task, needs no owner decision and comes first (pod#110).
             detail["window_continuation"] = window
-            if window["status"] == "window_available":
-                detail["next_action"] = window["next_action"]
+            detail["next_action"] = primary_action(window)
         raise PodError(code, "Caller is not the recorded owner. " + verdict["message"], detail)
 
 

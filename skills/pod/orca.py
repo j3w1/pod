@@ -453,9 +453,12 @@ def worker_rows(run: str) -> dict:
     raise PodError("orca_pagination", "Run worker read exceeds bounded pages")
 
 
-def current_run() -> dict:
-    """Read this terminal's native coordinator binding without adopting or creating one."""
-    response = read_command(["orchestration", "run-current", "--json"])
+def current_run(*, timeout: int | None = None) -> dict:
+    """Read this terminal's native coordinator binding without adopting or creating one.
+
+    `timeout` shortens the read for a caller that must stay responsive (the objective list)."""
+    argv = ["orchestration", "run-current", "--json"]
+    response = read_command(argv) if timeout is None else read_command(argv, timeout=timeout)
     result = response["result"]
     if "run" not in result:
         raise PodError("orca_contract", "Current Run response lacks an explicit binding")

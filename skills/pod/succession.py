@@ -403,6 +403,11 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
     facts["predecessor_owner"] = prior["owner"]
     if unfinished(prior) is not None:
         return refused("predecessor_handoff_pending", "The predecessor has an unfinished owner handoff.")
+    from .window import unfinished as window_unfinished
+    if (window_unfinished(prior) or {}).get("state") == "pending":
+        # A claimant may hold a pending window continuation; a claim never ends it (pod#110).
+        return refused("predecessor_continuation_pending", "The predecessor has a pending window continuation; "
+                       "finish it with pod continue first.")
     incomplete = _incomplete_claim(project, predecessor, prior)
     if incomplete is not None:
         return refused(*incomplete)
