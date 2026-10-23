@@ -1764,10 +1764,10 @@ class _SweepRemote:
     record and per-source reference limits. A mutation invalidates every observation of its issue.
     """
 
-    def __init__(self, project: Path, remote):
+    def __init__(self, project: Path, remote, observations: dict):
         self.project, self.source_reader = project, remote
         self.remote = _Remote(project, remote)
-        self.issues, self.states, self.parent_tasks = {}, {}, {}
+        self.issues, self.states, self.parent_tasks = (observations[key] for key in ("issues", "states", "parents"))
 
     def _source(self):
         if self.source_reader is None:
@@ -1927,6 +1927,7 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
         raise PodError("sweep_scope_unavailable", f"A sweep names at most {MAX_LISTED} repositories and objectives")
     out = {"schema": "pod-cli/v5", "status": "swept", "repositories": [],
            "counts": {name: 0 for name in RESULTS}, "next_safe_action": None}
+    observations = {key: {} for key in ("issues", "states", "parents")}
     for target in targets:
         if not target.is_dir():
             out["repositories"].append(_unavailable(target, "the path is not a directory"))
@@ -1946,7 +1947,7 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
             continue
         # Successor tails first: closing a tail writes its continued predecessors' entries too.
         rows = sorted(rows, key=lambda row: (row["phase"] == "continued", row["objective"]))
-        reader = _SweepRemote(target, remote)
+        reader = _SweepRemote(target, remote, observations)
         done, results = set(), []
         for row in rows:
             if row["objective"] in done:
@@ -1972,13 +1973,13 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
         for name in missing:
             results.append(_outcome(name, {"status": "not_applicable", "conditions": [
                 {"code": "objective_unknown", "message": "No record of that objective exists in this repository."}]}))
-        _deduplicate_tasks(results)
         for row in results:
             out["counts"][row["outcome"]] += 1
         out["repositories"].append({"path": str(target), "repository": context["repository"],
                                     "repo_key": context["repo_key"], "status": "incomplete" if problems else "swept",
                                     "reason": _scope_reason(problems) if problems else None,
                                     "objectives": results})
+    _deduplicate_tasks([row for repository in out["repositories"] for row in repository["objectives"]])
     tally = out["counts"]
     statuses = {row["status"] for row in out["repositories"]}
     lead = tally["not_proved"] + tally["unverified"]

@@ -76,6 +76,17 @@ class SourceIntentTests(TickCase):
         self.assertEqual(len(self.issue.calls) - before, 1)
         self.assertEqual(len(self.issue.closes), 1)
 
+    def test_repeated_repository_selection_shares_observations_and_lead_tasks(self):
+        self.ready(); self.write(close=True)
+        self.issue.state, self.issue.state_reason = "OPEN", "REOPENED"
+        before = len(self.issue.calls)
+        result = sweep(self.project, repositories=[str(self.project), str(self.project)])
+        rows = [row for repository in result["repositories"] for row in repository["objectives"]]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sum(row["party"] == "lead" for row in rows), 1)
+        self.assertEqual(len(self.issue.calls) - before, 1)
+        self.assertEqual(len(self.issue.closes), 1)
+
     def test_older_ordinary_closure_observes_completed_source_without_conversion(self):
         self.ready(); self.write(close=True)
         path = objective_root(self.project, "objective") / "context.json"

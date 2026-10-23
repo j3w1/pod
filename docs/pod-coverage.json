@@ -7820,7 +7820,8 @@
         "tests.test_completed_closure.SourceClosingTests.test_empty_recognized_criteria_never_close_vacuously",
         "tests.test_completed_closure.SourceClosingTests.test_duplicate_ticked_criteria_still_refuse_source_completion",
         "tests.test_closure_fixes_a.SourceIntentTests.test_sweep_memoizes_shared_sources_and_parents_and_reports_each_parent_once",
-        "tests.test_closure_fixes_a.SourceIntentTests.test_shared_reopened_source_has_one_lead_task_and_one_read_per_sweep"
+        "tests.test_closure_fixes_a.SourceIntentTests.test_shared_reopened_source_has_one_lead_task_and_one_read_per_sweep",
+        "tests.test_closure_fixes_a.SourceIntentTests.test_repeated_repository_selection_shares_observations_and_lead_tasks"
       ],
       "status": "NOT_RUN"
     },
