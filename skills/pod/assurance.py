@@ -380,7 +380,7 @@ def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int
                   obligation=ob["id"], retained=retained, proposed=proposed,
                   reserved=reserved,
                   limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
-                  **({"admission": pending[0]} if pending else {}),
+                  **({"admission": route_held["admission_id"] if route_held is not None else pending[0]} if pending else {}),
                   next_action=(route_next_action(route_held) if route_held is not None else
                                f"settle and consume the report for admission {pending[0]} before retrying this write"
                                if pending else {"seq": seq, "renew": [replacement]}))

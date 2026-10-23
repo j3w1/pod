@@ -587,6 +587,10 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             entry = closure_block(record_root)
             if entry is not None:
                 result["evidence_closure"] = entry
+        if mismatch and ((checkpoint or {}).get("closure") or state.get("continued_by")
+                         or state.get("historical_retirement") or result.get("evidence_closure")):
+            action = " ".join(route_next_action(row, ended=True) for row in route_holds[:64])
+            result.update(next_safe_action=action, next_action=action)
     if state is not None and checkpoint is not None and isinstance(objective, str) and record_root is not None:
         # New fields only: every earlier field above keeps its exact value (R114).
         error = result["obligations"].get("error") if isinstance(result.get("obligations"), dict) else None

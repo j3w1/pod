@@ -223,8 +223,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                          "preserve its correction follow-up in the successor or repository task. "
                          "This unreported tab has no standing close command.")
         elif recorded_settlement and route_hold(admission):
-            next_step = (f"Project lead: for admission {admission['admission_id']}, record any remaining tab follow-up "
-                         "in the successor or repository task; this ended record accepts no settlement write and supplies no close command.")
+            next_step = route_next_action(admission, ended=True)
         elif route_hold(admission):
             next_step = route_next_action(admission) + " This unreported tab has no standing close command."
         elif recorded_settlement:

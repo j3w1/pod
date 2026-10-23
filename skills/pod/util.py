@@ -488,18 +488,23 @@ def matching_route_settlement(row: dict, *, seq: int | None = None) -> bool:
     return True
 
 
-def route_next_action(row: dict) -> str:
+def route_next_action(row: dict, *, ended: bool = False) -> str:
     key = row.get("admission_id", "<admission>")
+    if ended:
+        return (f"Project lead: for admission {key}, record any remaining tab follow-up "
+                "in the successor or repository task; this ended record accepts no settlement write and supplies no close command.")
     implementation = row.get("role") == "implement"
     replacement = ("for an implementation, disposition it and record route_settlements basis redone "
                    "for a qualifying replacement; " if implementation else "")
-    discard = ("accept the later route evidence while the consumed report stands as recorded; "
-               if not implementation and row.get("report") is not None else
-               "for an unreported review or investigation discard, include corrections listing every known required finding as an ordinary correction id "
-               "(or [] with a reason explaining why none are known); " if not implementation else "")
+    decision = ("use decision accept with ordinary disposition integrated_into, or decision discard with ordinary disposition discarded"
+                if implementation else
+                "use decision accept for the later route evidence while the consumed report stands as recorded"
+                if row.get("report") is not None else
+                "use decision discard after native settlement, with corrections listing every known required finding as an ordinary correction id "
+                "(or [] with a reason explaining why none are known)")
     return (f"Project lead: for admission {key}, consume its report with internal report after a matching readback; "
             + replacement + "otherwise record route_settlements basis lead_decision with the lead's source and "
-            "reason in internal checkpoint; " + discard + LEAD_ROUTE_AUTHORITY)
+            "reason in internal checkpoint: " + decision + ". " + LEAD_ROUTE_AUTHORITY)
 
 
 def route_settlement_projection(rows: list[dict]) -> dict:

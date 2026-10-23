@@ -11,7 +11,7 @@ from pod.history import admission_movable
 from pod.internal import acknowledge, run
 from pod.ledger import objective_root, read, update_admission
 from pod.operations import OrcaPort
-from pod.util import route_discarded, route_flags, route_hold
+from pod.util import route_discarded, route_flags, route_hold, route_next_action
 from tests.issue41_support import ProductionCase
 
 
@@ -298,7 +298,8 @@ class ExplicitSettlementTests(SettlementCase):
         self.assertTrue(route_hold(self.row(admission)))
 
     def test_null_settlements_are_not_a_list(self):
-        self.refused_write("malformed", route_settlements=None)
+        error = self.refused_write("malformed", route_settlements=None)
+        self.assertEqual(error.detail["referent"]["record"], "route settlements")
 
     def test_redone_resolves_both_served_sets_through_current_renewal_tips(self):
         original, _ = self.original()
@@ -495,6 +496,11 @@ class ReviewDiscardTests(SettlementCase):
             self.c.report(admission, frozen)
         self.assertEqual(caught.exception.code, "report_conflict")
         self.refused_write("discard_unavailable", route_settlements=[self.discard(admission)])
+        action = route_next_action(self.row(admission))
+        self.assertIn("decision accept", action)
+        self.assertIn("while the consumed report stands as recorded", action)
+        for unavailable in ("decision discard", "corrections", "basis redone"):
+            self.assertNotIn(unavailable, action)
         before = self.state()
         self.c.write(route_settlements=[self.lead(admission, "accept")])
         after = self.state()
@@ -508,6 +514,9 @@ class ReviewDiscardTests(SettlementCase):
         admission, frozen = self.original(("S",), role="investigate", resolves="bounded question", stop_condition="answer recorded")
         self.c.report(admission, frozen, outcome="failed", map=self.parked())
         self.flag(admission, frozen)
+        action = route_next_action(self.row(admission))
+        self.assertIn("decision accept", action)
+        self.assertNotIn("decision discard", action)
         self.c.write(route_settlements=[self.lead(admission, "accept")])
         self.assertFalse(route_hold(self.row(admission)))
         self.assertEqual(self.row(admission)["report"]["outcome"], "failed")
@@ -563,12 +572,79 @@ class SettlementReadTests(SettlementCase):
             accept_write(prior, {"reopen": True, "revision_authority": {"provenance": "user_direct", "instruction": "reopen"},
                                  "route_settlements": []}, {})
         self.assertEqual(caught.exception.code, "objective_closed")
+        self.assertEqual(caught.exception.detail["referent"], {"record": "route settlements"})
+
+    def test_admission_settlement_refusal_names_the_record(self):
+        from pod.obligations import _route_settlements
+        with self.assertRaises(PodError) as caught:
+            _route_settlements([], {}, {"operation": "admit"})
+        self.assertEqual(caught.exception.detail["detail"], "checkpoint_only")
+        self.assertEqual(caught.exception.detail["referent"], {"record": "route settlements"})
 
     def test_internal_contract_exposes_bounded_settlement_wire(self):
         from pod.contracts import describe
         self.assertEqual(describe("map")["fields"]["route_settlements"]["max_items"], 16)
         self.assertEqual(describe("route settlement source")["fields"]["reference"]["max_length"], 512)
         self.assertEqual(describe("route settlement")["fields"]["reason"]["max_length"], 1024)
+
+
+class RenewalGuidanceTests(SettlementCase):
+    def test_route_held_implementation_names_disposition_before_route_settlement(self):
+        admission, _ = self.original()
+        renewal = [{"id": "S", "as": "S2", **deepcopy(WAIT)}]
+        error = self.refused_write("renewal_result_pending", renew=renewal)
+        action = error.detail["next_action"]
+        required = (f"Project lead: record an ordinary disposition for implementation admission "
+                    f"{admission['admission_id']} before retrying renewal.")
+        self.assertTrue(action.startswith(required), action)
+        self.assertIn("route_settlements basis lead_decision", action)
+        self.assertNotIn("owner", action.lower())
+        self.c.write(dispositions=[self.dispose(admission)], renew=renewal)
+        self.assertEqual(next(row for row in self.c.stored() if row["id"] == "S")["state"], "renewed")
+        self.assertTrue(route_hold(self.row(admission)))
+
+    def test_matching_report_still_needs_implementation_disposition_before_renewal(self):
+        admission, frozen = self.original()
+        self.c.report(admission, frozen, map=self.parked())
+        self.assertFalse(route_hold(self.row(admission)))
+        renewal = [{"id": "S", "as": "S2", **deepcopy(WAIT)}]
+        error = self.refused_write("renewal_result_pending", renew=renewal)
+        self.assertIn("record an ordinary disposition", error.detail["next_action"])
+        self.c.write(dispositions=[self.dispose(admission)], renew=renewal)
+        self.assertEqual(next(row for row in self.c.stored() if row["id"] == "S")["state"], "renewed")
+
+
+class CapacityGuidanceTests(SettlementCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        case = cls.case
+        case.write([*case.stored(), {"id": "B", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+            "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
+            "candidate": case.candidate, "existing_evidence": "tests", "insufficiency": "no review", **deepcopy(WAIT)}])
+        cls.baseline = cls.files(); cls.native = deepcopy(case.port.__dict__)
+
+    def test_capacity_referent_and_next_action_name_the_same_held_admission(self):
+        frozen = self.c.packet(["B"], role="review")
+        earlier = self.c.start("earlier", frozen)["admission"]; self.c.settle(earlier)
+        held = self.c.start("held", frozen)["admission"]; self.c.settle(held)
+        self.flag(held, frozen)
+        self.assertFalse(route_hold(self.row(earlier)))
+        self.assertIsNone(self.row(earlier)["report"])
+        before = self.files()
+        with self.assertRaises(PodError) as caught:
+            self.c.start("third", frozen)
+        error = caught.exception
+        self.assertEqual(error.detail["detail"], "finding_limit")
+        self.assertEqual(error.detail["referent"]["admission"], held["admission_id"])
+        self.assertIn(held["admission_id"], error.detail["next_action"])
+        self.assertNotIn(earlier["admission_id"], error.detail["next_action"])
+        self.assertIn("Project lead:", error.detail["next_action"])
+        self.assertNotIn("owner", error.detail["next_action"].lower())
+        self.assertEqual(self.files(), before)
+        self.c.report(held, frozen, map=self.parked(["B"]))
+        self.assertFalse(route_hold(self.row(held)))
+        self.c.start("third", frozen)
 
 
 class RouteWordingTests(unittest.TestCase):
@@ -617,7 +693,10 @@ class RouteWordingTests(unittest.TestCase):
             ("worker tab", view["worker_tabs"][0]["wording"]),
             ("map finalization", case.op("map")["finalization"]["next_action"])))
         case.write(case.finished_rows(), dispositions=[{"admission": key, "discarded": True, "reason": "superseded"}], close=True)
-        cls.wordings.append(("ended worker tab", case.status()["worker_tabs"][0]["wording"], key, "ended"))
+        ended = case.status()
+        cls.wordings.extend((name, text, key, "ended") for name, text in (
+            ("ended worker tab", ended["worker_tabs"][0]["wording"]),
+            ("ended status safe action", ended["next_safe_action"]), ("ended status action", ended["next_action"])))
         review = TabCase(); review.setUp(); cls.addClassCleanup(review.doCleanups)
         review.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
             "check": "review", "scope": {"paths": ["src"]}, "question": "is src right?", "candidate": review.candidate,
@@ -650,12 +729,14 @@ class RouteWordingTests(unittest.TestCase):
     def test_every_route_mismatch_surface_names_lead_exact_step_and_no_owner(self):
         self.assertEqual({name for name, *_ in self.wordings}, {"bind acknowledgement", "report refusal", "consume refusal",
             "Governor vocabulary", "Governor action", "Governor reason", "status safe action", "status action", "worker tab",
-            "map finalization", "ended worker tab", "capacity refusal", "renewal refusal", "settled discarded worker tab"})
+            "map finalization", "ended worker tab", "ended status safe action", "ended status action", "capacity refusal",
+            "renewal refusal", "settled discarded worker tab"})
         for name, text, admission, role in self.wordings:
             with self.subTest(surface=name):
                 self.assertIn("Project lead:", text)
                 self.assertIn(admission, text)
                 self.assertNotIn("owner", text.lower())
+                self.assertNotIn("; The coordinator relays", text)
                 if role == "discarded":
                     self.assertIn("terminally discarded", text)
                     self.assertIn("no standing close command", text)
@@ -665,12 +746,18 @@ class RouteWordingTests(unittest.TestCase):
                     self.assertIn("successor or repository task", text)
                     self.assertIn("accepts no settlement write", text)
                     self.assertNotIn("internal checkpoint", text)
+                    self.assertNotIn("internal report", text)
+                    self.assertNotIn("route_settlements", text)
                 else:
                     for step in ("internal report", "route_settlements basis lead_decision", "internal checkpoint"):
                         self.assertIn(step, text)
                     self.assertIn("does not authenticate the lead", text)
                     if role == "review":
                         self.assertIn("corrections", text)
+                        self.assertIn("decision discard", text)
                         self.assertNotIn("basis redone", text)
+                        self.assertNotIn("decision accept", text)
                     else:
                         self.assertIn("route_settlements basis redone", text)
+                        self.assertIn("decision accept with ordinary disposition integrated_into", text)
+                        self.assertIn("decision discard with ordinary disposition discarded", text)

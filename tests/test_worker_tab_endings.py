@@ -5,6 +5,7 @@ from unittest.mock import patch
 from pod.errors import PodError
 from pod.ledger import read
 from pod.operations import OrcaPort
+from pod.util import route_hold
 from tests.test_historical_retirement import RetirementCase
 from tests.test_succession import SuccessionCase
 from tests.test_worker_tabs import TabCase
@@ -32,6 +33,12 @@ class EndedTabAssertions:
                 self.assertNotIn("owner", row["wording"].lower())
                 if ended or state["checkpoint"].get("closure"):
                     self.assertIn("this ended record accepts no settlement write and supplies no close command", row["wording"])
+                    self.assertTrue(view["route_holds"])
+                    for action in (view["next_safe_action"], view["next_action"]):
+                        self.assertIn("Project lead:", action)
+                        self.assertIn("accepts no settlement write", action)
+                        for unavailable in ("internal report", "route_settlements", "internal checkpoint", "owner"):
+                            self.assertNotIn(unavailable, action.lower())
                 else:
                     self.assertIn("route_settlements basis lead_decision", row["wording"])
                     self.assertIn("internal checkpoint", row["wording"])
@@ -141,6 +148,40 @@ class RetiredTabTests(EndedTabAssertions, TabCase, RetirementCase):
 
 
 class RouteMismatchTabTests(EndedTabAssertions, TabCase):
+    def test_closed_route_hold_status_names_the_lead_and_preserves_the_hold(self):
+        self.intake(self.sub("S"))
+        frozen = self.packet(["S"])
+        start = self.port.start_worker
+        def receipt_mismatch(*args, **kwargs):
+            value = start(*args, **kwargs)
+            value["launch"]["effective"] = {**value["launch"]["effective"], "model": "gpt-6-luna"}
+            return value
+        with patch.object(OrcaPort, "start_worker", side_effect=receipt_mismatch):
+            admission = self.start("closed-route-hold", frozen)["admission"]
+        key = admission["admission_id"]
+        self.settle(admission); self.tab_case = "external"
+        self.write(self.finished_rows(), dispositions=[{"admission": key, "discarded": True, "reason": "superseded"}], close=True)
+        before = self.saved()
+        view = self.status()
+        self.assertEqual(view["blocker"], "route_mismatch")
+        self.assertEqual(view["route_holds"], [key])
+        for action in (view["next_safe_action"], view["next_action"]):
+            self.assertIn(f"Project lead: for admission {key}", action)
+            self.assertIn("successor or repository task", action)
+            self.assertIn("accepts no settlement write", action)
+            for unavailable in ("internal report", "route_settlements", "internal checkpoint", "owner"):
+                self.assertNotIn(unavailable, action.lower())
+        with self.assertRaises(PodError) as report:
+            self.report(admission, frozen)
+        self.assertEqual(report.exception.code, "objective_closed")
+        lead = {"admission": key, "basis": "lead_decision", "decision": "discard",
+                "source": {"reference": "repository-task/lead-decision"}, "reason": "the lead discards this result"}
+        with self.assertRaises(PodError) as checkpoint:
+            self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, route_settlements=[lead])
+        self.assertEqual(checkpoint.exception.code, "objective_closed")
+        self.assertEqual(self.saved(), before)
+        self.assertTrue(route_hold(read(self.project, "objective")["admissions"][key]))
+
     def route_mismatch(self, case):
         self.intake(self.sub("S"))
         self.frozen = self.packet(["S"], purpose="Repair parser", boundary={"paths": ["src"]})

@@ -974,12 +974,14 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
                         and (admission.get("report") is None and admission.get("disposition") is None
                              or admission.get("role") == "implement" and admission.get("disposition") is None))]
         if pending:
+            admission = _admissions(ctx)[pending[0]]
+            implementation = admission.get("role") == "implement"
+            action = (f"record an ordinary disposition for implementation admission {pending[0]} before retrying renewal"
+                      if implementation else f"settle and consume the report for admission {pending[0]} before retrying renewal")
+            if route_hold(admission):
+                action = (f"Project lead: {action}. " if implementation else "") + route_next_action(admission)
             raise refuse("obligation_invalid", "renewal_result_pending", "serving work must settle and its result be consumed or dispositioned",
-                         obligation=old_id, admission=pending[0],
-                         next_action=(route_next_action(_admissions(ctx)[pending[0]]) if route_hold(_admissions(ctx)[pending[0]]) else
-                                      f"settle and consume the report for admission {pending[0]} before retrying renewal"
-                                      if _admissions(ctx)[pending[0]].get("role") != "implement" else
-                                      f"record an ordinary disposition for implementation admission {pending[0]} before retrying renewal"))
+                         obligation=old_id, admission=pending[0], next_action=action)
         state = entry.get("state", old["state"])
         if state in TERMINAL:
             raise refuse("obligation_invalid", "renewal_terminal_state", "the replacement needs an explicit non-terminal state", obligation=new_id)
@@ -1130,7 +1132,8 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         raise refuse("objective_closed", "objective_closed", "the objective is closed",
                      closure_revision=prior_map["closure"]["revision"])
     if closed and "route_settlements" in value:
-        raise refuse("objective_closed", "objective_closed", "a closed objective accepts no route settlement")
+        raise refuse("objective_closed", "objective_closed", "a closed objective accepts no route settlement",
+                     record="route settlements")
     if prior_map is not None and "obligations" not in value:
         # A checkpoint that leaves the map unchanged still revalidates it against current facts.
         value = {**value, "obligations": deepcopy(prior_map["obligations"])}
@@ -1318,9 +1321,11 @@ def _route_definitions(admission: dict, lineage: Lineage) -> bool:
 def _route_settlements(entries, state: dict, ctx: dict) -> None:
     """Validate every basis last, then append all records to the locked write's admissions."""
     if ctx.get("operation", "checkpoint") not in ("checkpoint", "report"):
-        raise refuse("route_settlement_invalid", "checkpoint_only", "route settlements use internal checkpoint or report map")
+        raise refuse("route_settlement_invalid", "checkpoint_only", "route settlements use internal checkpoint or report map",
+                     record="route settlements")
     if not isinstance(entries, list) or len(entries) > bound("map", "route_settlements", "max_items"):
-        raise refuse("route_settlement_invalid", "malformed", "route_settlements is a bounded list")
+        raise refuse("route_settlement_invalid", "malformed", "route_settlements is a bounded list",
+                     record="route settlements")
     admissions, seen, accepted = _admissions(ctx), set(), []
     lineage = Lineage(state["obligations"])
     for entry in entries:
