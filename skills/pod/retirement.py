@@ -1027,8 +1027,9 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                      "locations": [], "retained": [], "unrecorded_locations": None,
                                      "records": []},
                            "message": f"The objective's record is unreadable or unsupported ({exc.code}).",
-                           "next_action": ("Run internal record-compaction for this exact project and objective first; "
-                                           "its bounded maintenance preserves the logical facts for the project lead." if exc.code == "record_too_large"
+                           "next_action": ("Project lead or coordinator: run internal record-compaction detection for this exact project "
+                                           "and objective and submit its exact scoped maintenance request before retirement; it "
+                                           "preserves all logical facts and needs no owner decision." if exc.code == "record_too_large"
                                            else "Historical retirement needs a readable current record.")}
             else:
                 # Each objective reads the host afresh: an earlier objective's inventory is never its proof.

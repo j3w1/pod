@@ -539,7 +539,9 @@ class CompletionGuidanceTests(unittest.TestCase):
         self.assertIn("retained receipts can move to immutable history", full.exception.detail["next_action"])
         self.assertIn("renew", full.exception.detail["next_action"])
         self.assertIn("terminal rows can archive", full.exception.detail["next_action"])
-        self.assertIn("record-compaction keeps its existing authority", full.exception.detail["next_action"])
+        self.assertIn("run internal record-compaction detection", full.exception.detail["next_action"])
+        self.assertIn("submit its exact scoped maintenance request; no owner decision is required",
+                      full.exception.detail["next_action"])
         case, _ = evidence.DeliveryClosesTests.merged(self)
         state = read(case.project, "objective")["checkpoint"]
         observed = governance.governance_observation(case.project, state["governance"]["base_ref"])

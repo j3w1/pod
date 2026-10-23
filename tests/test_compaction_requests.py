@@ -346,3 +346,34 @@ class CompactionRequestTests(KernelCase):
         self.state["checkpoint"]["closure"] = {"closed_at": "synthetic-time"}
         self.save()
         self.assert_compacted(self.requested())
+
+
+class OverLimitGuidanceTests(KernelCase):
+    """Every over-limit refusal names the lead's request step and never an owner decision (PoD#4)."""
+
+    def write_raw(self, size):
+        path = objective_root(self.project, "guided") / "context.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b" " * size)
+        return path
+
+    def test_ordinary_read_over_limit_names_the_request_step(self):
+        from pod.history import _context_bytes
+        path = self.write_raw(CONTEXT_LIMIT + 1)
+        with self.assertRaises(PodError) as refused:
+            _context_bytes(path, CONTEXT_LIMIT)
+        action = refused.exception.detail["next_action"]
+        self.assertEqual(refused.exception.code, "record_too_large")
+        self.assertIn("Project lead or coordinator: run internal record-compaction detection", action)
+        self.assertIn("submit its exact scoped maintenance request; no owner decision is required", action)
+        self.assertNotIn("owner recovery", action)
+
+    def test_above_the_maintenance_bound_names_lead_preservation_only(self):
+        from pod.history import _context_bytes
+        path = self.write_raw(16)
+        with patch("pod.history.MAINTENANCE_LIMIT", 8), self.assertRaises(PodError) as refused:
+            _context_bytes(path, 8)
+        self.assertEqual(refused.exception.detail["next_action"],
+                         "Project lead: preserve this record and arrange supported recovery; "
+                         "bounded compaction cannot read it.")
+        self.assertNotIn("record-compaction detection", refused.exception.detail["next_action"])

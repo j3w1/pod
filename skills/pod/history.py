@@ -245,8 +245,9 @@ def _require_size(record, *, current_bytes):
                                        "rows through the checkpoint renew route so terminal rows can archive. "
                                        "Consume or triage reports, record implementation dispositions and settle "
                                        "governed effects through their supported paths. If the record is still over "
-                                       "limit, the project lead diagnoses the remaining sections and supported "
-                                       "recovery; record-compaction keeps its existing authority."})
+                                       "limit, project lead or coordinator: run internal record-compaction detection "
+                                       "for this exact project and objective, then submit its exact scoped maintenance "
+                                       "request; no owner decision is required."})
 
 
 def _expand(reference, loader, cache):
@@ -493,11 +494,16 @@ def _context_bytes(path, limit):
             _check_read_deadline()
             data = file.read(limit + 1)
         if len(data) > limit or info.st_size > limit:
-            raise PodError("record_too_large", "Context exceeds its bounded read limit; use internal "
-                           "record-compaction detection for bounded maintenance by the project lead",
+            maintenance = limit >= MAINTENANCE_LIMIT
+            raise PodError("record_too_large", "Context exceeds its bounded read limit; "
+                           + ("bounded compaction cannot read it" if maintenance else
+                              "use internal record-compaction detection for a project-lead or coordinator request"),
                            {"current_bytes": max(info.st_size, len(data)), "limit_bytes": limit,
-                            "next_action": "Run internal record-compaction for this exact project and objective; "
-                                           "the project lead must recover records above its maintenance bound without treating them as completed."})
+                            "next_action": ("Project lead: preserve this record and arrange supported recovery; "
+                                            "bounded compaction cannot read it." if maintenance else
+                                            "Project lead or coordinator: run internal record-compaction detection for "
+                                            "this exact project and objective, then submit its exact scoped maintenance "
+                                            "request; no owner decision is required.")})
         return data
     except OSError as exc:
         raise PodError("unsafe_record", "Context cannot be safely opened") from exc
@@ -646,8 +652,10 @@ def capacity(path, state):
             if exc.code != "record_too_large":
                 raise
             useful = False
-        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; internal "
-                                 "record-compaction permits explicit bounded maintenance now; the project lead handles capacity before closure." if useful else
+        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; project lead "
+                                 "or coordinator: run internal record-compaction detection, then submit its exact scoped "
+                                 "maintenance request for explicit bounded maintenance now. The project lead handles capacity "
+                                 "before closure." if useful else
                                  _settlement_action(result["largest_sections"]))
         if useful and any(row["section"] == "standing_authorization" for row in result["largest_sections"][:3]):
             result["next_action"] += " The standing_authorization section is bounded and needs no maintenance."
