@@ -7979,6 +7979,94 @@
         "tests.test_completed_review_upgrade.RetainedHistoryDisplayTests.test_map_and_status_show_frozen_receipt_and_finding_counts_without_writes"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A532",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_settled_and_reserved_admissions_continue_with_history_and_provenance_preserved",
+        "tests.test_window_continuation.ContinuationTests.test_unknown_work_stays_unknown_and_nothing_is_stamped",
+        "tests.test_window_continuation.ContinuationTests.test_a_window_with_two_runtime_changes_continues_from_the_first_stop"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A533",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_one_winner_among_claimants_and_idempotent_replay",
+        "tests.test_window_continuation.ContinuationTests.test_same_caller_resumes_after_an_interruption_before_run_use",
+        "tests.test_window_continuation.ContinuationTests.test_a_lost_pending_claimant_is_replaced_without_extra_history",
+        "tests.test_window_continuation.ContinuationTests.test_a_refused_run_use_ends_the_attempt_and_the_retry_keeps_it",
+        "tests.test_window_continuation.ContinuationTests.test_the_initial_readback_stays_beside_the_completion_readback"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A534",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.RefusalTests.test_host_refusals_reach_the_lead",
+        "tests.test_window_continuation.RefusalTests.test_loss_outside_the_window_and_runtime_unchanged",
+        "tests.test_window_continuation.RefusalTests.test_moved_repository_and_changed_worktree",
+        "tests.test_window_continuation.RefusalTests.test_run_and_work_identity_refusals",
+        "tests.test_window_continuation.RefusalTests.test_pending_owner_handoff_holds_window_continuation",
+        "tests.test_window_continuation.RefusalTests.test_a_caller_in_the_wrong_place_never_ends_a_pending_attempt"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A535",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.RefusalTests.test_a_denied_window_leads_every_non_owner_refusal_with_a_lead_task",
+        "tests.test_window_continuation.RefusalTests.test_status_elsewhere_reports_objective_eligibility_and_caller_readiness",
+        "tests.test_window_continuation.ContinuationTests.test_the_pending_claimant_sees_its_own_resumable_step",
+        "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_holds_an_owner_handoff"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A536",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_receipts_are_scoped_per_repository_and_objective",
+        "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_fences_a_successor_claim",
+        "tests.test_window_continuation.ContinuationTests.test_stored_rows_validate_and_succession_lineage_recognizes_them"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A537",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_window_continuation.ContinuationTests.test_status_list_shows_the_supported_step_and_lead_conditions",
+        "tests.test_window_continuation.ContinuationTests.test_discovery_outside_orca_and_within_its_budget",
+        "tests.test_window_continuation.ContinuationTests.test_a_failed_or_slow_orca_read_degrades_the_list_to_unknown",
+        "tests.test_window_continuation.ContinuationTests.test_the_budget_bounds_reads_inside_a_row_and_skips_the_verifier",
+        "tests.test_window_continuation.RefusalTests.test_discovery_checks_the_recorded_worktree_itself",
+        "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
