@@ -48,6 +48,9 @@ def parser() -> argparse.ArgumentParser:
                        help="a repository to sweep (repeatable; default: here)")
     sweep.add_argument("--objective", metavar="NAME", action="append", help="only this objective (repeatable)")
     sweep.add_argument("--json", action="store_true")
+    resume = sub.add_parser("continue", help="continue an objective whose coordinator a verified Orca window ended")
+    resume.add_argument("--objective", metavar="NAME", required=True)
+    resume.add_argument("--json", action="store_true")
     sub.add_parser("update", help="update the installed bundle")
     models = sub.add_parser("models", help="model routes and cached public observations")
     models.add_argument("--json", action="store_true")
@@ -262,6 +265,9 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
     if args.command == "sweep":
         from .evidence_closure import sweep
         return sweep(project, repositories=args.repository, objectives=args.objective)
+    if args.command == "continue":
+        from .window import continue_command
+        return continue_command(project, args.objective)
     if args.command == "status":
         return _status(project, args.run, objective=args.objective,
                        current_run_fn=current_run, worker_rows_fn=worker_rows)
@@ -348,7 +354,8 @@ def _exit_code(args: argparse.Namespace, result: dict) -> int:
     if "projection" in result:
         # The route view succeeds as a read; its exit code still reports preference validity.
         return 0 if result["projection"]["preferences"]["status"] == "valid" else 1
-    return 0 if result["status"] in ("valid", "observed", "promoted", "checked", "listed", "absent", "swept") else 1
+    return 0 if result["status"] in ("valid", "observed", "promoted", "checked", "listed", "absent", "swept",
+                                     "continued", "already_continued") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -454,6 +461,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "sweep":
         from .evidence_closure import render_sweep
         render_sweep(result)
+    elif args.command == "continue":
+        from .window import render
+        render(result)
     elif args.command == "status":
         render_status(result)
     else:

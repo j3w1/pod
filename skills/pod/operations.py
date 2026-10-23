@@ -935,7 +935,8 @@ def _no_start_proof(project: Path, state: dict, previous: dict, ref: str | None)
         reached = observed_runtime
         for entry in (state.get("checkpoint", {}).get("continuity") or {}).get("history", []):
             if (entry["from_runtime"] == reached
-                    and (entry.get("provenance") != "owner_handoff" or entry.get("state") == "done")):
+                    and (entry.get("provenance") not in ("owner_handoff", "window_continuation")
+                         or entry.get("state") == "done")):
                 reached = entry["to_runtime"]
         if not isinstance(observed_runtime, str) or reached != previous["runtime"]:
             raise ValueError("no recorded runtime continuity for no-start proof")

@@ -226,6 +226,13 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("caller_not_live", "Orca cannot prove this caller's handle live (" + (own["code"] or "successful terminal show did not prove liveness") + ").",
                     definitive=own["state"] == "lost")
     pending = unfinished(state)
+    from .window import unfinished as window_unfinished
+    window = window_unfinished(state)
+    if window is not None and window["state"] == "pending":
+        # Neither coordinator-change path overwrites the other's pending authority (pod#110).
+        return fail("window_continuation_pending", "A window continuation is pending; it finishes through pod continue.",
+                    action="Finish the pending window continuation with pod continue --objective " + objective
+                           + " --json; do not run orca orchestration run-use by hand.")
     if pending and pending["state"] == "pending" and pending["decision"]["to_owner"] != caller:
         holder = terminal_identity(pending["decision"]["to_owner"])
         if holder["state"] != "lost":
@@ -355,8 +362,15 @@ def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: st
         refuse_incomplete(project, objective, state, claim=claim)
     verdict = nonowner_detection(project, objective, state, owner, port=port, current=current)
     if verdict is not None:
-        raise PodError(code, "Caller is not the recorded owner. " + verdict["message"],
-                       {"owner_handoff": verdict, "next_action": verdict["next_action"]})
+        detail = {"owner_handoff": verdict, "next_action": verdict["next_action"]}
+        from .window import status_block
+        window = status_block(project, objective, state, port=port)
+        if window is not None:
+            # The verified window route needs no owner decision and comes first (pod#110).
+            detail["window_continuation"] = window
+            if window["status"] == "window_available":
+                detail["next_action"] = window["next_action"]
+        raise PodError(code, "Caller is not the recorded owner. " + verdict["message"], detail)
 
 
 def owner_handoff(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:

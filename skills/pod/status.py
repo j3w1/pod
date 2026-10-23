@@ -538,6 +538,15 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         if handoff is not None:
             result.update(owner_handoff=handoff, blocker=handoff["status"],
                           next_safe_action=handoff["next_action"], next_action=handoff["next_action"])
+            # A coordinator lost to a verified owner-authorized Orca window continues with derived authority and no
+            # owner decision; the owner handoff block stays unchanged beside it (pod#110).
+            from .window import status_block as window_block
+            window = window_block(project, objective, state)
+            if window is not None:
+                result["window_continuation"] = window
+                if window["status"] == "window_available":
+                    result.update(blocker="window_available", next_safe_action=window["next_action"],
+                                  next_action=window["next_action"])
     if state is not None:
         from .retirement import ACTION as RETIREMENT, status_block as retirement_block
         retirement = retirement_block(state)
@@ -585,6 +594,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                               if key != "question"},
                                            "next_action": action + "; a handoff stays optional and moves authority only."}
             result.update(next_safe_action=action, next_action=action)
+        elif (result.get("window_continuation") or {}).get("status") == "window_available":
+            pass  # The verified window route above is the next action; nothing asks the owner.
         elif (result.get("readiness") or {}).get("state") == "coordinator_lost":
             # Lost and not proved delivered: a task for the project lead, never a question for the owner (R145).
             # The owner_handoff block keeps its R105 facts unchanged: handoff and successor claim stay optional
@@ -717,12 +728,18 @@ def render(result: dict) -> None:
         handoff = result.get("owner_handoff")
         if isinstance(handoff, dict):
             print(f"Owner handoff: {clean(handoff['condition'])}; {clean(handoff['message'])}")
+        window = result.get("window_continuation")
+        if isinstance(window, dict):
+            print(("Window continuation: available; " if window["status"] == "window_available"
+                   else f"Window continuation: unavailable ({clean(window['condition'])}); ")
+                  + clean(window["next_action"]))
         claim = result.get("successor_claim")
         if isinstance(claim, dict):
             print("Successor claim: " + ("available; " if claim["status"] == "claim_available"
                                          else f"refused ({clean(claim['condition'])}); ") + clean(claim["message"]))
         for entry in (result.get("runtime_continuity") or {}).get("history", []):
-            label = "Owner handoff" if entry["provenance"] == "owner_handoff" else "Runtime rebind"
+            label = {"owner_handoff": "Owner handoff", "window_continuation": "Window continuation"}.get(
+                entry["provenance"], "Runtime rebind")
             print(f"{label}: {clean(entry['from_runtime'])} -> {clean(entry['to_runtime'])} at "
                   f"{clean(entry['at'])} ({entry['provenance']})")
         for row in result.get("owner_decisions", []):

@@ -1,8 +1,9 @@
 """Read-only list of the objectives recorded for one repository or worktree (R108).
 
-Membership is proved by the state key, never guessed from paths. The list reads only Pod's own
-state directory and Git identity: no Orca, preference or provider read, so it also works outside
-an Orca terminal. It never writes, converts or locks a record.
+Membership is proved by the state key, never guessed from paths. The list reads Pod's own state
+directory and Git identity, so it also works outside an Orca terminal; inside one, open rows whose
+recorded runtime differs from Orca's add a bounded window-continuation check (pod#110). It never
+writes, converts or locks a record.
 """
 
 from __future__ import annotations
@@ -191,6 +192,10 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
             if row["phase"] == "open":
                 proof = prove(target, row["objective"], readback=False)
                 row["delivery_proof"] = {"status": proof["status"], "conditions": proof["conditions"]}
+    # Open objectives whose coordinator a verified Orca window ended show their supported continuation step; this
+    # reads Orca and the host verifier only for open rows, inside a live Orca terminal, within a bounded budget.
+    from .window import discover
+    discover(rows[:MAX_ROWS], project=target)
     truncated = len(rows) > MAX_ROWS or len(directories) > MAX_SCAN
     result.update(objectives=rows[:MAX_ROWS], total=len(rows), truncated=truncated,
                   unreadable_records=unreadable[:MAX_DIAGNOSTICS],
@@ -219,6 +224,14 @@ def render(result: dict) -> None:
               f"runs {', '.join(clean(run) for run in row['runs'][:4]) or 'none'} | "
               f"worktrees {', '.join(clean(path) for path in row['worktrees'][:2]) or 'unrecorded'} | "
               f"readiness {row['readiness']}")
+        continuation = row.get("continuation")
+        if continuation is not None:
+            if continuation["status"] == "available":
+                print(f"    Window continuation: available; in {clean(continuation['cwd'])} run "
+                      f"{clean(continuation['command'])} (no owner decision)")
+            else:
+                print(f"    Window continuation: {continuation['status']} ({clean(str(continuation['condition']))})"
+                      + (f"; {clean(continuation['next_action'])}" if continuation.get("next_action") else ""))
         proof = row.get("delivery_proof")
         if proof is not None:
             print(f"    Delivery proof: {proof['status'].replace('_', ' ')}"

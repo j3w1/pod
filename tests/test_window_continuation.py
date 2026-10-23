@@ -1,0 +1,364 @@
+"""Derived continuation after a verified owner-authorized Orca window (pod#110), through production boundaries.
+
+Only Orca and the host verifier's process boundary are replaced. A verified window lets a new coordinator in the
+recorded worktree continue with derived authority; every other case refuses to the project lead, never the owner.
+"""
+from contextlib import contextmanager
+from copy import deepcopy
+import json
+import os
+from pathlib import Path
+import subprocess
+from unittest.mock import patch
+
+import yaml
+
+from pod import window
+from pod.config import personal_path
+from pod.errors import PodError
+from pod.github import repository_context
+from pod.ledger import objective_root, read
+from pod.operations import OrcaPort
+from pod.util import context_decisions, map_decisions
+from tests.kernel_support import git
+from tests.test_owner_handoff import HandoffCase, SENTINEL
+
+OLD, NEW = "runtime", "runtime-new"
+
+
+class WindowCase(HandoffCase):
+    """A host verifier double answers through relay's real request/verdict validation."""
+
+    def setUp(self):
+        super().setUp()
+        self.host = {"mode": "verified"}
+        self.host_requests = []
+        output = patch("pod.relay._output", side_effect=self.verifier)
+        output.start(); self.addCleanup(output.stop)
+        path = personal_path(self.project)
+        value = yaml.safe_load(path.read_text())
+        value["authorization_verifier"] = ["/synthetic/ce-pod-verifier"]
+        path.write_text(yaml.safe_dump(value))
+
+    def binding(self):
+        context = repository_context(self.project)
+        return {"repository": context["repository"], "repo_key": context["repo_key"],
+                "path": context["worktree"], "branch": context["branch"]}
+
+    def core(self, **extra):
+        return super().core(**{"worktree": self.binding(), **extra})
+
+    def packet(self, serves, **extra):
+        return super().packet(serves, **{"worktree": self.binding(), **extra})
+
+    def verifier(self, command, request):
+        self.host_requests.append(deepcopy(request))
+        if self.host["mode"] == "fail":
+            from pod.relay import refusal
+            raise refusal("relay_verifier_failed")
+        verdict = {**request, "single_use": "op-window:effect-1", "decided_at": "2026-01-01T00:00:00Z"}
+        if self.host["mode"] == "verified":
+            verdict.update(verified=True, owner_source="owner DRAINED stop (synthetic)", window={
+                "schema": window.SCHEMA, "operation": "op-window", "effect": "effect-1", "kind": "stop",
+                "stopped_at": "2026-01-01T00:05:00Z", "old_runtime": request["orca_window"]["old_runtime"],
+                "after_runtime": None, "ended_sessions": True, "loss_basis": window.LOSS_BASIS,
+                **self.host.get("window", {})})
+        else:
+            verdict.update(verified=False, owner_source="unverified", single_use=request["reference"], window=None,
+                           condition=self.host["condition"])
+        return json.dumps(verdict).encode()
+
+    @contextmanager
+    def inside(self, where=None):
+        old = Path.cwd()
+        os.chdir(where or self.project)
+        try:
+            yield
+        finally:
+            os.chdir(old)
+
+    def lose(self, caller="next"):
+        super().lose(caller)
+        self.assertEqual(self.port.runtime, NEW)
+
+    def resume(self, *, where=None, project=None):
+        with self.inside(where):
+            return self.op("window-continuation", owner=os.environ["ORCA_TERMINAL_HANDLE"],
+                           **({"project": str(project)} if project else {}))
+
+    def command(self, where=None):
+        from io import StringIO
+        from contextlib import redirect_stdout
+        from pod import cli
+        out = StringIO()
+        with self.inside(where), redirect_stdout(out):
+            code = cli.main(["continue", "--objective", "objective", "--json"])
+        return code, json.loads(out.getvalue())
+
+    def rows(self):
+        return [row for row in self.state()["checkpoint"]["continuity"]["history"]
+                if row["provenance"] == window.PROVENANCE]
+
+    def assert_lead_refusal(self, condition, call=None, *, where=None):
+        before, calls = self.snapshot(), len(self.mutations)
+        call = call or (lambda: self.resume(where=where))
+        with self.assertRaises(PodError) as caught:
+            call()
+        error = caught.exception
+        self.assertEqual((error.code, error.detail["condition"]), ("window_continuation_refused", condition), str(error))
+        text = str(error) + json.dumps(error.detail)
+        self.assertTrue(error.detail["next_action"].startswith(window.LEAD))
+        for owner_question in ("Ask the Owner", "ask the Owner", "owner's direct", "user_direct"):
+            self.assertNotIn(owner_question, text)
+        self.assertNotIn(SENTINEL, text)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(len(self.mutations), calls)
+        return error
+
+    def assert_only_continuation_changes(self, before, after, *, owner):
+        before, after = deepcopy(before), deepcopy(after)
+        self.assertEqual(after["owner"], owner)
+        for state in (before, after):
+            state.pop("revision")
+            state["checkpoint"].pop("continuity")
+            state["owner"] = "*"
+            for ref in state["checkpoint"]["native_refs"]:
+                ref["runtime"] = "*"
+            for row in state["admissions"].values():
+                row["runtime"] = row["owner"] = "*"
+        self.assertEqual(after, before)
+
+
+class ContinuationTests(WindowCase):
+    def test_settled_and_reserved_admissions_continue_with_history_and_provenance_preserved(self):
+        self.establish(admissions=False)
+        second = self.packet(["S2"], boundary={"paths": ["area2"]})
+        with patch.object(OrcaPort, "start_worker", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): self.start("reserved", second)
+        settled = self.start("settled", self.frozen)["admission"]; self.settle(settled)
+        self.lose()
+        before = self.state()
+        decisions = (context_decisions(before), map_decisions(before["checkpoint"]))
+        history = deepcopy(before["checkpoint"]["continuity"]["history"])
+        status = self.status()
+        self.assertEqual(status["window_continuation"]["status"], "window_available")
+        self.assertIn("pod continue --objective objective", status["next_action"])
+        self.assertEqual(status["owner_handoff"]["status"], "handoff_available")  # R105 stays available, unchanged.
+        result = self.resume()
+        self.assertEqual(result["status"], "continued")
+        entry = result["window_continuation"]
+        self.assertEqual((entry["state"], entry["from_owner"], entry["to_owner"], entry["from_runtime"], entry["to_runtime"]),
+                         ("done", "owner", "next", OLD, NEW))
+        self.assertEqual(entry["run"], {"id": "run", "before": {"coordinator": "owner", "generation": 1},
+                                        "after": {"coordinator": "next", "generation": 2}})
+        verdicts = {row["id"]: (row["state"], row["verdict"]) for row in entry["admissions"]}
+        self.assertEqual(verdicts, {settled["admission_id"]: ("bound", "settled"),
+                                    next(key for key, row in before["admissions"].items() if row["state"] == "reserved"):
+                                        ("reserved", "absent")})
+        self.assertEqual(entry["window"]["window"]["operation"], "op-window")
+        self.assertNotIn("decision", entry)
+        after = self.state()
+        self.assertEqual(after["checkpoint"]["continuity"]["history"][:len(history)], history)
+        self.assertEqual(after["checkpoint"]["continuity"]["binding"], {"run": "run", "coordinator": "next", "generation": 2})
+        self.assert_only_continuation_changes(before, after, owner="next")
+        self.assertEqual((context_decisions(after), map_decisions(after["checkpoint"])), decisions)
+        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json"]])
+        self.assertEqual(self.host_requests[0]["orca_window"], {"old_runtime": OLD, "current_runtime": NEW,
+                                                               "coordinator": "owner"})
+        self.assertEqual(self.host_requests[0]["reference"], "orca-runtime:" + OLD)
+        # The new coordinator now passes the authority join; the map's own settled-admission rule answers next.
+        with self.assertRaises(PodError) as caught:
+            self.op("checkpoint", owner="next", value=self.core())
+        self.assertNotIn(caught.exception.code, ("native_authority_unverified", "coordinator_conflict"))
+        self.assertIn("active_admission_settled", str(caught.exception))
+
+    def test_unknown_work_stays_unknown_and_nothing_is_stamped(self):
+        self.establish(admissions=False)
+        running = self.start("running", self.frozen)["admission"]
+        second = self.packet(["S2"], boundary={"paths": ["area2"]})
+        with patch.object(OrcaPort, "start_worker", side_effect=PodError("native_effect_uncertain", "transport unavailable")):
+            with self.assertRaises(PodError): self.start("unresolved", second)
+        self.lose()
+        before, pending = self.state(), self.status()["pending_admissions"]
+        entry = self.resume()["window_continuation"]
+        verdicts = {row["state"]: (row["verdict"], row["reason"]) for row in entry["admissions"]}
+        self.assertEqual(verdicts["bound"], ("unknown", "not settled at readback"))
+        self.assertEqual(verdicts["unresolved"], ("unknown", "unresolved attempt"))
+        after = self.state()
+        self.assertEqual({k: row["state"] for k, row in after["admissions"].items()},
+                         {k: row["state"] for k, row in before["admissions"].items()})
+        self.assertEqual(after["admissions"][running["admission_id"]]["native_binding"],
+                         before["admissions"][running["admission_id"]]["native_binding"])
+        self.assertEqual(self.status()["pending_admissions"], pending)
+
+    def test_one_winner_among_claimants_and_idempotent_replay(self):
+        self.establish()
+        self.lose()
+        self.mode = "lost"  # run-use lands, but its answer never arrives: the attempt stays pending.
+        code, refused = self.command()
+        self.assertEqual((code, refused["status"], refused["condition"]), (1, "refused", "run_use_failed"))
+        self.assertEqual(self.rows()[-1]["state"], "pending")
+        self.mode = "success"
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        self.assert_lead_refusal("pending_other_caller")
+        os.environ["ORCA_TERMINAL_HANDLE"] = "next"
+        self.assertEqual(self.resume()["status"], "continued")  # Resume: no second run-use.
+        self.assertEqual(len(self.mutations), 1)
+        before = self.snapshot()
+        code, replay = self.command()
+        self.assertEqual((code, replay["status"]), (0, "already_continued"))
+        self.assertEqual(self.snapshot(), before)
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        # The record now names the live winner at the current runtime: no window question remains.
+        self.assert_lead_refusal("runtime_unchanged")
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_a_lost_pending_claimant_is_replaced_without_extra_history(self):
+        self.establish()
+        self.lose()
+        def interrupted(argv, **kwargs):
+            raise KeyboardInterrupt  # The process dies after the pending write, before run-use runs.
+        with patch("pod.orca.mutate_command", side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt): self.resume()
+        self.assertEqual(self.rows()[-1]["state"], "pending")
+        # The interrupted claimant is gone; another terminal replaces its pending attempt with no extra history.
+        self.terminals["next"] = "stale"; self.terminals["third"] = "live"
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        self.mutations.clear()
+        with patch("pod.orca.mutate_command", side_effect=self.mutate):
+            entry = self.resume()["window_continuation"]
+        self.assertEqual((entry["state"], entry["to_owner"]), ("done", "third"))
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.state()["owner"], "third")
+
+    def test_same_caller_resumes_after_an_interruption_before_run_use(self):
+        self.establish()
+        self.lose()
+        with patch("pod.orca.mutate_command", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): self.resume()
+        pending = deepcopy(self.rows()[-1])
+        entry = self.resume()["window_continuation"]
+        self.assertEqual((entry["state"], entry["at"], entry["to_owner"]), ("done", pending["at"], "next"))
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json"]])
+
+    def test_a_window_with_two_runtime_changes_continues_from_the_first_stop(self):
+        self.establish()
+        self.lose()
+        self.host["window"] = {"kind": "stop", "after_runtime": "runtime-mid"}  # Started, then restarted again.
+        entry = self.resume()["window_continuation"]
+        self.assertEqual((entry["from_runtime"], entry["to_runtime"], entry["window"]["window"]["after_runtime"]),
+                         (OLD, NEW, "runtime-mid"))
+
+    def test_receipts_are_scoped_per_repository_and_objective(self):
+        self.establish()
+        value = {"action": window.ACTION, "repo_key": "a" * 64, "objective": "objective", "authorization": "op:effect",
+                 "operation": "op", "effect": "effect", "old_runtime": OLD, "coordinator": "owner", "run": "run",
+                 "generation": 1}
+        window._receipt(self.project, value, consume=True)
+        window._receipt(self.project, value, consume=True)  # The identical transition may finish.
+        window._receipt(self.project, {**value, "repo_key": "b" * 64}, consume=True)  # Another checkout's same name.
+        with self.assertRaises(PodError) as caught:
+            window._receipt(self.project, {**value, "generation": 2}, consume=True)
+        self.assertEqual(caught.exception.detail["condition"], "window_already_used")
+
+    def test_status_list_shows_the_supported_step_and_lead_conditions(self):
+        self.establish()
+        self.lose()
+        from pod.listing import objective_list
+        with self.inside():
+            row = next(row for row in objective_list(self.project)["objectives"] if row["objective"] == "objective")
+        self.assertEqual(row["continuation"]["status"], "available")
+        self.assertEqual(row["continuation"]["command"], "pod continue --objective objective --json")
+        self.assertEqual(row["continuation"]["cwd"], repository_context(self.project)["worktree"])
+        self.host.update(mode="denied", condition="window_not_session_ending")
+        with self.inside():
+            row = next(row for row in objective_list(self.project)["objectives"] if row["objective"] == "objective")
+        self.assertEqual((row["continuation"]["status"], row["continuation"]["condition"]),
+                         ("unavailable", "window_not_session_ending"))
+        self.assertTrue(row["continuation"]["next_action"].startswith(window.LEAD))
+
+    def test_stored_rows_validate_and_succession_lineage_recognizes_them(self):
+        self.establish()
+        self.lose()
+        self.resume()
+        state = self.state()
+        row = deepcopy(self.rows()[-1])
+        for broken in ({**row, "decision": {"provenance": "user_direct"}}, {**row, "state": "unknown"},
+                       {**row, "window": {**row["window"], "verified": False}}):
+            with self.subTest(field=sorted(set(broken) ^ set(row)) or "value"):
+                with self.assertRaises(PodError) as caught:
+                    window.validate_entry(broken)
+                self.assertEqual(caught.exception.code, "state_unsupported")
+        from pod.succession import _handed_over
+        self.assertTrue(_handed_over(state, "owner", "next", since="2000-01-01T00:00:00+00:00"))
+
+
+class RefusalTests(WindowCase):
+    def setUp(self):
+        super().setUp()
+        self.establish()
+        self.lose()
+
+    def test_host_refusals_reach_the_lead(self):
+        for condition in window.HOST_CONDITIONS:
+            with self.subTest(condition=condition):
+                self.host.update(mode="denied", condition=condition)
+                self.assert_lead_refusal(condition)
+        self.host.update(mode="fail")
+        self.assert_lead_refusal("window_unverified")
+        self.host.update(mode="verified", window={"old_runtime": "another-runtime"})
+        self.assert_lead_refusal("window_unverified")
+        self.host.update(window={"ended_sessions": False})
+        self.assert_lead_refusal("window_unverified")
+        self.host.update(window={"stopped_at": "2025-12-31T00:00:00Z"})  # Stopped before it was authorized.
+        self.assert_lead_refusal("window_unverified")
+        path = personal_path(self.project)
+        value = yaml.safe_load(path.read_text()); value.pop("authorization_verifier"); path.write_text(yaml.safe_dump(value))
+        self.assert_lead_refusal("window_verifier_unavailable")
+
+    def test_loss_outside_the_window_and_runtime_unchanged(self):
+        self.terminals["owner"] = "exited"
+        self.assert_lead_refusal("coordinator_lost_outside_window")
+        self.terminals["owner"] = "live"
+        self.assert_lead_refusal("owner_live")
+        self.terminals["owner"] = "stale"
+        self.port.runtime = OLD; self.port.placement["runtime"] = OLD
+        self.assert_lead_refusal("runtime_unchanged")
+
+    def test_moved_repository_and_changed_worktree(self):
+        moved = self.root / "moved"
+        os.rename(self.project, moved)
+        try:
+            self.assert_lead_refusal("objective_unknown", lambda: self.resume(where=moved, project=moved))
+            self.assertFalse(objective_root(moved, "objective").exists())
+        finally:
+            os.rename(moved, self.project)
+        other = self.root / "other"
+        git(self.project, "worktree", "add", "-q", "-b", "elsewhere", str(other))
+        self.assert_lead_refusal("worktree_changed", lambda: self.resume(where=other, project=other))
+        git(self.project, "checkout", "-q", "-b", "renamed")
+        self.assert_lead_refusal("worktree_changed")
+
+    def test_run_and_work_identity_refusals(self):
+        self.current.update(coordinator_handle="foreign", consumer_generation=4)
+        self.assert_lead_refusal("run_rebound_elsewhere")
+        self.current.update(coordinator_handle="owner", consumer_generation=1)
+        original = self.native_read
+        def missing(argv, **kwargs):
+            if argv[:2] == ["orchestration", "run-show"]:
+                raise PodError("orca_read_failed", "Orca read did not succeed", {"native_code": "run_not_found"})
+            return original(argv, **kwargs)
+        with patch("pod.orca.read_command", side_effect=missing):
+            self.assert_lead_refusal("run_missing")
+        next(iter(self.port.workers.values())).update(worktree="different")
+        self.assert_lead_refusal("identity_differs")
+
+    def test_pending_owner_handoff_holds_window_continuation(self):
+        self.mode = "lost"
+        with self.assertRaises(PodError):
+            self.handoff()
+        self.assertEqual(self.state()["checkpoint"]["continuity"]["history"][-1]["state"], "pending")
+        self.mode = "success"
+        self.current.update(coordinator_handle="owner", consumer_generation=1)
+        self.assert_lead_refusal("handoff_pending")

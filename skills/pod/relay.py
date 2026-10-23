@@ -31,12 +31,41 @@ NEXT = {
 }
 
 
-def refusal(code: str, *, fields: list[str] | None = None) -> PodError:
-    # Verifier output, stderr, arguments and exception text never become diagnostics.
+def refusal(code: str, *, fields: list[str] | None = None, condition: str | None = None) -> PodError:
+    # Verifier output, stderr, arguments and exception text never become diagnostics; only a validated window
+    # condition from a closed list does.
     next_action = ("obtain a fresh owner decision bound to the current standing_authorization.scope_digest; "
                    "the host must save that digest with the decision" if fields == ["standing.scope_digest"] else NEXT[code])
     return PodError(code, f"Relayed authorization refused: {code}. Next: {next_action}",
-                    {"next_action": next_action, **({"fields": fields} if fields else {})})
+                    {"next_action": next_action, **({"fields": fields} if fields else {}),
+                     **({"condition": condition} if condition else {})})
+
+
+def _window_fields(verdict: dict) -> None:
+    """The orca_window echo and the host's window facts (pod#110); the window module checks their meaning."""
+    from .window import HOST_CONDITIONS, KINDS, LOSS_BASIS, SCHEMA as WINDOW
+    echo = exact(verdict["orca_window"], {"old_runtime", "current_runtime", "coordinator"},
+                 {"old_runtime", "current_runtime", "coordinator"}, name="relay orca_window")
+    for key in echo:
+        bounded_text(echo[key], name=key, limit=256).encode("utf-8")
+    if verdict["verified"]:
+        if "condition" in verdict:
+            raise ValueError("condition")
+        window = exact(verdict["window"], {"schema", "operation", "effect", "kind", "stopped_at", "old_runtime",
+                                           "after_runtime", "ended_sessions", "loss_basis"},
+                       {"schema", "operation", "effect", "kind", "stopped_at", "old_runtime", "after_runtime",
+                        "ended_sessions", "loss_basis"}, name="relay window")
+        for key in ("operation", "effect", "old_runtime"):
+            bounded_text(window[key], name=key, limit=512).encode("utf-8")
+        if window["after_runtime"] is not None:
+            bounded_text(window["after_runtime"], name="after_runtime", limit=512).encode("utf-8")
+        if (window["schema"] != WINDOW or window["kind"] not in KINDS or window["ended_sessions"] is not True
+                or window["loss_basis"] != LOSS_BASIS):
+            raise ValueError("window")
+        window["stopped_at"] = normalize_timestamp(window["stopped_at"], field="window stop time",
+                                                   code="relay_verifier_malformed")
+    elif verdict["window"] is not None or verdict.get("condition") not in HOST_CONDITIONS:
+        raise ValueError("denied window")
 
 
 def _output(command: list[str], request: dict) -> bytes:
@@ -105,20 +134,25 @@ def validate_verdict(value: object) -> dict:
     try:
         action = value.get("action") if isinstance(value, dict) else None
         extra = {action} if action in ("standing", "answer", "issue_revision") else set()
+        if action == "orca_window":
+            extra = {"orca_window", "window"}
         verdict_fields = (VERDICT_FIELDS - {"owner_source"} | {"responder_source"}
                           if action == "answer" else VERDICT_FIELDS) | extra
-        verdict = exact(value, verdict_fields, verdict_fields, name="relay verdict")
+        optional = verdict_fields | ({"condition"} if action == "orca_window" else set())
+        verdict = exact(value, optional, verdict_fields, name="relay verdict")
         if verdict["schema"] != SCHEMA or type(verdict["verified"]) is not bool:
             raise ValueError("verdict")
-        if verdict["action"] not in ("publish", "merge", "standing", "answer", "issue_revision"):
+        if verdict["action"] not in ("publish", "merge", "standing", "answer", "issue_revision", "orca_window"):
             raise ValueError("action")
         source = "responder_source" if action == "answer" else "owner_source"
         for key, limit in (("reference", 512), ("objective", 256), (source, 512), ("single_use", 512)):
             bounded_text(verdict[key], name=key, limit=limit).encode("utf-8")
-        if action in ("standing", "answer", "issue_revision"):
+        if action in ("standing", "answer", "issue_revision", "orca_window"):
             if verdict["candidate"] is not None or verdict["pr"] is not None:
                 raise ValueError("candidate/pr")
-            if action == "issue_revision":
+            if action == "orca_window":
+                _window_fields(verdict)
+            elif action == "issue_revision":
                 from .issue_revision import validate_binding
                 validate_binding(verdict["issue_revision"], verdict["target"])
             elif action == "standing":
@@ -180,9 +214,11 @@ def verify(command: list[str] | None, request: dict) -> dict:
             and isinstance(value.get("standing"), dict) and value["standing"].get("operation") != request["standing"]["operation"]):
         raise refusal("relay_verifier_mismatch", fields=["standing"])
     verdict = validate_verdict(value)
+    if verdict["action"] == "orca_window" != request["action"]:
+        raise refusal("relay_verifier_mismatch", fields=["action"])
     if not verdict["verified"]:
-        raise refusal("relay_verifier_denied")
-    binding_fields = BINDING_FIELDS | ({request["action"]} if request["action"] in ("standing", "answer", "issue_revision") else set())
+        raise refusal("relay_verifier_denied", condition=verdict.get("condition") if request["action"] == "orca_window" else None)
+    binding_fields = BINDING_FIELDS | ({request["action"]} if request["action"] in ("standing", "answer", "issue_revision", "orca_window") else set())
     mismatches = sorted(key for key in binding_fields if verdict.get(key) != request[key])
     if request["action"] in ("standing", "answer") and "target" in mismatches:
         mismatches.remove("target")
