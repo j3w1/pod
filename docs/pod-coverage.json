@@ -7849,7 +7849,8 @@
         "tests.test_github.IssueReopenTimelineTests.test_empty_timeline_remains_absent_and_zoned_event_is_normalized",
         "tests.test_github.IssueReopenTimelineTests.test_inconsistent_identity_partial_errors_and_extra_nodes_refuse",
         "tests.test_github.IssueReopenTimelineTests.test_unreadable_timeline_is_not_reported_as_no_reopen",
-        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_shared_context_carries_the_current_utc_closure_timestamp"
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_shared_context_carries_the_current_utc_closure_timestamp",
+        "tests.test_closure_fixes_c3.FreshSourceTests.test_fresh_reopen_timeline_holds_a_later_persons_reopen"
       ],
       "status": "NOT_RUN"
     },
@@ -7866,7 +7867,10 @@
         "tests.test_closure_fixes_a.SourceIntentTests.test_sweep_memoizes_shared_sources_and_parents_and_reports_each_parent_once",
         "tests.test_closure_fixes_a.SourceIntentTests.test_shared_reopened_source_has_one_lead_task_and_one_read_per_sweep",
         "tests.test_closure_fixes_a.SourceIntentTests.test_repeated_repository_selection_shares_observations_and_lead_tasks",
-        "tests.test_closure_fixes_c1.ReopenTimingTests.test_shared_reopened_source_reads_one_timeline_per_sweep"
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_shared_reopened_source_reads_one_timeline_per_sweep",
+        "tests.test_closure_fixes_c3.FreshSourceTests.test_persons_not_planned_close_after_cached_read_stays_not_planned",
+        "tests.test_closure_fixes_c3.FreshSourceTests.test_cached_preclosure_reopen_still_closes_after_its_own_fresh_read",
+        "tests.test_closure_fixes_c3.FreshSourceTests.test_fresh_source_body_change_holds_the_cached_completion"
       ],
       "status": "NOT_RUN"
     },
@@ -7951,7 +7955,8 @@
         "tests.test_evidence_closure.UndeliveredTests.test_no_recorded_delivery_pull_request_stays_open",
         "tests.test_completed_closure.GovernanceCompletionTests.test_unproved_closing_currency_names_the_lead_and_preserves_bytes",
         "tests.test_closure_fixes_b.LinkedCompletionTests.test_missing_link_names_supported_lead_work_without_an_impossible_r93_step",
-        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_direct_completion_without_merge_names_a_blocked_project_lead_task"
+        "tests.test_closure_fixes_c2.ClosingContinuityTests.test_direct_completion_without_merge_names_a_blocked_project_lead_task",
+        "tests.test_closure_fixes_c3.CompletionGuidanceTests.test_missing_merge_names_unavailable_proof_and_the_leads_task"
       ],
       "status": "NOT_RUN"
     },

@@ -741,9 +741,10 @@ def completion_governance(project: Path, map_state: dict, *, checkpoint: bool = 
             raise
         raise PodError(exc.code, "Completion bookkeeping lacks proved delivery, retained target identity or Git ancestry; "
                        "closure remains blocked as a project lead task",
-                       {**(exc.detail or {}), "next_action": "the project lead restores genuine delivery proof and the retained "
-                        "Git/target facts; if no recorded or linked merge into that target exists, keep closure blocked and "
-                        "report the unavailable completion proof to the project lead; retry only after the required proof "
+                       {**(exc.detail or {}), "next_action": "the project lead checks the project's delivery records and "
+                        "restores genuine delivery proof and the retained Git/target facts; if no recorded or linked "
+                        "merge into that target exists, delivery proof is unavailable and closure stays blocked; "
+                        "retry only after the required proof "
                         "is available, on the retained baseline without governance_refresh; ordinary work adopting changed "
                         "governance retains its existing revision authority"}) from exc
 

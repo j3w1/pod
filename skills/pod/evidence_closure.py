@@ -1675,16 +1675,20 @@ def _close_source_issue(project: Path, objective: str, raw: dict, *, remote, wri
         source = validate_issue_binding(source)
         effect["locator"] = source["locator"]
         reader = remote or GhPort(project)
-        checked, live = issue_recheck_live(project, source, port=reader)
-        if live is None:
-            raise PodError("source_unreadable", "The bound source observation is unavailable")
-        # No-op for an already completed source; never change another closing reason.
-        if live["state"] == "CLOSED":
-            effect.update(outcome="already_completed" if checked.get("state_reason") == "COMPLETED" else "closed_other_reason",
-                          state=live["state"], state_reason=checked.get("state_reason"))
-        elif checked.get("state_reason") == "REOPENED" and _reopened_after_closure(reader, source, closed_at, effect):
-            effect.update(outcome="reopened", reason="source_reopened", state="OPEN", state_reason="REOPENED")
-        else:
+        # Cached observations can rule out a send; only this effect's own fresh source check permits one.
+        checks = (reader, reader._source()) if isinstance(reader, _SweepRemote) else (reader,)
+        for check_reader in checks:
+            checked, live = issue_recheck_live(project, source, port=check_reader)
+            if live is None:
+                raise PodError("source_unreadable", "The bound source observation is unavailable")
+            # No-op for an already completed source; never change another closing reason.
+            if live["state"] == "CLOSED":
+                effect.update(outcome="already_completed" if checked.get("state_reason") == "COMPLETED" else "closed_other_reason",
+                              state=live["state"], state_reason=checked.get("state_reason"))
+                break
+            if checked.get("state_reason") == "REOPENED" and _reopened_after_closure(check_reader, source, closed_at, effect):
+                effect.update(outcome="reopened", reason="source_reopened", state="OPEN", state_reason="REOPENED")
+                break
             if not writable:
                 raise PodError("closure_unverified", "An older ordinary closure permits source observation, not a new mutation")
             from .pod_mapping import scope_hash
@@ -1698,6 +1702,7 @@ def _close_source_issue(project: Path, objective: str, raw: dict, *, remote, wri
             lines = pod_lines(live["body"], seal=source.get("role") == "SEAL")
             if not lines or any(len(rows) != 1 or not rows[0]["ticked"] for rows in lines.values()):
                 raise PodError("source_unproved", "The bound source needs a nonempty unambiguous fully ticked PoD set")
+        else:
             # The cooperative lock is the local fence; this second read also rejects an uncooperative raw edit.
             for path, before in snapshots:
                 _, immediate = _read_record(path)
