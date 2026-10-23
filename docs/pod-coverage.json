@@ -7548,10 +7548,10 @@
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
         "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
         "tests.test_records_reservations.FindingReservationTests.test_incremental_old_report_cannot_take_a_pending_reviews_finding_budget",
-        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_after_retained_finding_allows_replacement_review",
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_its_reservation_and_renewal_hold",
         "tests.test_records_refused_reports.RefusedReportTests.test_failed_without_report_names_consumption_and_keeps_renewal_blocked",
-        "tests.test_records_refused_reports.RefusedReportTests.test_sibling_states_release_only_explicit_permanent_refusal",
-        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_releases_the_reserved_checkpoint_receipt"
+        "tests.test_records_refused_reports.RefusedReportTests.test_sibling_states_never_release_a_hold_without_consumption_or_disposition",
+        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_the_reserved_checkpoint_receipt"
       ],
       "status": "NOT_RUN"
     },
@@ -7635,7 +7635,7 @@
         "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
         "tests.test_records_corrections.InvestigationCapacityTests.test_full_ordinary_history_never_allows_investigation_discard",
-        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_does_not_block_renewal_or_supply_proof"
+        "tests.test_records_refused_reports.RefusedReportTests.test_consumable_review_keeps_its_slot_and_records_its_finding"
       ],
       "status": "NOT_RUN"
     },

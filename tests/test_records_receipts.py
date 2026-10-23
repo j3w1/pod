@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 import unittest
 
+from pod.assurance import own_report_overflow
 from pod.errors import PodError
 from pod.ledger import _read, objective_root
 from tests.issue41_support import ProductionCase
@@ -84,7 +85,7 @@ class ReceiptBoundaryTests(unittest.TestCase):
         self.assertEqual(detail["detail"], "receipt_limit")
         self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "limit")}, {"retained": 64, "proposed": 65, "limit": 64})
         self.assertEqual(detail["referent"]["admission"], self.admission["admission_id"])
-        self.assertEqual(detail["next_action"], f"consume the report for admission {self.admission['admission_id']} before retrying this write")
+        self.assertEqual(detail["next_action"], own_report_overflow(self.admission["admission_id"], "receipts"))
         self.assertTrue(self.unchanged)
         self.assertEqual(self.checkpoint_refusal.detail["detail"], "receipt_limit")
         self.assertTrue(self.checkpoint_atomic)

@@ -966,9 +966,7 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
                          "renewal copies the recorded row unchanged", changed_fields=set(changed), obligation=old_id,
                          next_action=("use the existing authorized revision path for changed definitions" if changed else
                                       "omit the renewed row from obligations or update; put replacement state fields in its renew entry"))
-        from .assurance import report_permanently_refused
         pending = [key for key, admission in _admissions(ctx).items() if old_id in admission.get("serves", [])
-                   and not report_permanently_refused(admission)
                    and (key in _outstanding(ctx) or admission.get("state") != "deferred"
                         and (admission.get("report") is None and admission.get("disposition") is None
                              or admission.get("role") == "implement" and admission.get("disposition") is None))]

@@ -1,4 +1,4 @@
-"""Recorded permanent report refusal releases only the assurance result hold."""
+"""A route-mismatched review keeps its reservation and renewal hold (accepted, documented limitation)."""
 from copy import deepcopy
 import shutil
 import unittest
@@ -59,40 +59,47 @@ class RefusedReportTests(unittest.TestCase):
         self.assertIsNone(rejected["disposition"])
         return rejected, packet
 
-    def test_recorded_mismatch_after_retained_finding_allows_replacement_review(self):
+    def test_recorded_mismatch_keeps_its_reservation_and_renewal_hold(self):
+        # Accepted limitation (DECISIONS Round 4, option A): a recorded route
+        # mismatch is not proof that Pod will refuse every later report, so the
+        # review keeps its slots; the Governor already holds such an objective
+        # for its route decision.
         rejected, packet = self.refused_review()
-        replacement = self.case.start("replacement", packet)["admission"]; self.case.settle(replacement)
-        self.case.report(replacement, packet, map=self.report_map(
-            state="satisfied", evidence=[{"attempt": replacement["admission_id"]}]))
-        state = read(self.case.project, "objective")
-        self.assertEqual(state["admissions"][rejected["admission_id"]], rejected)
-        assurance = next(row for row in self.case.stored() if row["id"] == "A")
-        self.assertEqual((len(assurance["receipts"]), len(assurance["findings"])), (1, 1))
-        self.assertNotIn(rejected["admission_id"], [row["evidence"]["attempt"] for row in assurance["receipts"]])
-        self.assertEqual(renewal.RenewalAssuranceTests.qualification(self.case), "QUALIFIED")
+        before = files(self.case)
+        with self.assertRaises(PodError) as caught:
+            self.case.start("replacement", packet)
+        detail = caught.exception.detail
+        self.assertEqual(detail["detail"], "finding_limit")
+        self.assertEqual(detail["referent"]["admission"], rejected["admission_id"])
+        with self.assertRaises(PodError) as caught:
+            self.case.write(renew=[{"id": "A", "as": "A2", **waiting()}])
+        self.assertEqual(caught.exception.detail["detail"], "renewal_result_pending")
+        self.assertEqual(caught.exception.detail["referent"]["admission"], rejected["admission_id"])
+        self.assertEqual(files(self.case), before)
 
-    def test_recorded_mismatch_releases_the_reserved_checkpoint_receipt(self):
+    def test_recorded_mismatch_keeps_the_reserved_checkpoint_receipt(self):
         for start in range(0, 63, 16):
             self.case.write(**self.report_map(evidence=[{"attempt": f"retained-{index}"}
                 for index in range(start, min(start + 16, 63))]))
         rejected, _ = self.refused_review()
-        self.case.write(**self.report_map(evidence=[{"attempt": "last"}]))
-        assurance = next(row for row in self.case.stored() if row["id"] == "A")
-        self.assertEqual(len(assurance["receipts"]), 64)
-        self.assertEqual(read(self.case.project, "objective")["admissions"][rejected["admission_id"]], rejected)
+        before = files(self.case)
+        with self.assertRaises(PodError) as caught:
+            self.case.write(**self.report_map(evidence=[{"attempt": "last"}]))
+        self.assertEqual(caught.exception.detail["detail"], "receipt_limit")
+        self.assertEqual(caught.exception.detail["referent"]["admission"], rejected["admission_id"])
+        self.assertEqual(files(self.case), before)
 
-    def test_recorded_mismatch_does_not_block_renewal_or_supply_proof(self):
-        rejected, _ = self.refused_review()
-        self.case.write(renew=[{"id": "A", "as": "A2", **waiting()}])
-        state = read(self.case.project, "objective")
-        self.assertEqual(state["admissions"][rejected["admission_id"]], rejected)
-        rows = {row["id"]: row for row in self.case.stored()}
-        self.assertEqual((rows["A"]["state"], len(rows["A"]["findings"])), ("renewed", 1))
-        self.assertEqual((rows["A2"]["receipts"], rows["A2"].get("findings", [])), ([], []))
-        self.assertEqual(renewal.RenewalAssuranceTests.qualification(self.case), "WITHHELD")
-        packet = self.case.packet(["A2"], role="review")
-        replacement = self.case.start("renewed-review", packet)["admission"]
-        self.assertEqual(replacement["serves"], ["A2"])
+    def test_consumable_review_keeps_its_slot_and_records_its_finding(self):
+        # RD-1: a review whose report Pod accepts must find its reserved slot,
+        # so its finding is recorded on the row it served.
+        packet = self.case.packet(["A"], role="review")
+        admission = self.case.start("consumable", packet)["admission"]; self.case.settle(admission)
+        before = len(next(row for row in self.case.stored() if row["id"] == "A")["findings"])
+        self.case.report(admission, packet, map=self.report_map(),
+                         triage=[{"finding": "kept", "severity": "minor", "triage": "advisory",
+                                  "summary": "finding keeps its reserved slot"}])
+        assurance = next(row for row in self.case.stored() if row["id"] == "A")
+        self.assertEqual(len(assurance["findings"]), before + 1)
 
     def test_failed_without_report_names_consumption_and_keeps_renewal_blocked(self):
         packet = self.case.packet(["A"], role="review")
@@ -117,13 +124,13 @@ class RefusedReportTests(unittest.TestCase):
         replacement = self.case.start("replacement", packet)["admission"]
         self.assertEqual(replacement["serves"], ["A"])
 
-    def test_sibling_states_release_only_explicit_permanent_refusal(self):
-        # No uncertainty, native error or failed outcome is itself proof that
-        # Pod permanently refused a report. Existing consumed/deferred rules stay.
+    def test_sibling_states_never_release_a_hold_without_consumption_or_disposition(self):
+        # Only consumption, deferral or an ordinary disposition ends a hold; a
+        # recorded route mismatch, uncertainty or native failure does not.
         base = {"serves": ["A"], "state": "bound", "report": None, "disposition": None}
         cases = [
             ("unconsumed", {}, True),
-            ("recorded-mismatch", {"route_decision": {"route_mismatch": True}}, False),
+            ("recorded-mismatch", {"route_decision": {"route_mismatch": True}}, True),
             ("unknown-effective", {"route_decision": {"effective_unknown": True}}, True),
             ("false-mismatch", {"route_decision": {"route_mismatch": False}}, True),
             ("malformed-marker", {"route_decision": {"route_mismatch": "unknown"}}, True),

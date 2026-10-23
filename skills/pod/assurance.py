@@ -333,22 +333,17 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
     return stamped
 
 
-def report_permanently_refused(admission: dict) -> bool:
-    """Only an explicit recorded report refusal releases this result's hold.
-
-    Route mismatch is the current permanent report refusal marker. Unknown
-    routes, native failures and recoverable errors do not establish refusal.
-    """
-    return (admission.get("route_decision") or {}).get("route_mismatch") is True
-
-
 def pending_serving(ob: dict, ctx: dict) -> list[str]:
-    """Keep result reservations until consumption, disposition or permanent refusal."""
+    """Keep result reservations until consumption or disposition.
+
+    A recorded route mismatch does not release them: Pod still accepts a report
+    whose worker-show route matches, and the Governor already holds a mismatched
+    objective for its route decision.
+    """
     from .obligations import _admissions, _outstanding
     outstanding = set(_outstanding(ctx))
     return [key for key, row in _admissions(ctx).items()
             if ob["id"] in (row.get("serves") or []) and row.get("state") != "deferred"
-            and not report_permanently_refused(row)
             and row.get("disposition") is None and (key in outstanding or row.get("report") is None)]
 
 
@@ -370,8 +365,7 @@ def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int
     pending = pending_serving(ob, ctx)
     reporting = ctx.get("unconsumed_report_attempt")
     admission = _admissions(ctx).get(reporting, {})
-    if (reporting is not None and reporting not in pending and ob["id"] in admission.get("serves", [])
-            and not report_permanently_refused(admission)):
+    if reporting is not None and reporting not in pending and ob["id"] in admission.get("serves", []):
         # Ingestion excludes itself from slot accounting, but a refused write
         # has not consumed its report and cannot yet renew the served row.
         pending.append(reporting)
@@ -394,8 +388,19 @@ def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int
                   reserved=reserved,
                   limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
                   **({"admission": pending[0]} if pending else {}),
-                  next_action=(f"consume the report for admission {pending[0]} before retrying this write"
+                  next_action=(own_report_overflow(reporting, field) if pending and pending[0] == reporting else
+                               f"consume the report for admission {pending[0]} before retrying this write"
                                if pending else {"seq": seq, "renew": [replacement]}))
+
+
+def own_report_overflow(admission: str, field: str) -> str:
+    """This write consumes the named report, so it cannot be told to consume it first."""
+    if field == "findings":
+        return (f"the report for admission {admission} does not fit this row's remaining finding history (it was "
+                "admitted before capacity reservation); consolidate related findings within the triage group bounds, "
+                "keeping every required finding, and retry this write")
+    return (f"the report for admission {admission} cannot be recorded: this row's receipt history is full and the "
+            "report was admitted before capacity reservation; record it for the project lead as a blocked result")
 
 
 def binding_current(binding: Any, ctx: dict) -> bool:

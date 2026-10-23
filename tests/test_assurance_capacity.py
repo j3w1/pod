@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pod.assurance import own_report_overflow
 from pod.contracts import bound
 from pod.errors import PodError
 from pod.ledger import _read, objective_root
@@ -158,7 +159,7 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["referent"]["limit"], 64)
         self.assertEqual(caught.exception.detail["referent"]["admission"], admission["admission_id"])
         self.assertEqual(caught.exception.detail["next_action"],
-                         f"consume the report for admission {admission['admission_id']} before retrying this write")
+                         own_report_overflow(admission["admission_id"], "findings"))
         self.assertEqual(self.files(), before)
 
     def test_new_admission_reserves_the_full_finding_budget(self):
