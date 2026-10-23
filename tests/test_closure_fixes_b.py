@@ -192,7 +192,8 @@ class SealMappingCase(TickCase):
     def repair(self):
         self.issue.body = self.issue.body.replace("**PoD 2:", "**PoD#2:")
         source = issue_intake(self.project, self.locator, port=self.issue, completion=True)["source"]
-        return self.write(objective_source=source, mapping_repair={
+        return self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1,
+                          objective_source=source, mapping_repair={
             "original_body": self.original, "targets": {"O2": "PoD#2"}})
 
 
@@ -319,9 +320,12 @@ class SealRevisionTests(SealRevisionCase):
     def test_seal_issue_revision_preserves_unchanged_ac_and_stores_valid_ac_mapping(self):
         self.begin_seal()
         self.prove()
+        original = self.issue.body
         self.tick(1)
         before = deepcopy(self.stored()[0])
-        result = self.revise(self.proposal())
+        proposal = self.proposal()
+        proposal["issue_revision_data"] = self.historical_data(original)
+        result = self.revise(proposal)
         checkpoint = read(self.project, "objective")["checkpoint"]
         self.assertEqual(checkpoint["criteria"], ["AC1", "AC2"])
         self.assertEqual(checkpoint["obligations"][0], before)
