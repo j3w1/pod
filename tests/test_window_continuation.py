@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+import tarfile
 from unittest.mock import patch
 
 import yaml
@@ -24,6 +26,8 @@ from tests.kernel_support import git
 from tests.test_owner_handoff import HandoffCase, SENTINEL
 
 OLD, NEW = "runtime", "runtime-new"
+# The last release before window continuation (0.21.13): its helper must refuse a record carrying the new row.
+PRECEDING = "bbe1785df23bf5c7b90e3058d782e54df7abe9ee"
 
 
 class WindowCase(HandoffCase):
@@ -259,6 +263,108 @@ class ContinuationTests(WindowCase):
         self.assertEqual((final["verdict"], final["outcome"]), ("settled", "succeeded"))
         self.assertGreaterEqual(entry["completion"]["at"], entry["at"])
 
+    def test_a_retry_after_an_ended_attempt_keeps_every_readback(self):
+        self.establish()
+        self.lose()
+        self.mode = "refused"
+        self.command()
+        first = deepcopy(self.rows()[-1])
+        self.assertEqual((first["state"], first["admissions"][0]["verdict"]), ("aborted", "unknown"))
+        self.assertEqual(first["initial"], {"at": first["at"], "runtime": NEW, "admissions": first["admissions"]})
+        self.settle(self.admission)  # The worker settles before the retry reads it again.
+        self.mode = "success"
+        from pod import history
+        with patch("pod.history.prepare_context", wraps=history.prepare_context) as preflight:
+            entry = self.resume()["window_continuation"]
+        self.assertEqual(entry["initial"], first["initial"])  # The transition's first readback never changes.
+        self.assertEqual(entry["attempts"], [{"to_owner": "next", "at": first["at"], "runtime": NEW,
+                                              "abort_reason": "run-use refused", "run_before": first["run"]["before"],
+                                              "admissions": first["admissions"]}])
+        # The capacity preflight sized the done record with the whole expanded row before the receipt was consumed.
+        (call,) = [call for call in preflight.call_args_list if not call.kwargs]  # Not the writer's own compaction.
+        projected = call.args[1]["checkpoint"]["continuity"]["history"][-1]
+        self.assertEqual((projected["state"], projected["initial"], projected["attempts"]),
+                         ("done", first["initial"], entry["attempts"]))
+        self.assertEqual([item["verdict"] for item in entry["admissions"]], ["settled"])
+        self.assertEqual([item["verdict"] for item in entry["completion"]["admissions"]], ["settled"])
+
+    def test_a_lost_claimant_is_replaced_across_another_runtime_change_keeping_its_readback(self):
+        self.establish()
+        self.lose()
+        self.mode = "lost"  # run-use lands, but its answer never arrives: the attempt stays pending.
+        self.command()
+        first = deepcopy(self.rows()[-1])
+        self.assertEqual((first["state"], first["admissions"][0]["verdict"]), ("pending", "unknown"))
+        # Orca restarts again: the claimant's session ends, the worker settles and a third terminal continues.
+        self.terminals["next"] = "stale"
+        self.port.runtime = self.port.placement["runtime"] = "runtime-later"
+        self.settle(self.admission)
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        self.mode = "success"
+        entry = self.resume()["window_continuation"]
+        self.assertEqual((entry["state"], entry["to_owner"], entry["from_runtime"], entry["to_runtime"]),
+                         ("done", "third", OLD, "runtime-later"))
+        self.assertEqual(entry["initial"], first["initial"])
+        self.assertEqual(entry["attempts"], [{"to_owner": "next", "at": first["at"], "runtime": NEW,
+                                              "abort_reason": "pending caller handle stale or gone",
+                                              "run_before": first["run"]["before"], "admissions": first["admissions"]}])
+        self.assertEqual([(item["verdict"], item["runtime"]) for item in entry["admissions"]],
+                         [("settled", "runtime-later")])
+        self.assertEqual((len(self.rows()), len(self.mutations)), (1, 2))
+
+    def test_an_interruption_after_the_receipt_recovers_after_another_restart(self):
+        self.establish()
+        self.lose()
+        before, files = self.state(), self.snapshot()
+        with patch("pod.ledger._write", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): self.resume()
+        self.assertEqual(self.state(), before)  # Only the receipt landed; the record is unchanged.
+        added = set(self.snapshot()) - set(files)
+        self.assertEqual([Path(name).parent.name for name in added], [".relay-authorizations"])
+        self.port.runtime = self.port.placement["runtime"] = "runtime-later"
+        entry = self.resume()["window_continuation"]  # The receipt binds the transition, not the current runtime.
+        self.assertEqual((entry["state"], entry["to_runtime"]), ("done", "runtime-later"))
+        self.assertEqual((len(self.rows()), len(self.mutations)), (1, 1))
+
+    def test_an_interrupted_done_write_resumes_without_another_run_use(self):
+        self.establish()
+        self.lose()
+        from pod import ledger
+        original, written = ledger._write, []
+        def write(path, state, **kwargs):
+            written.append(state["checkpoint"]["continuity"]["history"][-1]["state"])
+            if len(written) == 2:
+                raise KeyboardInterrupt  # The process dies before the done write lands.
+            return original(path, state, **kwargs)
+        with patch("pod.ledger._write", side_effect=write):
+            with self.assertRaises(KeyboardInterrupt): self.resume()
+        self.assertEqual(written, ["pending", "done"])
+        self.assertEqual((self.rows()[-1]["state"], len(self.mutations)), ("pending", 1))
+        self.assertEqual(self.resume()["status"], "continued")
+        self.assertEqual((len(self.rows()), len(self.mutations)), (1, 1))
+
+    def test_the_preceding_helper_refuses_a_record_carrying_the_row(self):
+        self.establish()
+        self.lose()
+        self.resume()
+        old = self.root / "preceding-helper"
+        old.mkdir()
+        archive = old / "bundle.tar"
+        repository = Path(__file__).resolve().parents[1]
+        subprocess.run(["git", "-C", str(repository), "archive", "-o", str(archive), PRECEDING, "VERSION",
+                        "skills/pod"], check=True)
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(old, filter="data")
+        script = ("from pathlib import Path\nimport pod\nfrom pod.errors import PodError\nfrom pod.ledger import read\n"
+                  "try:\n    read(Path.cwd(), 'objective')\nexcept PodError as exc:\n    print(pod.__version__, exc.code)\n"
+                  "else:\n    print(pod.__version__, 'accepted')\n")
+        before = self.snapshot()
+        result = subprocess.run([sys.executable, "-c", script], cwd=self.project, capture_output=True, text=True,
+                                env={**os.environ, "PYTHONPATH": str(old / "skills"), "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ["0.21.13", "state_unsupported"])
+        self.assertEqual(self.snapshot(), before)
+
     def test_a_pending_continuation_fences_a_successor_claim(self):
         self.establish()
         self.lose()
@@ -408,6 +514,20 @@ class ContinuationTests(WindowCase):
                 with self.assertRaises(PodError) as caught:
                     window.validate_entry(broken)
                 self.assertEqual(caught.exception.code, "state_unsupported")
+        attempt = {"to_owner": "third", "at": row["at"], "runtime": NEW, "abort_reason": "run-use refused",
+                   "run_before": row["run"]["before"], "admissions": row["admissions"]}
+        window.validate_entry({**row, "attempts": [attempt]})
+        for name, broken in (("initial missing", {key: value for key, value in row.items() if key != "initial"}),
+                             ("initial runtime", {**row, "initial": {**row["initial"], "runtime": ""}}),
+                             ("initial readback", {**row, "initial": {**row["initial"], "admissions": [{}]}}),
+                             ("attempt runtime", {**row, "attempts": [{**attempt, "runtime": None}]}),
+                             ("attempt readback", {**row, "attempts": [{k: v for k, v in attempt.items()
+                                                                        if k != "admissions"}]}),
+                             ("attempt bound", {**row, "attempts": [attempt] * (window.MAX_ATTEMPTS + 1)})):
+            with self.subTest(shape=name):
+                with self.assertRaises(PodError) as caught:
+                    window.validate_entry(broken)
+                self.assertEqual(caught.exception.code, "state_unsupported")
         from pod.succession import _handed_over
         self.assertTrue(_handed_over(state, "owner", "next", since="2000-01-01T00:00:00+00:00"))
 
@@ -534,3 +654,145 @@ class RefusalTests(WindowCase):
         self.mode = "success"
         self.current.update(coordinator_handle="owner", consumer_generation=1)
         self.assert_lead_refusal("handoff_pending")
+
+
+class DiscoveryTests(WindowCase):
+    """The list's objective-level check: one deadline for every read, the attempt bound, and unknown never refused."""
+
+    def listed(self):
+        rows = [{"objective": "objective", "phase": "open"}]
+        window.discover(rows, project=self.project)
+        return rows[0].get("continuation")
+
+    def test_one_deadline_stops_worker_pages_and_clamps_every_read(self):
+        self.establish(admissions=False)
+        with patch.object(OrcaPort, "start_worker", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): self.start("reserved", self.frozen)
+        self.lose()
+        clock, reads, original = {"now": 0.0}, [], self.native_read
+
+        class Clock(window.Budget):
+            def __init__(self, seconds):
+                self._clock = lambda: clock["now"]
+                self.deadline = clock["now"] + seconds
+
+        def read(argv, **kwargs):
+            reads.append((argv[:2], clock["now"], kwargs.get("timeout")))
+            clock["now"] += 1.0  # Each actual read costs one synthetic second; nothing sleeps.
+            if argv[:2] != ["orchestration", "worker-list"]:
+                return original(argv, **kwargs)
+            page = sum(name == ["orchestration", "worker-list"] for name, _, _ in reads)
+            return {"runtime": self.port.runtime, "result": {
+                "workers": [{"dispatchId": f"other-dispatch-{page}", "taskId": f"other-task-{page}"}],
+                "scope": {"run": "run", "source": "flag"}, "page": {"hasMore": True, "nextCursor": f"page-{page}"}}}
+
+        with patch.object(window, "Budget", Clock), patch("pod.orca.read_command", side_effect=read):
+            continuation = self.listed()
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "discovery_budget"))
+        self.assertEqual(continuation["message"], "continuation unknown: the bounded check did not finish")
+        pages = [start for name, start, _ in reads if name == ["orchestration", "worker-list"]]
+        self.assertGreater(len(pages), 1)  # A genuinely multi-page reserved lookup, stopped by the deadline.
+        deadline = window.DISCOVERY_SECONDS
+        self.assertTrue(all(start < deadline and 0 < timeout <= deadline - start for _, start, timeout in reads), reads)
+        self.assertEqual(reads[0][2], window.DISCOVERY_RUNTIME_TIMEOUT)  # The first runtime read is inside it too.
+        self.assertEqual(self.host_requests, [])
+
+    def test_a_read_failing_after_the_runtime_read_lists_unknown_not_a_refusal(self):
+        self.establish()
+        self.lose()
+        original = self.native_read
+
+        def failing_run_show(argv, **kwargs):
+            if argv[:2] == ["orchestration", "run-show"]:
+                raise PodError("orca_unavailable", SENTINEL)  # Timed out after the runtime read succeeded.
+            return original(argv, **kwargs)
+
+        with patch("pod.orca.read_command", side_effect=failing_run_show):
+            continuation = self.listed()
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unknown", "run_unverified"))
+        self.assertEqual(continuation["message"],
+                         "continuation unknown: the objective's Run could not be read (orca_unavailable)")
+        self.assertEqual(continuation["next_action"], "pod status --objective objective")
+        self.terminals["owner"] = "unreadable"
+        self.assertEqual(self.listed()["status"], "unknown")
+        self.terminals["owner"] = "stale"
+        self.host.update(mode="fail")
+        self.assertEqual((self.listed()["status"], self.listed()["condition"]), ("unknown", "window_unverified"))
+        # A proved refusal still lists as unavailable with its lead task.
+        self.host.update(mode="verified")
+        self.terminals["owner"] = "live"
+        continuation = self.listed()
+        self.assertEqual((continuation["status"], continuation["condition"]), ("unavailable", "owner_live"))
+        self.assertTrue(continuation["next_action"].startswith(window.LEAD))
+        self.assertNotIn(SENTINEL, json.dumps(continuation))
+
+    def test_exhausted_attempts_are_never_advertised(self):
+        self.establish()
+        self.lose()
+        self.mode = "refused"
+        for _ in range(window.MAX_ATTEMPTS + 1):
+            code, refused = self.command()
+            self.assertEqual((code, refused["condition"]), (1, "run_use_failed"))
+        row = self.rows()[-1]
+        self.assertEqual((row["state"], len(row["attempts"])), ("aborted", window.MAX_ATTEMPTS))
+        self.mode = "success"
+        requests = len(self.host_requests)
+        self.assertEqual((self.listed()["status"], self.listed()["condition"]), ("unavailable", "attempts_full"))
+        status = self.status()["window_continuation"]
+        self.assertEqual((status["status"], status["condition"]), ("window_unavailable", "attempts_full"))
+        self.assert_lead_refusal("attempts_full")
+        self.assertEqual(len(self.host_requests), requests)  # Refused before any verifier call.
+
+    def test_an_exhausted_pending_attempt_resumes_for_its_claimant_and_is_never_replaced(self):
+        self.establish()
+        self.lose()
+        self.mode = "refused"
+        for _ in range(window.MAX_ATTEMPTS):
+            self.command()
+        self.mode = "lost"  # The fifth attempt's run-use lands, but its answer never arrives.
+        self.command()
+        pending = deepcopy(self.rows()[-1])
+        self.assertEqual((pending["state"], len(pending["attempts"])), ("pending", window.MAX_ATTEMPTS))
+        self.mode = "success"
+        # The claimant's own rerun is no new attempt, so it stays available.
+        self.assertEqual(self.listed()["status"], "available")
+        own = self.status()["window_continuation"]
+        self.assertEqual((own["status"], own["caller"]), ("window_available", {"ready": True}))
+        # With the claimant lost, a replacement would need a fifth earlier attempt.
+        self.terminals["next"] = "stale"
+        os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        self.assertEqual((self.listed()["status"], self.listed()["condition"]), ("unavailable", "attempts_full"))
+        self.assertEqual(self.status()["window_continuation"]["condition"], "attempts_full")
+        self.assert_lead_refusal("attempts_full")
+        self.assertEqual(self.rows()[-1], pending)
+        self.terminals["next"] = "live"
+        os.environ["ORCA_TERMINAL_HANDLE"] = "next"
+        entry = self.resume()["window_continuation"]
+        self.assertEqual((entry["state"], len(entry["attempts"]), len(self.mutations)), ("done", window.MAX_ATTEMPTS, 5))
+
+    def test_the_list_reads_no_configuration_outside_orca_and_only_the_verifier_setting_inside(self):
+        self.establish()
+        self.lose()
+        from pod import config
+        from pod.listing import objective_list
+
+        def listed():
+            with self.inside(), patch("pod.config._read_bytes", wraps=config._read_bytes) as reads, \
+                    patch("pod.orca.read_command", side_effect=AssertionError("no Orca read")):
+                rows = objective_list(self.project)["objectives"]
+            return next(row for row in rows if row["objective"] == "objective"), [call.args[0] for call in
+                                                                                 reads.call_args_list]
+
+        with patch.dict(os.environ):
+            os.environ.pop("ORCA_TERMINAL_HANDLE")
+            row, reads = listed()
+        self.assertEqual(reads, [])  # Outside Orca: no configuration, Orca or verifier read.
+        self.assertNotIn("continuation", row)
+        path = personal_path(self.project)
+        value = yaml.safe_load(path.read_text())
+        value.pop("authorization_verifier")
+        path.write_text(yaml.safe_dump(value))
+        row, reads = listed()
+        self.assertEqual(reads, [path])  # Inside Orca without a verifier: that one setting, and no Orca read.
+        self.assertNotIn("continuation", row)
+        self.assertEqual(self.host_requests, [])

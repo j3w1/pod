@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -130,6 +132,39 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
     if argv == ["--version"]:
         return {"version": proc.stdout.strip(), "executable": str(executable())}
     return _envelope(proc.stdout)
+
+
+# A caller that must stay within one wall-time budget (the objective list's window discovery) sets a deadline; every
+# read below then clamps its timeout to the time left and none starts once it is spent.
+_DEADLINE: ContextVar = ContextVar("pod_orca_read_deadline", default=None)
+DEADLINE_SPENT = "discovery_budget"
+
+
+@contextmanager
+def read_deadline(budget):
+    """Bound every read of this module inside the block by `budget`.
+
+    `budget.limit(seconds)` returns the timeout a read may use, at most the time left, and `budget.check()` passes
+    while time is left; both raise `DEADLINE_SPENT` once it is spent. A read the deadline cut short reports that
+    error, and no reader here turns it into an Orca answer."""
+    token = _DEADLINE.set(budget)
+    try:
+        yield
+    finally:
+        _DEADLINE.reset(token)
+
+
+def _read(argv: list[str], *, timeout: float | None = None) -> dict:
+    budget = _DEADLINE.get()
+    if budget is None:
+        return read_command(argv) if timeout is None else read_command(argv, timeout=timeout)
+    limit = budget.limit(10 if timeout is None else timeout)
+    try:
+        return read_command(argv, timeout=limit)
+    except PodError as exc:
+        if exc.code == "orca_unavailable":
+            budget.check()
+        raise
 
 
 def _envelope(stdout: str) -> dict:
@@ -295,7 +330,7 @@ def worktree_identity(selector: str) -> dict:
     if selected is None:
         raise PodError("invalid_worktree_selector", "Worker placement must name an existing worktree")
     try:
-        response = read_command(["worktree", "show", "--worktree", selected, "--json"])
+        response = _read(["worktree", "show", "--worktree", selected, "--json"])
     except PodError as exc:
         raise PodError("worktree_resolution_unavailable",
                        "Orca could not resolve the selected worker worktree") from exc
@@ -369,13 +404,13 @@ def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[in
 def contract() -> dict:
     """What the installed runtime is and which orchestration contracts it advertises."""
     try:
-        version = read_command(["--version"])
+        version = _read(["--version"])
     except PodError as exc:
         return {"status": "unavailable", "reason": exc.code}
     snapshot = {"status": "unavailable", "version": version["version"],
                 "executable": version["executable"], "runtime": None, "capabilities": {}}
     try:
-        status = read_command(["status", "--json"])
+        status = _read(["status", "--json"])
     except PodError as exc:
         snapshot["reason"] = exc.code
         return snapshot
@@ -409,7 +444,9 @@ def message_route(snapshot: dict) -> dict:
 
 
 def worker_rows(run: str) -> dict:
-    """Read workers for one exact Run; unscoped fleet enumeration is forbidden."""
+    """Read workers for one exact Run; unscoped fleet enumeration is forbidden.
+
+    Under a `read_deadline` each page is one bounded read, and no page starts once the deadline is spent."""
     if not _argument(run):
         raise PodError("orca_contract", "Exact Run identity is required for worker reads")
     prefix = ["orchestration", "worker-list", "--include-remote", "--json", "--limit", "100"]
@@ -421,7 +458,7 @@ def worker_rows(run: str) -> dict:
     runtime = None
     scope = None
     for _ in range(100):
-        response = read_command(prefix + (["--cursor", cursor] if cursor else []))
+        response = _read(prefix + (["--cursor", cursor] if cursor else []))
         result = response["result"]
         page = result.get("page")
         rows = result.get("workers")
@@ -458,7 +495,7 @@ def current_run(*, timeout: int | None = None) -> dict:
 
     `timeout` shortens the read for a caller that must stay responsive (the objective list)."""
     argv = ["orchestration", "run-current", "--json"]
-    response = read_command(argv) if timeout is None else read_command(argv, timeout=timeout)
+    response = _read(argv, timeout=timeout)
     result = response["result"]
     if "run" not in result:
         raise PodError("orca_contract", "Current Run response lacks an explicit binding")
@@ -484,7 +521,7 @@ def run_show(run: str) -> dict:
     """Who coordinates one exact Run now; only its identity and generation leave this port."""
     if not _argument(run):
         raise PodError("orca_contract", "Exact Run identity is required for a Run read")
-    response = read_command(["orchestration", "run-show", "--id", run, "--json"])
+    response = _read(["orchestration", "run-show", "--id", run, "--json"])
     row = response["result"].get("run") if isinstance(response["result"], dict) else None
     coordinator = row.get("coordinator_handle") if isinstance(row, dict) else None
     generation = row.get("consumer_generation") if isinstance(row, dict) else None
@@ -497,14 +534,16 @@ def run_show(run: str) -> dict:
 
 
 def worker_show(dispatch: str) -> dict:
-    return read_command(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
+    return _read(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
 
 
 def terminal_identity(handle: str) -> dict:
     """Read only handle liveness; presentation and pane fields never leave this port."""
     try:
-        shown = read_command(["terminal", "show", "--terminal", handle, "--json"])
+        shown = _read(["terminal", "show", "--terminal", handle, "--json"])
     except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
         code = (exc.detail or {}).get("native_code")
         return {"handle": handle, "runtime": None, "state": "lost" if code in
                 ("terminal_handle_stale", "terminal_not_found", "terminal_handle_gone") else "unreadable",

@@ -8005,7 +8005,11 @@
         "tests.test_window_continuation.ContinuationTests.test_same_caller_resumes_after_an_interruption_before_run_use",
         "tests.test_window_continuation.ContinuationTests.test_a_lost_pending_claimant_is_replaced_without_extra_history",
         "tests.test_window_continuation.ContinuationTests.test_a_refused_run_use_ends_the_attempt_and_the_retry_keeps_it",
-        "tests.test_window_continuation.ContinuationTests.test_the_initial_readback_stays_beside_the_completion_readback"
+        "tests.test_window_continuation.ContinuationTests.test_the_initial_readback_stays_beside_the_completion_readback",
+        "tests.test_window_continuation.ContinuationTests.test_a_retry_after_an_ended_attempt_keeps_every_readback",
+        "tests.test_window_continuation.ContinuationTests.test_a_lost_claimant_is_replaced_across_another_runtime_change_keeping_its_readback",
+        "tests.test_window_continuation.ContinuationTests.test_an_interruption_after_the_receipt_recovers_after_another_restart",
+        "tests.test_window_continuation.ContinuationTests.test_an_interrupted_done_write_resumes_without_another_run_use"
       ],
       "status": "NOT_RUN"
     },
@@ -8035,7 +8039,9 @@
         "tests.test_window_continuation.RefusalTests.test_a_denied_window_leads_every_non_owner_refusal_with_a_lead_task",
         "tests.test_window_continuation.RefusalTests.test_status_elsewhere_reports_objective_eligibility_and_caller_readiness",
         "tests.test_window_continuation.ContinuationTests.test_the_pending_claimant_sees_its_own_resumable_step",
-        "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_holds_an_owner_handoff"
+        "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_holds_an_owner_handoff",
+        "tests.test_window_continuation.DiscoveryTests.test_exhausted_attempts_are_never_advertised",
+        "tests.test_window_continuation.DiscoveryTests.test_an_exhausted_pending_attempt_resumes_for_its_claimant_and_is_never_replaced"
       ],
       "status": "NOT_RUN"
     },
@@ -8048,7 +8054,8 @@
       "offline_test": [
         "tests.test_window_continuation.ContinuationTests.test_receipts_are_scoped_per_repository_and_objective",
         "tests.test_window_continuation.ContinuationTests.test_a_pending_continuation_fences_a_successor_claim",
-        "tests.test_window_continuation.ContinuationTests.test_stored_rows_validate_and_succession_lineage_recognizes_them"
+        "tests.test_window_continuation.ContinuationTests.test_stored_rows_validate_and_succession_lineage_recognizes_them",
+        "tests.test_window_continuation.ContinuationTests.test_the_preceding_helper_refuses_a_record_carrying_the_row"
       ],
       "status": "NOT_RUN"
     },
@@ -8064,7 +8071,11 @@
         "tests.test_window_continuation.ContinuationTests.test_a_failed_or_slow_orca_read_degrades_the_list_to_unknown",
         "tests.test_window_continuation.ContinuationTests.test_the_budget_bounds_reads_inside_a_row_and_skips_the_verifier",
         "tests.test_window_continuation.RefusalTests.test_discovery_checks_the_recorded_worktree_itself",
-        "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors"
+        "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors",
+        "tests.test_window_continuation.DiscoveryTests.test_one_deadline_stops_worker_pages_and_clamps_every_read",
+        "tests.test_window_continuation.DiscoveryTests.test_a_read_failing_after_the_runtime_read_lists_unknown_not_a_refusal",
+        "tests.test_window_continuation.DiscoveryTests.test_exhausted_attempts_are_never_advertised",
+        "tests.test_window_continuation.DiscoveryTests.test_the_list_reads_no_configuration_outside_orca_and_only_the_verifier_setting_inside"
       ],
       "status": "NOT_RUN"
     }
