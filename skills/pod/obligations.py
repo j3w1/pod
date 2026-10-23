@@ -2455,11 +2455,20 @@ def serialization_flags(prior: dict | None, state: dict) -> list[dict]:
     return flags
 
 
+def retained_history(state: dict) -> list[dict]:
+    """Read-only counts of the fully hydrated history on frozen rows."""
+    return [{"id": ob["id"], "state": ob["state"], "retained_receipts": len(ob.get("receipts", [])),
+             "retained_findings": len(ob.get("findings", []))}
+            for ob in state["obligations"] if ob["state"] in FROZEN]
+
+
 def status_projection(state: dict | None, ctx: dict) -> dict:
     """Human and JSON status for the map: every state with its referent."""
     if not isinstance(state, dict) or state.get("obligations") is None:
         return {"map": None, "lines": ["Map        none (kernel inert)"]}
     rows = state["obligations"]
+    retained = retained_history(state)
+    history = {row["id"]: row for row in retained}
     counts = {name: sum(ob["state"] == name for ob in rows) for name in STATES}
     lines = [f"Objective  rev {state['revision']} · seq {state['seq']} · "
              + ("closed" if state.get("closure") else "open"),
@@ -2482,6 +2491,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                 detail += " (" + channel["channel"] + ("; earlier record" if channel.get("channel_recorded") is False else "") + ")"
         else:
             detail = ob.get("check") or ob.get("resolves") or ""
+        if ob["id"] in history:
+            counts_kept = history[ob["id"]]
+            detail = f"{counts_kept['retained_receipts']} receipt(s), {counts_kept['retained_findings']} finding(s) retained; " + detail
         lines.append(f"  {ob['id']:<4} {ob['state']:<16} {detail}"[:160])
     for key, row in sorted(_admissions(ctx).items()):
         if row.get("role") == "implement" and row.get("disposition"):
@@ -2513,6 +2525,7 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                     "coordinator_slot": state.get("coordinator_slot"),
                     "quiescence": state.get("quiescence"), "closure": state.get("closure"),
                     "delivery": state.get("delivery"),
+                    "retained_history": retained,
                     "observations": state.get("observations"), "label": label,
                     "obligations": [{"id": ob["id"], "state": ob["state"],
                                      "referent": referent(ob),

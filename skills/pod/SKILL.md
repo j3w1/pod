@@ -22,7 +22,7 @@ Closure is part of delivery. Once the source's PoDs are all ticked, delivery is 
 
 Worker tabs are done when no releasable finished tab remains except an owner-kept one; every other kept tab is closed under the worker-tab standing close authorization or named with Orca's close failure or its need for an owner decision; the final report names every owner-kept tab, including one Orca has since marked user-owned.
 
-The final report lists each bound PES PoD's tick state against its criteria, ticks without Pod proof, ambiguous ticks and due ticks or unticks left blocked at closure, with their reasons; none of those limitations counts as ticked by Pod.
+The final report lists each bound PES PoD's tick state against its criteria and each completion-bound SEAL AC, ticks without Pod proof, ambiguous ticks and due ticks or unticks left blocked at closure, with their reasons; none of those limitations counts as ticked by Pod.
 
 Continue through implementation, verification and corrections. Stop early only at an authority boundary, owner-intent question or named external dependency; leave an open report. Use direct work when sufficient. Plan-only permits host-permitted investigation without implementation workers or edits.
 

@@ -620,7 +620,7 @@ def _completion(project: Path, objective: str, state: dict, *, older: bool) -> t
                 or live.get("number") != source["number"]
                 or parse_issue_locator(live.get("url")) != {key: source[key] for key in ("repository", "number", "locator")}):
             return False, facts
-        live_lines = pod_lines(live["body"])
+        live_lines = pod_lines(live["body"], seal=source.get("role") == "SEAL")
         facts["lines"] = live_lines
         seen = set()
         for row in lines:

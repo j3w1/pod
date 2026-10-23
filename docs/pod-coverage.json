@@ -6764,7 +6764,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_evidence_closure.SweepTests.test_the_sweep_needs_no_terminal_or_run_binding_and_mutates_nothing"
+        "tests.test_evidence_closure.SweepTests.test_the_sweep_needs_no_terminal_or_run_binding_and_only_completes_its_source"
       ],
       "status": "NOT_RUN"
     },
@@ -7681,6 +7681,223 @@
       ],
       "offline_test": [
         "tests.test_records_capacity.RecordsCapacityTests.test_subsequent_groups_preserve_every_historical_row_and_receipt"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A513",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.ClosingPortTests.test_only_the_fixed_query_and_exact_bound_completion_patch_are_allowed",
+        "tests.test_completed_closure.ClosingPortTests.test_linked_pr_identity_and_pagination_fail_closed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A514",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.LinkedClosureTests.test_github_only_proof_closes_without_inventing_a_delivery_record"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A515",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.LinkedClosureTests.test_recorded_unmerged_pr_keeps_its_check_despite_a_merged_link"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A516",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.LinkedClosureTests.test_old_record_without_target_identity_is_unavailable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A517",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.LinkedClosureTests.test_chain_proves_every_source_including_the_predecessor",
+        "tests.test_completed_closure.LinkedClosureTests.test_interrupted_chain_source_effects_retry_only_the_remaining_issue"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A518",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.GovernanceCompletionTests.test_delivery_only_write_after_governance_change_keeps_baseline",
+        "tests.test_completed_closure.GovernanceCompletionTests.test_exact_merge_result_with_delivered_policy_does_not_adopt_it",
+        "tests.test_completed_closure.GovernanceCompletionTests.test_report_closure_after_governance_change_uses_the_same_proof",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_closing_checkpoint_after_its_merge_needs_no_owner_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A519",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.GovernanceCompletionTests.test_default_retarget_and_unknown_ancestry_never_grant_the_exemption",
+        "tests.test_completed_closure.GovernanceCompletionTests.test_combined_delivery_and_closure_cannot_skip_finalization"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A520",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.SourceClosingTests.test_checkpoint_closes_source_and_sweep_replays_without_rewriting_pod",
+        "tests.test_completed_closure.SourceClosingTests.test_report_closure_has_the_same_source_effect_and_acknowledgement"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A521",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.SourceClosingTests.test_refused_close_is_acknowledged_and_sweep_retries_it",
+        "tests.test_completed_closure.SourceClosingTests.test_lost_close_response_uses_readback_and_never_resends_a_completed_issue",
+        "tests.test_completed_closure.SourceClosingTests.test_unlanded_close_is_unknown_then_retried_by_sweep"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A522",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.LinkedClosureTests.test_interrupted_chain_source_effects_retry_only_the_remaining_issue",
+        "tests.test_completed_closure.SourceClosingTests.test_reopened_or_unclosed_objective_cannot_send_a_source_effect",
+        "tests.test_completed_closure.SourceClosingTests.test_source_changed_during_immediate_read_prevents_the_effect"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A523",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.SourceClosingTests.test_source_material_change_and_closed_other_reason_never_write",
+        "tests.test_completed_closure.SourceClosingTests.test_referenced_seal_and_eel_stay_named_lead_tasks",
+        "tests.test_completed_closure.SourceClosingTests.test_empty_recognized_criteria_never_close_vacuously",
+        "tests.test_completed_closure.SourceClosingTests.test_duplicate_ticked_criteria_still_refuse_source_completion"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A524",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.SealCompletionTests.test_full_seal_handoff_renews_rebinds_ticks_and_closes_its_own_issue"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A525",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.SealRecognitionTests.test_ac_lines_and_exact_refs_are_recognized_only_for_bound_seals",
+        "tests.test_seal_intake.SealIntakeTests.test_same_repository_intake_and_recheck_keep_existing_results",
+        "tests.test_eel_intake.EelMarkerTests.test_intake_refuses_title_and_each_body_marker_form_without_a_binding",
+        "tests.test_completed_closure.SourceClosingTests.test_seal_completion_binding_cannot_start_a_new_objective",
+        "tests.test_completed_closure.SourceClosingTests.test_an_issue_bound_objective_cannot_rebind_to_a_seal",
+        "tests.test_completed_closure.SealCompletionTests.test_extra_unmapped_handoff_still_holds_evidence_closure"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A526",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.CompletedTickTests.test_pre_send_completed_source_ticks_without_reopen",
+        "tests.test_completed_closure.CompletedTickTests.test_completed_during_send_keeps_the_confirmed_authorship",
+        "tests.test_completed_closure.CompletedTickTests.test_lost_response_on_completed_source_remains_ambiguous"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A527",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.CompletedTickTests.test_completed_source_never_bypasses_material_or_role_changes",
+        "tests.test_records_boundaries.RenewalTickTests.test_candidate_move_independently_unticks_pending_renewal",
+        "tests.test_pod_ticks_closure.ClosureTests.test_checkpoint_satisfying_last_criterion_and_closing_is_atomic_refusal"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A528",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.LinkedClosureTests.test_unproved_retirement_detection_names_all_conditions_and_optional_abandonment",
+        "tests.test_evidence_closure.RetirementProofTests.test_proof_delivery_closes_by_evidence_and_refuses_the_rest_as_lead_tasks"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A529",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_closure.CompletionGuidanceTests.test_capacity_and_governance_unavailable_name_the_lead_action",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_skill_states_its_boundaries",
+        "tests.test_evidence_closure.UndeliveredTests.test_no_recorded_delivery_pull_request_stays_open",
+        "tests.test_completed_closure.GovernanceCompletionTests.test_unproved_closing_currency_names_the_lead_and_preserves_bytes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A530",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_review_upgrade.PreUpgradeReviewTests.test_preexisting_review_consumes_after_upgrade_without_another_admission"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A531",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_completed_review_upgrade.RetainedHistoryDisplayTests.test_map_and_status_show_frozen_receipt_and_finding_counts_without_writes"
       ],
       "status": "NOT_RUN"
     }

@@ -234,7 +234,7 @@ def _require_size(record, *, current_bytes):
                         "limit_bytes": CONTEXT_LIMIT, "largest_sections": sections,
                         "next_action": "Consume or triage reports, record implementation dispositions, or settle "
                                        "governed effects through their supported paths; use internal record-compaction "
-                                       "with an owner decision for an already over-limit record."})
+                                       "for bounded explicit maintenance of an already over-limit record; the project lead resolves capacity and proof before closure."})
 
 
 def _expand(reference, loader, cache):
@@ -442,10 +442,10 @@ def _context_bytes(path, limit):
             data = file.read(limit + 1)
         if len(data) > limit or info.st_size > limit:
             raise PodError("record_too_large", "Context exceeds its bounded read limit; use internal "
-                           "record-compaction detection for owner-scoped maintenance",
+                           "record-compaction detection for bounded maintenance by the project lead",
                            {"current_bytes": max(info.st_size, len(data)), "limit_bytes": limit,
                             "next_action": "Run internal record-compaction for this exact project and objective; "
-                                           "records above its maintenance bound need owner recovery."})
+                                           "the project lead must recover records above its maintenance bound without treating them as completed."})
         return data
     except OSError as exc:
         raise PodError("unsafe_record", "Context cannot be safely opened") from exc
@@ -593,7 +593,7 @@ def capacity(path, state):
                 raise
             useful = False
         result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; internal "
-                                 "record-compaction permits owner-scoped maintenance now." if useful else
+                                 "record-compaction permits explicit bounded maintenance now; the project lead handles capacity before closure." if useful else
                                  _settlement_action(result["largest_sections"]))
         if useful and any(row["section"] == "standing_authorization" for row in result["largest_sections"][:3]):
             result["next_action"] += " The standing_authorization section is bounded and needs no maintenance."

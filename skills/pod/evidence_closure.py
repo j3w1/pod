@@ -2,8 +2,9 @@
 
 One read-only delivery proof, one immutable end-of-life record written beside the objective's record (never inside
 it), and one sweep that applies it to every open objective of a repository. The proof reuses R110's loss proof and
-R112's Run, Dispatch and start-request checks unchanged. Nothing here asks the owner, starts work or mutates Orca,
-Git or a provider: `context.json`, `governor.json` and Pod history stay byte-identical, and a pending, UNKNOWN or
+R112's Run, Dispatch and start-request checks unchanged. Proof never asks the owner, starts work or mutates Orca,
+Git or a provider. After closure a separate exact bound-source effect may complete its issue; `context.json`,
+`governor.json` and Pod history stay byte-identical, and a pending, UNKNOWN or
 FAILED result is preserved as it reads, never stamped.
 """
 
@@ -243,7 +244,10 @@ def _record_issue(raw: dict) -> dict | None:
     if isinstance(source, dict):
         from .github import parse_issue_locator
         try:
-            return parse_issue_locator(source.get("locator"))
+            issue = parse_issue_locator(source.get("locator"))
+            if source.get("role") == "SEAL":
+                issue["role"] = "SEAL"
+            return issue
         except PodError as exc:
             raise PodError("record_unreadable", "The record's documented objective source is malformed") from exc
     raise PodError("record_unreadable", "The record's documented objective source is malformed")
@@ -691,6 +695,14 @@ def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _P
             proof.add("not_proved", "renewal_pending", "Renewed criteria need fresh proof before evidence closure; existing issue ticks do not prove the replacement.")
     proof.facts["sources"] = []
     for issue, bound_by in issues:
+        if issue.get("role") == "SEAL":
+            from .lineage import Lineage
+            bound = next((row["raw"] for row in members or [] if row["objective"] == bound_by), state)
+            lineage = Lineage(((bound or {}).get("checkpoint") or {}).get("obligations", []))
+            criteria = [row for row in lineage.rows.values() if row.get("kind") == "criterion"
+                        and lineage.effective(row["id"]) == row["id"]]
+            if not criteria or any(row.get("state") not in ("satisfied", "withdrawn") for row in criteria):
+                proof.add("not_proved", "source_unproved", f"{bound_by}'s SEAL completion still needs every live criterion, including unmapped handoff and delivery criteria.")
         facts = {"locator": issue["locator"], "repository": issue["repository"], "number": issue["number"],
                  "proof": None, "state": None, "state_reason": None, "pod_lines": None, "body_sha256": None,
                  "bound_by": bound_by}
@@ -702,11 +714,12 @@ def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _P
             proof.add("unverified", "source_unreadable", f"{whose} could not be read on GitHub ({exc.code}).")
             continue
         from .github import pod_lines
-        lines = [line for rows in pod_lines(row["body"]).values() for line in rows]
+        recognized = pod_lines(row["body"], seal=issue.get("role") == "SEAL")
+        lines = [line for rows in recognized.values() for line in rows]
         ticked = sum(line["ticked"] for line in lines)
         facts.update(state=row["state"], state_reason=_clip(row.get("state_reason"), 64),
                      pod_lines={"ticked": ticked, "total": len(lines)}, body_sha256=_sha(row["body"].encode()))
-        if lines and ticked == len(lines):
+        if lines and ticked == len(lines) and all(len(rows) == 1 for rows in recognized.values()):
             facts["proof"] = "pod_ticks"
         elif row["state"] == "CLOSED" and row.get("state_reason") == "COMPLETED":
             facts["proof"] = "issue_completed"
@@ -909,6 +922,11 @@ def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: 
         for number in numbers:
             recorded.setdefault(number, row["objective"])
     if not recorded:
+        if not proof.facts.get("chain_complete", True):
+            return  # An unread member may record its PRs; never assert absence from a partial chain.
+        if members and any(row["doc"]["issue"] is not None for row in members):
+            _linked_delivery(project, members, proof, remote)
+            return
         # A chain Pod could not read whole may record its pull requests in a member it could not read; that
         # member's own condition already holds the proof, so nothing is claimed unrecorded.
         if proof.facts.get("chain_complete", True):
@@ -937,6 +955,45 @@ def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: 
                                             "recorded_by": recorded[number]})
         else:
             proof.add("not_proved", "pr_not_merged", f"Pull request #{number} is {row['state'].lower()}, not merged.")
+
+
+def _linked_delivery(project: Path, members: list[dict], proof: _Proof, remote: _Remote) -> None:
+    """Read linked proof only when no PR was recorded; never replace recorded-PR checks or create R93."""
+    from .github import repository_context
+    repository = repository_context(project)["repository"]
+    seen_sources, linked = set(), {}
+    for member in members:
+        issue = member["doc"]["issue"]
+        if issue is None or issue["locator"].casefold() in seen_sources:
+            continue
+        seen_sources.add(issue["locator"].casefold())
+        governance = (member["raw"].get("checkpoint") or {}).get("governance") or {}
+        target = governance.get("base_ref")
+        prefix = "refs/remotes/origin/"
+        if (repository is None or repository.casefold() != issue["repository"].casefold()
+                or not isinstance(target, str) or not target.startswith(prefix) or not target[len(prefix):]):
+            proof.add("unverified", "target_identity_unavailable",
+                      f"{member['objective']} has no retained exact GitHub target identity; the project lead must restore genuine delivery facts.")
+            continue
+        try:
+            rows = remote.get().closing_prs(repository=issue["repository"], number=issue["number"])
+        except (PodError, AttributeError) as exc:
+            code = getattr(exc, "code", "linked_read_unavailable")
+            proof.add("not_proved" if code == "scope_too_large" else "unverified", code,
+                      f"Linked delivery for {issue['locator']} could not be proved ({code}).")
+            continue
+        matching = [row for row in rows if row["base_repository"].casefold() == repository.casefold()
+                    and row["base_branch"] == target[len(prefix):] and row["state"] == "MERGED"]
+        if not matching:
+            proof.add("not_proved", "delivery_unrecorded", f"No merged linked pull request targets {repository}/{target[len(prefix):]} for {issue['locator']}.")
+        for row in matching:
+            linked.setdefault(row["number"], {"pr": row["number"], "url": row["url"],
+                "merged_at": row["merged_at"], "merge_commit": row["merge_commit"],
+                "recorded_by": member["objective"], "proof": "github_link"})
+    if len(linked) > MAX_PRS:
+        proof.add("not_proved", "scope_too_large", f"Linked delivery across the chain exceeds {MAX_PRS} pull requests.")
+    else:
+        proof.facts["delivery"] = [linked[key] for key in sorted(linked)]
 
 
 def _preserved(project: Path, root: Path, doc: dict, state: dict | None, proof: _Proof, remote: _Remote, *,
@@ -1207,7 +1264,12 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
         for path in sorted({root / "context.json", *(row["root"] / "context.json" for row in chain)}, key=str):
             stack.enter_context(_lock(path))
         if present(root):
-            return _replay(project, root, chain, caller=caller, port=port)
+            return _closed_effects(project, objective, _replay(project, root, chain, caller=caller, port=port),
+                                   chain, remote=remote)
+        raw, _ = _read_record(root)
+        if _phase(root, raw) == "closed" and isinstance((raw.get("checkpoint") or {}).get("objective_source"), dict):
+            return _closed_effects(project, objective, {"objective": objective, "status": "replayed",
+                                   "closure": {"basis": "obligations"}}, [], remote=remote)
         verdict = prove(project, objective, port=port, remote=remote, now=now)
         if verdict["status"] != "proved":
             return {"objective": objective, "status": verdict["status"], "conditions": verdict["conditions"]}
@@ -1223,9 +1285,23 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
         content = _content(project, objective, verdict["facts"], caller=caller, at=at, relation="tail",
                            tail={"objective": objective, "at": at})
         if not _create(root, content):
-            return _replay(project, root, chain, caller=caller, port=port)
+            return _closed_effects(project, objective, _replay(project, root, chain, caller=caller, port=port),
+                                   chain, remote=remote)
         written = _complete_chain(project, _missing(chain, content), content, work, caller=caller)
-        return {"objective": objective, "status": "closed", "closure": compact(content), "predecessors": written}
+        return _closed_effects(project, objective, {"objective": objective, "status": "closed",
+                               "closure": compact(content), "predecessors": written}, chain, remote=remote)
+
+
+def _closed_effects(project: Path, objective: str, result: dict, chain: list[dict], *, remote=None) -> dict:
+    if result["status"] not in ("closed", "replayed", "chain_completed"):
+        return result
+    result.update(close_source_issues(project, objective, remote=remote, locked=True))
+    for member in chain:
+        if present(member["root"]):
+            effects = close_source_issues(project, member["objective"], remote=remote, locked=True)
+            for key in ("source_issues", "parents_open"):
+                result[key].extend(effects[key])
+    return result
 
 
 def _missing(chain: list[dict], tail: dict) -> list[dict]:
@@ -1469,16 +1545,157 @@ def render(result: dict) -> None:
 # --------------------------------------------------------------------------- sweep (R148)
 
 
+def close_source_issues(project: Path, objective: str, *, remote=None, locked: bool = False) -> dict:
+    """Closed-objective external effect shared by both writers and sweep; never changes Pod bytes.
+
+    Only the issue retained by this objective is writable. The objective lock fences local reopen; GitHub's
+    unconditional PATCH retains an outside-edit race between the immediate read and write. Provider outcomes
+    cannot undo or fail acknowledgement of an already-recorded Pod closure.
+    """
+    from .ledger import _lock, _record_exists, objective_root
+    root = objective_root(project, objective)
+    if not locked:
+        if not _record_exists(root / "context.json"):
+            return {"source_issues": [{"objective": objective, "locator": None, "outcome": "refused",
+                     "reason": "objective_unknown", "next_action": "the project lead restores the actual objective record before source completion"}],
+                    "parents_open": []}
+        with _lock(root / "context.json"):
+            return close_source_issues(project, objective, remote=remote, locked=True)
+    out = {"source_issues": [], "parents_open": []}
+    effect = {"objective": objective, "locator": None, "outcome": "unverified"}
+    try:
+        raw, before = _read_record(root)
+        kind = _record_class(raw)
+        if kind not in SUPPORTED or raw.get("historical_retirement"):
+            raise PodError("objective_not_closed", "Only an actual supported Pod closure permits this effect")
+        if present(root):
+            stored = load(root)
+            from .github import repository_context
+            if (stored["objective"] != objective or stored["repository"] != repository_context(project)["repo_key"]
+                    or not isinstance(stored["record"], dict) or stored["record"].get("context_sha256") != _sha(before)):
+                raise PodError("objective_not_closed", "The evidence closure names another objective")
+            if stored["relation"] == "predecessor":
+                tail = load(objective_root(project, stored["tail"]["objective"]))
+                if tail["relation"] != "tail" or not any(row.get("objective") == objective
+                        and row.get("relation") == "predecessor" for row in tail["chain"]):
+                    raise PodError("objective_not_closed", "The evidence closure's certified tail is unavailable")
+        else:
+            from .ledger import _read, map_of, validate_checkpoint_snapshot, closed_snapshot_context
+            state = _read(root / "context.json")
+            mapped = map_of(state)
+            if kind != "current" or raw.get("continued_by") or not (mapped or {}).get("closure"):
+                raise PodError("objective_not_closed", "Only an actual ordinary or evidence closure permits this effect")
+            from .obligations import validate_closed_snapshot
+            validate_checkpoint_snapshot(project, state)
+            if validate_closed_snapshot(mapped, closed_snapshot_context(project, objective, state)):
+                raise PodError("closure_unverified", "A required recorded closure fact is unavailable")
+        source = (raw.get("checkpoint") or {}).get("objective_source")
+        if source in (None, "direct_objective"):
+            return out
+        from .github import GhPort, validate_issue_binding, issue_recheck_live, pod_lines
+        source = validate_issue_binding(source)
+        effect["locator"] = source["locator"]
+        reader = remote or GhPort(project)
+        checked, live = issue_recheck_live(project, source, port=reader)
+        if live is None:
+            raise PodError("source_unreadable", "The bound source observation is unavailable")
+        # No-op for an already completed source; never change another closing reason.
+        if live["state"] == "CLOSED":
+            effect.update(outcome="already_completed" if checked.get("state_reason") == "COMPLETED" else "closed_other_reason",
+                          state=live["state"], state_reason=checked.get("state_reason"))
+        else:
+            from .pod_mapping import scope_hash
+            from .util import digest
+            retained = (raw.get("pod_ticks") or {}).get("facts") or {}
+            checkbox_only = (checked.get("body_changed") and not checked.get("amendment_changed")
+                             and retained.get("source") == digest(source)
+                             and retained.get("mapping_scope_sha256") == scope_hash(live["body"], seal=source.get("role") == "SEAL"))
+            if checked["status"] != "current" and not checkbox_only:
+                raise PodError("source_changed", "The project lead must reconcile the bound source body and amendments")
+            lines = pod_lines(live["body"], seal=source.get("role") == "SEAL")
+            if not lines or any(len(rows) != 1 or not rows[0]["ticked"] for rows in lines.values()):
+                raise PodError("source_unproved", "The bound source needs a nonempty unambiguous fully ticked PoD set")
+            # The cooperative lock is the local fence; this second read also rejects an uncooperative raw edit.
+            _, immediate = _read_record(root)
+            if immediate != before:
+                raise PodError("closure_changed", "The Pod record changed during source readback; no issue write was sent")
+            try:
+                response = reader.issue_close(source=source)
+            except PodError as exc:
+                response = {"result": "unconfirmed", "reason": exc.code}
+            effect["write"] = response
+            try:
+                readback, observed = issue_recheck_live(project, source, port=reader)
+                effect.update(state=readback["state"], state_reason=readback.get("state_reason"))
+                completed = readback["state"] == "CLOSED" and readback.get("state_reason") == "COMPLETED"
+                effect["outcome"] = ("refused" if response["result"] == "refused" else "closed" if completed else "unknown")
+                if readback.get("body_changed") or readback.get("amendment_changed"):
+                    effect["source_changed"] = True
+                if observed is not None:
+                    effect["body_sha256"] = _sha(observed["body"].encode())
+            except PodError as exc:
+                effect.update(outcome="refused" if response["result"] == "refused" else "unknown", reason=exc.code)
+        _source_parents(live["body"], source, reader, out["parents_open"])
+    except (PodError, AttributeError) as exc:
+        effect.update(outcome="refused" if getattr(exc, "code", None) in
+                      ("objective_not_closed", "closure_changed", "source_changed", "source_unproved") else "unverified",
+                      reason=getattr(exc, "code", "source_effect_unavailable"))
+    effect["next_action"] = ("the bound source issue is completed" if effect["outcome"] in ("closed", "already_completed")
+                             else "the project lead resolves the named source condition, then runs pod sweep; no owner completion decision is needed")
+    for parent in out["parents_open"]:
+        parent["objective"] = objective
+    out["source_issues"].append(effect)
+    return out
+
+
+def _source_parents(body: str, source: dict, remote, output: list) -> None:
+    """References never authorize a parent mutation; its completion remains a named lead task."""
+    import re
+    from .github import parse_issue_locator, _document_marker, SEAL_TITLE, SEAL_FORMAT, EEL_TITLE, EEL_FORMAT
+    links = list(dict.fromkeys(re.findall(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*", body)))
+    if len(links) > MAX_PRS:
+        output.append({"locator": source["locator"], "role": "references_unavailable", "party": "lead",
+                       "code": "scope_too_large", "remaining": len(links) - MAX_PRS,
+                       "next_action": "the project lead evaluates the remaining source references beyond the bounded parent read"})
+    for link in links[:MAX_PRS]:
+        if link.casefold() == source["locator"].casefold():
+            continue
+        issue = parse_issue_locator(link)
+        facts = {"repository": issue["repository"], "number": issue["number"]}
+        try:
+            row = remote.issue(repository=issue["repository"], number=issue["number"])
+            role = ("SEAL" if _document_marker(row.get("title"), row.get("body"), SEAL_TITLE, SEAL_FORMAT) else
+                    "EEL" if _document_marker(row.get("title"), row.get("body"), EEL_TITLE, EEL_FORMAT) else None)
+            if role is None or row.get("state") == "CLOSED" and row.get("stateReason") == "COMPLETED":
+                continue
+            facts.update(read="observed", state=row.get("state"), state_reason=row.get("stateReason"),
+                         body_sha256=_sha(row["body"].encode()), updated_at=row.get("updatedAt"))
+        except (PodError, KeyError, AttributeError) as exc:
+            role = "unavailable"
+            facts.update(read="unavailable", code=getattr(exc, "code", "source_unreadable"))
+        rule = {"EEL": "closes when its consuming PES work is delivered",
+                "SEAL": "closes when every requirement's delivering PES is closed"}.get(role, "source completion rule unavailable")
+        output.append({"locator": link, "role": role, "party": "lead", "completion_rule": rule, "facts": facts,
+                       "reason": "completion_rule_unavailable",
+                       "next_action": "the project lead verifies this rule against all consumers or requirements: "
+                                      + rule + "; the child objective alone cannot evaluate that rule"})
+
+
 def _outcome(objective: str, verdict: dict) -> dict:
     """One objective's sweep row. `already_closed` means its own closure existed and nothing was written for it; a
     predecessor entry the sweep wrote is reported as that predecessor's own `closed` row (see `sweep`)."""
     status = verdict["status"]
     outcome = {"closed": "closed", "replayed": "already_closed", "chain_completed": "already_closed",
                "not_proved": "not_proved", "unverified": "unverified"}.get(status, "skipped")
+    effects = {key: [row for row in verdict[key] if row.get("objective") == objective]
+               for key in ("source_issues", "parents_open") if key in verdict}
+    effects_held = any(row.get("outcome") not in ("closed", "already_completed")
+                       for row in effects.get("source_issues", [])) or bool(effects.get("parents_open"))
     return {"objective": objective, "outcome": outcome,
             "conditions": [{"code": item["code"], "message": item["message"]}
                            for item in verdict.get("conditions", [])][:MAX_LISTED],
-            "party": "lead" if outcome in ("not_proved", "unverified") else None}
+            "party": "lead" if outcome in ("not_proved", "unverified") or effects_held else None,
+            **effects}
 
 
 def _unavailable(target: Path, reason: str) -> dict:
@@ -1536,8 +1753,8 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
           port=None, remote=None) -> dict:
     """Close every provably delivered open objective of each repository (C6), idempotently.
 
-    Needs no Orca terminal, Run binding or live coordinator; starts nothing and mutates no Orca, Git or provider
-    state. It writes only `closure-evidence.json` files, and a run after every entry exists writes nothing. Each
+    Needs no Orca terminal, Run binding or live coordinator; starts nothing and mutates no Orca or Git state.
+    It writes only `closure-evidence.json` Pod files, then retries the separate bound-source effect. Each
     repository's records are enumerated by the sweep's own bounded scan; named objectives are resolved directly. A
     repository it cannot read is `unavailable`; one whose records it could not all read is `incomplete`, with the
     reason, and the sweep never claims its objectives all closed. The sweep still ran.
@@ -1580,7 +1797,7 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
             for name in verdict.get("predecessors") or []:
                 if name not in done:
                     done.add(name)
-                    results.append(_outcome(name, {"status": "closed"}))
+                    results.append(_outcome(name, {**verdict, "status": "closed"}))
         for name in missing:
             results.append(_outcome(name, {"status": "not_applicable", "conditions": [
                 {"code": "objective_unknown", "message": "No record of that objective exists in this repository."}]}))
@@ -1605,6 +1822,13 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
     if "incomplete" in statuses:
         text += ("; a repository's records could not all be read, so an objective there may still be open: "
                  "restore them as its reason names, then sweep again")
+    effects_held = sum(any(effect.get("outcome") not in ("closed", "already_completed")
+                          for effect in row.get("source_issues", [])) or bool(row.get("parents_open"))
+                       for repository in out["repositories"] for row in repository["objectives"])
+    if effects_held:
+        text = text.removesuffix("; nothing else needs the sweep")
+        text += (f"; {effects_held} objective(s) still have source-issue or parent tasks for the project lead: "
+                 "resolve the reported outcome and sweep again")
     out["next_safe_action"] = text
     return out
 
@@ -1621,4 +1845,9 @@ def render_sweep(result: dict) -> None:
             reason = "; ".join(f"{item['code']}: {clean(item['message'])}" for item in row["conditions"][:3])
             print(f"  {clean(row['objective'])[:64]}: {row['outcome'].replace('_', ' ')}"
                   + (f" ({reason})" if reason else "") + (" - a task for the project lead" if row["party"] else ""))
+            for effect in row.get("source_issues", []):
+                print(f"    Source {clean(str(effect.get('locator') or 'unavailable'))}: {clean(effect['outcome'])}"
+                      + (f" ({clean(effect['reason'])})" if effect.get("reason") else ""))
+            for parent in row.get("parents_open", []):
+                print(f"    Parent {clean(parent['locator'])}: a task for the project lead")
     print(f"Next: {result['next_safe_action']}")

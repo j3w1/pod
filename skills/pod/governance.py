@@ -563,7 +563,7 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
         return observed
 
     def unavailable(reason: str, identity: str | None = None) -> dict:
-        action = ("restore the missing Git evidence or obtain a fresh direct user decision for "
+        action = ("the project lead restores missing Git evidence for completion bookkeeping; ordinary work adopting changed governance requires a fresh direct user decision for "
                   "this exact target snapshot, then write governance_refresh with "
                   "revision_authority and governance.base_ref/base")
         raise PodError("governance_unavailable", f"Governance comparison is unavailable: {reason}. Next: {action}",
@@ -610,7 +610,7 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
             if not in_baseline:
                 contains_work = True
     if contains_work:
-        action = ("obtain a fresh direct user decision for this exact target snapshot, then write "
+        action = ("the project lead records verified delivery and closes on the retained baseline when proved; ordinary work adopting this exact target snapshot needs a fresh direct user decision, then write "
                   "governance_refresh with revision_authority and governance.base_ref/base")
         raise PodError("governance_unavailable",
                        "The changed governance target contains known objective work beyond its bound base. "
@@ -649,9 +649,11 @@ def unchanged_governance(project: Path, map_state: dict) -> tuple[dict, dict] | 
 
 
 def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
-    """The closing checkpoint's narrow exemption (R147): after a verified delivery (R93) the target has since moved
-    past, closure keeps the trusted baseline and adopts nothing, so it needs no governance refresh or owner snapshot
-    decision. Returns what it kept, which the closing write reports; None when the exemption does not apply."""
+    """Shared completion proof for closure and delivery-only recording: unchanged target, contained R93 result.
+
+    Callers still validate the entire write and finalization. This predicate adopts nothing, including when
+    changed governance is at the exact delivered result. Unknown ancestry and default retargets grant nothing.
+    """
     governance = map_state.get("governance") or {}
     delivery = map_state.get("delivery")
     if delivery is None or governance.get("base_ref") is None or governance.get("base") is None:
@@ -663,14 +665,31 @@ def closure_keeps_baseline(project: Path, map_state: dict) -> dict | None:
             and _symbolic_ref(project, "refs/remotes/origin/HEAD") != governance["base_ref"]):
         return None  # A changed default target is a retarget, never kept by closure.
     current = _resolve_commit(project, governance["base_ref"])
-    if current is None or current in (governance["base"], delivery["result"]):
+    if current is None or current == governance["base"]:
         return None
     if git_is_ancestor(project, delivery["result"], current) is not True:
         return None
     return {"adopted": False, "base_ref": governance["base_ref"], "base": governance["base"], "target": current,
             "delivery": delivery["result"],
-            "reason": "closure keeps the trusted baseline of the verified delivery; the target moved past it and "
-                      "its later policy is not adopted"}
+            "reason": "completion bookkeeping keeps the trusted baseline of the verified delivery; "
+                      "the contained result and later policy are not adopted"}
+
+
+def completion_governance(project: Path, map_state: dict, *, checkpoint: bool = False) -> tuple[dict | None, tuple[dict, dict] | None]:
+    """Completion callers share proof and refusal guidance; ordinary adoption keeps its own authority."""
+    kept = closure_keeps_baseline(project, map_state)
+    if kept is not None:
+        return kept, None
+    try:
+        return None, require_governance_current(project, map_state, checkpoint=checkpoint)
+    except PodError as exc:
+        if exc.code not in ("governance_changed", "governance_unavailable"):
+            raise
+        raise PodError(exc.code, "Completion bookkeeping lacks verified delivery, retained target identity or Git ancestry; "
+                       "the project lead must resolve that proof before retrying",
+                       {**(exc.detail or {}), "next_action": "the project lead restores the named Git/target facts and records "
+                        "verified delivery through its supported checkpoint before closure; ordinary work adopting "
+                        "changed governance retains its existing revision authority"}) from exc
 
 
 def accepted_current_target(map_state: dict, current: str) -> bool:

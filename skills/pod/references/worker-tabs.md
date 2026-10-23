@@ -125,7 +125,7 @@ no identity, progress or outcome.
 
 ## Accept reports and settle tabs
 
-The coordinator's own tab stays until its closure is recorded. Once delivery proof and final-report consumption are complete, record closure in that same turn before ending, being released or having that tab closed. Settle worker tabs through the steps below before the ordinary closing write. If the coordinator is already gone, use the router's recovery guidance for evidence closure.
+The coordinator's own tab stays until its closure is recorded. Once delivery proof and final-report consumption are complete, record closure in that same turn before ending, being released or having that tab closed. Settle worker tabs through the steps below before the ordinary closing write. If the coordinator is already gone, use the router's recovery guidance for evidence closure. Missing completion proof goes to the project lead; completed bookkeeping needs no owner decision.
 
 After each accepted success or failure report, do exactly one: reuse the terminal
 for an immediate supported follow-up, retain it within an active correction cycle

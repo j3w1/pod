@@ -373,6 +373,10 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
                 from .evidence_closure import SWEEP_ACTION
                 out["successor_claim"] = {**claim, "next_action": SWEEP_ACTION[0].upper() + SWEEP_ACTION[1:]
                                           + "; a claim stays optional and moves authority only."}
+            else:
+                from .evidence_closure import LEAD_ACTION
+                out["successor_claim"] = {**claim, "next_action": LEAD_ACTION
+                    + " A claim stays optional and moves authority only, with its own recorded decision."}
     if "summary" not in block:
         block["summary"] = _summary(block)
     tabs = worker_tabs if worker_tabs is not None else (view or {}).get("worker_tabs", [])

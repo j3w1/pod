@@ -1,6 +1,6 @@
 """The owner's historical retirement of delivered objectives whose coordinator is lost (R112, R113).
 
-Retirement releases named worktrees of delivered history and nothing else. The objective is not
+Retirement abandons the named record and releases only its named worktrees. The objective is not
 closed, continued, QUALIFIED or successful: its Governor journal, admissions, obligations and
 evidence stay exactly as recorded, and the record accepts no later write. No coordinator is
 revived, and no successor, agent session or worker is created. CE stays the resource authority.
@@ -874,9 +874,9 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
     stands, and what cleanup holds for it afterwards (R113)."""
     names = [row["objective"] for row in eligible]
     standing = {row["path"]: row for item in eligible for row in item["facts"]["locations"]}
-    question = (f"May Pod retire {'objective' if len(names) == 1 else 'objectives'} {', '.join(names)} as delivered "
-                f"history whose coordinator is gone, releasing {_released([standing[key] for key in sorted(standing)])} "
-                "for cleanup?")
+    question = (f"Optional abandonment: may Pod retire {'objective' if len(names) == 1 else 'objectives'} {', '.join(names)} "
+                f"without claiming completion, releasing {_released([standing[key] for key in sorted(standing)])} "
+                "for cleanup? This is an authority decision to abandon the record, never delivery proof.")
     # Only a refusal that came after every fact was read, with every path an existing worktree or proven absent,
     # leaves facts a decision can bind (R112, R113); what that decision would end is said for it too.
     later = [row for row in refused if row["status"] == "refused" and row["facts"]["runs"]
@@ -960,6 +960,7 @@ def _close_proved(project: Path, objectives: object, *, port=None) -> dict:
             # `predecessors` names each predecessor entry this call wrote (R146); a replay writes none.
             row.update(closure=verdict.get("closure"), predecessors=verdict.get("predecessors", []),
                        next_action=f"Read it with pod status --objective {name}; it is closed by evidence.")
+            row.update({key: verdict[key] for key in ("source_issues", "parents_open") if key in verdict})
         results.append(row)
     done = [row for row in results if row["status"] != "refused"]
     return {"status": "closed" if len(done) == len(results) else "partially_closed" if done else "refused",
@@ -972,7 +973,10 @@ def _delivered(project: Path, verdict: dict, *, port) -> dict:
     from .evidence_closure import prove
     proof = prove(project, verdict["objective"], port=port, readback=False)
     if proof["status"] != "proved":
-        return verdict
+        from .evidence_closure import LEAD_ACTION
+        return {**verdict, "completion": {"status": proof["status"], "conditions": proof["conditions"]},
+                "party": "lead", "next_action": LEAD_ACTION,
+                "abandonment": "R112 retirement remains an optional abandonment decision; it never proves delivery."}
     return {**verdict, "status": "delivered", "condition": "delivered", "retirement": verdict["condition"],
             "delivery": [row["pr"] for row in proof["facts"]["delivery"]],
             "message": "Delivery is proved; this objective closes by evidence, with no owner decision.",
@@ -1021,7 +1025,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                      "records": []},
                            "message": f"The objective's record is unreadable or unsupported ({exc.code}).",
                            "next_action": ("Run internal record-compaction for this exact project and objective first; "
-                                           "its owner-scoped maintenance preserves the logical facts." if exc.code == "record_too_large"
+                                           "its bounded maintenance preserves the logical facts for the project lead." if exc.code == "record_too_large"
                                            else "Historical retirement needs a readable current record.")}
             else:
                 # Each objective reads the host afresh: an earlier objective's inventory is never its proof.
@@ -1034,6 +1038,13 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                     verdict = _delivered(project, verdict, port=port)
             verdict["record"] = record_name(project, context, name)
             if decision is None:
+                if verdict["status"] in ("eligible", "refused") and "completion" not in verdict:
+                    from .evidence_closure import LEAD_ACTION
+                    # Early record-only refusals keep their precedence and perform no new native read.
+                    verdict.update(completion={"status": "unverified", "conditions": [{
+                        "code": verdict["condition"], "status": "unverified", "message": verdict["message"]}]},
+                        party="lead", next_action=LEAD_ACTION,
+                        abandonment="R112 remains an optional abandonment route, never delivered history.")
                 results.append(verdict)
                 continue
             block = decision["objectives"][index]
@@ -1095,14 +1106,15 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
         if eligible:
             out["question"] = _question(eligible, [row for row in results
                                                    if row["status"] not in ("eligible", "delivered")], tally)
-            out["next_action"] = ("Ask the owner the question. Then rerun the request with only the objectives the "
-                                  "owner's answer names, and a user_direct decision of exactly {provenance, "
+            out["next_action"] = ("The project lead resolves every objective's completion.conditions, then runs pod sweep. "
+                                  "Only for optional abandonment, name only the objectives the owner's answer names "
+                                  "in an explicit user_direct decision of exactly {provenance, "
                                   "instruction, repository, reason, objectives}, each of those objectives in order as "
                                   "{objective, owner, runs, release, locations, retained, unrecorded_locations, "
                                   "records, delivery} with these facts and its delivery references; a refused "
-                                  "objective stays refused alone.")
+                                  "objective stays refused alone; this route never confirms completed work.")
         else:
-            out["next_action"] = "Historical retirement fits no requested objective now; resolve each named condition."
+            out["next_action"] = "The project lead resolves each named completion condition, then runs pod sweep; historical retirement is optional abandonment."
         if delivered:
             out["next_action"] += (" Delivered " + ", ".join(delivered) + ": " + DELIVERED_ACTION
                                    + " (or rerun this request with proof: delivery).")

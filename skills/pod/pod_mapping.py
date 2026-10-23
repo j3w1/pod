@@ -85,11 +85,11 @@ def validate_epoch(row: dict, *, seq: int, lineage) -> None:
             raise _hold("association_invalid", row["id"])
 
 
-def scope_hash(body: str) -> str:
+def scope_hash(body: str, *, seal: bool = False) -> str:
     """Whole body, masking only checkbox bytes recognized by the existing parser."""
     from .github import pod_lines
     masked = list(body)
-    for lines in pod_lines(body).values():
+    for lines in pod_lines(body, seal=seal).values():
         for line in lines:
             masked[line["offset"]] = " "
     return _hash("".join(masked))

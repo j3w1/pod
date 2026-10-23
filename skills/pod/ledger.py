@@ -1140,7 +1140,7 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
 def map_read(project: Path, objective: str) -> dict:
     """Read one restatable map and its exact objective-local attempt evidence."""
     from .assurance import evidence_valid, review_completed
-    from .obligations import bound_governance_digest, restatable_rows, undispositioned
+    from .obligations import bound_governance_digest, restatable_rows, retained_history, undispositioned
     view = kernel_view(project, objective)
     state, map_state, ctx = view["state"], view["map"], view["ctx"]
     if state is None or map_state is None:
@@ -1201,6 +1201,7 @@ def map_read(project: Path, objective: str) -> dict:
             **({"revision_decisions": map_state["revision_decisions"], "decision_channels": 4}
                if any(row.get("operation") == "issue_revision" for row in map_state.get("revision_decisions", [])) else {}),
             "closure": map_state.get("closure"), "obligations": restatable_rows(map_state),
+            "retained_history": retained_history(map_state),
             "acceptances": {ob["id"]: ob["acceptances"] for ob in map_state["obligations"]
                             if ob.get("acceptances")},
             "outstanding": outstanding, "settled_attempts": settled_attempts,
@@ -1383,20 +1384,18 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         kept = None
         if prior_map is not None and not refresh:
             current_map = prior_map if verified_delivery is None else {**prior_map, "delivery": verified_delivery}
-            try:
+            from .governance import completion_governance
+            from .obligations import restatable_rows
+            closing = proposed.get("close") is True and not prior_map.get("closure") and verified_delivery is None
+            delivery_only = (verified_delivery is not None and set(proposed) <= {"seq", "obligations"}
+                             and proposed.get("obligations", prior_map["obligations"]) in
+                                 (prior_map["obligations"], restatable_rows(prior_map))
+                             and all(core.get(key) == previous.get(key) for key in core
+                                     if key not in {"schema", "native_refs", "policy_revision"}))
+            if closing or delivery_only:
+                kept, unchanged = completion_governance(project, current_map, checkpoint=True)
+            else:
                 unchanged = require_governance_current(project, current_map, checkpoint=True)
-            except PodError as exc:
-                # A closing write after its verified delivery keeps the trusted baseline instead of asking for a
-                # snapshot decision; a delivery named in the closing write itself never counts (R147).
-                closing = (proposed.get("close") is True and not prior_map.get("closure")
-                           and verified_delivery is None)
-                if exc.code != "governance_changed" or not closing:
-                    raise
-                from .governance import closure_keeps_baseline
-                kept = closure_keeps_baseline(project, prior_map)
-                if kept is None:
-                    raise
-                unchanged = None
             if unchanged is not None:
                 adopted_observation, derived_adoption = unchanged
         if prior_map is None:
@@ -1595,6 +1594,15 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if "verification" not in core and "verification" in previous:
             # Like the map, the verification context carries forward until it is restated.
             core["verification"] = previous["verification"]
+        source = core.get("objective_source") or {}
+        if source.get("role") == "SEAL" and source != previous.get("objective_source"):
+            if not previous or previous.get("objective_source") is not None:
+                raise PodError("seal_completion_binding_refused", "Bind a SEAL only to its existing direct objective",
+                               {"next_action": "the project lead uses the direct objective that owns this SEAL's completion"})
+            from .github import issue_recheck_live
+            checked, _ = issue_recheck_live(project, source)
+            if checked.get("body_changed") or checked.get("amendment_changed"):
+                raise PodError("issue_reconciliation_required", "The SEAL completion binding changed during rebind")
         issue_revision = Revision(project, objective, owner, state, core, proposed, data=revision_data) if issue_requested else None
         if issue_revision is not None:
             proposed = {**proposed, "revision_authority": issue_revision.authority}
@@ -1662,6 +1670,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         except PodError:
             journal = None
         result["standing_authorization"] = standing_projection(state, journal)
+        if map_state.get("closure"):
+            from .evidence_closure import close_source_issues
+            result.update(close_source_issues(project, objective, locked=True))
         return result
 
 
@@ -2240,7 +2251,14 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                              "observation_digest": report_identity, "result_commit": result_commit,
                              "consumed_at": datetime.now(timezone.utc).isoformat()}
             row["updated_at"] = row["report"]["consumed_at"]
-        require_governance_current(project, map_state)
+        from .governance import completion_governance
+        kept = None
+        if closing:
+            kept, _ = completion_governance(project, map_state)
+        else:
+            require_governance_current(project, map_state)
+        if kept is not None:
+            ctx["governance_kept"] = kept
         try:
             value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
                                     admission_id=admission_id)
@@ -2277,11 +2295,16 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
         if closing:
             _record_continuity_event(prepared_continuity or authority.get("continuity"))
+        source_effects = {}
+        if new_map.get("closure"):
+            from .evidence_closure import close_source_issues
+            source_effects = close_source_issues(project, objective, locked=True)
         return {"ingestion": ingestion, "settled": settled,
                 "written": _report_written_ids(new_map, admission_id),
                 "map": {"seq": new_map["seq"], "revision": new_map["revision"],
                         "quiescence": new_map["quiescence"]},
-                "report": report_projection(state["checkpoint"], ctx, standing_normal=True), **tab_output()}
+                "report": report_projection(state["checkpoint"], ctx, standing_normal=True),
+                **({"governance_adoption": kept} if kept else {}), **source_effects, **tab_output()}
 
 
 def state_inventory(project: Path) -> dict:

@@ -37,11 +37,16 @@ PR_FIELDS = "number,url,headRefOid,state,isDraft"
 # A pull request read back for a carried effect (R118): every state, with its merge commit.
 PR_READ_FIELDS = "number,url,headRefOid,state,mergeCommit,mergedAt"
 PR_LIST_LIMIT = 10
-ISSUE_FIELDS = "number,title,body,state,url,updatedAt"
+ISSUE_FIELDS = "number,title,body,state,stateReason,url,updatedAt"
 # What a delivery proof reads (R145): an issue's closing reason, and one pull request by its number.
 ISSUE_STATE_FIELDS = "number,url,state,stateReason,body"
 PR_VIEW_FIELDS = "number,url,state,mergedAt,mergeCommit"
 PR_COMMITS_FIELDS = "number,headRefOid,commits"
+# Fixed, read-only connection. The seventeenth node and pageInfo detect truncation.
+CLOSING_PRS_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){"
+    "nameWithOwner issue(number:$number){number url closedByPullRequestsReferences(first:17,includeClosedPrs:true){"
+    "nodes{number url state mergedAt mergeCommit{oid} baseRefName baseRepository{nameWithOwner}} "
+    "pageInfo{hasNextPage}}}}}")
 AMENDMENT_JQ = "{id: .id, body: .body, url: .html_url, updatedAt: .updated_at}"
 _ISSUE_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)/?\Z")
 _COMMENT_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)\Z")
@@ -50,13 +55,15 @@ _POD_LINE = re.compile(r"- \[([ xX])\] \*\*PoD#([0-9]{1,9})(?![0-9])")
 _FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)\Z")
 
 
-def pod_ref_number(ref: object) -> int | None:
+def pod_ref_number(ref: object, *, seal: bool = False) -> int | None:
     """The bounded PoD number at the start of a criterion reference, if present."""
     match = POD_REF.match(ref) if isinstance(ref, str) else None
+    if match is None and seal and isinstance(ref, str):
+        match = re.fullmatch(r"AC([0-9]{1,9})", ref)
     return int(match[1]) if match else None
 
 
-def pod_lines(body: str) -> dict[int, list[dict]]:
+def pod_lines(body: str, *, seal: bool = False) -> dict[int, list[dict]]:
     """Recognize only column-zero PoD lines outside CommonMark fenced code blocks."""
     found: dict[int, list[dict]] = {}
     fence_char, fence_length = "", 0
@@ -73,6 +80,8 @@ def pod_lines(body: str) -> dict[int, list[dict]]:
             fence_char, fence_length = fence[1][0], len(fence[1])
         else:
             match = _POD_LINE.match(line)
+            if match is None and seal:
+                match = re.match(r"- \[([ xX])\] \*\*AC([0-9]{1,9})(?![0-9A-Za-z_])", line)
             if match:
                 found.setdefault(int(match[2]), []).append(
                     {"offset": offset + 3, "ticked": match[1] != " "})
@@ -80,17 +89,17 @@ def pod_lines(body: str) -> dict[int, list[dict]]:
     return found
 
 
-def flip_pod_checkbox(body: str, offset: int, ticked: bool) -> str:
+def flip_pod_checkbox(body: str, offset: int, ticked: bool, *, seal: bool = False) -> str:
     """Change exactly one recognized checkbox character, preserving every other byte."""
     target = "x" if ticked else " "
     if (type(offset) is not int or type(ticked) is not bool
-            or not any(row["offset"] == offset for rows in pod_lines(body).values() for row in rows)
+            or not any(row["offset"] == offset for rows in pod_lines(body, seal=seal).values() for row in rows)
             or body[offset] == target):
         raise PodError("internal_error", "PoD edit must change exactly one recognized checkbox character")
     return body[:offset] + target + body[offset + 1:]
 
 
-def pod_blocks(body: str) -> dict[int, list[dict]]:
+def pod_blocks(body: str, *, seal: bool = False) -> dict[int, list[dict]]:
     """Complete physical list-item scope for recognized PoDs, without their checkbox.
 
     Indented continuations/nested lists, internal blank lines and lazy paragraph
@@ -104,7 +113,7 @@ def pod_blocks(body: str) -> dict[int, list[dict]]:
         offset += len(raw) + 1
     boundary = re.compile(r"(?:#{1,6}(?:[ \t]|$)|(?:[-+*]|[0-9]+[.)])[ \t]+|>|(?:[-*_][ \t]*){3,}$)")
     found = {}
-    for number, occurrences in pod_lines(body).items():
+    for number, occurrences in pod_lines(body, seal=seal).items():
         for occurrence in occurrences:
             first = positions[occurrence["offset"]]
             last, blank = first + 1, False
@@ -176,6 +185,8 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
         # Exact spelling deliberately binds the path, including repository case.
         try:
             payload = json.loads(stdin)
+            if payload == {"state": "closed", "state_reason": "completed"}:
+                return stdin == json.dumps({"state": "closed", "state_reason": "completed"})
             return (isinstance(payload, dict) and set(payload) == {"body"}
                     and isinstance(payload["body"], str)
                     and len(payload["body"].encode()) <= 512 * 1024
@@ -184,6 +195,11 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
             return False
     if stdin is not None:
         return False
+    if (len(argv) == 10 and argv[:4] == ["api", "graphql", "-f", "query=" + CLOSING_PRS_QUERY]
+            and argv[4] == "-f" and argv[5].startswith("owner=") and _name(argv[5][6:])
+            and argv[6] == "-f" and argv[7].startswith("name=") and _name(argv[7][5:])
+            and argv[8] == "-F" and re.fullmatch(r"number=[1-9][0-9]{0,8}", argv[9])):
+        return "/" not in argv[5][6:] and "/" not in argv[7][5:]
     if (len(argv) == 12 and argv[:2] == ["pr", "list"] and argv[2] == "--head" and _name(argv[3])
             and argv[4] == "--base" and _name(argv[5]) and argv[6:] == [
                 "--state", "open", "--json", PR_FIELDS, "--limit", "5"]):
@@ -396,10 +412,12 @@ def _validate_amendment_observation(row: object, *, repository: str,
 def validate_issue_binding(value: object) -> dict:
     from .util import exact
     source = exact(value, {"schema", "repository", "number", "locator", "body_sha256",
-                           "amendments"}, {"schema", "repository", "number", "locator",
+                           "amendments", "role"}, {"schema", "repository", "number", "locator",
                                            "body_sha256", "amendments"}, name="issue_source")
     if source["schema"] != "pod-issue-source/v1":
         raise PodError("invalid_issue_source", "Issue source schema is unsupported")
+    if "role" in source and source["role"] != "SEAL":
+        raise PodError("invalid_issue_source", "Only a SEAL completion binding may carry a role")
     parsed = parse_issue_locator(source["locator"])
     if (parsed["repository"].casefold() != str(source["repository"]).casefold()
             or parsed["number"] != source["number"]
@@ -447,11 +465,16 @@ def _refuse_eel(row: dict, locator: str) -> None:
                         "next_action": "write or use a separate Pod Execution Spec that cites this EEL"})
 
 
-def _refuse_requirements(row: dict, locator: str) -> None:
+def _refuse_requirements(row: dict, locator: str, *, seal: bool = False) -> None:
     # Either restrictive identity wins over a conflicting executable declaration.
     # Preserve the EEL diagnostic, including when the other marker says SEAL.
     _refuse_eel(row, locator)
     marker = _document_marker(row.get("title"), row.get("body"), SEAL_TITLE, SEAL_FORMAT)
+    if seal:
+        if marker is None:
+            raise PodError("issue_role_changed", "The bound SEAL changed document role",
+                           {"next_action": "the project lead reconciles the source role before further work"})
+        return
     if marker is not None:
         raise PodError("issue_is_requirements_spec",
                        "Issue is a SEAL (Scope, Expectations, Acceptance & Limits): requirements input, "
@@ -468,7 +491,9 @@ def _complete_issue_source(row: dict) -> bool:
 
 
 def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
-                 amendments: list[str] | None = None) -> dict:
+                 amendments: list[str] | None = None, completion: bool = False) -> dict:
+    if type(completion) is not bool:
+        raise PodError("invalid_request", "completion must be boolean")
     parsed = parse_issue_locator(locator)
     context = repository_context(project, fresh=True)  # A100 binds the target now
     reader = port or GhPort(project)
@@ -491,7 +516,8 @@ def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
     title = row.get("title")
     if not _complete_issue_source(row):
         raise PodError("incomplete_issue_source", "Issue body is empty or exceeds the bounded source size")
-    _refuse_requirements(row, parsed["locator"])
+    seal = completion and _document_marker(title, body, SEAL_TITLE, SEAL_FORMAT) is not None
+    _refuse_requirements(row, parsed["locator"], seal=seal)
     requested_amendments = amendments or []
     if (not isinstance(requested_amendments, list) or len(requested_amendments) > 32
             or any(not isinstance(value, str) for value in requested_amendments)
@@ -516,6 +542,8 @@ def issue_intake(project: Path, locator: str, *, port: "GhPort | None" = None,
                "number": parsed["number"], "locator": parsed["locator"],
                "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
                "amendments": amendment_bindings}
+    if seal:
+        binding["role"] = "SEAL"
     validate_issue_binding(binding)
     status = "reconciliation_required" if row["state"] == "CLOSED" else "ready"
     return {"schema": "pod-issue-intake/v1", "status": status,
@@ -539,7 +567,7 @@ def issue_recheck_live(project: Path, binding: dict, *,
         raise PodError("repository_mismatch", "Bound issue target differs from the actual checkout")
     row = (port or GhPort(project)).issue(repository=source["repository"], number=source["number"])
     # A restrictive document identity stops execution even when only its title changed.
-    _refuse_requirements(row, source["locator"])
+    _refuse_requirements(row, source["locator"], seal=source.get("role") == "SEAL")
     digest_now = hashlib.sha256(row["body"].encode()).hexdigest()
     changed = digest_now != source["body_sha256"]
     amendment_changed = False
@@ -560,7 +588,7 @@ def issue_recheck_live(project: Path, binding: dict, *,
             "status": "reconciliation_required" if changed or amendment_changed or closed else "current",
             "body_changed": changed, "amendment_changed": amendment_changed,
             "metadata_changed": None,
-            "state": row["state"], "updated_at": row.get("updatedAt"),
+            "state": row["state"], "state_reason": row.get("stateReason"), "updated_at": row.get("updatedAt"),
             "reason": ("issue_body_changed" if changed else
                        "issue_amendment_changed" if amendment_changed else
                        "closed_issue_requires_intent_reconciliation" if closed else None)}, row
@@ -690,6 +718,47 @@ class GhPort:
                 "state": row["state"], "merged_at": row.get("mergedAt") if isinstance(row.get("mergedAt"), str) else None,
                 "merge_commit": oid if isinstance(oid, str) and _GIT_ID.fullmatch(oid) else None}
 
+    def closing_prs(self, *, repository: str, number: int) -> list[dict]:
+        """Complete bounded delivery association, with exact issue, PR and base identities."""
+        owner, name = repository.split("/")
+        response = self._gh_json(["api", "graphql", "-f", "query=" + CLOSING_PRS_QUERY,
+                                  "-f", "owner=" + owner, "-f", "name=" + name, "-F", f"number={number}"])
+        try:
+            if response.get("errors"):
+                raise ValueError
+            repo = response["data"]["repository"]
+            issue = repo["issue"]
+            identity = parse_issue_locator(issue["url"])
+            connection = issue["closedByPullRequestsReferences"]
+            nodes, page = connection["nodes"], connection["pageInfo"]
+            if (repo["nameWithOwner"].casefold() != repository.casefold()
+                    or issue["number"] != number or identity["number"] != number
+                    or identity["repository"].casefold() != repository.casefold()
+                    or not isinstance(nodes, list) or type(page["hasNextPage"]) is not bool):
+                raise ValueError
+            if len(nodes) > 16 or page["hasNextPage"]:
+                raise PodError("scope_too_large", "Linked delivery exceeds 16 pull requests or is truncated")
+            result, seen = [], set()
+            for row in nodes:
+                pr = row["number"]
+                url = f"https://github.com/{repository}/pull/{pr}"
+                oid = (row.get("mergeCommit") or {}).get("oid")
+                base_repository = row["baseRepository"]["nameWithOwner"]
+                if (type(pr) is not int or pr < 1 or pr in seen or row["url"].casefold() != url.casefold()
+                        or row["state"] not in ("OPEN", "CLOSED", "MERGED")
+                        or not isinstance(base_repository, str) or not _name(base_repository)
+                        or not isinstance(row["baseRefName"], str) or not _name(row["baseRefName"])
+                        or row["state"] == "MERGED" and (not isinstance(oid, str) or not _GIT_ID.fullmatch(oid)
+                                                                          or not isinstance(row["mergedAt"], str))):
+                    raise ValueError
+                seen.add(pr)
+                result.append({"number": pr, "url": row["url"], "state": row["state"],
+                               "merged_at": row.get("mergedAt"), "merge_commit": oid,
+                               "base_repository": base_repository, "base_branch": row["baseRefName"]})
+            return result
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise PodError("gh_contract", "GitHub returned inconsistent linked delivery identities") from exc
+
     def pr_commits(self, *, repository: str, number: int) -> dict:
         """One pull request's head and commits, read only (C11); a list at GitHub's bound may be truncated."""
         from .evidence_closure import MAX_PR_COMMITS
@@ -718,13 +787,20 @@ class GhPort:
 
     def issue_body_write(self, *, source: dict, body: str) -> dict:
         """Send one bound issue PATCH; distinguish a held refusal from an uncertain effect."""
+        return self._issue_write(source, {"body": body})
+
+    def issue_close(self, *, source: dict) -> dict:
+        """The only source-issue lifecycle effect: close this bound issue as completed."""
+        return self._issue_write(source, {"state": "closed", "state_reason": "completed"})
+
+    def _issue_write(self, source: dict, payload: dict) -> dict:
         binding = validate_issue_binding(source)
         argv = ["api", "--method", "PATCH", "--include",
                 f"repos/{binding['repository']}/issues/{binding['number']}", "--input", "-"]
         try:
             completed = self._gh(argv, mutation=True,
                                  bound_issue=(binding["repository"], binding["number"]),
-                                 stdin=json.dumps({"body": body}))
+                                 stdin=json.dumps(payload))
         except PodError as exc:
             if exc.code == "gh_contract":
                 raise PodError("remote_effect_uncertain", "Issue write response exceeded its bound") from exc
