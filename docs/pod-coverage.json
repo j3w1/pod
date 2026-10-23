@@ -1827,9 +1827,10 @@
         "tests.test_delivery.VerifiedDeliveryTests.test_target_moved_after_verified_result_holds_future_work",
         "tests.test_delivery.VerifiedDeliveryTests.test_moved_target_refuses_recording_a_stale_delivery",
         "tests.test_delivery.VerifiedDeliveryTests.test_owner_refresh_after_delivery_restores_currency",
-        "tests.test_delivery.VerifiedDeliveryTests.test_replaying_the_delivery_never_skips_currency_or_closes",
+        "tests.test_delivery.VerifiedDeliveryTests.test_replaying_delivery_only_keeps_baseline_and_closure_still_needs_its_proof",
         "tests.test_delivery.VerifiedDeliveryTests.test_a_later_snapshot_decision_ends_the_old_delivery_exception",
-        "tests.test_delivery.VerifiedDeliveryTests.test_a_report_map_cannot_close_against_a_moved_target"
+        "tests.test_delivery.VerifiedDeliveryTests.test_a_report_map_closes_on_the_verified_baseline_after_target_moves",
+        "tests.test_delivery.VerifiedDeliveryTests.test_mixed_delivery_and_work_update_still_requires_governance_currency"
       ],
       "status": "NOT_RUN"
     },

@@ -1386,7 +1386,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             current_map = prior_map if verified_delivery is None else {**prior_map, "delivery": verified_delivery}
             from .governance import completion_governance
             from .obligations import restatable_rows
-            closing = proposed.get("close") is True and not prior_map.get("closure") and verified_delivery is None
+            closing = (proposed.get("close") is True and not prior_map.get("closure")
+                       and (verified_delivery is None or prior_map.get("delivery") == verified_delivery))
             delivery_only = (verified_delivery is not None and set(proposed) <= {"seq", "obligations"}
                              and proposed.get("obligations", prior_map["obligations"]) in
                                  (prior_map["obligations"], restatable_rows(prior_map))

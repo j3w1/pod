@@ -292,7 +292,7 @@ class VerifiedDeliveryTests(KernelCase):
         self.assertEqual(stale.exception.code, "governance_changed")
         self.assertEqual(read(self.project, "objective"), before)
 
-    def test_replaying_the_delivery_never_skips_currency_or_closes(self):
+    def test_replaying_delivery_only_keeps_baseline_and_closure_still_needs_its_proof(self):
         self.prepare_result()
         self.write(self.stored(), delivery={"record": "merge-1"})
         self.move_target("AGENTS.md")
@@ -300,13 +300,29 @@ class VerifiedDeliveryTests(KernelCase):
         rows = self.stored()
         rows[0].pop("executor")
         rows[0].update(state="satisfied", evidence=[self.proof("O1")])
-        for obligations, fields in ((self.stored(), {}), (rows, {"close": True})):
-            with self.subTest(close=bool(fields)), self.assertRaises(PodError) as caught:
-                self.write(obligations, delivery={"record": "merge-1"}, **fields)
-            self.assertEqual(caught.exception.code, "governance_changed")
-            self.assertEqual(read(self.project, "objective"), before)
+        replay = self.write(self.stored(), delivery={"record": "merge-1"})
+        self.assertEqual(replay["checkpoint"]["delivery"], before["checkpoint"]["delivery"])
+        self.assertEqual(replay["checkpoint"]["governance"], before["checkpoint"]["governance"])
+        self.assertIsNone(replay["checkpoint"]["closure"])
+        self.assertFalse(replay["governance_adoption"]["adopted"])
+        closed = self.write(rows, delivery={"record": "merge-1"}, close=True)
+        self.assertTrue(closed["checkpoint"]["closure"])
+        self.assertEqual(closed["checkpoint"]["governance"], before["checkpoint"]["governance"])
+        self.assertFalse(closed["governance_adoption"]["adopted"])
 
-    def test_a_report_map_cannot_close_against_a_moved_target(self):
+    def test_mixed_delivery_and_work_update_still_requires_governance_currency(self):
+        self.prepare_result()
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        self.move_target("AGENTS.md")
+        before = read(self.project, "objective")
+        rows = self.stored(); rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        with self.assertRaises(PodError) as caught:
+            self.write(rows, delivery={"record": "merge-1"})
+        self.assertEqual(caught.exception.code, "governance_changed")
+        self.assertEqual(read(self.project, "objective"), before)
+
+    def test_a_report_map_closes_on_the_verified_baseline_after_target_moves(self):
         from pod.github import repository_context
         self.prepare_result()
         self.write(self.stored(), delivery={"record": "merge-1"})
@@ -327,10 +343,12 @@ class VerifiedDeliveryTests(KernelCase):
             row["state"] = "satisfied"
         rows[0]["evidence"] = [self.proof("O1")]
         before = read(self.project, "objective")["checkpoint"]
-        with self.assertRaises(PodError) as caught:
-            self.report(admission, frozen, map={"obligations": rows, "close": True})
-        self.assertEqual(caught.exception.code, "governance_changed")
-        self.assertEqual(read(self.project, "objective")["checkpoint"], before)
+        result = self.report(admission, frozen, map={"obligations": rows, "close": True})
+        after = read(self.project, "objective")
+        self.assertTrue(after["checkpoint"]["closure"])
+        self.assertEqual(after["checkpoint"]["governance"], before["governance"])
+        self.assertFalse(result["governance_adoption"]["adopted"])
+        self.assertIsNotNone(after["admissions"][admission["admission_id"]]["report"])
 
     def test_a_later_snapshot_decision_ends_the_old_delivery_exception(self):
         _, _, result = self.prepare_result()
