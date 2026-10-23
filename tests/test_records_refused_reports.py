@@ -60,10 +60,10 @@ class RefusedReportTests(unittest.TestCase):
         return rejected, packet
 
     def test_recorded_mismatch_keeps_its_reservation_and_renewal_hold(self):
-        # Accepted limitation (DECISIONS Round 4, option A): a recorded route
-        # mismatch is not proof that Pod will refuse every later report, so the
-        # review keeps its slots; the Governor already holds such an objective
-        # for its route decision.
+        # Accepted limitation (R150): a recorded route mismatch is not proof
+        # that Pod will refuse every later report, so the review keeps its
+        # slots; the Governor already holds such an objective for its route
+        # decision.
         rejected, packet = self.refused_review()
         before = files(self.case)
         with self.assertRaises(PodError) as caught:
@@ -90,8 +90,9 @@ class RefusedReportTests(unittest.TestCase):
         self.assertEqual(files(self.case), before)
 
     def test_consumable_review_keeps_its_slot_and_records_its_finding(self):
-        # RD-1: a review whose report Pod accepts must find its reserved slot,
-        # so its finding is recorded on the row it served.
+        # Baseline for the hold tests above: an ordinary review keeps its
+        # reserved slot and its finding is recorded on the row it served. The
+        # route-mismatch hold itself is pinned by the sibling table below.
         packet = self.case.packet(["A"], role="review")
         admission = self.case.start("consumable", packet)["admission"]; self.case.settle(admission)
         before = len(next(row for row in self.case.stored() if row["id"] == "A")["findings"])
@@ -111,14 +112,14 @@ class RefusedReportTests(unittest.TestCase):
         detail = caught.exception.detail
         self.assertEqual(detail["detail"], "finding_limit")
         self.assertEqual(detail["referent"]["admission"], admission["admission_id"])
-        self.assertEqual(detail["next_action"], f"consume the report for admission {admission['admission_id']} before retrying this write")
+        self.assertEqual(detail["next_action"], f"settle and consume the report for admission {admission['admission_id']} before retrying this write")
         self.assertEqual(files(self.case), before)
         with self.assertRaises(PodError) as caught:
             self.case.write(renew=[{"id": "A", "as": "A2", **waiting()}])
         self.assertEqual(caught.exception.detail["detail"], "renewal_result_pending")
         self.assertEqual(caught.exception.detail["referent"]["admission"], admission["admission_id"])
         self.assertEqual(caught.exception.detail["next_action"],
-                         f"consume the report for admission {admission['admission_id']} before retrying renewal")
+                         f"settle and consume the report for admission {admission['admission_id']} before retrying renewal")
         self.assertEqual(files(self.case), before)
         self.case.report(admission, packet, outcome="failed", map=self.report_map())
         replacement = self.case.start("replacement", packet)["admission"]

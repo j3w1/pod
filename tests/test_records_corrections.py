@@ -45,7 +45,7 @@ class CapacityPaddingTests(ProductionCase):
         self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
                          {"retained": 63, "proposed": 65, "reserved": 1, "limit": 64})
         self.assertEqual(detail["referent"]["admission"], admission["admission_id"])
-        self.assertEqual(detail["next_action"], f"consume the report for admission {admission['admission_id']} before retrying this write")
+        self.assertEqual(detail["next_action"], f"settle and consume the report for admission {admission['admission_id']} before retrying this write")
         self.assertEqual(files(self), before)
         for extra in ({}, {"capacity": {"packet": packet, "report": report_body(self, admission, packet)}}):
             with self.subTest(extra=tuple(extra)):

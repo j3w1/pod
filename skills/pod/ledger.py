@@ -2234,7 +2234,6 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             else:
                 ingestion = _ingest_result(row, result_commit)
         if prior_report is None:
-            ctx["unconsumed_report_attempt"] = admission_id
             row["report"] = {"outcome": report_value.get("outcome"), "status": observation.get("status"),
                              "attempt": report_value.get("attempt"),
                              "observation": report_value,

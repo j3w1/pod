@@ -973,7 +973,7 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
         if pending:
             raise refuse("obligation_invalid", "renewal_result_pending", "serving work must settle and its result be consumed or dispositioned",
                          obligation=old_id, admission=pending[0],
-                         next_action=(f"consume the report for admission {pending[0]} before retrying renewal"
+                         next_action=(f"settle and consume the report for admission {pending[0]} before retrying renewal"
                                       if _admissions(ctx)[pending[0]].get("role") != "implement" else
                                       f"record an ordinary disposition for implementation admission {pending[0]} before retrying renewal"))
         state = entry.get("state", old["state"])

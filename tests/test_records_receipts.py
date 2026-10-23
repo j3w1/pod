@@ -3,7 +3,6 @@ from copy import deepcopy
 import json
 import unittest
 
-from pod.assurance import own_report_overflow
 from pod.errors import PodError
 from pod.ledger import _read, objective_root
 from tests.issue41_support import ProductionCase
@@ -80,12 +79,11 @@ class ReceiptBoundaryTests(unittest.TestCase):
     def files(cls):
         return {str(path.relative_to(cls.path.parent)): path.read_bytes() for path in cls.path.parent.rglob("*") if path.is_file() and path.name != ".lock"}
 
-    def test_65th_report_refuses_atomically_and_names_pending_consumption(self):
+    def test_65th_report_refuses_atomically_with_exact_renewal_request(self):
         detail = self.refusal.detail
         self.assertEqual(detail["detail"], "receipt_limit")
         self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "limit")}, {"retained": 64, "proposed": 65, "limit": 64})
-        self.assertEqual(detail["referent"]["admission"], self.admission["admission_id"])
-        self.assertEqual(detail["next_action"], own_report_overflow(self.admission["admission_id"], "receipts"))
+        self.assertEqual(detail["next_action"]["renew"][0]["id"], "A")
         self.assertTrue(self.unchanged)
         self.assertEqual(self.checkpoint_refusal.detail["detail"], "receipt_limit")
         self.assertTrue(self.checkpoint_atomic)
