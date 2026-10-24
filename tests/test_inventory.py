@@ -441,6 +441,21 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
             "pin_conflicts": ("references/models.md", "report pin conflicts"),
             "no_forced_delegation": ("references/models.md", "no delegation just to apply a pin"),
             "update_skip": ("references/recovery.md", "send only its displayed selector (shown number/key; enter only if shown) once"),
+            "decision_cooperative_boundary": ("references/decisions.md", "cooperative boundary unless the host verifier"),
+            "decision_host_enforcement": ("references/decisions.md", "this check is cooperative unless the host enforces it"),
+            "decision_current_authority": ("references/decisions.md", "check current authority before every sensitive use"),
+            "decision_policy_skip": ("references/decisions.md", "pod policy skip"),
+            "decision_tool_check": ("references/decisions.md", "pod tool check"),
+            "decision_tool_answer": ("references/decisions.md", "pod tool answer"),
+            "decision_execute_flag": ("references/decisions.md", "execute: true"),
+            "decision_agent_provenance": ("references/decisions.md", "provenance: agent_decision"),
+            "decision_session_channel": ("references/decisions.md", "channel: agent_session"),
+            "decision_request_provenance": ("references/decisions.md", "provenance: decision_request"),
+            "decision_verification_kind": ("references/decisions.md", "verification: decision"),
+            "decision_included_subscription": ("references/decisions.md", "--spending included_subscription"),
+            "decision_stricter_policy": ("references/decisions.md", "the stricter of current machine policy and remembered permission wins."),
+            "decision_tool_review": ("references/decisions.md", "pod tool review"),
+            "decision_changed_at": ("references/decisions.md", "changed_at"),
         }
         for topic, (permitted, anchor) in anchors.items():
             with self.subTest(topic=topic):
