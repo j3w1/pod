@@ -1618,8 +1618,9 @@ def _checkpoint_decision(state, *, owner, value, native):
     raw = value.get("revision_authority") if isinstance(value, dict) else None
     if not isinstance(raw, dict) or raw.get("channel") == "relayed" and not decision_input(raw):
         return None
-    if not decision_input(raw) and "channel" not in raw:
-        # Implicit-session calls retain their preceding representation.
+    if not decision_input(raw) and ("channel" not in raw or "question" in raw):
+        # Existing question answers, including explicit session inputs, retain their
+        # recorded-question validation and receipt-free representation.
         return None
     from .obligations import expand_update
     previous = (state or {}).get("checkpoint") or {}

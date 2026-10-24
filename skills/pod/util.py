@@ -205,12 +205,12 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
 
 
 def protect_decision_record(value: dict) -> None:
-    """Earlier readers must refuse channel fields and closure reports they cannot read faithfully."""
+    """Protect supported decision positions without interpreting opaque user content."""
     from .standing import SCHEMA as STANDING_SCHEMA, STATUS_SCHEMA as STANDING_STATUS_SCHEMA
-    from .contracts import TOOL_QUESTION_SCHEMA
+    from .contracts import TOOL_QUESTION_SCHEMA, STATE_SCHEMAS
     def representation(item):
         if isinstance(item, dict):
-            own = (5 if "decision_binding" in item or "decision_order" in item or item.get("decision_channels") == 5 or item.get("schema") == TOOL_QUESTION_SCHEMA
+            return (5 if "decision_binding" in item or "decision_order" in item or item.get("decision_channels") == 5 or item.get("schema") == TOOL_QUESTION_SCHEMA
                    else 4 if item.get("operation") == "issue_revision" and "relay_verification" in item
                    or item.get("decision_channels") == 4
                    else 3 if item.get("schema") in (STANDING_SCHEMA, STANDING_STATUS_SCHEMA)
@@ -218,11 +218,40 @@ def protect_decision_record(value: dict) -> None:
                    or item.get("decision_channels") == 3
                    else 2 if "relay_verification" in item or item.get("decision_channels") == 2
                    else 1 if (CHANNEL_FIELDS | {"decision_channels"}) & item.keys() else 0)
-            return max([own, *(representation(v) for v in item.values())])
-        if isinstance(item, list):
-            return max((representation(v) for v in item), default=0)
         return 0
-    version = representation(value)
+
+    containers = [value]
+    if value.get("schema") == STATE_SCHEMAS["context"] and isinstance(value.get("checkpoint"), dict):
+        containers.append(value["checkpoint"])
+    for container in tuple(containers):
+        report = (container.get("closure") or {}).get("report")
+        if isinstance(report, dict):
+            containers.append(report)
+    records = list(containers)
+    for container in containers:
+        # Inventories add a default session channel for old rows. That projection
+        # does not mean a channel was stored, so it must not raise their reader floor.
+        decisions = (context_decisions(container) if container.get("schema") == STATE_SCHEMAS["context"] else [])
+        if container.get("schema") == STATE_SCHEMAS["checkpoint"]:
+            decisions += map_decisions(container)
+        for row in decisions:
+            decision = row["decision"]
+            if decision.get("channel_recorded") is False:
+                decision = {key: item for key, item in decision.items() if key not in ("channel", "channel_recorded")}
+            records.append(decision)
+        records.extend((container.get("standing_authorization"), container.get("history")))
+        records.extend(row.get("decision") for row in container.get("owner_decisions", []))
+        continuity = container.get("continuity") or {}
+        for row in continuity.get("history", []):
+            records.extend((row.get("decision"), row.get("resolution")))
+        questions = container.get("questions", [])
+        if isinstance(questions, list):
+            records.extend(row for row in questions if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA)
+        # Carried journal decisions still require their reader floor even though
+        # they are excluded from the current owner's decision inventory.
+        for row in container.get("actions", []):
+            records.extend(((row.get("action") or {}).get("authorization"), row.get("exception")))
+    version = max(map(representation, records), default=0)
     if version:
         value["decision_channels"] = version
 _ZONED_TIMESTAMP = re.compile(
