@@ -12,7 +12,7 @@ import unittest
 from pod import config
 from tests.decision_policy_support import MachineCase
 
-BASELINE = "438dde67737a68c6f1f175f11ed9c2d00c857e71"
+BASELINE = "42214fdca819fb85571ef16cad2c8f2479536867"
 REPOSITORY = Path(__file__).resolve().parents[1]
 
 
