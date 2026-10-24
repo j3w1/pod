@@ -215,7 +215,7 @@ class VerifiedRetirementTests(LifecycleMatrix, retirement.RetirementCase):
 class VerifiedHandoffTests(LifecycleMatrix, handoff.HandoffCase):
     categories = ("scope_changes", "coordinator_changes")
     objectives = changed_objectives = ("objective",)
-    factual_error = "handoff_unavailable"
+    factual_error = "owner_handoff_refused"
 
     def prepare_lifecycle(self):
         self.establish()
