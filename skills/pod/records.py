@@ -154,6 +154,14 @@ def packet(value: Any) -> dict:
     for field in ("worktree", "placement"):
         if field in p:
             worktree_binding(p[field])
+    if "routing_role" in p:
+        from .selection import SEMANTIC_ROLES
+        if p["routing_role"] not in SEMANTIC_ROLES:
+            raise PodError("invalid_packet", "Routing role must be a canonical semantic role")
+    if "fallback_of" in p and not _sha256(p["fallback_of"]):
+        raise PodError("invalid_packet", "Fallback reference must name an exact prior admission")
+    if "decision_context" in p:
+        validate_decision_context(p["decision_context"])
     _packet_route(p["route"])
     if len(str(p)) > TABLE["packet"]["max_repr_length"]:
         raise PodError("invalid_packet", "Packet is too large")
@@ -165,6 +173,34 @@ def packet(value: Any) -> dict:
         state = None
     return {"packet_id": digest(p), "body": p, "title": title(p),
             "task_display_name": packet_title(state, p)}
+
+
+def validate_decision_context(value: object) -> dict:
+    from . import policy, tool_permissions
+    from .util import encoded
+    names = {"policy", "permissions", "decision_generation", "every_sensitive_use"}
+    row = exact(value, names, names, name="packet decision context")
+    summary = exact(row["policy"], {"preset", "categories", "setup"}, {"preset", "categories", "setup"}, name="policy summary")
+    if summary["setup"] not in ("unasked", "skipped", "answered"):
+        raise PodError("invalid_packet", "Unknown policy setup summary")
+    categories = policy.preset("custom", summary["categories"])
+    if summary["preset"] != "custom" and categories != policy.preset(summary["preset"]):
+        raise PodError("invalid_packet", "Policy summary disagrees with its preset")
+    if (type(row["decision_generation"]) is not int or row["decision_generation"] < 0
+            or not isinstance(row["permissions"], list) or len(row["permissions"]) > 32):
+        raise PodError("invalid_packet", "Decision context generation or permission count is invalid")
+    memory = []
+    for item in row["permissions"]:
+        entry = exact(item, {"tool", "category", "mode", "changed_at"}, {"tool", "category", "mode"}, name="permission summary")
+        if entry.get("changed_at") is not None:
+            from .util import normalize_timestamp
+            normalize_timestamp(entry["changed_at"], field="permission changed time", code="invalid_packet")
+        memory.append({**{key: entry[key] for key in ("tool", "category", "mode")}, "decision": {"summary": True}})
+    tool_permissions.validate_memory(memory)
+    instruction = policy.projection(None, [], [])["every_sensitive_use"]
+    if row["every_sensitive_use"] != instruction or len(encoded(row, compact=True)) > 8192:
+        raise PodError("invalid_packet", "Decision context needs its bounded every-use instruction")
+    return row
 
 
 @input_record("worktree_binding")

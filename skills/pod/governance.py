@@ -27,7 +27,12 @@ _OBJECT = gitio.OBJECT_ID
 
 
 def user_direct_revision(value: object) -> bool:
-    return isinstance(value, dict) and value.get("provenance") == "user_direct"
+    if isinstance(value, dict) and value.get("provenance") == "user_direct":
+        return True
+    from .relay import current_decision
+    capability = current_decision()
+    return (isinstance(value, dict) and capability is not None
+            and any(capability.matches(value, kind) for kind in ("governance", "revision", "question")))
 
 
 def canonical_bound_ref(project: Path, bound_ref: str | None, proposed: str | None,
@@ -488,7 +493,7 @@ def _governance_history(prior: dict | None) -> dict:
                 or type(row["seq"]) is not int or row["seq"] < 1
                 or not isinstance(row["base_ref"], str) or not _BASE_REF.fullmatch(row["base_ref"])
                 or not isinstance(row["base"], str) or not _OBJECT.fullmatch(row["base"])
-                or row["provenance"] != "user_direct" or row["kind"] not in ("initial", "snapshot", "retarget")
+                or row["provenance"] not in ("user_direct", "agent_decision") or row["kind"] not in ("initial", "snapshot", "retarget")
                 or not isinstance(row["instruction"], str) or not 1 <= len(row["instruction"]) <= 1024):
             raise PodError("state_unsupported", "Governance decision history is malformed")
         owner_decision(row, kind="governance", stored=True)
@@ -521,10 +526,10 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
     authority = proposed.get("revision_authority")
     old = (prior or {}).get("governance", {})
     current = map_state["governance"]
-    if (isinstance(authority, dict) and authority.get("provenance") == "user_direct"
+    if (user_direct_revision(authority)
             and (prior is None or snapshot_authorized or old.get("base_ref") != current["base_ref"])):
         decision = {"base_ref": current["base_ref"], "base": current["base"],
-                    "provenance": "user_direct", "instruction": authority["instruction"],
+                    "provenance": owner_decision(authority, kind="governance")["provenance"], "instruction": authority["instruction"],
                     **channel_fields(owner_decision(authority, kind="governance")),
                     **({"question": authority["question"]} if "question" in authority else {}),
                     "kind": "initial" if prior is None else "snapshot" if snapshot_authorized else "retarget"}

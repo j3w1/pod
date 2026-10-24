@@ -13,6 +13,7 @@ operating-system fence: a process of the old coordinator that is still running i
 from __future__ import annotations
 
 from contextlib import ExitStack
+from copy import deepcopy
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -45,11 +46,15 @@ def _texts(value: object, *, limit: int) -> bool:
 def validate_link(name: str, value: object) -> None:
     """The stored shape of either side of a claim; anything else makes the record unsupported."""
     fields = CONTINUED if name == "continued_by" else CONTINUES
+    if name == "continued_by" and isinstance(value, dict) and "decision_binding" in value and "provenance" in value:
+        fields = fields | {"provenance"}
     if name == "continues" and isinstance(value, dict) and value.get("state") == CLAIMING:
         fields = CONTINUES | {"state", "decision"}
+    if name == "continues" and isinstance(value, dict) and "approval" in value:
+        fields = fields | {"approval"}
     if (not isinstance(value, dict) or set(value) - CHANNEL_FIELDS != fields
             or any(not isinstance(value[key], str) or not value[key] or len(value[key]) > 1024
-                   for key in fields - {"runs", "unfinished", "unreported", "ambiguity"})
+                   for key in fields - {"runs", "unfinished", "unreported", "ambiguity", "approval"})
             or name == "continued_by" and (value["orca_claim"] != "unavailable"
                                            or not all(_texts(value[key], limit=256)
                                                       for key in ("runs", "unfinished", "unreported"))
@@ -57,6 +62,9 @@ def validate_link(name: str, value: object) -> None:
         raise PodError("state_unsupported", f"Objective {name.replace('_', ' ')} record is malformed")
     if name == "continued_by":
         owner_decision(value, kind="claim", stored=True)
+    if name == "continues" and isinstance(value, dict) and "approval" in value:
+        from .relay import validate_decision_record
+        validate_decision_record(value["approval"], kind="claim")
 
 
 def reserved_for(state: dict | None) -> str | None:
@@ -666,12 +674,18 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
     from .ledger import _lock, _path, _read, _write, _write_succession, require_authority
     from .operations import OrcaPort
     bounded_text(predecessor, name="predecessor", limit=256)
+    from .relay import Decision, decision_input, _raw_decision
+    generic = decision_input(decision)
+    requested_decision = dict(decision) if isinstance(decision, dict) else None
     if decision is not None:
         decision = exact(decision, DECISION | {CARRIED} | CHANNEL_FIELDS, DECISION, name="succession_decision")
         bounded_text(decision["instruction"], name="instruction", limit=1024)
-        if decision["provenance"] != "user_direct":
+        if decision["provenance"] != "user_direct" and not generic:
             raise PodError("succession_decision_mismatch", "Only the owner's direct instruction permits a claim")
-        decision = owner_decision(decision, kind="claim")
+        if generic:
+            _raw_decision(decision)
+        else:
+            decision = owner_decision(decision, kind="claim")
     if owner != os.environ.get("ORCA_TERMINAL_HANDLE"):
         raise PodError("native_authority_unverified", "A claim needs the successor's own live coordinator")
     if predecessor == objective:
@@ -702,6 +716,25 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
             raise PodError("predecessor_unverified", "The predecessor record is unreadable or on a superseded schema",
                            {"code": exc.code, "next_action": "only a readable current record can be continued"}) from exc
         verdict = _predecessor_facts(project, objective, predecessor, state, prior, owner, port=port)
+        capability = None
+        def authorize(recorded=None, *, completion=False):
+            nonlocal capability, decision
+            carried, failure = _carried(project, predecessor, prior)
+            if failure is not None:
+                raise PodError(failure[0], failure[1])
+            effect = {"decision": requested_decision, "carried": carried}
+            states = {"successor": deepcopy(state), "predecessor": deepcopy(prior)}
+            if recorded is None:
+                capability = Decision(project, objective, kind="claim", effect=effect, state=states,
+                                      decision=requested_decision, resources={"predecessor": predecessor, "successor": objective})
+            else:
+                prepare = Decision.complete if completion else Decision.resume
+                capability = prepare(project, objective, recorded, effect=effect)
+            capability.keys = ["ownership:" + digest(name) for name in (predecessor, objective)]
+            capability.phases({"successor": own, "predecessor": other}, states)
+            stack.enter_context(capability.scope())
+            decision = owner_decision(decision, kind="claim")
+            capability.finalize(decision)
         if verdict["status"] == "claimed":
             back = state.get("continues")
             if isinstance(back, dict) and back.get("objective") != predecessor:
@@ -719,6 +752,8 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
                 if decision is None:  # Detection never writes, even to finish an interrupted claim.
                     return {**verdict, "next_action": "rerun internal succession with the claim's decision "
                                                       "to record the successor's link"}
+                if generic:
+                    authorize(link, completion=True)
                 # Before copying rows, the successor must still be open with no work of its own: only rows and
                 # units this claim already copied may be there (R118).
                 blocker = _started(project, objective, state, predecessor=predecessor,
@@ -729,7 +764,8 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
                                    {"next_action": "the owner decides how the predecessor's unsettled effects "
                                                    "settle, for example by historical retirement"})
                 completed = {**state, "continues": {"objective": predecessor, "record": verdict["record"],
-                                                    "at": prior["continued_by"]["at"]}}
+                                                    "at": prior["continued_by"]["at"],
+                                                    **({"approval": dict(capability.record)} if capability else {})}}
                 _require_fit(project, objective, predecessor, prior, recorded[CARRIED], at=link["at"],
                              records={"successor's record": completed}, linked=True)
                 _carry(project, objective, predecessor, prior, recorded[CARRIED], at=link["at"])
@@ -749,6 +785,8 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
                 raise PodError("succession_decision_mismatch",
                                "The decision differs from the one that reserved this successor. Nothing was written.",
                                {"succession": verdict, "next_action": "rerun with the decision that made the claim"})
+            if generic:
+                authorize(state["continues"].get("approval"), completion=True)
             state.pop("continues")
             _write(own, state)
             raise PodError(verdict["condition"], verdict["message"] + " The successor's reservation was released.",
@@ -769,15 +807,26 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
                            "The decision differs from fresh predecessor, successor, owner, Run, ambiguity or carried "
                            "Governor facts. Nothing was written.",
                            {"succession": verdict, "next_action": verdict["next_action"]})
-        at = datetime.now(timezone.utc).isoformat()
+        if generic:
+            authorize(state["continues"].get("approval") if reserved else None)
+            fresh = _predecessor_facts(project, objective, predecessor, state, prior, owner, port=port)
+            if (fresh["status"] != "claim_available" or fresh["facts"] != verdict["facts"]
+                    or digest(_carried(project, predecessor, prior)[0]) != digest(capability.effect["carried"])):
+                raise PodError("succession_decision_mismatch", "Claim eligibility or native identities changed during verification")
+        at = capability.commit_clock() if capability else datetime.now(timezone.utc).isoformat()
         link = {"objective": objective, "record": own.parent.name, "owner": facts["successor_owner"],
                 "runs": list(verdict["facts"]["runs"]), "at": at, "instruction": decision["instruction"],
                 **channel_fields(decision),
                 "unfinished": verdict["unfinished"], "unreported": verdict["unreported"],
                 "ambiguity": list(verdict["facts"]["ambiguity"]), "orca_claim": "unavailable"}
+        if capability is not None:
+            link["provenance"] = decision["provenance"]
         reservation = {"objective": predecessor, "record": other.parent.name, "at": at, "state": CLAIMING,
                        "decision": _scope(decision)}
         completed = {"objective": predecessor, "record": other.parent.name, "at": at}
+        if capability is not None:
+            reservation["approval"] = dict(capability.record)
+            completed["approval"] = dict(capability.record)
         # Every record the claim writes must fit before the first is written, so a claim too large for the
         # successor never freezes the predecessor or reserves the successor.
         try:
@@ -801,6 +850,8 @@ def _succession(project: Path, objective: str, *, owner: str, predecessor: str,
             state["continues"] = reservation
             _write(own, state)
         _write_succession(other, prior)
+        if capability is not None:
+            capability.completion_only = True
         _carry(project, objective, predecessor, prior, verdict["facts"][CARRIED], at=at)
         state["continues"] = completed
         _write(own, state)
@@ -881,6 +932,8 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
     planned = [("successor's Governor journal", {**journal, "revision": journal["revision"] + 1}, MAX_JOURNAL)]
     for name, value in records.items():
         candidate = {**value, "revision": value["revision"] + 2}
+        from .relay import stamp_decision
+        stamp_decision(candidate)
         protect_decision_record(candidate)
         path = _path(project, predecessor if name.startswith("predecessor") else objective)
         try:

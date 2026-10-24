@@ -538,11 +538,17 @@ def _revalidate_standing(project: Path, objective: str, *, owner: str, row: dict
                            {"next_action": "obtain current owner consent or reconfirm yolo for this objective"})
         _owned_state(project, objective, owner, _path(project, objective), version=True)
         require_governance_current(project, map_of(context))
+        from .standing import require_current_decision
+        require_current_decision(project, objective, context)
 
 
 def _revalidate_relay(project: Path, objective: str, *, owner: str, row: dict) -> None:
     """Recheck confirmed consent and the current prepared candidate immediately before an effect."""
     consent = row["action"].get("authorization") or {}
+    if "decision_binding" in consent:
+        from .governor import revalidate_decision_authorization
+        revalidate_decision_authorization(project, objective, consent, unit=row["action"]["unit"])
+        return
     if consent.get("channel") != "relayed":
         return
     from .config import effective

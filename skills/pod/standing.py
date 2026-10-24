@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import ExitStack
+from copy import deepcopy
 import hashlib
 from pathlib import Path
 import re
@@ -18,7 +20,7 @@ MAX_DECISIONS = 32
 MAX_ANSWERS = 16
 MAX_DECISION_BYTES = TABLE["standing decision"]["stored_max_bytes"]
 MAX_ANSWER_BYTES = TABLE["responder answer"]["stored_max_bytes"]
-_STORED_DECISION = {"id", "operation", "utc", "seq", "binding", "exclusions", "relay_verification"}
+_STORED_DECISION = {"id", "operation", "utc", "seq", "binding", "exclusions", "relay_verification", "decision_effect"}
 CLOSURE_TEXT_BYTES = 256
 
 
@@ -32,6 +34,9 @@ def _timestamp(now: datetime) -> str:
 
 def decision_time(row: dict) -> str:
     """Owner decision time, distinct from the time Pod recorded a relay."""
+    if "decision_binding" in row:
+        decided = _instant(row["decided_at"])
+        return _timestamp(min(decided, _instant(row["utc"]))) if row["operation"] == "revoke" else _timestamp(decided)
     if row["channel"] == "session":
         return row["utc"]
     decided = _instant(row["relay_verification"]["decided_at"])
@@ -117,7 +122,9 @@ def _fresh(context: dict, row: dict) -> None:
     record = context.get("standing_authorization", {})
     decided = _instant(decision_time(row))
     if row["operation"] == "activate":
-        if row["relay_verification"]["standing"].get("scope_digest") != scope_digest(context):
+        bound_scope = (row.get("binding", {}).get("scope_digest") if "decision_binding" in row
+                       else row["relay_verification"]["standing"].get("scope_digest"))
+        if bound_scope != scope_digest(context):
             from .relay import refusal
             raise refusal("relay_verifier_mismatch", fields=["standing.scope_digest"])
         if decided > _instant(row["utc"]):
@@ -210,9 +217,14 @@ def _names(value: object, allowed: tuple, *, nonempty: bool = False) -> list:
 
 
 def _decision(value: object, operation: str, now: datetime, *, stored: bool = False) -> dict:
-    allowed = fields("standing decision") if operation == "activate" else fields("standing decision") - {"scope", "widening", "expires_at"}
+    allowed = fields("standing decision") if operation == "activate" else fields("standing decision") - {"scope", "widening", "expires_at", "scope_digest", "spending"}
     row = exact(value, allowed, required("standing decision"), name="standing decision")
-    row = owner_decision(row, kind="standing_authorization", stored=stored, verified_authorization=True)
+    from .relay import decision_input, current_decision, _raw_decision
+    if not stored and decision_input(row) and current_decision() is None:
+        _raw_decision(row)
+        row = dict(row)
+    else:
+        row = owner_decision(row, kind="standing_authorization", stored=stored, verified_authorization=True)
     if operation == "activate":
         scope = _names(row.get("scope", list(DEFAULT_SCOPE)), STANDING_SCOPES, nonempty=True)
         widening = _names(row.get("widening", []), STANDING_EXCLUSIONS)
@@ -227,6 +239,120 @@ def _decision(value: object, operation: str, now: datetime, *, stored: bool = Fa
                 raise PodError("invalid_standing_authorization", "Standing expiry must be later than now")
         row = {**row, "scope": scope, "widening": widening, "expires_at": expiry}
     return row
+
+
+def _standing_effect(operation, proposed, previous, material):
+    affected = ([previous] if previous is not None else []) + ([proposed] if operation == "activate" else [])
+    scopes = sorted({scope for row in affected for scope in row.get("scope", [])}) or ["routine"]
+    widening = []
+    for row in affected:
+        for name in row.get("widening", []):
+            if name == "paid_resources":
+                spending = row.get("spending")
+                widening.append({"kind": "paid_resources", "effect": {"spending": spending}}
+                                if spending in ("included_subscription", "new_commitment") else {"kind": "unclassified", "effect": {}})
+            else:
+                widening.append(name)
+    return {"operation": operation, "scopes": scopes, "widening": widening, "scope_digest": material,
+            "previous": ({key: previous[key] for key in ("scope", "widening", "spending", "expires_at") if key in previous}
+                         if previous is not None else None), "proposed": proposed}
+
+
+def _generic_operate(project, objective, owner, action, decision, *, now=None):
+    from .ledger import _lock, _path, _read, _require_open, _write, require_authority
+    from .governor import _read_journal, _record_path
+    from .relay import Decision, same_decision_input
+    path = _path(project, objective)
+    with _lock(path), ExitStack() as stack:
+        context = _read(path)
+        original = deepcopy(context)
+        if context["owner"] != owner:
+            raise PodError("coordinator_conflict", "Standing authorization belongs to another coordinator")
+        _require_open(context)
+        require_authority(project, objective, owner=owner, state=context)
+        created = "standing_authorization" not in context
+        record = context.get("standing_authorization", {"schema": SCHEMA, "decisions": [], "answers": [],
+                  "observed_scope_digest": scope_identity(context)})
+        context["standing_authorization"] = record
+        if record["decisions"]:
+            latest = record["decisions"][-1]
+            if (latest.get("decision_effect", {}).get("proposed") == decision and latest["operation"] == action
+                    and same_decision_input(decision, latest)):
+                return {"standing_authorization": projection(context, _read_journal(_record_path(project, objective)), now=now),
+                        "decision": latest, "context_revision": context["revision"], "committed": True, "readback": True}
+        source = (context.get("checkpoint") or {}).get("objective_source")
+        if action == "activate" and source is not None:
+            from .github import issue_recheck_live
+            checked, live = issue_recheck_live(project, source)
+            if checked["status"] != "current" or live is None:
+                raise PodError("issue_reconciliation_required", "Execution Spec changed or is unavailable")
+            observe(context, source, live["body"])
+        material = scope_digest(context)
+        if action == "activate":
+            if decision.get("scope_digest") != material:
+                raise PodError("decision_stale", "Standing activation needs the current scope_digest from standing show")
+            if "paid_resources" in decision.get("widening", []) and decision.get("spending") != "included_subscription":
+                raise PodError("standing_money_scope", "Standing consent cannot approve future spending; approve each new commitment separately")
+            if "spending" in decision and "paid_resources" not in decision.get("widening", []):
+                raise PodError("invalid_standing_authorization", "Spending classification belongs only to included paid-resource usage")
+        previous = next((row for row in reversed(record["decisions"]) if row["operation"] == "activate"), None)
+        effect = _standing_effect(action, decision, previous, material)
+        capability = Decision(project, objective, kind="standing_authorization", effect=effect, state=original,
+                              decision=decision, resources={"objective": objective, "scope_digest": material}, clock=lambda: _clock(now))
+        capability.keys = ["standing"]
+        if record["decisions"]:
+            capability.prior = [{"keys": ["standing"], "decided_at": decision_time(record["decisions"][-1])}]
+        stack.enter_context(capability.scope())
+        approved = _decision(decision, action, _clock(now))
+        capability.finalize(approved)
+        at = _timestamp(_instant(capability.commit_clock()))
+        row = {**approved, "id": f"Y{len(record['decisions']) + 1}", "operation": action, "utc": at,
+               "seq": (context.get("checkpoint") or {}).get("seq", 0), "decision_effect": effect}
+        if action == "activate":
+            row.update(binding={"scope_digest": material}, exclusions=[name for name in STANDING_EXCLUSIONS if name not in row["widening"]])
+        _row_fit(row)
+        _fresh(context, row)
+        capability.order_at = decision_time(row)
+        if (len(record["decisions"]) >= MAX_DECISIONS
+                or action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1):
+            raise PodError("standing_authorization_full", "Standing decision history is full; nothing is evicted")
+        if action == "activate" and source is not None:
+            checked, live = issue_recheck_live(project, source)
+            if checked["status"] != "current" or live is None:
+                raise PodError("issue_reconciliation_required", "Execution Spec changed during decision verification")
+            observed = deepcopy(context)
+            observe(observed, source, live["body"])
+            if scope_digest(observed) != material:
+                raise PodError("decision_stale", "Standing material scope changed during verification")
+        require_authority(project, objective, owner=owner, state=context, persist_rebind=False)
+        _raise_barrier(record, capability.order_at)
+        if created and action == "activate" and decision["channel"] == "relayed":
+            _raise_barrier(record, row["utc"])
+        if action == "activate":
+            record.pop("scope_changed_for", None)
+        record["decisions"].append(row)
+        validate_record(record)
+        _write(path, context)
+        return {"standing_authorization": projection(context, _read_journal(_record_path(project, objective)), now=now),
+                "decision": row, "context_revision": context["revision"]}
+
+
+def require_current_decision(project, objective, context):
+    """Revalidate a currently active accepted scope before synthesizing or using it."""
+    record = context.get("standing_authorization", {}).get("decisions", [])
+    if not record or "decision_binding" not in record[-1]:
+        return
+    from .relay import Decision
+    from .config import _edit_lock, personal_path, load
+    row = record[-1]
+    capability = Decision._recorded(project, objective, row)
+    if capability.kind != "standing_authorization" or row["operation"] != "activate" or row["binding"]["scope_digest"] != scope_digest(context):
+        raise PodError("standing_authorization_inactive", "Standing decision no longer covers this material scope")
+    capability.effect = row["decision_effect"]
+    capability.revalidate_authorizer()
+    capability.check_receipt()
+    with _edit_lock(personal_path(project)):
+        capability.recheck_policy(load(project))
 
 
 def _answer(value: object) -> dict:
@@ -296,7 +422,17 @@ def validate_record(value: object) -> None:
                 activations.add(row["id"])
             elif {"scope", "widening", "expires_at", "binding", "exclusions"} & row.keys():
                 raise ValueError("revocation")
-            if row["channel"] == "relayed":
+            if "decision_binding" in row:
+                from .relay import validate_decision_record, _raw_decision
+                from .policy import categories
+                validate_decision_record(row, kind="standing_authorization")
+                effect = row.get("decision_effect")
+                if (not isinstance(effect, dict) or effect.get("operation") != row["operation"]
+                        or row["decision_binding"]["categories"] != categories("standing_authorization", effect)
+                        or row["decision_binding"]["payload_sha256"] != digest({"effect": effect, "decision": _raw_decision(effect["proposed"])})
+                        or row["operation"] == "activate" and row["binding"]["scope_digest"] != effect.get("scope_digest")):
+                    raise ValueError("decision effect")
+            elif row["channel"] == "relayed":
                 verdict = validate_verdict(row.get("relay_verification"))
                 if (not verdict["verified"] or verdict["action"] != "standing"
                         or verdict["standing"] != _request_fields(row["operation"], decision,
@@ -401,6 +537,9 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
     except (PodError, ValueError, TypeError, UnicodeError) as exc:
         raise PodError("invalid_standing_authorization", "Malformed standing authorization input") from exc
     project, objective, owner = Path(request["project"]), request["objective"], request["owner"]
+    from .relay import decision_input
+    if decision is not None and (decision_input(decision) or "scope_digest" in decision or "spending" in decision):
+        return _generic_operate(project, objective, owner, action, decision, now=now)
     path = _path(project, objective)
     if action == "show":
         with _lock(path):
@@ -588,7 +727,10 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
     if latest is not None:
         decision = {key: latest[key] for key in ("id", "scope", "exclusions", "widening", "expires_at", "channel")}
         decision["since"] = latest["utc"]
-        if latest["channel"] == "relayed":
+        if "decision_binding" in latest:
+            decision.update(provenance=latest["provenance"], actor=latest["actor"]["kind"],
+                            decided_at=decision_time(latest), recorded_at=latest.get("recorded_at"))
+        elif latest["channel"] == "relayed":
             decision.update(relay_reference=latest["relay"]["reference"], owner_source=latest["relay"]["owner_source"])
     effects = []
     for row in (journal or {}).get("actions", []):
@@ -624,6 +766,8 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
             "responder_decisions": {"total": len(answers), "truncated": len(answers) > 64, "items": answers[-64:]},
             "history": {"total": len(decisions), "items": [{**{key: row[key] for key in ("id", "operation", "channel")},
                                                            "at": row["utc"], "decided_at": decision_time(row)} for row in decisions]}}
+    if any("decision_binding" in row for row in decisions):
+        result["decision_channels"] = 5
     checkpoint = context.get("checkpoint") or {}
     closure = checkpoint.get("closure")
     if closure and (decisions or record.get("closed_at")):
@@ -658,7 +802,7 @@ def synthesize(context: dict, binding: dict | None, unit: dict | None, scopes: s
             "scope": sorted(scopes), "utc": _timestamp(_clock(now)), "target": target,
             **({"pr": pr} if "merge" in scopes else {}),
             "standing": {"id": record["id"], "reference": f"standing_authorization/decisions/{index}",
-                         "channel": record["channel"]}}, ""
+                         "channel": record["channel"], **({"decision_channels": 5} if "decision_binding" in record else {})}}, ""
 
 
 def cleanup_projection(context: dict, resources: list[dict]) -> dict:

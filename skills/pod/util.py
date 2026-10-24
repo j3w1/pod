@@ -17,8 +17,9 @@ from .errors import FieldRefusal, PodError
 from .contracts import bound, fields, required, input_record
 
 MAX_RECORD = 128 * 1024
-DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"}
-CHANNEL_FIELDS = {"channel", "relay"}
+DECISION_EVIDENCE = {"actor", "decided_at", "recorded_at", "decision_binding", "decision_verification"}
+DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"} | DECISION_EVIDENCE
+CHANNEL_FIELDS = {"channel", "relay"} | DECISION_EVIDENCE
 RELAYED_DECISIONS = {"question", "governance", "withdrawal", "claim", "retirement"}
 
 
@@ -45,6 +46,11 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False,
     """
     if not isinstance(value, dict):
         raise PodError("invalid_decision", "An owner decision must be an object")
+    from .relay import current_decision, decision_input, stored_or_capability
+    capability = current_decision()
+    if (decision_input(value) or DECISION_EVIDENCE & set(value)
+            or not stored and capability is not None and capability.matches(value, kind)):
+        return stored_or_capability(value, kind=kind, stored=stored)
     if "provenance" in value and value["provenance"] != "user_direct":
         raise PodError("invalid_decision", "Owner decision provenance must be user_direct")
     if "instruction" in value:
@@ -123,7 +129,7 @@ def map_decisions(state: dict) -> list[dict]:
     for ob in state.get("obligations", []):
         if ob.get("provenance") == "user_direct":
             add("obligation", f"obligations/{ob['id']}/source", ob["source"])
-        if ob.get("withdrawal", {}).get("by") == "user_direct":
+        if ob.get("withdrawal", {}).get("by") in ("user_direct", "agent_decision"):
             add("withdrawal", f"obligations/{ob['id']}/withdrawal", ob["withdrawal"])
     return rows
 
@@ -134,7 +140,7 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
     def add(kind, reference, value):
         rows.append({"kind": kind, "reference": reference, "decision": decision_channel(value)})
     for index, value in enumerate(state.get("constraints", [])):
-        if value.get("provenance") == "user_direct":
+        if value.get("provenance") in ("user_direct", "agent_decision"):
             add("constraint", f"constraints/{index}", value)
     for index, value in enumerate(((state.get("checkpoint") or {}).get("continuity") or {}).get("history", [])):
         if isinstance(value.get("decision"), dict):
@@ -145,9 +151,16 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
         add("retirement", "historical_retirement", state["historical_retirement"])
     for index, value in enumerate(state.get("standing_authorization", {}).get("decisions", [])):
         add("standing_authorization", f"standing_authorization/decisions/{index}", value)
+    from .contracts import TOOL_QUESTION_SCHEMA
+    questions = (state.get("checkpoint") or {}).get("questions", [])
+    for value in questions if isinstance(questions, list) else []:
+        if isinstance(value, dict) and value.get("schema") == TOOL_QUESTION_SCHEMA and "decision" in value:
+            from .relay import validate_decision_record
+            add("tool_permission" if value["purpose"] == "memory" else "tool_operation",
+                f"checkpoint/questions/{value['id']}/decision", validate_decision_record(value["decision"]))
     for identity, admission in state.get("admissions", {}).items():
         for index, failure in enumerate(admission.get("failures", [])):
-            if failure.get("cleared_by") == "user":
+            if failure.get("cleared_by") in ("user", "agent"):
                 add("route_failure_clear", f"admissions/{identity}/failures/{index}/clear_decision", failure.get("clear_decision", {}))
     for value in (journal or {}).get("actions", []):
         for field, kind in (("authorization", "authorization"),):
@@ -162,9 +175,11 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
 def protect_decision_record(value: dict) -> None:
     """Earlier readers must refuse channel fields and closure reports they cannot read faithfully."""
     from .standing import SCHEMA as STANDING_SCHEMA, STATUS_SCHEMA as STANDING_STATUS_SCHEMA
+    from .contracts import TOOL_QUESTION_SCHEMA
     def representation(item):
         if isinstance(item, dict):
-            own = (4 if item.get("operation") == "issue_revision" and "relay_verification" in item
+            own = (5 if "decision_binding" in item or "decision_order" in item or item.get("decision_channels") == 5 or item.get("schema") == TOOL_QUESTION_SCHEMA
+                   else 4 if item.get("operation") == "issue_revision" and "relay_verification" in item
                    or item.get("decision_channels") == 4
                    else 3 if item.get("schema") in (STANDING_SCHEMA, STANDING_STATUS_SCHEMA)
                    or item.get("schema") == "pod-authorization/v1" and "standing" in item
@@ -481,9 +496,10 @@ def matching_route_settlement(row: dict, *, seq: int | None = None) -> bool:
     if not route_hold(row):
         return False
     row["route_decision"].setdefault("mismatch_occurrence", route_occurrence(row))
+    from .relay import decision_commit_time
     row["route_decision"].setdefault("settlements", []).append({
         "basis": "matching_report", "occurrence": route_occurrence(row),
-        "utc": datetime.now(timezone.utc).isoformat(),
+        "utc": decision_commit_time(),
         **({"seq": seq} if seq is not None else {}), "report_digest": row["report"]["observation_digest"]})
     return True
 
