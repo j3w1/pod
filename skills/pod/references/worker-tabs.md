@@ -48,7 +48,7 @@ review admitted before it. Leave out round 1 while it is the only round: once a
 second review is admitted, the first reviewer's tab becomes
 `Reviewer · round 1`, and the display readback gives that rename. A worker on a
 reused terminal, or one listed in `display.continued`, adds ` (continued)`.
-Retention alone adds nothing, and no title carries a status, route, id or prompt
+Retention alone adds nothing, and no worker title carries a status, route, id or prompt
 text.
 
 **Shared worktree.** A worker that sits in the task worktree rather than its own
@@ -74,6 +74,14 @@ task worktree and `Coordinator · <task>` anywhere else, for example on a main
 checkout. A successor, or a coordinator listed in `display.continued`, adds
 ` (continued)`. When the display readback gives the reason `record display.task`,
 record the task words in the checkpoint's `display` record.
+
+For a Pod-owned coordinator title, a known current wait for the person adds
+` · needs you`; clearing the wait removes it. A setup offer, an agent wait or
+unknown old question facts add no mark. This is the only status text Pod adds
+to a tab title. Preserve host-owned names and expose their limitation through
+the display link. A projected mark is not proof of a native title change: apply
+only supported metadata actions and read back the actual result. Native metadata
+and desktop rendering remain separate evidence.
 
 **At each step:**
 

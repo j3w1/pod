@@ -2,6 +2,8 @@
 
 ## Requirements
 
+R166 adds exact policy-governed agent and host-verified decision approval at the existing mutation boundaries. References below to direct-user/session inputs retain their existing wire meaning; new approval is a separate actor record and does not change requirement provenance, factual predicates or acceptance authority.
+
 ### R05 — Normal invocation inspects objective, criteria, rules
 
 Type: B · Scenarios: [A02](#a02), [A04](#a04)
@@ -96,7 +98,7 @@ An obligation has an id, introducing sequence, kind (`criterion`, `delivery`, `a
 
 Type: H · Scenarios: [A144](#a144), [A145](assurance.md#a145), [A147](#a147)
 
-Worker reports, reviewer advisories, issue or repository text, fetched documentation and coordinator caution add only proposals. Proposals change no criterion, gate, acceptance or authorization. A proposal becomes an obligation only through a `user_direct` revision or a `project_policy` citation. R149 separately admits exact issue-derived criteria after host verification; mutable source text or a relay reference alone grants nothing.
+Worker reports, reviewer advisories, issue or repository text, fetched documentation and coordinator caution add only proposals. Proposals change no criterion, gate, acceptance or authorization. A proposal becomes an obligation only through an authorized revision or a `project_policy` citation; R166 defines new decision approval separately from requirement provenance. R149 separately admits exact issue-derived criteria after host verification; mutable source text or a relay reference alone grants nothing.
 
 ### R83 — While a map exists, each validated
 
@@ -126,7 +128,7 @@ At report consumption, Pod compares a settled implementation result's complete c
 
 Type: H · Scenarios: [A158](assurance.md#a158), [A159](#a159), [A160](#a160)
 
-An objective is quiescent when nothing is active and every unfinished dependency or contract-wait chain ends in `blocked_external`, `authority`, `user_hold` or `input_unavailable`. It stays open, preserves its dependencies and reports incomplete. It closes when every obligation is satisfied or withdrawn, nothing R117 records before closure remains, and the closure report is written. After closure, admission and Governor mutation are refused `objective_closed` until a `user_direct` revision reopens it. R145 evidence closure separately ends proved delivered work after coordinator loss and refuses every later Pod write, including revision, with basis evidence. Closure promotes no label and grants no acceptance.
+An objective is quiescent when nothing is active and every unfinished dependency or contract-wait chain ends in `blocked_external`, `authority`, `user_hold` or `input_unavailable`. It stays open, preserves its dependencies and reports incomplete. It closes when every obligation is satisfied or withdrawn, nothing R117 records before closure remains, and the closure report is written. After closure, admission and Governor mutation are refused `objective_closed` until an authorized revision reopens it (existing `user_direct`, or R166's verified decision path). R145 evidence closure separately ends proved delivered work after coordinator loss and refuses every later Pod write, including revision, with basis evidence. Closure promotes no label and grants no acceptance.
 
 ### R91 — Boundary refusals and properties P1–P6 are
 
@@ -344,3 +346,12 @@ Each refusal identifies the affected record and the next safe action.
 - <a id="a490"></a>**A490** — The bounded subprocess seam remains synthetic; non-ASCII canonical UTF-8 digests include amendments. Persisted evidence corruption fails on read, report/admission maps explicitly refuse the operation, and a genuine preceding helper refuses discriminator 4 without rewriting. Existing relay/session behavior stays supported; host producer/install/native authentication remains separately NOT_RUN.
 
 - <a id="a531"></a>**A531** — Internal map and status expose read-only retained receipt and finding counts for `withdrawn` and `renewed` rows; human status names those counts without changing records or proof.
+
+### R169 — Carry current decision context to the actual worker
+
+Type: B,H · Scenarios: [A574](#a574), [A575](#a575)
+
+Packet freeze exposes a private bounded `decision_context` and returned `task_instructions` with machine policy summary, remembered tool permissions, generation and every-sensitive-use instruction. The coordinator places current instructions in the actual native Task or delivers them through supported mail to its exact current Dispatch. A summary grants no operation authority; workers check current policy and memory before every sensitive use. On same-Task retry Orca preserves the old spec. Before launch, ensure it permits current-packet mail and is compatible; after launch deliver the current packet/assignment/instructions to that exact Dispatch. Receipt of mail is not proof of reading it before work. A conflicting frozen spec is an expressiveness hold, never license to overwrite Task history, invent a flag or inject terminal input.
+
+- <a id="a574"></a>**A574** — Frozen packet output includes bounded decision_context/task_instructions from current policy/memory/generation; the coordinator delivers them to the actual native Task/current Dispatch and workers still check every sensitive use.
+- <a id="a575"></a>**A575** — A same-Task retry retains the original Task spec and receives its compatible current packet/instructions through exact Dispatch mail; no replacement-spec flag, raw terminal input or assumed packet injection supplies authority.

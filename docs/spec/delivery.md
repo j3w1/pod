@@ -282,7 +282,7 @@ automatic adoptions cannot grow the report or status by repeating their rows.
 
 Type: B,H · Scenarios: [A339](#a339), [A340](#a340), [A341](#a341), [A342](#a342), [A343](#a343), [A356](#a356), [A419](#a419), [A420](#a420), [A421](#a421), [A422](#a422), [A423](#a423), [A424](#a424), [A425](#a425), [A441](#a441)
 
-One shared validator checks owner-authority inputs: `provenance: user_direct`,
+R166 adds distinct agent/verified-decision input without changing these old wires. One shared validator checks existing owner-authority inputs: `provenance: user_direct`,
 `instruction`, optional `channel` (`session` by default, or `relayed`), and `relay`
 exactly when relayed. A relay contains bounded nonempty `reference` and
 `owner_source` text identifying the relay and the verified owner source; publish/merge
@@ -292,7 +292,7 @@ accept these common fields additively. Every new accepted decision stores its
 channel and, when relayed, the complete relay. Existing records without a channel
 read as `channel: session` with `channel_recorded: false` and text "session (earlier record)"; they are never rewritten on read.
 
-The common decision channel's exhaustive relayed list is: owner answers to an already recorded question,
+The existing common decision channel's exhaustive relayed list is: owner answers to an already recorded question,
 governance snapshot adoption/retarget, withdrawal, R110 continuation instructions
 recorded as `claim`, retirement (R112), the verified publish/merge authorizations below,
 and the verified standing-authorization activation and revocation of R136. R149's distinct
@@ -367,10 +367,10 @@ still needs R137's exact candidate, prepared target and gates, and an inactive, 
 replayed standing grant supplies nothing. A verified relayed widening may name any
 default exclusion: `deploy`, `paid_resources`, `secrets`, `unique_deletion` and
 `scope_growth`, each explicitly, under the same exact binding. It never confirms
-Password Manager Defaults, authorizes DRAINED/REPLACE/reboots, bypasses secret
+protected credential changes, authorizes host maintenance confirmations, bypasses secret
 handlers or disables gates. Widening never bypasses the scope binding or suspension.
 R149 adds a distinct host-verified issue-source criteria revision; it grants no
-general revision or delivery authority. Every other kind
+general revision or delivery authority. Outside R166's distinct verified-decision path, every other kind
 requires session too, including owner handoff R105, runtime continuity R98,
 direct-user route/delegation constraints, general revisions/reopen without a recorded-question answer,
 user-cleared route failures and Governor efficiency exceptions. Such a relay refuses
@@ -455,7 +455,7 @@ The owner turns it on at any time:
 
 - At start, the owner types `/pod <link> yolo`. The coordinator records the activation right after intake and before any admission.
 - Later, the owner types a plain instruction in the coordinator's own session, such as "use yolo from now on". The coordinator turns it into the exact decision (scope, widening, expiry) and records it with `channel: session`. Text an executor, a host agent or a mailbox relayed is `relayed`, never session (R120).
-- A relayed activation is accepted only when the host verifier's `standing` action confirms exactly this objective, operation, scope, widening, expiry and material `scope_digest` (R139). The request carries `standing.scope_digest`, computed after the activation's own live issue read, equal to the digest Pod would bind now. The host must compare it with the digest saved with that exact owner decision; echoing the request is not verification. A different, missing or unknown decision-time digest refuses `relay_verifier_mismatch` naming `standing.scope_digest`, before key use or a write, with a next action to obtain a fresh owner decision for the current digest. This includes release and, only with an explicit owner widening, deploy; it authorizes no deploy target by itself (R120). Pod stores the complete verdict, takes `relay.owner_source` from it and consumes its `single_use` key for one row. Without a configured verifier it refuses `relay_verifier_unconfigured`; other verifier failures reuse the existing relay codes. A verified relayed widening may name any default exclusion: `deploy`, `paid_resources`, `secrets`, `unique_deletion` and `scope_growth`, each explicitly, under the same exact binding. It never confirms Password Manager Defaults, authorizes DRAINED/REPLACE/reboots, bypasses secret handlers or disables gates. Widening never bypasses the scope binding or suspension.
+- A relayed activation is accepted only when the host verifier's `standing` action confirms exactly this objective, operation, scope, widening, expiry and material `scope_digest` (R139). The request carries `standing.scope_digest`, computed after the activation's own live issue read, equal to the digest Pod would bind now. The host must compare it with the digest saved with that exact owner decision; echoing the request is not verification. A different, missing or unknown decision-time digest refuses `relay_verifier_mismatch` naming `standing.scope_digest`, before key use or a write, with a next action to obtain a fresh owner decision for the current digest. This includes release and, only with an explicit owner widening, deploy; it authorizes no deploy target by itself (R120). Pod stores the complete verdict, takes `relay.owner_source` from it and consumes its `single_use` key for one row. Without a configured verifier it refuses `relay_verifier_unconfigured`; other verifier failures reuse the existing relay codes. A verified relayed widening may name any default exclusion: `deploy`, `paid_resources`, `secrets`, `unique_deletion` and `scope_growth`, each explicitly, under the same exact binding. It never confirms protected credential changes, authorizes host maintenance confirmations, bypasses secret handlers or disables gates. Widening never bypasses the scope binding or suspension.
 - An activation of an issue-bound objective reads the bound issue live through the existing issue recheck. A live body that differs from the bound digest, an unreconciled edit, refuses `issue_reconciliation_required` without a write; reconcile first.
 - An activation made while one is active replaces it, which is how a later widening or narrowing is recorded. One made while suspended is the owner's re-confirmation.
 - Activating restarts and reopens nothing. A consent wait that deferred `authorization_missing` is satisfied at the Governor's next check.
@@ -551,3 +551,54 @@ Only each chain member's own bound source closes. Referenced SEAL/EEL parents re
 - <a id="a521"></a>**A521** — Permission refusal is acknowledged separately from recorded Pod closure; lost responses use readback, unlanded writes stay unknown, and sweep retries remaining OPEN sources, including a claim-only successor's predecessor source when narrowed to that predecessor.
 - <a id="a522"></a>**A522** — Interruption between a completed chain's source effects leaves its Pod entries intact; replay completes remaining effects. Concurrent local reopen or a changed authorizing chain record prevents a source send. A source reopened before work finished closes normally, including on retry after a refused first close. A latest reopen later than Pod's recorded closure stays OPEN through repeated sweeps, with a named lead task and no owner question. An unreadable or absent reopen event or missing closure time holds the effect as a lead task. New ordinary closure times validate as UTC and remain stable on replay; evidence closures use their recorded time.
 - <a id="a523"></a>**A523** — Material source change, empty or duplicate criteria and another closing reason never trigger a source close. Referenced parent SEAL/EEL issues are never mutated by the child; shared completed sources and parent facts are read once within the cache bound, with one lead task per locator per sweep and fresh observations on the next sweep.
+
+### R166 — Verify each new decision at its actual mutation boundary
+
+Type: B,H · Scenarios: [A565](#a565), [A566](#a566), [A567](#a567), [A568](#a568)
+
+Preserve every existing session and relay wire, including metadata-only owner relay forms, specialized publish/merge, standing, responder answer, issue revision and `orca_window`. Add local `provenance: agent_decision`, `channel: agent_session`, `instruction` without trusted identity claims, and verified `provenance: decision_request`, `channel: relayed`, `instruction`, exactly `relay: {reference, verification: decision}`. Public input accepts no actor, verdict, kernel time or stored-only evidence. A local cooperative agent can approve only when every affected category allows any agent. A host-attested agent needs exact allowed kind/category/resource scope under current policy. A host-attested person remains person authority. Requirement provenance is distinct from the approving actor; never relabel an agent user_direct or turn source text into consent.
+
+The actual adapter derives the complete typed old/proposed effect, current expected state, resources/native/source predicates and conflict keys, then obtains a nonserializable kernel capability. Question effects wrap their actual underlying effect; added and removed restrictions, standing scopes and widenings all count. Caller categories may assert equality but cannot replace classification. Opaque effects are unclassified/person-only. Verification supplies authority only for that exact effect; map/source currency, governance, factual liveness, review independence and all existing effect gates still hold. Only exact host-verified capability may bypass an old recorded-question prerequisite; cooperative local approvals keep that prerequisite where required.
+
+The additive path uses the existing mutation for each kind, retaining its factual checks:
+
+| Decision kind | Complete effect and current facts to bind |
+| --- | --- |
+| Question | Actual underlying effect and exact answer; recorded question identity where required. Unknown subject is unclassified. |
+| Governance, withdrawal, revision, reopen | Exact old/proposed scope, definitions, source and governance state; reopen also binds the closed revision. These require scope-change authority. |
+| Claim, handoff | Exact predecessor/successor or coordinator change and fresh native loss/Run facts; both scope-change and coordinator-change categories apply. |
+| Retirement | Exact records and fresh retirement facts; scope-change authority plus irreversible-deletion authority if such an effect is actually requested. |
+| Constraint, route rule, route-failure clear | Full added/removed restrictions or exact failure being cleared, current rule and preference bindings. Model predicates use model-choice authority; unknown kinds stay unclassified. |
+| Continuity | Exact runtime ambiguity and fresh equal work identities, classified as continuity; authority never overrides a disproven identity. |
+| Compaction | Exact repository, record, revision, physical input and logical hashes, classified as routine; immutable-history and lossless-fit predicates remain. |
+| Governor exception, authorization | Governed action and exact candidate, target, unit and prepared state; exception approval removes no correctness or authority gate. |
+| Standing authorization | All added and removed scopes/widenings, current material scope digest and prior activation; intersect every affected category. |
+| Tool permission, tool operation | Exact tool/category and pending memory choice or operation, with current personal and applicable objective bindings; memory and use are separate effects. |
+| Policy | Exact previous/proposed personal policy and current generation, always person-only. |
+
+New session decisions use the kernel's commit time and relays their verified decision time. Latest conflicting keys remain ordered across current and hydrated history; no unrelated machine-global time barrier is invented. Unknown earlier chronology cannot be overridden by an agent: require fresh person resolution or a provably nonconflicting transition. A tied or older conflicting grant supplies no authority; future grants refuse. Existing standing stop/future-stop semantics retain their stronger conservative behavior. R167 owns atomic generation/receipt recovery and stored marker compatibility.
+
+- <a id="a565"></a>**A565** — New raw local/verified inputs cannot smuggle actor/verdict/time evidence; local agents require any-agent categories, host agents retain truthful provenance and exact scope, and old owner inputs remain compatible.
+- <a id="a566"></a>**A566** — Actual adapters derive full mixed effects including removed restrictions, wrapped questions and standing widening; caller category labels and incomplete scopes cannot hide money or other stricter effects.
+- <a id="a567"></a>**A567** — Each supported decision kind verifies its exact current payload/state/native/source/resource binding at the mutation boundary; missing verifier, denial, stale payload or wrong scope writes/consumes nothing, and verified authority never substitutes for factual checks.
+- <a id="a568"></a>**A568** — Older/tied/future conflicting grants refuse, unknown chronology stays conservative and current/hydrated history retains the ordering barrier; one-shot receipt recovery cannot authorize a changed transition or replay a committed approval.
+
+#### Additive decision verifier contract
+
+The existing read-only host verifier transport adds `action: decision`, preserving all old action bytes. It keeps the shell-free argv invocation, five-second timeout, 16 KiB stdout bound, duplicate-key rejection, safe diagnostics and existing receipt home. The kernel builds this request; a caller does not supply its expected binding or a verdict.
+
+| Request field | New action value |
+| --- | --- |
+| `schema`, `reference`, `action` | `pod-relay-verification/v1`, raw relay reference, `decision`. |
+| `objective` | Current objective id, or null for machine-only policy/tool decisions. |
+| `candidate`, `pr` | Null; candidate/native facts participate in the normalized effect/state binding. |
+| `target` | Exactly `{objective: ID}` for objective decisions, or `{machine: personal}` for machine-only decisions. |
+| `decision` | Exact kernel binding described below. |
+
+`decision` requires `kind`, `payload_sha256`, `state_sha256`, `decision_policy_revision`, `decision_generation`, `categories`, `resources` and `request_id`, with optional kernel-derived `kinds` for a composite effect. When present, `kinds` is sorted, unique, nonempty, contains the primary kind and has at most 16 bounded entries. Hashes/request identity are SHA-256 values; generation is a nonnegative integer. Categories are a nonempty normalized unique list. Resources are at most 16 bounded key/value strings (keys up to 64 characters, values up to 512). The payload binds the complete effect and raw instruction; state binds the actual expected predecessor. The kernel creates request identity, never a caller-supplied UUID assertion.
+
+The host returns those exact request fields plus `verified`, `principal`, `decided_at` and `single_use`. `principal` has exactly `kind: person|agent`, bounded `identity` and `scope: {kinds, categories, resources}`. The scope must include every kernel-derived kind (the primary kind alone when no list is present), all categories and the exact resource binding; kind lists are nonempty, unique and at most 32. A positive response must match every expected field and independently authenticate the decision rather than echoing expectations. Time is timezone-aware, and the use key is stable and unique. No caller principal is a credential. Stored decision evidence retains truthful provenance/channel and validates on read without a host call. A bounded verified answer stores the full verdict once and derives `actor`, `decided_at` and `decision_binding` on read rather than duplicating it; ordinary expanded records retain those fields explicitly. Kernel `recorded_at` is commit time, never caller input. Preflight full encoded stored rows and aggregate fit before consuming authority; legal transport size does not imply a row fits.
+
+The generic decision action also supports the existing checkpoint-only issue-source revision operation: the saved host decision binds that exact reconciliation and current source/state, without inventing a recorded question. Existing source identity, scope/proof history and native predicates remain mandatory; the earlier specialized `issue_revision` action retains its own wire.
+
+For a new policy-governed standing activation, `decision.scope_digest` must equal the current digest from `standing-authorization` show. It binds material scope independently of the verifier's positive answer; a stale digest cannot be reconfirmed. A `paid_resources` widening on this path requires explicit `spending: included_subscription` and cannot authorize future new commitments. Each new commitment needs its own person operation approval. Managed publish may carry the new exact decision input in its existing authorization record, retaining candidate/target checks and immediate pre-effect revalidation; the saved actor stays an agent when the host attests an agent.
