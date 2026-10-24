@@ -56,7 +56,7 @@ class DecisionViewTests(unittest.TestCase):
                                 "decision": {"instruction": "private answer", "verifier": "private verifier"}}]
         before = deepcopy(data)
         view = readiness.decision_view(data)
-        self.assertEqual(view["tool_permissions"], [{"tool": "vault.read", "category": "secrets", "mode": "ask_each_time"}])
+        self.assertEqual(view["tool_permissions"], [{"tool": "vault.read", "category": "secrets", "mode": "ask_each_time", "changed_at": None}])
         self.assertNotIn("private", json.dumps(view))
         self.assertEqual(data, before)
 
