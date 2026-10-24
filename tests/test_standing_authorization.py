@@ -2032,11 +2032,20 @@ class StandingGuidanceTests(unittest.TestCase):
     def test_responder_answers_never_resolve_excluded_or_owner_decisions(self):
         for path in ("docs/spec/delivery.md", "skills/pod/references/governor.md"):
             text = self.text(path)
+            if path == "docs/spec/delivery.md":
+                text = text.split("### R138", 1)[1].split('- <a id="a429">', 1)[0]
             self.assertIn("A responder answer never resolves an R4-excluded question or any owner-decision kind", text)
             for exclusion in ("production deployment", "new paid or cloud resources", "secrets",
                               "deleting unique or unmerged material", "work beyond the objective's scope"):
                 self.assertIn(exclusion, text)
-            self.assertIn("Those questions still go to the owner", text)
+            self.assertIn("Those questions require their own supported decision path", text)
+            self.assertIn("A separate host-verified decision may authorize the exact effect when current machine policy permits", text)
+            self.assertIn("a trusted agent's attested scope must cover it", text)
+            self.assertIn("Money/new commitments, policy changes and human-only login stay person-only", text)
+            self.assertIn("An answer is never an owner decision and never authority" if path == "docs/spec/delivery.md" else
+                          "Pod records it as the responder's decision, never the owner's, and it grants no authority", text)
+            self.assertIn("a responder cannot extend it" if path == "docs/spec/delivery.md" else
+                          "the responder cannot extend it", text)
 
     def test_cleanup_uses_the_plans_exact_scope_standing_instruction(self):
         text = self.text("skills/pod/references/cleanup.md")
