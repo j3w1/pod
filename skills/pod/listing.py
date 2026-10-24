@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .errors import PodError
 from .history import load_context
+from .util import public_decisions
 
 MAX_SCAN = 1024
 MAX_ROWS = 128
@@ -207,7 +208,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     result["next_safe_action"] = (
         "every record under the state root was read; this list is complete" if result["complete"]
         else "treat unreadable, unattributed or unscanned records as possibly touching this scope")
-    return result
+    return public_decisions(result)
 
 
 def render(result: dict) -> None:
