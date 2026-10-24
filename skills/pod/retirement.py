@@ -132,7 +132,9 @@ def _facts_valid(value: dict) -> bool:
 def validate_entry(value: object) -> None:
     """The stored shape of a retirement; anything else makes the record unsupported."""
     native = value.get("native") if isinstance(value, dict) else None
-    if (not isinstance(value, dict) or set(value) - CHANNEL_FIELDS not in (ENTRY, LOCATED_ENTRY)
+    modern = isinstance(value, dict) and "decision_binding" in value and "provenance" in value
+    entry_fields = (ENTRY | {"provenance"}, LOCATED_ENTRY | {"provenance"}) if modern else (ENTRY, LOCATED_ENTRY)
+    if (not isinstance(value, dict) or set(value) - CHANNEL_FIELDS not in entry_fields
             or not all(_text(value[key], 1024) for key in ("at", "decision", "instruction", "reason", "repository"))
             or not _texts(value["objectives"], MAX_OBJECTIVES, 256) or not value["objectives"]
             or not _text(value["owner"], 256) or not _runs(value["runs"])
@@ -839,14 +841,29 @@ def _decision(value: object, requested: list[dict], repository: str) -> dict:
     mismatch = PodError("retirement_decision_mismatch", "Only the owner's direct instruction for exactly the "
                         "requested objectives and paths permits retirement. Nothing was written.",
                         {"next_action": "detect again without a decision and confirm its facts with the owner"})
-    if decision["provenance"] != "user_direct" or decision["repository"] != repository:
+    from .relay import decision_input, _raw_decision
+    generic = decision_input(decision)
+    if (decision["provenance"] != "user_direct" and not generic) or decision["repository"] != repository:
         raise mismatch
     blocks = decision["objectives"]
     if not isinstance(blocks, list) or len(blocks) != len(requested) or any(
             not isinstance(block, dict) or block.get("objective") != row["objective"]
             or block.get("release") != row["release"] for block, row in zip(blocks, requested)):
         raise mismatch
+    if generic:
+        _raw_decision(decision)
+        return dict(decision)
     return owner_decision(decision, kind="retirement")
+
+
+def _retirement_entry(decision, requested, repository, facts, verdict, block, at):
+    from .relay import current_decision
+    capability = current_decision()
+    return {"at": at, "decision": digest(decision), "instruction": decision["instruction"], "reason": decision["reason"],
+            **channel_fields(decision), **({"provenance": decision["provenance"]} if capability is not None else {}),
+            "repository": repository, "objectives": [item["objective"] for item in requested],
+            "owner": facts["owner"], "runs": facts["runs"], "released": facts["release"], "locations": facts["locations"],
+            "preserved": facts["records"], "unfinished": verdict["unfinished"], "delivery": list(block["delivery"]), "native": verdict["native"]}
 
 
 def _block_valid(block: dict) -> bool:
@@ -1011,12 +1028,74 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
         legacy_digest = (digest({key: value for key, value in decision.items() if key != "channel"})
                          if decision["channel"] == "session" and "relay" not in decision else None)
     port = port or OrcaPort(project)
+    from .relay import Decision, decision_input, same_decision_input, stamp_decision
+    from copy import deepcopy
+    generic = decision_input(decision)
+    requested_decision = deepcopy(decision)
+    capability = None
     paths = {row["objective"]: _path(project, row["objective"]) for row in requested}
     results = []
     with ExitStack() as stack:
         # Nothing is created for a name that has no record: a lock would make its directory.
         for path in sorted((path for path in paths.values() if path.exists()), key=str):
             stack.enter_context(_lock(path))
+        if generic:
+            states, planned = {}, []
+            for index, item in enumerate(requested):
+                name, candidate_path = item["objective"], paths[item["objective"]]
+                if not candidate_path.exists():
+                    continue
+                try:
+                    saved = _read(candidate_path)
+                except PodError:
+                    continue  # The ordinary per-objective refusal below remains authoritative.
+                states[name] = saved
+                checked = _detect(project, name, item["release"], saved, port=port, repository=repository, host=_Host(project))
+                block = decision["objectives"][index]
+                if (checked["status"] == "eligible" and _block_valid(block)
+                        and {key: block.get(key) for key in FACTS} == checked["facts"] and not _moved(checked["locations"])):
+                    planned.append((index, checked))
+            recorded = next((saved[FIELD] for saved in states.values()
+                             if isinstance(saved.get(FIELD), dict) and "decision_binding" in saved[FIELD]
+                             and same_decision_input(decision, saved[FIELD])), None)
+            if planned or recorded is not None:
+                primary = recorded["decision_binding"]["resources"]["primary"] if recorded else requested[planned[0][0]]["objective"]
+                resources = {"repository": repository, "objectives": digest([row["objective"] for row in requested]),
+                             "records": digest(sorted(states)), "primary": primary}
+                effect = {"decision": requested_decision}
+                if recorded is None:
+                    capability = Decision(project, primary, kind="retirement", effect=effect, state=states,
+                                          decision=requested_decision, resources=resources)
+                else:
+                    if recorded["decision_binding"]["resources"] != resources:
+                        raise PodError("decision_stale", "Retirement record scope changed; obtain a fresh scoped decision")
+                    capability = (Decision.resume if planned else Decision.complete)(project, primary, recorded, effect=effect)
+                capability.keys = [prefix + digest(requested[index]["objective"]) for index, _ in planned
+                                   for prefix in ("ownership:", "retirement:")]
+                capability.phases({name: paths[name] for name in states}, states)
+                stack.enter_context(capability.scope())
+                decision = owner_decision(decision, kind="retirement")
+                capability.finalize(decision)
+                # Re-observe every selected location/native scope after host lookup,
+                # then preflight complete authority-bearing rows before the first receipt.
+                from .history import prepare_context
+                from .ledger import _validate_context
+                from .util import protect_decision_record
+                for index, checked in planned:
+                    item = requested[index]
+                    name = item["objective"]
+                    fresh = _detect(project, name, item["release"], states[name], port=port,
+                                    repository=repository, host=_Host(project))
+                    if fresh["status"] != "eligible" or fresh["facts"] != checked["facts"] or _moved(fresh["locations"]):
+                        raise PodError("decision_stale", "Retirement eligibility changed during verification")
+                    probe = deepcopy(states[name])
+                    probe[FIELD] = _retirement_entry(decision, requested, repository, fresh["facts"], fresh,
+                                                     decision["objectives"][index], capability.commit_clock())
+                    stamp_decision(probe)
+                    protect_decision_record(probe)
+                    probe["revision"] += 1
+                    _validate_context(probe)
+                    prepare_context(paths[name], probe, purpose="retirement")
         for index, row in enumerate(requested):
             name, path = row["objective"], paths[row["objective"]]
             try:
@@ -1083,13 +1162,8 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                            "its facts. Nothing was written.",
                                 "next_action": "detect again and confirm the changed facts with the owner"})
                 continue
-            entry = {"at": datetime.now(timezone.utc).isoformat(), "decision": digest(decision),
-                     "instruction": decision["instruction"], "reason": decision["reason"],
-                     **channel_fields(decision),
-                     "repository": repository, "objectives": [item["objective"] for item in requested],
-                     "owner": facts["owner"], "runs": facts["runs"], "released": facts["release"],
-                     "locations": facts["locations"], "preserved": facts["records"], "unfinished": verdict["unfinished"],
-                     "delivery": list(block["delivery"]), "native": verdict["native"]}
+            entry = _retirement_entry(decision, requested, repository, facts, verdict, block,
+                                      capability.commit_clock() if capability else datetime.now(timezone.utc).isoformat())
             state[FIELD] = entry
             _write_retirement(path, state)
             results.append({**verdict, "status": "retired", "retirement": status_block(state),

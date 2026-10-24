@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import ExitStack
+from copy import deepcopy
 import os
 import re
 from pathlib import Path
@@ -18,10 +20,10 @@ ENTRY = {"provenance", "state", "from_runtime", "to_runtime", "at", "verified",
 
 def validate_entry(row: dict) -> None:
     decision = row.get("decision")
-    if (set(row) != ENTRY or row.get("state") not in ("pending", "done", "aborted")
+    if (set(row) - {"resolution"} != ENTRY or row.get("state") not in ("pending", "done", "aborted")
             or not isinstance(row.get("verified"), dict)
             or not isinstance(decision, dict) or set(decision) - CHANNEL_FIELDS != DECISION
-            or decision.get("provenance") != "user_direct"
+            or decision.get("provenance") not in ("user_direct", "agent_decision")
             or any(not isinstance(decision.get(key), str) or not decision[key]
                    for key in DECISION - {"ambiguity", "recorded_generation"})
             or (decision["recorded_generation"] is not None and
@@ -31,6 +33,9 @@ def validate_entry(row: dict) -> None:
             or row.get("abort_reason") is not None and not isinstance(row["abort_reason"], str)):
         raise PodError("state_unsupported", "Owner handoff history is malformed")
     owner_decision(decision, kind="handoff", stored=True)
+    if "resolution" in row:
+        from .relay import validate_decision_record
+        validate_decision_record(row["resolution"], kind="handoff")
     # Presentation and pane identities are never accepted as authority or stored evidence.
     allowed = {"run", "coordinator", "generation", "admissions", "absent", "owner_code", "caller_runtime"}
     completion = row["completion"]
@@ -413,26 +418,101 @@ def refuse_nonowner(project: Path, objective: str, state: dict | None, owner: st
         raise PodError(code, "Caller is not the recorded owner. " + verdict["message"], detail)
 
 
+def _preflight_decision(path, state, value, verified, pending, capability):
+    """Both physical phases fit before run-use; the numeric allowance is never stored."""
+    import sys
+    from .history import prepare_context
+    from .ledger import _validate_context
+    from .relay import stamp_decision
+    from .util import MAX_RECORD, protect_decision_record
+    at = capability.commit_clock()
+    staged = deepcopy(state)
+    record = staged["checkpoint"].setdefault("continuity", {"binding": None, "history": []})
+    row = {**deepcopy(pending or {}), "provenance": "owner_handoff", "state": "pending",
+           "from_runtime": value["recorded_runtime"], "to_runtime": value["current_runtime"], "at": at,
+           "verified": deepcopy(verified), "decision": dict(value), "abort_reason": (pending or {}).get("abort_reason"), "completion": None}
+    if pending is not None and pending["decision"].get("decision_binding") != capability.binding:
+        row["resolution"] = dict(capability.record)
+    if pending is None:
+        record["history"].append(row)
+    else:
+        index = state["checkpoint"]["continuity"]["history"].index(pending)
+        record["history"][index] = row
+    future = deepcopy(staged)
+    digits = sys.get_int_max_str_digits() or MAX_RECORD
+    generation = 10 ** (min(digits, MAX_RECORD) - 1)
+    completed = future["checkpoint"]["continuity"]["history"][record["history"].index(row)]
+    completed.update(state="done", completion={**deepcopy(verified), "coordinator": value["to_owner"], "generation": generation})
+    future["owner"] = value["to_owner"]
+    for admission in future["admissions"].values():
+        admission.update(owner=value["to_owner"], runtime=value["current_runtime"])
+    for ref in future["checkpoint"].get("native_refs", []):
+        ref["runtime"] = value["current_runtime"]
+    future["checkpoint"]["continuity"]["binding"] = {"run": value["run"], "coordinator": value["to_owner"], "generation": generation}
+    for candidate in (staged, future):
+        stamp_decision(candidate)
+        protect_decision_record(candidate)
+        candidate["revision"] += 2
+        _validate_context(candidate)
+        prepare_context(path, candidate, protected=set(candidate["admissions"]))
+
+
 def owner_handoff(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:
     from .ledger import (_lock, _path, _read, _write, _require_open, CONTINUITY_HISTORY)
     from .orca import current_run, mutate_command, terminal_identity
     value = exact(decision, DECISION | CHANNEL_FIELDS, DECISION, name="handoff_decision")
+    from .relay import Decision, decision_input, _raw_decision, same_decision_input
+    generic = decision_input(value)
+    requested_value = deepcopy(value)
     bounded_text(value["instruction"], name="instruction", limit=1024)
-    if value["provenance"] != "user_direct":
+    if value["provenance"] != "user_direct" and not generic:
         raise PodError("handoff_decision_mismatch", "Only an exact direct Owner confirmation permits this handoff")
-    value = owner_decision(value, kind="handoff")
+    if generic:
+        _raw_decision(value)
+    else:
+        value = owner_decision(value, kind="handoff")
     path = _path(project, objective)
+    capability = None
 
     def refusal(verdict, code="owner_handoff_refused"):
         return PodError(code, verdict["message"], {"owner_handoff": verdict, "next_action": verdict["next_action"]})
 
     def abort(entry, reason, state):
+        if generic and capability is None:
+            if "decision_binding" in entry["decision"] and same_decision_input(requested_value, entry["decision"]):
+                authorize(entry["decision"], completion=True)
+            else:
+                authorize()
+                entry["resolution"] = dict(capability.record)
+        if capability is not None:
+            capability.completion_only = True
         entry.update(state="aborted", abort_reason=reason)
         _write(path, state)
 
     # Keep the objective lock through the single native mutation and authoritative re-read.
-    with _lock(path):
+    with _lock(path), ExitStack() as decision_stack:
         state = _read(path)
+        def authorize(recorded=None, *, completion=False):
+            nonlocal capability, value
+            effect = {"decision": requested_value}
+            states = {"objective": deepcopy(state)}
+            if recorded is None:
+                capability = Decision(project, objective, kind="handoff", effect=effect, state=states,
+                                      decision=requested_value, resources={"objective": objective, "run": value["run"],
+                                      "from_owner": value["from_owner"], "to_owner": value["to_owner"]})
+            else:
+                capability = (Decision.complete if completion else Decision.resume)(project, objective, recorded, effect=effect)
+            from .util import digest
+            capability.keys = ["ownership:" + digest(objective)]
+            capability.phases({"objective": path}, states)
+            decision_stack.enter_context(capability.scope())
+            value = owner_decision(value, kind="handoff")
+            capability.finalize(value)
+            if not completion:
+                refreshed = detect(project, objective, state, port=port)
+                if refreshed["status"] != "handoff_available" or refreshed["facts"] != verdict["facts"]:
+                    raise PodError("handoff_decision_mismatch", "Handoff facts changed during decision verification")
+                _preflight_decision(path, state, value, refreshed["verified"], pending, capability)
         # A handoff moves coordination, not work: a successor an incomplete claim reserves may change coordinator
         # so that the new one finishes the claim (R118).
         _require_open(state, reserved=False)
@@ -457,6 +537,13 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
                 raise refusal(verdict)
         if verdict["status"] != "handoff_available":
             raise refusal(verdict, "runtime_continuity_full" if verdict["condition"] == "history_full" else "owner_handoff_refused")
+        if generic and capability is None:
+            recorded = ((pending or {}).get("resolution") if (pending or {}).get("state") == "aborted" else (pending or {}).get("decision"))
+            if not isinstance(recorded, dict) or "decision_binding" not in recorded or not same_decision_input(requested_value, recorded):
+                recorded = None
+            authorize(recorded, completion=recorded is not None and verdict["condition"] == "resume")
+        if capability is not None:
+            capability.completion_only = verdict["condition"] == "resume"
         if pending and pending["state"] == "pending" and pending["decision"] != value:
             raise refusal({**verdict, "message": "The pending handoff requires its original exact confirmation."}, "handoff_decision_mismatch")
         record = state["checkpoint"].get("continuity") or {"binding": None, "history": []}
@@ -464,7 +551,7 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
             if len(record["history"]) >= CONTINUITY_HISTORY:
                 raise PodError("runtime_continuity_full", "Handoff history is full; continue in a successor objective", {"limit": CONTINUITY_HISTORY})
             pending = {"provenance": "owner_handoff", "state": "pending", "from_runtime": value["recorded_runtime"],
-                       "to_runtime": value["current_runtime"], "at": datetime.now(timezone.utc).isoformat(),
+                       "to_runtime": value["current_runtime"], "at": capability.commit_clock() if capability else datetime.now(timezone.utc).isoformat(),
                        "verified": verdict["verified"], "decision": dict(value), "abort_reason": None, "completion": None}
             record["history"].append(pending)
             state["checkpoint"]["continuity"] = record
@@ -472,7 +559,7 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
         elif pending["state"] == "aborted":
             pending.update(state="pending", decision=dict(value), verified=verdict["verified"],
                            from_runtime=value["recorded_runtime"], to_runtime=value["current_runtime"],
-                           at=datetime.now(timezone.utc).isoformat())
+                           at=capability.commit_clock() if capability else datetime.now(timezone.utc).isoformat())
             _write(path, state)
         failed = None
         if verdict["condition"] == "fresh":
@@ -508,5 +595,7 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
             ref["runtime"] = value["current_runtime"]
         record["binding"] = {"run": value["run"], "coordinator": owner, "generation": run["generation"]}
         pending.update(state="done", completion=run)
+        if capability is not None:
+            capability.completion_only = True
         _write(path, state)
         return {"status": "handed_off", "objective": objective, "owner_handoff": pending}

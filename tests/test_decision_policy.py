@@ -17,6 +17,17 @@ LOCAL = {"kind": "agent", "channel": "agent_session"}
 
 
 class DecisionPolicyTests(unittest.TestCase):
+    def test_preset_strictness_and_automatic_bookkeeping(self):
+        presets = [policy.preset(name) for name in ("careful", "delegate", "hands_off")]
+        for category in policy.CATEGORIES:
+            levels = [policy.DECIDERS.index(value[category]) for value in presets]
+            self.assertEqual(levels, sorted(levels, reverse=True), category)
+        for category in policy.AUTOMATIC:
+            self.assertTrue(all(value[category] == "any_agent" for value in presets))
+            for decider in ("person", "trusted_agents"):
+                with self.subTest(category=category, decider=decider), self.assertRaises(PodError):
+                    policy.preset("custom", {**presets[0], category: decider})
+
     def test_all_presets_and_invariant_person_only(self):
         for name in ("careful", "delegate", "hands_off"):
             with self.subTest(name=name):
@@ -31,7 +42,8 @@ class DecisionPolicyTests(unittest.TestCase):
         for category in ("merge_publish", "scope_changes", "secrets", "coordinator_changes",
                          "speaking_for_person", "production_deployment", "irreversible_deletion"):
             self.assertEqual(policy.required(careful, [category]), "person")
-        for category in ("routine", "continuity", "model_choices"):
+        self.assertEqual(policy.required(careful, ["model_choices"]), "trusted_agents")
+        for category in ("routine", "continuity"):
             self.assertEqual(policy.required(careful, [category]), "any_agent")
 
     def test_custom_complete_map_and_strictest_union(self):

@@ -23,6 +23,7 @@ CATEGORIES = (
 )
 DECIDERS = ("any_agent", "trusted_agents", "person")
 PERSON_ONLY = frozenset({"money", "policy_changes", "human_login"})
+AUTOMATIC = frozenset({"continuity", "routine"})
 SENSITIVE = frozenset({"secrets", "money", "speaking_for_person",
                        "production_deployment", "irreversible_deletion"})
 _KINDS = {
@@ -73,12 +74,15 @@ def preset(name, categories=None):
         default = {"careful": "person", "delegate": "trusted_agents", "hands_off": "any_agent"}[name]
         result = dict.fromkeys(CATEGORIES, default)
         if name == "careful":
-            result.update(dict.fromkeys(("model_choices", "continuity", "routine"), "any_agent"))
+            result["model_choices"] = "trusted_agents"
+        result.update(dict.fromkeys(AUTOMATIC, "any_agent"))
         result.update(dict.fromkeys(PERSON_ONLY, "person"))
     if any(value not in DECIDERS for value in result.values()):
         raise PodError("invalid_decision_policy", "Unknown category decider")
     if any(result[key] != "person" for key in PERSON_ONLY):
         raise PodError("invalid_decision_policy", "Money, policy changes and human login require person")
+    if any(result[key] != "any_agent" for key in AUTOMATIC):
+        raise PodError("invalid_decision_policy", "Continuity and routine bookkeeping stay automatic")
     return result
 
 
@@ -252,6 +256,14 @@ def projection(policy, permissions, pending):
     """
     from .tool_permissions import validate_memory
 
+    def changed_at(row):
+        from .relay import validate_decision_record
+        try:
+            decision = validate_decision_record(row["decision"], kind="tool_permission")
+        except PodError:
+            return None
+        return decision["decided_at"]
+
     current = effective(policy)
     memory = validate_memory(permissions)
     if not isinstance(pending, list) or len(pending) > 8:
@@ -265,7 +277,7 @@ def projection(policy, permissions, pending):
         if identity in seen:
             raise PodError("invalid_pending_decisions", "Duplicate pending identity")
         seen.add(identity)
-        if row.get("state") in ("answered", "consumed", "refused", "cancelled"):
+        if row.get("state") in ("answered", "approved", "consumed", "refused", "cancelled"):
             continue
         if row.get("state") not in ("pending", "waiting"):
             raise PodError("invalid_pending_decisions", "Unknown pending state")
@@ -279,7 +291,8 @@ def projection(policy, permissions, pending):
                 {"text": "Who should decide? Choose Careful, Delegate, Hands-off or Custom.",
                  "choices": ["careful", "delegate", "hands_off", "custom", "skip"], "required": "person"}
                 if setup else None),
-            "permissions": [{key: row[key] for key in ("tool", "category", "mode")} for row in memory],
+            "permissions": [{**{key: row[key] for key in ("tool", "category", "mode")},
+                             "changed_at": changed_at(row)} for row in memory],
             "pending": waits, "waiting_on_person": setup or any(x["waiting_on"] == "person" for x in waits),
             "waiting_on_agent": any(x["waiting_on"] == "agent" for x in waits),
             "every_sensitive_use": "Check current policy and tool permission before every sensitive use."}

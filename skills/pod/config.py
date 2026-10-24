@@ -36,7 +36,8 @@ ROUTE_STATES = ("enabled", "disabled")
 REFRESH_SETTINGS = ("automatic", "manual")
 DEFAULT_WORKER_CAPACITY = 2
 PERSONAL_FIELDS = {"schema", "routes", "preferred", "pinned", "workers", "refresh", "waste_governor",
-                   "authorization_verifier"}
+                   "authorization_verifier", "decision_policy", "decision_generation",
+                   "tool_permissions", "pending_decisions"}
 # The 0.6.x personal shape, read only to explain and convert it.
 V1_IDS = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5",
           "gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
@@ -53,6 +54,7 @@ WASTE_GOVERNOR_FIELDS = {"mode", "cancel_superseded_validation", "preflight", "t
 DEFAULT_GOVERNOR = {"mode": "enforce", "cancel_superseded_validation": True,
                     "preflight": [], "triggers": {}, "transient_retries": 1, "exceptions": []}
 KEEP = object()
+DECISION_FIELDS = ("decision_policy", "tool_permissions", "pending_decisions", "decision_generation")
 
 
 def defaults() -> dict:
@@ -330,6 +332,19 @@ def validate(value: Any, *, project: bool = False) -> dict:
                 or not Path(command[0]).is_absolute()):
             raise PodError("invalid_config", "authorization_verifier needs 1-16 command arguments, "
                            "each at most 4096 characters, with an absolute executable path")
+    from . import policy, tool_permissions
+    from .relay import validate_decision_record
+    if "decision_generation" in doc and (type(doc["decision_generation"]) is not int or doc["decision_generation"] < 0):
+        raise PodError("invalid_config", "decision_generation must be a nonnegative integer")
+    if "decision_policy" in doc:
+        policy.validate(doc["decision_policy"])
+        if "decision" in doc["decision_policy"]:
+            validate_decision_record(doc["decision_policy"]["decision"], kind="policy")
+    if "tool_permissions" in doc:
+        for item in tool_permissions.validate_memory(doc["tool_permissions"]):
+            validate_decision_record(item["decision"], kind="tool_permission")
+    if "pending_decisions" in doc:
+        validate_pending(doc["pending_decisions"])
     return doc
 
 
@@ -437,6 +452,10 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
             "pin_diagnostic": None if document else diagnostic.get("pinned"),
             "preferred_diagnostic": None if document else diagnostic.get("preferred"),
             "authorization_verifier": document.get("authorization_verifier") if document else None,
+            "decision_policy": document.get("decision_policy") if document else None,
+            "tool_permissions": document.get("tool_permissions", []) if document else [],
+            "pending_decisions": document.get("pending_decisions", []) if document else [],
+            "decision_generation": document.get("decision_generation", 0) if document else 0,
             "policy_revision": digest(governor), "waste_governor": governor, "provenance": provenance}
 
 
@@ -553,9 +572,28 @@ def _surgical(raw: bytes, before: dict, after: dict) -> tuple[bytes, bool]:
                                  lambda match: match[1] + str(after["workers"]["max_active"]) + match[2],
                                  changed, count=1)
         ok = ok and count == 1
+    for field in DECISION_FIELDS:
+        if before.get(field) == after.get(field):
+            continue
+        lines = changed.splitlines(keepends=True)
+        starts = [index for index, line in enumerate(lines) if re.match(rf"^{field}:[ \t]*", line)]
+        block = yaml.safe_dump({field: after[field]}, sort_keys=False, allow_unicode=True)
+        if len(starts) == 1:
+            start, end = starts[0], starts[0] + 1
+            while end < len(lines):
+                line = lines[end]
+                if line.startswith("#") or re.match(r"^(?:[A-Za-z_][A-Za-z0-9_-]*|\"[^\"]+\"|'[^']+')[ \t]*:", line):
+                    break
+                end += 1
+            lines[start:end] = [block]
+            changed = "".join(lines)
+        elif not starts:
+            changed += ("" if changed.endswith("\n") else "\n") + block
+        else:
+            ok = False
     encoded = changed.encode("utf-8")
     try:
-        if ok and _parse(encoded) == after:
+        if ok and len(encoded) <= 64 * 1024 and _parse(encoded) == after:
             return encoded, True
     except PodError:
         pass
@@ -668,6 +706,352 @@ def set_pin(path: Path, key: str | None, *, displayed: dict) -> dict:
 
 def set_refresh(path: Path, setting: str, *, displayed: dict) -> dict:
     return edit(path, displayed=displayed, refresh=setting)
+
+
+def decision_state(snapshot: dict) -> dict:
+    """Authority facts only, so unrelated route edits can merge under the lock."""
+    return {key: deepcopy(snapshot[key]) for key in DECISION_FIELDS}
+
+
+def prepare_decision_document(snapshot: dict, changes: dict, capability=None) -> tuple[dict, bytes, bool]:
+    """Caller holds the short config lock; return the complete validated replacement."""
+    raw = _read_bytes(Path(snapshot["path"]))
+    document = _parse(raw) if raw is not None else {
+        "schema": SCHEMA, "routes": {}, "workers": {"max_active": DEFAULT_WORKER_CAPACITY}}
+    updated = {**document, **deepcopy(changes), "decision_generation": snapshot["decision_generation"] + 1}
+    if capability is not None:
+        capability.finalize(updated)
+    _shape(updated)
+    validate(updated)
+    _encode(updated)
+    encoded, preserved = _surgical(raw, document, updated) if raw is not None else (_encode(updated), True)
+    return updated, encoded, preserved
+
+
+def document_decision_state(document: dict) -> dict:
+    return {key: deepcopy(document.get(key, None if key == "decision_policy" else 0 if key == "decision_generation" else []))
+            for key in DECISION_FIELDS}
+
+
+def tool_question_text(result: dict, tool: str, category: str, operation: str) -> str:
+    from .term import clean
+    category = category.replace("_", " ")
+    text = (f"May {tool} use {category} to {operation}?" if result["purpose"] == "operation" else
+            result["text"].replace(result["category"], category))
+    return clean(text)
+
+
+def validate_pending(value: object) -> list[dict]:
+    from . import policy, tool_permissions
+    from .relay import validate_decision_record
+    from .util import bounded_text, encoded
+    if not isinstance(value, list) or len(value) > 8:
+        raise PodError("invalid_pending_decisions", "At most eight unresolved machine questions are retained")
+    seen = set()
+    for item in value:
+        names = {"id", "purpose", "tool", "category", "categories", "operation", "spending", "revisions",
+                 "state", "text", "choices", "decision", "answer", "principal"}
+        row = exact(item, names, names - {"decision", "answer", "principal"}, name="pending decision")
+        bounded_text(row["id"], name="pending_id", limit=128)
+        if row["id"] in seen or row["purpose"] not in ("memory", "operation"):
+            raise PodError("invalid_pending_decisions", "Pending identity or purpose is invalid")
+        seen.add(row["id"])
+        tool_permissions._tool(row["tool"])
+        tool_permissions._category(row["category"])
+        bounded_text(row["operation"], name="tool_operation", limit=256)
+        bounded_text(row["text"], name="question", limit=512)
+        expected = policy.categories("tool_operation", {"category": row["category"], "spending": row["spending"]})
+        if row["categories"] != expected or row["state"] not in ("pending", "approved", "refused", "consumed", "answered", "cancelled"):
+            raise PodError("invalid_pending_decisions", "Pending categories or state are invalid")
+        choices = (["ask_each_time"] if row["category"] == "money" else list(tool_permissions.MODES)) if row["purpose"] == "memory" else ["approve", "refuse"]
+        if row["choices"] != choices:
+            raise PodError("invalid_pending_decisions", "Pending choices disagree with its purpose")
+        revisions = tool_permissions._revisions(row["revisions"])
+        if revisions["invocation"] != row["id"]:
+            raise PodError("invalid_pending_decisions", "Pending invocation is inconsistent")
+        if row["state"] not in ("pending", "cancelled"):
+            if row.get("answer") not in choices:
+                raise PodError("invalid_pending_decisions", "Answered question needs an exact choice")
+            approval = validate_decision_record(row.get("decision", {}), kind="tool_permission" if row["purpose"] == "memory" else "tool_operation")
+            if ("principal" in row and row["principal"] != approval["actor"]
+                    or "principal" not in row and "decision_binding" in row["decision"]):
+                raise PodError("invalid_pending_decisions", "Pending actor is inconsistent")
+        elif {"decision", "answer", "principal"} & set(row):
+            raise PodError("invalid_pending_decisions", "Pending question carries no approval")
+        if len(encoded(row, compact=True)) > 2048:
+            raise PodError("pending_decision_too_large", "Question exceeds 2048 bytes; shorten the operation or decision evidence")
+    return deepcopy(value)
+
+
+def _decision_prior(snapshot: dict) -> list[dict]:
+    rows = []
+    current = snapshot["decision_policy"]
+    if current is not None and "decision" in current:
+        rows.append({"keys": ["policy"], "decided_at": current["decision"].get("decided_at")})
+    for row in snapshot["tool_permissions"]:
+        rows.append({"keys": ["memory:" + digest([row["tool"], row["category"]])],
+                     "decided_at": row["decision"].get("decided_at")})
+    for row in snapshot["pending_decisions"]:
+        if "decision" in row:
+            rows.append({"keys": ["invocation:" + row["id"]], "decided_at": row["decision"].get("decided_at")})
+    return rows
+
+
+def decision_edit(project: Path | None, *, displayed: dict, changes: dict, capability=None,
+                  keys: list[str] = ()) -> dict:
+    """Commit only decision fields with generation CAS, preflight, then receipt.
+
+    This is the existing personal writer and receipt home, with config -> receipt
+    locking for machine-only work. No verifier or native lookup runs in this lock.
+    """
+    if not changes or set(changes) - (set(DECISION_FIELDS) - {"decision_generation"}):
+        raise PodError("invalid_config_edit", "Decision edit names supported personal decision fields")
+    from . import policy
+    path = personal_path(project)
+    with _edit_lock(path):
+        raw = _read_bytes(path)
+        document = _parse(raw) if raw is not None else {
+            "schema": SCHEMA, "routes": {}, "workers": {"max_active": DEFAULT_WORKER_CAPACITY}}
+        current = load(project)
+        if decision_state(current) != decision_state(displayed):
+            raise PodError("decision_stale", "Policy, permission memory or pending decisions changed; read again")
+        updated, encoded, preserved = prepare_decision_document(current, changes, capability)
+        after = document_decision_state(updated)
+        if capability is not None:
+            from .relay import Decision
+            if not isinstance(capability, Decision):
+                raise PodError("decision_capability_required", "The mutation needs its exact decision capability")
+            capability.consume(current_state=decision_state(current), snapshot=current, result=after,
+                               keys=keys, prior=_decision_prior(current))
+        elif (set(changes) != {"pending_decisions"}
+              and not (set(changes) == {"decision_policy"} and current["decision_policy"] is None
+                       and changes["decision_policy"] == {"preset": "careful", "categories": policy.preset("careful"), "setup": "skipped"})):
+            raise PodError("decision_capability_required", "An answered decision requires current authority")
+        elif set(changes) == {"pending_decisions"}:
+            # Unapproved question creation/pruning carries no approval or permission.
+            old = {row["id"]: row for row in current["pending_decisions"]}
+            if any(row.get("state") != "pending" and row != old.get(row["id"])
+                   and not (row.get("state") == "cancelled" and old.get(row["id"], {}).get("state") == "pending"
+                            and {key: value for key, value in row.items() if key != "state"}
+                                == {key: value for key, value in old[row["id"]].items() if key != "state"})
+                   for row in changes["pending_decisions"]):
+                raise PodError("decision_capability_required", "An answered question requires current authority")
+        _replace(path, encoded)
+    saved = load(project)
+    saved["notice"] = "" if preserved else "comments not preserved"
+    return saved
+
+
+def decision_context(snapshot: dict) -> dict:
+    from .policy import projection
+    view = projection(snapshot["decision_policy"], snapshot["tool_permissions"], snapshot["pending_decisions"])
+    return {"policy": {key: view[key] for key in ("preset", "categories", "setup")},
+            "permissions": view["permissions"], "decision_generation": snapshot["decision_generation"],
+            "every_sensitive_use": view["every_sensitive_use"]}
+
+
+def set_decision_policy(project: Path | None, name: str, *, decision: dict | None = None,
+                        categories: dict | None = None, displayed: dict | None = None) -> dict:
+    from . import policy
+    from .relay import Decision
+    snapshot = displayed or load(project)
+    if decision is not None:
+        exact(decision, {"provenance", "instruction", "channel", "relay"}, {"provenance", "instruction"}, name="decision input")
+    if name == "skip":
+        if snapshot["decision_policy"] is not None or decision is not None or categories is not None:
+            raise PodError("policy_skip_refused", "Skip only the first unanswered setup; it keeps Careful")
+        value = {"preset": "careful", "categories": policy.preset("careful"), "setup": "skipped"}
+        capability = None
+    else:
+        value = {"preset": name, "categories": policy.preset(name, categories), "setup": "answered"}
+        current = snapshot["decision_policy"]
+        if current is not None and {key: item for key, item in current.items() if key != "decision"} == value:
+            from .relay import same_decision_input
+            if "decision" in current and same_decision_input(decision, current["decision"]):
+                return {"status": "replayed", "committed": True, "decision_generation": snapshot["decision_generation"],
+                        **decision_context(snapshot)}
+        capability = Decision(project, None, kind="policy", effect={"previous": snapshot["decision_policy"], "proposed": value},
+                              state=decision_state(snapshot), decision=decision, resources={"policy": "personal"}, snapshot=snapshot)
+        value["decision"] = capability.record
+    saved = decision_edit(project, displayed=snapshot, changes={"decision_policy": value}, capability=capability, keys=["policy"])
+    return {"status": "saved", "decision_generation": saved["decision_generation"], **decision_context(saved),
+            **({"notice": saved["notice"]} if saved.get("notice") else {})}
+
+
+def tool_check(project: Path | None, tool: str, category: str, operation: str, *, spending=None,
+               invocation: str | None = None) -> dict:
+    """Check at every sensitive use; this helper executes no external tool."""
+    from uuid import uuid4
+    from . import tool_permissions
+    snapshot = load(project)
+    pending = next((row for row in snapshot["pending_decisions"] if row["id"] == invocation), None)
+    if invocation is not None and pending is None:
+        raise PodError("tool_invocation_unavailable", "The pending invocation is unavailable; an old answer grants nothing")
+    if invocation is None:
+        pending = next((row for row in snapshot["pending_decisions"] if row["state"] == "pending"
+                        and (row["tool"], row["category"], row["operation"], row["spending"]) == (tool, category, operation, spending)), None)
+        if pending is not None:
+            invocation = pending["id"]
+    if pending is not None and (pending["tool"], pending["category"], pending["operation"], pending["spending"]) != (tool, category, operation, spending):
+        raise PodError("tool_invocation_mismatch", "Invocation binds another exact operation")
+    if pending is not None and pending["state"] == "consumed":
+        return {"status": "consumed", "execute": False, "invocation": invocation}
+    if pending is not None and pending["purpose"] == "memory" and pending["state"] == "answered":
+        invocation, pending = None, None
+    refreshed = None
+    if pending is not None and pending["state"] == "pending" and pending["revisions"] != {
+            "policy": digest(snapshot["decision_policy"]), "memory": digest(snapshot["tool_permissions"]),
+            "decision_generation": snapshot["decision_generation"], "invocation": invocation}:
+        refreshed = pending["id"]
+        invocation, pending = None, None
+    revisions = {"policy": digest(snapshot["decision_policy"]), "memory": digest(snapshot["tool_permissions"]),
+                 "decision_generation": snapshot["decision_generation"], "invocation": invocation or uuid4().hex}
+    evaluated = None
+    if pending is not None and pending["purpose"] == "operation":
+        if pending["state"] == "approved":
+            if pending["revisions"] != revisions:
+                raise PodError("decision_stale", "Policy or permission state changed after operation approval")
+            from .relay import validate_decision_record
+            evaluated = {key: pending[key] for key in ("id", "purpose", "tool", "category", "operation", "spending", "revisions", "state")}
+            evaluated["principal"] = validate_decision_record(pending["decision"])["actor"]
+    result = tool_permissions.check(snapshot["decision_policy"], snapshot["tool_permissions"], tool, category,
+                                    operation, spending=spending, pending=evaluated, revisions=revisions)
+    if "text" in result:
+        result = {**result, "text": tool_question_text(result, tool, category, operation)}
+    if pending is not None and pending["state"] in ("refused", "cancelled"):
+        return {"status": "refused", "execute": False, "invocation": invocation}
+    if result["status"] == "allowed":
+        if result.get("consume_required"):
+            # Approval is already committed. The use has a separate durable receipt,
+            # and its recorded post-answer generation is rechecked under the lock.
+            return _consume_tool(project, snapshot, pending, result)
+        with _edit_lock(personal_path(project)):
+            if decision_state(snapshot) != decision_state(load(project)):
+                raise PodError("decision_stale", "Policy or permission changed before the sensitive-use response")
+            return {**result, "execute": True}
+    if pending is not None and pending["state"] == "pending":
+        return {**result, "execute": False, "invocation": pending["id"], "question": pending["text"]}
+    # Finished memory choices do not implicitly approve this use: create its exact
+    # operation question only after memory has been committed independently.
+    # This personal pending mutation advances generation, invalidating every
+    # earlier operation approval. Retain its non-evicting receipt, not a dead slot.
+    rows = [row for row in snapshot["pending_decisions"]
+            if row["id"] != refreshed and row["state"] == "pending"]
+    if len(rows) >= 8:
+        raise PodError("pending_decision_limit", "Resolve an existing machine question before creating another")
+    revisions["decision_generation"] += 1
+    row = {"id": revisions["invocation"], "purpose": result["purpose"], "tool": tool, "category": category,
+           "categories": result["categories"], "operation": operation, "spending": spending,
+           "revisions": revisions, "state": "pending", "text": result["text"], "choices": result["choices"]}
+    decision_edit(project, displayed=snapshot, changes={"pending_decisions": rows + [row]})
+    return {**result, "execute": False, "invocation": row["id"], "question": row["text"]}
+
+
+def tool_review(project: Path | None, tool: str, category: str) -> dict:
+    """Ask to change memory only; this never approves an operation."""
+    from uuid import uuid4
+    from . import policy, tool_permissions
+    tool, category = tool_permissions._tool(tool), tool_permissions._category(category)
+    if category == "money":
+        raise PodError("tool_review_money", "Money has no hands-off permission; check and approve each new spending commitment")
+    snapshot = load(project)
+    identity = uuid4().hex
+    rows = [row for row in snapshot["pending_decisions"] if row["state"] == "pending"
+            and not (row["purpose"] == "memory" and (row["tool"], row["category"]) == (tool, category))]
+    if len(rows) >= 8:
+        raise PodError("pending_decision_limit", "Resolve an existing machine question before reviewing another")
+    entry = next((row for row in snapshot["tool_permissions"] if (row["tool"], row["category"]) == (tool, category)), None)
+    row = {"id": identity, "purpose": "memory", "tool": tool, "category": category, "categories": [category],
+           "operation": "Review remembered tool permission", "spending": None,
+           "revisions": {"policy": digest(snapshot["decision_policy"]), "memory": digest(snapshot["tool_permissions"]),
+                         "decision_generation": snapshot["decision_generation"] + 1, "invocation": identity},
+           "state": "pending", "choices": list(tool_permissions.MODES),
+           "text": f"For {tool} and {category.replace('_', ' ')}, choose hands-off or ask each time" + (
+               f" (currently {entry['mode'].replace('_', ' ')})." if entry else ".")}
+    decision_edit(project, displayed=snapshot, changes={"pending_decisions": rows + [row]})
+    return {"status": "permission_question", "execute": False, "purpose": "memory", "invocation": identity,
+            "question": row["text"], "choices": row["choices"], "required": policy.required(snapshot["decision_policy"], [category])}
+
+
+def tool_cancel(project: Path | None, invocation: str) -> dict:
+    snapshot = load(project)
+    rows = deepcopy(snapshot["pending_decisions"])
+    row = next((item for item in rows if item["id"] == invocation), None)
+    if row is None or row["state"] != "pending":
+        raise PodError("tool_cancel_refused", "Cancel only an unanswered question")
+    row["state"] = "cancelled"
+    decision_edit(project, displayed=snapshot, changes={"pending_decisions": rows})
+    return {"status": "cancelled", "execute": False, "invocation": invocation}
+
+
+def tool_answer(project: Path | None, invocation: str, answer: str, *, decision: dict,
+                displayed: dict | None = None) -> dict:
+    from . import tool_permissions
+    from .relay import Decision, compact_tool_decision
+    exact(decision, {"provenance", "instruction", "channel", "relay"}, {"provenance", "instruction"}, name="decision input")
+    snapshot = displayed or load(project)
+    rows = deepcopy(snapshot["pending_decisions"])
+    row = next((item for item in rows if item["id"] == invocation), None)
+    if row is not None and row["state"] != "pending" and row.get("answer") == answer:
+        from .relay import same_decision_input
+        if same_decision_input(decision, row["decision"]):
+            return {"status": row["state"], "execute": False, "invocation": invocation, "committed": True,
+                    "readback": True, "decision_generation": snapshot["decision_generation"]}
+    if row is None or row["state"] != "pending" or answer not in row["choices"]:
+        raise PodError("tool_answer_refused", "Answer a current unresolved question with one offered choice")
+    expected = {"policy": digest(snapshot["decision_policy"]), "memory": digest(snapshot["tool_permissions"]),
+                "decision_generation": snapshot["decision_generation"], "invocation": invocation}
+    if row["revisions"] != expected:
+        raise PodError("decision_stale", "Policy or memory changed; check the operation again before answering")
+    kind = "tool_permission" if row["purpose"] == "memory" else "tool_operation"
+    effect = {"category": row["category"], "spending": row["spending"], "question": row, "answer": answer}
+    capability = Decision(project, None, kind=kind, effect=effect, state=decision_state(snapshot), decision=decision,
+                          resources={"tool": row["tool"], "category": row["category"], "invocation": invocation}, snapshot=snapshot)
+    row.update(answer=answer, decision=compact_tool_decision(capability.record),
+               state="answered" if row["purpose"] == "memory" else "approved" if answer == "approve" else "refused")
+    if capability.verdict is None:
+        row["principal"] = capability.actor
+    changes = {"pending_decisions": rows}
+    key = "invocation:" + invocation
+    if row["purpose"] == "memory":
+        changes["tool_permissions"] = tool_permissions.remember(snapshot["tool_permissions"], row["tool"], row["category"], answer, capability.record)
+        key = "memory:" + digest([row["tool"], row["category"]])
+    row["revisions"]["decision_generation"] += 1
+    saved = decision_edit(project, displayed=snapshot, changes=changes, capability=capability, keys=[key])
+    return {"status": row["state"], "execute": False, "invocation": invocation,
+            "decision_generation": saved["decision_generation"], **({"notice": saved["notice"]} if saved.get("notice") else {})}
+
+
+def _consume_tool(project: Path | None, snapshot: dict, pending: dict, result: dict) -> dict:
+    from .ledger import _lock, state_root
+    from .util import atomic_json, bounded_json
+    path = personal_path(project)
+    receipt = state_root(None) / ".relay-authorizations" / (digest("pod-tool-use:" + pending["id"]) + ".json")
+    with _edit_lock(path):
+        current = load(project)
+        if decision_state(snapshot) != decision_state(current):
+            raise PodError("decision_stale", "Policy or memory changed before operation consumption")
+        raw = _read_bytes(path)
+        document = _parse(raw)
+        updated = deepcopy(document)
+        row = next(item for item in updated["pending_decisions"] if item["id"] == pending["id"])
+        row["state"] = "consumed"
+        updated["decision_generation"] += 1
+        _shape(updated)
+        validate(updated)
+        encoded = _encode(updated)
+        use = {"schema": "pod-relay-use/v1", "authorization": digest(pending),
+               "transition": digest({"before": decision_state(snapshot), "invocation": pending["id"]})}
+        with _lock(receipt):
+            recovered = receipt.exists() or receipt.is_symlink()
+            if recovered and bounded_json(receipt, limit=1024) != use:
+                raise PodError("tool_invocation_reused", "Invocation already consumed with another binding")
+            if not recovered:
+                atomic_json(receipt, use, limit=1024)
+            _replace(path, encoded)
+        # A crash after the use receipt cannot produce a fresh execute response.
+        return {**result, "status": "consumed" if recovered else "allowed", "execute": not recovered,
+                "invocation": pending["id"]}
 
 
 def setup_preview(raw: bytes) -> dict:
