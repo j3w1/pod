@@ -34,7 +34,7 @@ class PublicDecisionPrivacyTests(unittest.TestCase):
         cls.addClassCleanup(case.doCleanups)
         case.setUp()
         case.intake()
-        config.set_decision_policy(case.project, "delegate", decision=PERSON)
+        config.set_decision_policy(case.project, "delegate", decision={**PERSON, "instruction": INSTRUCTION + "policy"})
         case.controls = case.root / "privacy-controls.json"
         case.controls.write_text("{}")
         case.verifier = case.root / "privacy-verifier.py"
@@ -124,6 +124,42 @@ class PublicDecisionPrivacyTests(unittest.TestCase):
         requested = next(row for row in result["constraints"] if row["kind"] == "route_rule")
         self.assertEqual(requested["value"], rule()["value"])
         self.assertEqual(result["tool_permissions"][0]["mode"], "ask_each_time")
+        self.assertEqual(result["standing_authorization"]["decision"]["actor"], "agent")
+
+    def test_config_json_omits_private_policy_and_permission_decisions(self):
+        output = self.command("config", "--json")
+        self.assert_private_absent(output)
+        result = json.loads(output)
+        self.assertEqual(result["decision_policy"]["preset"], "delegate")
+        self.assertEqual({row["tool"] for row in result["tool_permissions"]}, {"fixture-tool", "fixture-memory"})
+
+    def test_config_text_preserves_preference_summary(self):
+        output = self.command("config")
+        self.assert_private_absent(output)
+        self.assertIn("enabled routes", output)
+
+    def test_policy_json_omits_its_original_private_instruction(self):
+        output = self.command("policy", "--json")
+        self.assert_private_absent(output)
+        self.assertEqual(json.loads(output)["decision_policy"]["preset"], "delegate")
+
+    def test_policy_text_keeps_decider_meaning(self):
+        output = self.command("policy")
+        self.assert_private_absent(output)
+        self.assertIn("Decision policy: Delegate", output)
+        self.assertIn("trusted agents", output)
+
+    def test_models_json_keeps_private_preference_decisions_out_of_routes(self):
+        output = self.command("models", "--json")
+        self.assert_private_absent(output)
+        self.assertTrue(json.loads(output)["routes"])
+
+    def test_doctor_json_does_not_expand_private_decision_state(self):
+        output = self.command("doctor", "--json")
+        self.assert_private_absent(output)
+        result = json.loads(output)
+        self.assertEqual(result["native_probe"], "not_run")
+        self.assertIn("preferences", result)
 
     def test_objective_text_keeps_meaningful_decision_channels(self):
         output = self.command("status", "--objective", "objective")
@@ -240,8 +276,171 @@ class RetiredDecisionPrivacyTests(unittest.TestCase):
         self.assertIn("objective", output)
         self.assertIn("retired", output)
 
+    def test_retired_objective_json_sanitizes_status_and_report_inventories(self):
+        output = self.command("status", "--objective", "objective", "--json")
+        self.assert_private_absent(output)
+        result = json.loads(output)
+        self.assertEqual(result["retirement"]["actor"], {"kind": "agent", "channel": "relayed"})
+        decision = next(row["decision"] for row in result["owner_decisions"] if row["kind"] == "retirement")
+        self.assertEqual(decision["channel"], "relayed")
+
+    def test_retired_objective_text_reports_truthful_decision_channel(self):
+        output = self.command("status", "--objective", "objective")
+        self.assert_private_absent(output)
+        self.assertIn("Historical retirement", output)
+        self.assertIn("Decision retirement: relayed", output)
+
+    def test_retirement_private_read_and_authorizer_still_use_complete_evidence(self):
+        state = ledger.read(self.case.project, "objective")
+        proof = state["historical_retirement"]
+        validated = relay.validate_decision_record(proof)
+        self.assertEqual(validated["instruction"], INSTRUCTION)
+        self.assertEqual(validated["actor"]["identity"], PRINCIPAL)
+        self.assertIn(SCOPE, validated["actor"]["scope"]["kinds"])
+        with patch.object(relay, "verify_decision", wraps=relay.verify_decision) as verifier:
+            relay.Decision._recorded(self.case.project, "objective", proof).revalidate_authorizer()
+        self.assertEqual(verifier.call_args.args[1]["reference"], REFERENCE)
+
+
+class ClaimedDecisionPrivacyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_verified_lifecycle import VerifiedClaimTests
+        case = cls.case = VerifiedClaimTests()
+        cls.addClassCleanup(case.doCleanups)
+        case.setUp()
+        case.choose_policy()
+        case.configure_verifier()
+        authority = case.request({**RELAY, "instruction": INSTRUCTION,
+                                  "relay": {"reference": REFERENCE, "verification": "decision"}})
+        fixed = save_vouch(case, lambda: case.apply_decision(authority))
+        fixed["principal"]["identity"] = PRINCIPAL
+        fixed["principal"]["scope"]["kinds"] = [*fixed["principal"]["scope"]["kinds"], SCOPE]
+        fixed["single_use"] = USE_KEY
+        case.controls.write_text(json.dumps({"saved_verdict": fixed}))
+        case.assert_accepted(case.apply_decision(authority))
+        cls.before = case.durable()
+        cls.config_before = config.personal_path().read_bytes()
+
+    command = PublicDecisionPrivacyTests.command
+    assert_private_absent = PublicDecisionPrivacyTests.assert_private_absent
+    tearDown = RetiredDecisionPrivacyTests.tearDown
+
+    def test_claimed_predecessor_json_keeps_safe_class_and_channel(self):
+        output = self.command("status", "--objective", "objective", "--json")
+        self.assert_private_absent(output)
+        result = json.loads(output)
+        self.assertEqual(result["succession"]["continued_by"], "successor")
+        self.assertEqual(result["succession"]["actor"], {"kind": "agent", "channel": "relayed"})
+        decision = next(row["decision"] for row in result["owner_decisions"] if row["kind"] == "claim")
+        self.assertEqual(decision["channel"], "relayed")
+
+    def test_claimed_predecessor_text_keeps_claim_meaning(self):
+        output = self.command("status", "--objective", "objective")
+        self.assert_private_absent(output)
+        self.assertIn("successor", output)
+        self.assertIn("Decision claim: relayed", output)
+
+    def test_claimed_list_json_keeps_both_objectives_without_private_proof(self):
+        output = self.command("status", "--list", "--json")
+        self.assert_private_absent(output)
+        rows = {row["objective"]: row for row in json.loads(output)["objectives"]}
+        self.assertEqual(rows["objective"]["phase"], "continued")
+        self.assertEqual(rows["objective"]["continued_by"], "successor")
+        self.assertEqual(rows["successor"]["continues"], "objective")
+
+    def test_claimed_list_text_keeps_continuation_meaning(self):
+        output = self.command("status", "--list")
+        self.assert_private_absent(output)
+        self.assertIn("objective | continued -> successor", output)
+
+    def test_claim_private_record_and_authorizer_keep_original_scope(self):
+        state = ledger.read(self.case.project, "objective")
+        proof = state["continued_by"]
+        validated = relay.validate_decision_record(proof)
+        self.assertEqual(validated["instruction"], INSTRUCTION)
+        self.assertEqual(validated["actor"]["identity"], PRINCIPAL)
+        self.assertIn(SCOPE, validated["actor"]["scope"]["kinds"])
+        with patch.object(relay, "verify_decision", wraps=relay.verify_decision) as verifier:
+            relay.Decision._recorded(self.case.project, "successor", proof).revalidate_authorizer()
+        self.assertEqual(verifier.call_args.args[1]["reference"], REFERENCE)
+
+
+class GovernorDecisionPrivacyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_verified_decisions import VerifiedGovernorTests
+        host = cls.governor = VerifiedGovernorTests()
+        cls.addClassCleanup(host.doCleanups)
+        host.setUp()
+        cls.case = host.case
+        value = host.generic_request()
+        value["authorization"].update(instruction=INSTRUCTION, relay={"reference": REFERENCE, "verification": "decision"})
+        operation = lambda: host.case.op("governor", action=value)
+        fixed = save_vouch(host, operation)
+        fixed["principal"]["identity"] = PRINCIPAL
+        fixed["principal"]["scope"]["kinds"] = [*fixed["principal"]["scope"]["kinds"], SCOPE]
+        fixed["single_use"] = USE_KEY
+        host.controls.write_text(json.dumps({"saved_verdict": fixed}))
+        host.assertEqual(operation()["decision"], "ALLOW")
+        cls.before = cls.private_bytes()
+
+    @classmethod
+    def private_bytes(cls):
+        return {str(path): path.read_bytes() for path in (
+            config.personal_path(), *ledger.state_root(cls.case.project).rglob("*.json"))}
+
+    def tearDown(self):
+        self.assertEqual(self.private_bytes(), self.before)
+
+    assert_private_absent = PublicDecisionPrivacyTests.assert_private_absent
+
+    def command(self, *arguments):
+        from pod.operations import OrcaPort
+        with patch.object(cli, "current_run", return_value={"run": {"id": "run"}, "runtime": "runtime"}), \
+             patch.object(cli, "worker_rows", return_value={"workers": [], "scope": {"run": "run"}, "complete": True}), \
+             patch.object(OrcaPort, "read_native", autospec=True,
+                          side_effect=lambda _port, owner, **fields: self.case.port.read_native(owner, **fields)):
+            return PublicDecisionPrivacyTests.command(self, *arguments)
+
+    def test_governor_authorization_json_sanitizes_both_public_inventories(self):
+        output = self.command("status", "--objective", "objective", "--json")
+        self.assert_private_absent(output)
+        result = json.loads(output)
+        for inventory in (result["owner_decisions"], result["report"]["owner_decisions"]):
+            decision = next(row["decision"] for row in inventory if row["kind"] == "authorization")
+            self.assertEqual(decision["actor"], {"kind": "agent", "channel": "relayed"})
+            self.assertEqual(decision["channel"], "relayed")
+
+    def test_governor_authorization_text_keeps_truthful_channel(self):
+        output = self.command("status", "--objective", "objective")
+        self.assert_private_absent(output)
+        self.assertIn("Decision authorization: relayed", output)
+
+    def test_private_journal_authorizer_still_validates_full_proof(self):
+        proof = self.governor.journal()["actions"][-1]["action"]["authorization"]
+        validated = relay.validate_decision_record(proof)
+        self.assertEqual(validated["instruction"], INSTRUCTION)
+        self.assertEqual(validated["actor"]["identity"], PRINCIPAL)
+        self.assertIn(SCOPE, validated["actor"]["scope"]["kinds"])
+        with patch.object(relay, "verify_decision", wraps=relay.verify_decision) as verifier:
+            relay.Decision._recorded(self.case.project, "objective", proof).revalidate_authorizer()
+        self.assertEqual(verifier.call_args.args[1]["reference"], REFERENCE)
+
 
 class PublicDecisionProjectionTests(unittest.TestCase):
+    def test_safe_scalar_actor_summary_remains_unchanged_and_idempotent(self):
+        for actor, channel in (("person", "session"), ("person", "relayed"),
+                               ("agent", "agent_session"), ("agent", "relayed")):
+            with self.subTest(actor=actor, channel=channel):
+                value = {"actor": actor, "channel": channel, "decided_at": "2026-10-01T00:00:00Z",
+                         "scope": ["publish"], "id": "Y1"}
+                before = deepcopy(value)
+                observed = public_status(value)
+                self.assertEqual(observed, before)
+                self.assertEqual(public_status(observed), observed)
+                self.assertEqual(value, before)
+
     def test_new_local_actor_and_legacy_channels_stay_distinct(self):
         earlier = {"provenance": "user_direct", "instruction": "earlier recorded words", "channel": "relayed",
                   "relay": {"reference": "old metadata", "owner_source": "old source"},

@@ -104,7 +104,8 @@ def public_decisions(value: Any, *, rule: bool = False) -> Any:
     if not isinstance(value, dict):
         return value
     rule = rule or value.get("kind") == "route_rule"
-    authority = bool({"actor", "decision_binding", "decision_verification"} & value.keys())
+    authority = (isinstance(value.get("actor"), dict)
+                 or bool({"decision_binding", "decision_verification"} & value.keys()))
     private = ((DECISION_FIELDS - {"provenance", "channel"}) | {"decision_effect"}) if authority else set()
     if authority or rule:
         private = private | {"request", "instruction"}
