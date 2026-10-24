@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .errors import PodError
 from .orca import DISPLAY_WORKTREE_LIMIT, _passable, display_worktree_argv
-from .readiness import STATES
+from .readiness import STATES, decision_view
 
 TITLE_LIMIT = 96
 WORDS = {"implementer": "Implementer", "fixer": "Fixer", "investigator": "Investigator",
@@ -286,6 +286,11 @@ def coordinator_title(state: dict, terminal: dict | None, worktree: dict | None)
         value = "Coordinator · " + name
     if state.get("continues") or "coordinator" in (((state.get("checkpoint") or {}).get("display") or {}).get("continued", [])):
         value += " (continued)"
+    if not (((state.get("checkpoint") or {}).get("display") or {}).get("host_tab", False)):
+        decisions = decision_view(state.get("decision_input"), state.get("checkpoint"), objective=True)
+        if decisions["needs_you"] is True:
+            mark = " · needs you"
+            value = _cut(value, TITLE_LIMIT - len(mark)) + mark
     return value
 
 
@@ -389,6 +394,7 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
                version_read: dict | None) -> dict:
     """Compare only complete supplied backend readbacks; desktop truth needs a screenshot."""
     terminals = _inventory(terminals_read, "terminals")
+    decisions = decision_view(state.get("decision_input"), state.get("checkpoint"), objective=True)
     worktrees = _inventory(worktrees_read, "worktrees")
     by_path = {row.get("path"): row for row in worktrees or []}
     by_id = {row.get("id"): row.get("path") for row in worktrees or []}
@@ -466,9 +472,15 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         and coordinator.get("connected") is True and isinstance(coordinator.get("worktreePath"), str) else None,
         rename(title, state.get("owner")) if title else None, repeat_terminal,
         reason="record display.task" if not title else None,
-        session=session_rename(title, state.get("owner") if coordinator else None,
+        session={"session_rename": None, "session_reason": "host names win"} if host_tab else
+        session_rename(title, state.get("owner") if coordinator else None,
                                (coordinator or {}).get("agentIdentity"), coordinator=True) if title else
         {"session_rename": None, "session_reason": "record display.task"})
+    rows[-1].update(needs_you=decisions["needs_you"],
+                    decision_limitation=("Host owns this tab title; needs you is exposed through this display link."
+                                         if host_tab and decisions["needs_you"] is True else
+                                         "Decision wait facts are unavailable or incomplete."
+                                         if decisions["needs_you"] is None else None))
 
     named, hosted = {}, {}
     for row in ordered(state):
@@ -528,5 +540,5 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
                             "guard": "the host sends it once, only after the exact terminal is tui-idle"})
     if parsed is None:
         actions.append({"command": ["orca", "--version"]})
-    return {"rows": rows, "orca": {"version": version, "limitation": limitation},
+    return {**decisions, "rows": rows, "orca": {"version": version, "limitation": limitation},
             "desktop": "NOT_VERIFIED", "verdict": verdict, "next_action": actions}
