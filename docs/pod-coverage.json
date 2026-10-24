@@ -7326,7 +7326,7 @@
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_all_allowed_outcomes_and_both_dispositions_move_at_trigger_exactly",
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_unaccounted_current_and_unsettled_results_stay_inline",
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_active_failures_and_unknown_or_mismatched_routes_stay_inline",
-        "tests.test_history_outcomes.ImplementationOutcomeTests.test_review_and_investigation_still_require_success",
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_investigation_requires_success_and_settled_reviews_move",
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_native_governor_and_ambiguous_joins_preserve_vetoes",
         "tests.test_route_settlements.MatchingReportTests.test_settlement_preserves_history_movement_guards"
       ],
@@ -8395,6 +8395,58 @@
         "tests.test_route_settlements.ExplicitSettlementTests.test_null_settlements_are_not_a_list",
         "tests.test_route_settlements.ReviewDiscardTests.test_review_requires_corrections_list_and_cannot_accept_or_discard_live_work",
         "tests.test_route_settlements.ExplicitSettlementTests.test_a_refused_multi_settlement_write_settles_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A549",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_reviews.ReviewEligibilityTests.test_settled_reviews_of_every_outcome_move_at_trigger_exactly",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_current_and_unresolved_reviews_stay_inline",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_unsettled_reviews_stay_inline",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_unreadable_lineage_keeps_every_unsuccessful_review_inline",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_a_later_unresolved_finding_returns_a_moved_review_inline",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_user_withdrawn_corrections_count_as_resolved",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_succeeded_reviews_keep_the_served_receipt_rule",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_native_governor_and_ambiguous_joins_preserve_vetoes",
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_investigation_requires_success_and_settled_reviews_move",
+        "tests.test_history_reviews.RenewedAssuranceTests.test_owner_withdrawal_after_renewal_releases_the_frozen_review",
+        "tests.test_history_reviews.RenewedAssuranceTests.test_a_coordinator_held_correction_still_pins_the_frozen_review"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A550",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_reviews.ReconciliationEligibilityTests.test_settled_reconciliation_reports_move_for_every_outcome",
+        "tests.test_history_reviews.ReconciliationEligibilityTests.test_unsettled_or_current_reconciliation_reports_stay_inline",
+        "tests.test_history_reviews.ReconciliationEligibilityTests.test_adopted_proposals_leave_a_reconciled_investigation_movable",
+        "tests.test_history_reviews.ReconciliationEligibilityTests.test_validated_unsuccessful_investigations_still_stay_inline"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A551",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_reviews.LiveShapeTests.test_genuine_prechange_writer_refuses_the_pending_report_without_writing",
+        "tests.test_history_reviews.LiveShapeTests.test_pending_current_report_records_once_settled_reviews_move",
+        "tests.test_history_reviews.LiveShapeTests.test_closure_replay_and_status_are_identical_after_compaction",
+        "tests.test_history_reviews.LiveShapeTests.test_compaction_reports_the_bytes_it_reclaims"
       ],
       "status": "NOT_RUN"
     }

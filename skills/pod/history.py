@@ -65,10 +65,47 @@ def _review_consumed(state, key, row):
                for ob in (state.get("checkpoint") or {}).get("obligations", []))
 
 
+def _review_settled(state, key, row):
+    """Any-outcome review: its served assurance holds its findings, each required one resolved."""
+    serves = row.get("serves")
+    obligations = (state.get("checkpoint") or {}).get("obligations", [])
+    if (not isinstance(serves, list) or len(serves) != 1 or not isinstance(obligations, list)
+            or not any(isinstance(ob, dict) and ob.get("id") == serves[0] and ob.get("kind") == "assurance"
+                       for ob in obligations)):
+        return False
+    from .lineage import Lineage
+    try:
+        lineage = Lineage(obligations)
+        findings = lineage.findings(serves[0])
+        for finding in findings:
+            if finding.get("attempt") != key or finding.get("triage") != "required_correction":
+                continue
+            # A frozen finding keeps its bytes; the effective correction decides resolution.
+            child = lineage.rows.get(lineage.effective(finding.get("correction")))
+            owner_withdrawn = (isinstance(child, dict) and child.get("state") == "withdrawn"
+                               and (child.get("withdrawal") or {}).get("by") == "user_direct")
+            if not owner_withdrawn and not isinstance(finding.get("resolved_seq"), int):
+                return False
+    except (PodError, AttributeError, KeyError, TypeError):
+        return False  # An unreadable lineage cannot prove the corrections settled.
+    return True
+
+
+def _proposals_settled(state, key):
+    """A reconciled investigation leaves no unadopted proposal from its report."""
+    proposals = (state.get("checkpoint") or {}).get("proposals", [])
+    return isinstance(proposals, list) and not any(
+        not isinstance(row, dict) or row.get("origin_ref") == key[:64] and row.get("status") != "adopted"
+        for row in proposals)
+
+
+OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
+
+
 def admission_movable(state, key, row, protected=frozenset()) -> bool:
     """Conservative, role-aware predicate for consumed superseded results.
 
-    A validated consumed report proves prior native settlement; archiving does not
+    A consumed report proves prior native settlement; archiving does not
     change the admission's bound state or current native outstanding predicate.
     Any freshly observed outstanding/native or Governor dependency vetoes a move.
     """
@@ -77,20 +114,24 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
     report = row.get("report") or {}
     if (key in protected or row.get("state") not in ("closed", "bound")
             or not row.get("candidate") or row.get("candidate") == candidate
-            or report.get("status") != "validated_observation"
+            or report.get("status") not in ("validated_observation", "reconciliation_required")
+            or report.get("outcome") not in OUTCOMES
             or row.get("route_decision", {}).get("effective_unknown") is True
             or route_hold(row)
             or any(not failure.get("cleared_at") for failure in row.get("failures", []))):
         return False
     role = row.get("role")
     if role == "implement":
-        return (row.get("disposition") is not None
-                and report.get("outcome") in ("succeeded", "partial", "failed", "blocked", "uncertain"))
-    if report.get("outcome") != "succeeded":
+        return row.get("disposition") is not None
+    if role == "investigate":
+        if report.get("status") == "reconciliation_required":
+            return _proposals_settled(state, key)
+        return report.get("outcome") == "succeeded"
+    if role != "review" or report.get("status") != "validated_observation":
         return False
-    if role == "review":
+    if report.get("outcome") == "succeeded":
         return _review_consumed(state, key, row)
-    return role == "investigate"
+    return _review_settled(state, key, row)
 
 
 def _positions(state):
@@ -652,6 +693,7 @@ def capacity(path, state):
             if exc.code != "record_too_large":
                 raise
             useful = False
+        result["reclaimable_bytes"] = len(raw) - len(_bytes(planned)) if useful else 0
         result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; project lead "
                                  "or coordinator: run internal record-compaction detection, then submit its exact scoped "
                                  "maintenance request for explicit bounded maintenance now. The project lead handles capacity "
@@ -715,7 +757,7 @@ def record_compaction(project, objective, *, request=None, decision=None):
             same_scope = submitted["repository"] == repository and submitted["objective"] == objective
             prior = next((row for row in receipts if row["decision"] == digest(submitted)), None)
             if same_scope and prior is not None and prior["logical_sha256"] == logical:
-                return {"status": "replayed", "facts": facts, "written": False}
+                return {"status": "replayed", "facts": facts, "written": False, "reclaimable_bytes": 0}
             if not same_scope or submitted["facts"] != binding:
                 _fail("compaction_decision_mismatch", "The request differs from the exact physical or logical record; detect again")
         # Reserve the largest complete request authority, including six-byte JSON
@@ -733,7 +775,8 @@ def record_compaction(project, objective, *, request=None, decision=None):
         if useful:
             _require_size(record, current_bytes=len(raw))
         result = {"status": "compaction_available" if useful else "unchanged", "facts": facts, "current_bytes": len(raw),
-                  "proposed_bytes": len(_bytes(record)), "limit_bytes": CONTEXT_LIMIT, "moved": _moved(record), "written": False}
+                  "proposed_bytes": len(_bytes(record)), "limit_bytes": CONTEXT_LIMIT, "moved": _moved(record), "written": False,
+                  "reclaimable_bytes": max(0, len(raw) - len(_bytes(record)))}
         if not useful:
             result["largest_sections"] = largest_sections(state)
             result["next_action"] = (_settlement_action(result["largest_sections"]) if len(raw) >= WARN_AT else
@@ -753,6 +796,8 @@ def record_compaction(project, objective, *, request=None, decision=None):
                    "decision": digest(submitted), "input_sha256": binding["input_sha256"], "logical_sha256": logical}
         record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, receipt], require_fit=False)
         if len(_bytes(record)) >= len(raw):
-            return {**result, "status": "unchanged", "proposed_bytes": len(_bytes(record)), "written": False}
+            return {**result, "status": "unchanged", "proposed_bytes": len(_bytes(record)), "written": False,
+                    "reclaimable_bytes": 0}
         publish_context(path, record, chunks)
-        return {**result, "status": "compacted", "proposed_bytes": len(_bytes(record)), "written": True}
+        return {**result, "status": "compacted", "proposed_bytes": len(_bytes(record)), "written": True,
+                "reclaimable_bytes": len(raw) - len(_bytes(record))}
