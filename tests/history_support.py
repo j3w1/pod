@@ -1,5 +1,6 @@
 """Deterministic large logical contexts; synthetic fixtures, never native evidence."""
 from copy import deepcopy
+import json
 
 from pod.ledger import _empty, _validate_context
 from pod.util import digest, encoded
@@ -65,3 +66,19 @@ def synthetic_state(count=60):
                 "evidence": {"attempt": key, "candidate": candidate, "binding": deepcopy(binding),
                              "definition": "2" * 64, "governance": "1" * 64}})
     return _validate_context(state)
+
+
+def inline_copies(physical, logical):
+    """Pod 0.21.16's physical shape: every satisfied row's receipt copy of current proof inline."""
+    from pod.history import is_reference
+    shaped = deepcopy(physical)
+    current = logical["checkpoint"]["candidate"]
+    for old, new in zip(logical["checkpoint"]["obligations"], shaped["checkpoint"]["obligations"]):
+        if is_reference(new) or old.get("state") != "satisfied":
+            continue
+        selected = [json.dumps(item, sort_keys=True) for item in old.get("evidence", [])]
+        for index, receipt in enumerate(old.get("receipts", [])):
+            evidence = receipt.get("evidence") or {}
+            if evidence.get("candidate") == current or json.dumps(evidence, sort_keys=True) in selected:
+                new["receipts"][index] = deepcopy(receipt)
+    return shaped
