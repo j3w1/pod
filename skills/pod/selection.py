@@ -95,7 +95,7 @@ def validate_rule(value: object, *, stored: bool = False) -> dict:
 
 
 def validate_constraint(value: object, snapshot: dict | None = None, *, new: bool = False) -> dict:
-    """Constraint shape; with a snapshot, the checks for a new direct-user constraint.
+    """Validate constraint shape and shared input or stored approval evidence.
 
     Model constraints accept any registry id, including ids that are no longer supported, so
     earlier objective records stay readable. A new Disabled exception names one exact Disabled
@@ -107,10 +107,11 @@ def validate_constraint(value: object, snapshot: dict | None = None, *, new: boo
     if set(value) - (required | {"id", "role", "saved_state", "mode", "file_stamp", "active"} | DECISION_FIELDS) or not required <= set(value):
         raise PodError("invalid_constraint", "Constraint has missing or unsupported fields")
     kind, provenance, item = value["kind"], value["provenance"], value["value"]
+    model_decision = kind in (*RULE_CONSTRAINTS, "route_rule") and provenance in RULE_DECISIONS
     if (kind not in CONSTRAINT_KINDS or provenance not in PROVENANCE
-            and not (kind == "route_rule" and provenance in RULE_DECISIONS)):
+            and not model_decision):
         raise PodError("invalid_constraint", "Constraint kind or provenance is unsupported")
-    if provenance == "user_direct" or kind == "route_rule" and provenance in RULE_DECISIONS:
+    if provenance == "user_direct" or model_decision:
         value = owner_decision(value, kind="constraint", stored=not (new or snapshot is not None))
     elif (DECISION_FIELDS - {"provenance"}) & set(value):
         raise PodError("invalid_constraint", "Only direct user constraints carry owner decision fields")
