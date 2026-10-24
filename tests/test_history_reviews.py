@@ -148,6 +148,10 @@ class ReviewEligibilityTests(unittest.TestCase):
         state = deepcopy(self.state)
         correction_of(state, "attempt-001").update(state="withdrawn", evidence=[],
             withdrawal={"by": "user_direct", "reason": "synthetic owner waiver"})
+        for ob in state["checkpoint"]["obligations"]:
+            for finding in ob.get("findings", []):
+                if finding["attempt"] == "attempt-001":
+                    finding.pop("resolved_seq", None)  # Owner withdrawal alone resolves it.
         record, chunks = compact(state, trigger_bytes=0)
         self.assertTrue(is_reference(record["admissions"]["attempt-001"]))
         self.assertEqual(hydrate(record, chunks.__getitem__), state)
@@ -357,6 +361,9 @@ class LiveShapeTests(unittest.TestCase):
                                                   "request": request})
         cls.closed_compacted = json.loads(path.read_bytes())
         cls.after = facts()
+        cls.replayed = run("record-compaction", {"project": str(case.project), "objective": "objective",
+                                                 "request": request})
+        cls.replayed_bytes = path.read_bytes()
 
     def test_genuine_prechange_writer_refuses_the_pending_report_without_writing(self):
         from tests.test_history_regressions import previous_history_call
@@ -399,3 +406,57 @@ class LiveShapeTests(unittest.TestCase):
         self.assertEqual(self.compacted["reclaimable_bytes"],
                          self.compacted["current_bytes"] - self.compacted["proposed_bytes"])
         self.assertEqual(self.compacted["proposed_bytes"], len(encoded(self.closed_compacted, compact=True)))
+        self.assertEqual((self.replayed["status"], self.replayed["written"], self.replayed["reclaimable_bytes"]),
+                         ("replayed", False, 0))
+        self.assertEqual(self.replayed_bytes, encoded(self.closed_compacted, compact=True))
+
+
+class RenewedAssuranceTests(unittest.TestCase):
+    """An owner withdraws the correction after the assurance renewed, freezing its finding."""
+
+    @classmethod
+    def setUpClass(cls):
+        from pod.ledger import read
+        from tests.issue41_support import ProductionCase
+        from tests import test_records_boundaries as renewal
+        case = ProductionCase()
+        case.setUp()
+        cls.addClassCleanup(case.doCleanups)
+        renewal.RenewalAssuranceTests.policy(case)
+
+        def seq():
+            return read(case.project, "objective")["checkpoint"]["seq"]
+        frozen = case.packet(["A"], role="review")
+        admission = case.start("review", frozen)["admission"]
+        case.settle(admission)
+        case.report(admission, frozen, outcome="failed", map={"seq": seq() + 1, "update": {"A": WAITING, "K": {
+            "kind": "correction", "provenance": "coordinator", "parent": "A", "check": "repair the defect",
+            "proof_scope": ["src"], **WAITING}}}, triage=[{"finding": "F1", "severity": "major",
+            "triage": "required_correction", "correction": "K", "summary": "repair required"}])
+        case.write(renew=[{"id": "A", "as": "A2"}])
+        case.write(seq=seq() + 1, update={"K": {"state": "withdrawn", "withdrawal": {"by": "user_direct",
+                   "reason": "owner waiver"}}}, revision_authority={"provenance": "user_direct", "instruction": "Waive K"})
+        case.move()
+        case.write(seq=seq() + 1)
+        cls.key = admission["admission_id"]
+        cls.state = read(case.project, "objective")
+
+    def test_owner_withdrawal_after_renewal_releases_the_frozen_review(self):
+        from pod.history import admission_movable
+        frozen = next(row for row in self.state["checkpoint"]["obligations"] if row["id"] == "A")
+        self.assertEqual(frozen["state"], "renewed")
+        self.assertNotIn("resolved_seq", frozen["findings"][0])
+        row = self.state["admissions"][self.key]
+        self.assertNotEqual(row["candidate"], self.state["checkpoint"]["candidate"])
+        self.assertTrue(admission_movable(self.state, self.key, row))
+        record, chunks = compact(self.state, trigger_bytes=0)
+        self.assertTrue(is_reference(record["admissions"][self.key]))
+        self.assertEqual(hydrate(record, chunks.__getitem__), self.state)
+
+    def test_a_coordinator_held_correction_still_pins_the_frozen_review(self):
+        from pod.history import admission_movable
+        state = deepcopy(self.state)
+        correction = next(row for row in state["checkpoint"]["obligations"] if row["id"] == "K")
+        correction.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+        correction.pop("withdrawal")
+        self.assertFalse(admission_movable(state, self.key, state["admissions"][self.key]))

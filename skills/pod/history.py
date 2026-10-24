@@ -75,11 +75,20 @@ def _review_settled(state, key, row):
         return False
     from .lineage import Lineage
     try:
-        findings = Lineage(obligations).findings(serves[0])
+        lineage = Lineage(obligations)
+        findings = lineage.findings(serves[0])
+        for finding in findings:
+            if finding.get("attempt") != key or finding.get("triage") != "required_correction":
+                continue
+            # A frozen finding keeps its bytes; the effective correction decides resolution.
+            child = lineage.rows.get(lineage.effective(finding.get("correction")))
+            owner_withdrawn = (isinstance(child, dict) and child.get("state") == "withdrawn"
+                               and (child.get("withdrawal") or {}).get("by") == "user_direct")
+            if not owner_withdrawn and not isinstance(finding.get("resolved_seq"), int):
+                return False
     except (PodError, AttributeError, KeyError, TypeError):
         return False  # An unreadable lineage cannot prove the corrections settled.
-    return all(isinstance(finding.get("resolved_seq"), int) for finding in findings
-               if finding.get("attempt") == key and finding.get("triage") == "required_correction")
+    return True
 
 
 def _proposals_settled(state, key):
@@ -748,7 +757,7 @@ def record_compaction(project, objective, *, request=None, decision=None):
             same_scope = submitted["repository"] == repository and submitted["objective"] == objective
             prior = next((row for row in receipts if row["decision"] == digest(submitted)), None)
             if same_scope and prior is not None and prior["logical_sha256"] == logical:
-                return {"status": "replayed", "facts": facts, "written": False}
+                return {"status": "replayed", "facts": facts, "written": False, "reclaimable_bytes": 0}
             if not same_scope or submitted["facts"] != binding:
                 _fail("compaction_decision_mismatch", "The request differs from the exact physical or logical record; detect again")
         # Reserve the largest complete request authority, including six-byte JSON

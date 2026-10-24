@@ -8414,7 +8414,9 @@
         "tests.test_history_reviews.ReviewEligibilityTests.test_user_withdrawn_corrections_count_as_resolved",
         "tests.test_history_reviews.ReviewEligibilityTests.test_succeeded_reviews_keep_the_served_receipt_rule",
         "tests.test_history_reviews.ReviewEligibilityTests.test_native_governor_and_ambiguous_joins_preserve_vetoes",
-        "tests.test_history_outcomes.ImplementationOutcomeTests.test_investigation_requires_success_and_settled_reviews_move"
+        "tests.test_history_outcomes.ImplementationOutcomeTests.test_investigation_requires_success_and_settled_reviews_move",
+        "tests.test_history_reviews.RenewedAssuranceTests.test_owner_withdrawal_after_renewal_releases_the_frozen_review",
+        "tests.test_history_reviews.RenewedAssuranceTests.test_a_coordinator_held_correction_still_pins_the_frozen_review"
       ],
       "status": "NOT_RUN"
     },
