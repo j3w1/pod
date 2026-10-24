@@ -8410,6 +8410,7 @@
         "tests.test_history_reviews.ReviewEligibilityTests.test_current_and_unresolved_reviews_stay_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_unsettled_reviews_stay_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_unreadable_lineage_keeps_every_unsuccessful_review_inline",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_a_later_unresolved_finding_returns_a_moved_review_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_user_withdrawn_corrections_count_as_resolved",
         "tests.test_history_reviews.ReviewEligibilityTests.test_succeeded_reviews_keep_the_served_receipt_rule",
         "tests.test_history_reviews.ReviewEligibilityTests.test_native_governor_and_ambiguous_joins_preserve_vetoes",
@@ -8427,6 +8428,7 @@
       "offline_test": [
         "tests.test_history_reviews.ReconciliationEligibilityTests.test_settled_reconciliation_reports_move_for_every_outcome",
         "tests.test_history_reviews.ReconciliationEligibilityTests.test_unsettled_or_current_reconciliation_reports_stay_inline",
+        "tests.test_history_reviews.ReconciliationEligibilityTests.test_adopted_proposals_leave_a_reconciled_investigation_movable",
         "tests.test_history_reviews.ReconciliationEligibilityTests.test_validated_unsuccessful_investigations_still_stay_inline"
       ],
       "status": "NOT_RUN"

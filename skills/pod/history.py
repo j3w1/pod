@@ -82,6 +82,14 @@ def _review_settled(state, key, row):
                if finding.get("attempt") == key and finding.get("triage") == "required_correction")
 
 
+def _proposals_settled(state, key):
+    """A reconciled investigation leaves no unadopted proposal from its report."""
+    proposals = (state.get("checkpoint") or {}).get("proposals", [])
+    return isinstance(proposals, list) and not any(
+        not isinstance(row, dict) or row.get("origin_ref") == key[:64] and row.get("status") != "adopted"
+        for row in proposals)
+
+
 OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
 
 
@@ -107,7 +115,9 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
     if role == "implement":
         return row.get("disposition") is not None
     if role == "investigate":
-        return report.get("status") == "reconciliation_required" or report.get("outcome") == "succeeded"
+        if report.get("status") == "reconciliation_required":
+            return _proposals_settled(state, key)
+        return report.get("outcome") == "succeeded"
     if role != "review" or report.get("status") != "validated_observation":
         return False
     if report.get("outcome") == "succeeded":

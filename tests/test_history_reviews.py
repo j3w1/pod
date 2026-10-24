@@ -129,6 +129,21 @@ class ReviewEligibilityTests(unittest.TestCase):
             ("unsettled route mismatch", lambda state, row: row["route_decision"].update(route_mismatch=True)),
         ])
 
+    def test_a_later_unresolved_finding_returns_a_moved_review_inline(self):
+        # Reports carry no findings; coordinator triage records them, also on a later report replay.
+        record, chunks = compact(self.state, trigger_bytes=0)
+        self.assertTrue(is_reference(record["admissions"]["attempt-001"]))
+        state = hydrate(record, chunks.__getitem__)
+        served = next(ob for ob in state["checkpoint"]["obligations"]
+                      if ob["id"] == state["admissions"]["attempt-001"]["serves"][0])
+        state["checkpoint"]["obligations"].append({"id": "KL", "kind": "correction", "provenance": "coordinator",
+            "parent": served["id"], "state": "waiting", "check": "repair a later finding", "evidence": [], "receipts": []})
+        served["findings"].append({"attempt": "attempt-001", "finding": "F3", "severity": "major",
+            "triage": "required_correction", "summary": "triaged later", "correction": "KL", "recorded_seq": 9})
+        record, _ = compact(state, trigger_bytes=0)
+        self.assertEqual(record["admissions"]["attempt-001"], state["admissions"]["attempt-001"])
+        self.assertTrue(is_reference(record["admissions"]["attempt-002"]))
+
     def test_user_withdrawn_corrections_count_as_resolved(self):
         state = deepcopy(self.state)
         correction_of(state, "attempt-001").update(state="withdrawn", evidence=[],
@@ -190,6 +205,9 @@ class ReconciliationEligibilityTests(unittest.TestCase):
                  ("attempt-001", "current implementation", lambda state, row: row.update(candidate=state["checkpoint"]["candidate"])),
                  ("attempt-006", "current investigation", lambda state, row: row.update(candidate=state["checkpoint"]["candidate"])),
                  ("attempt-006", "investigation with an active failure", lambda state, row: row.update(failures=[{"kind": "unavailable"}])),
+                 ("attempt-006", "investigation with an open proposal", lambda state, row: state["checkpoint"]["proposals"].append(
+                     {"id": "rep-synthetic", "source": "worker_report", "origin_ref": row["admission_id"][:64],
+                      "summary": "synthetic follow-up", "status": "open"})),
                  ("attempt-006", "protected investigation", None)]
         for key, label, change in cases:
             with self.subTest(label=label):
@@ -200,6 +218,13 @@ class ReconciliationEligibilityTests(unittest.TestCase):
                 record, _ = compact(state, trigger_bytes=0, protected_admissions=() if change else (key,))
                 self.assertEqual(record["admissions"][key], row)
                 self.assertTrue(is_reference(record["admissions"]["attempt-002"]))
+
+    def test_adopted_proposals_leave_a_reconciled_investigation_movable(self):
+        state = deepcopy(self.state)
+        state["checkpoint"]["proposals"] = [{"id": "rep-synthetic", "source": "worker_report", "status": "adopted",
+                                             "origin_ref": "attempt-006", "summary": "synthetic follow-up"}]
+        record, _ = compact(state, trigger_bytes=0)
+        self.assertTrue(is_reference(record["admissions"]["attempt-006"]))
 
     def test_validated_unsuccessful_investigations_still_stay_inline(self):
         state = deepcopy(self.state)
