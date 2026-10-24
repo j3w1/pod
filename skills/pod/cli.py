@@ -157,6 +157,10 @@ def _config(project: Path, *, edit: bool) -> dict:
 
 
 def _decision_view(snapshot: dict) -> dict:
+    if snapshot["status"] == "invalid":
+        from .readiness import decision_view
+        reason = snapshot["errors"][0]["code"] if snapshot["errors"] else "invalid_config"
+        return {**decision_view({"status": "invalid", "reason": reason}), "decision_generation": None}
     from .policy import projection
     view = projection(snapshot["decision_policy"], snapshot["tool_permissions"], snapshot["pending_decisions"])
     waiting = {"items": view["pending"], "total": len(view["pending"]), "truncated": False,
@@ -185,7 +189,7 @@ def _policy_command(args, project):
     snapshot = load_config(project)
     name = args.preset
     if name is None:
-        if args.json or not sys.stdin.isatty():
+        if snapshot["status"] == "invalid" or args.json or not sys.stdin.isatty():
             return {"status": "ok", **_decision_view(snapshot)}
         print("Who should decide? Careful, Delegate, Hands-off, Custom, or skip setup.")
         name = input("Choice: ").strip().lower().replace("-", "_")
@@ -529,9 +533,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Pinned route: {result['pinned'] or 'none'}")
             if result["summary"]["not_set"]:
                 print(f"Not set (not eligible): {result['summary']['not_set']} routes")
+        if result.get("waiting_decisions", {}).get("status") == "unavailable":
+            print("Decision waits: unavailable (" + result["waiting_decisions"]["reason"] + ")")
     elif args.command in ("policy", "tool"):
         policy_view = result.get("decision_policy", result.get("policy")) if args.command == "policy" else None
-        if policy_view is not None:
+        if policy_view is not None and policy_view.get("status") == "unavailable":
+            print("Decision policy: unavailable (" + policy_view["reason"] + ")")
+            print("Decision waits: unavailable (" + result["waiting_decisions"]["reason"] + ")")
+        elif policy_view is not None:
             print("Decision policy: " + policy_view["preset"].replace("_", "-").capitalize())
             print("Setup: " + policy_view["setup"])
             deciders = {"person": "me", "trusted_agents": "trusted agents", "any_agent": "any agent"}

@@ -718,7 +718,9 @@ def _op_display(request: dict) -> dict:
         raise PodError("map_unavailable", "This objective has no recorded display facts")
     from .config import load
     snapshot = load(Path(request["project"]))
-    state = {**state, "decision_input": {"policy": snapshot["decision_policy"],
+    state = {**state, "decision_input": {"status": snapshot["status"],
+                                       "reason": snapshot["errors"][0]["code"] if snapshot["errors"] else None,
+                                       "policy": snapshot["decision_policy"],
                                        "permissions": snapshot["tool_permissions"],
                                        "pending": snapshot["pending_decisions"],
                                        "generation": snapshot["decision_generation"]}}
