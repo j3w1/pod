@@ -209,11 +209,36 @@ class ToolUseCases:
 
 
 class MachineToolUseTests(ToolUseCases, MachineCase, unittest.TestCase):
-    pass
+    def test_withdrawn_vouch_refuses_without_consumption(self):
+        super().test_withdrawn_vouch_refuses_without_consumption()
+
+    def test_expired_host_vouch_refuses_without_consumption(self):
+        super().test_expired_host_vouch_refuses_without_consumption()
+
+    def test_changed_scope_refuses_even_with_positive_verdict(self):
+        super().test_changed_scope_refuses_even_with_positive_verdict()
+
+    def test_verifier_race_refuses_before_use_receipt(self):
+        super().test_verifier_race_refuses_before_use_receipt()
+
+    def test_interrupted_consumption_recovers_without_current_authority_or_execution(self):
+        super().test_interrupted_consumption_recovers_without_current_authority_or_execution()
 
 
 class ObjectiveToolUseTests(ToolUseCases, ProductionCase):
     objective = "objective"
+
+    def test_withdrawn_vouch_refuses_without_consumption(self):
+        super().test_withdrawn_vouch_refuses_without_consumption()
+
+    def test_expired_host_vouch_refuses_without_consumption(self):
+        super().test_expired_host_vouch_refuses_without_consumption()
+
+    def test_changed_scope_refuses_even_with_positive_verdict(self):
+        super().test_changed_scope_refuses_even_with_positive_verdict()
+
+    def test_interrupted_consumption_recovers_without_current_authority_or_execution(self):
+        super().test_interrupted_consumption_recovers_without_current_authority_or_execution()
 
 
 if __name__ == "__main__":
