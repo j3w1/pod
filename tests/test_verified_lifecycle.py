@@ -26,6 +26,8 @@ class LifecycleMatrix:
         self.verifier = self.root / "decision-verifier.py"
         self.verifier.write_text(decisions.VERIFIER)
         self.prepare_lifecycle()
+        self.maps_before = {name: read(self.project, name)["checkpoint"]["obligations"]
+                            for name in self.objectives}
 
     def choose_policy(self, *, denied=False):
         config.set_decision_policy(self.project, "careful" if denied else "hands_off",
@@ -153,6 +155,10 @@ class VerifiedClaimTests(LifecycleMatrix, succession.SuccessionCase):
         self.assertEqual(result["status"], "claimed")
         self.assertEqual(read(self.project, "objective")["continued_by"]["objective"], "successor")
         self.assertEqual(read(self.project, "successor")["continues"]["objective"], "objective")
+        self.assertEqual(read(self.project, "objective")["owner"], "owner")
+        self.assertEqual(read(self.project, "successor")["owner"], "next")
+        for name, rows in self.maps_before.items():
+            self.assertEqual(read(self.project, name)["checkpoint"]["obligations"], rows)
 
     def stored_decision(self):
         return read(self.project, "objective")["continued_by"]
@@ -179,6 +185,9 @@ class VerifiedRetirementTests(LifecycleMatrix, retirement.RetirementCase):
         self.assertEqual(result["status"], "retired")
         entry = read(self.project, "objective")["historical_retirement"]
         self.assertEqual(entry["released"], [self.where()])
+        self.assertEqual(read(self.project, "objective")["owner"], "owner")
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"],
+                         self.maps_before["objective"])
         self.assertTrue(self.project.is_dir())
 
     def stored_decision(self):
@@ -219,6 +228,8 @@ class VerifiedHandoffTests(LifecycleMatrix, handoff.HandoffCase):
     def assert_accepted(self, result):
         self.assertEqual(self.entry()["state"], "done")
         self.assertEqual(read(self.project, "objective")["owner"], "next")
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"],
+                         self.maps_before["objective"])
         self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json"]])
 
     def stored_decision(self):
@@ -226,6 +237,47 @@ class VerifiedHandoffTests(LifecycleMatrix, handoff.HandoffCase):
 
     def break_facts(self):
         self.current["id"] = "different-run"
+
+    def pending_verified_handoff(self):
+        self.choose_policy()
+        self.configure_verifier(kind="agent")
+        decision = self.request(decisions.RELAY)
+        self.mode = "lost"
+        with self.assertRaises(PodError) as caught:
+            self.apply_decision(decision)
+        self.assertEqual(caught.exception.code, "owner_handoff_refused")
+        self.assertEqual(self.entry()["state"], "pending")
+        self.assertEqual(read(self.project, "objective")["owner"], "owner")
+        self.assertEqual(len(self.mutations), 1)
+        self.mode = "success"
+        return decision
+
+    def test_verified_pending_handoff_resumes_without_second_native_mutation(self):
+        decision = self.pending_verified_handoff()
+        receipts = {path: data for path, data in self.durable().items()
+                    if ".relay-authorizations/" in path}
+        self.assert_accepted(self.apply_decision(decision))
+        self.assertEqual({path: data for path, data in self.durable().items()
+                          if ".relay-authorizations/" in path}, receipts)
+
+    def test_verified_pending_identity_loss_records_abort_without_rebinding(self):
+        decision = self.pending_verified_handoff()
+        before = self.durable()
+        journal = {path: data for path, data in before.items() if path.endswith("governor.json")}
+        next(iter(self.port.workers.values()))["worktree"] = "different-worktree"
+        resources = self.resources()
+        with self.assertRaises(PodError):
+            self.apply_decision(decision)
+        self.assertEqual(self.entry()["state"], "aborted")
+        self.assertEqual(self.entry()["abort_reason"], "identity_differs")
+        self.assertEqual(read(self.project, "objective")["owner"], "owner")
+        after = self.durable()
+        self.assertEqual({path: data for path, data in after.items() if path in journal}, journal)
+        self.assertEqual(self.resources(), resources)
+        self.assertEqual({path: data for path, data in before.items()
+                          if ".relay-authorizations/" in path},
+                         {path: data for path, data in after.items()
+                          if ".relay-authorizations/" in path})
 
 
 class VerifiedContinuityTests(LifecycleMatrix, continuity.ContinuityCase):
@@ -257,6 +309,8 @@ class VerifiedContinuityTests(LifecycleMatrix, continuity.ContinuityCase):
     def assert_accepted(self, result):
         self.assertEqual(result["status"], "rebound")
         self.assertEqual(read(self.project, "objective")["owner"], "owner")
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"],
+                         self.maps_before["objective"])
         self.assertEqual(read(self.project, "objective")["checkpoint"]["native_refs"],
                          [{"runId": "run", "runtime": "runtime-2"}])
 
