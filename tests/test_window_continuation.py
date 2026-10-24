@@ -134,6 +134,25 @@ class WindowCase(HandoffCase):
 
 
 class ContinuationTests(WindowCase):
+    def test_opaque_question_relay_stays_opaque_through_continuation(self):
+        from pod.contracts import TOOL_QUESTION_SCHEMA
+        self.establish(admissions=False)
+        opaque = {"channel": "relayed", "relay": {"reference": "opaque", "verification": "decision"},
+                  "relay_verification": {"operation": "issue_revision"}, "decision_binding": {},
+                  "decision_order": [], "decision_channels": 5, "schema": TOOL_QUESTION_SCHEMA}
+        question = {"id": "opaque-question", "relay": opaque}
+        self.op("checkpoint", value=self.core(obligations=self.stored(), questions=[question]))
+        before = self.state()
+        self.assertNotIn("decision_channels", before)
+        self.assertEqual(before["checkpoint"]["questions"], [question])
+        self.lose()
+        self.resume()
+        after = self.state()
+        self.assert_only_continuation_changes(before, after, owner="next")
+        self.assertEqual(after["checkpoint"]["questions"], [question])
+        self.assertEqual((context_decisions(after), map_decisions(after["checkpoint"])),
+                         (context_decisions(before), map_decisions(before["checkpoint"])))
+
     def test_settled_and_reserved_admissions_continue_with_history_and_provenance_preserved(self):
         self.establish(admissions=False)
         second = self.packet(["S2"], boundary={"paths": ["area2"]})

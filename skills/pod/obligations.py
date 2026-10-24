@@ -1956,9 +1956,13 @@ def validate_map_record(state: dict) -> None:
         if type(value[field]) is not int or value[field] < 1:
             raise refuse("obligation_invalid", "malformed", "persisted map sequence and revision are positive integers", record="persisted map")
     for ob in value["obligations"]:
-        if isinstance(ob, dict) and (ob.get("withdrawal") or {}).get("by") == "agent_decision":
+        if not isinstance(ob, dict) or "withdrawal" not in ob:
+            continue
+        withdrawal = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"),
+                            "withdrawal", obligation=ob.get("id"))
+        if withdrawal.get("by") == "agent_decision":
             from .relay import validate_agent_withdrawal
-            validate_agent_withdrawal(ob["withdrawal"], introduced_seq=ob.get("introduced_seq", 1), sequence=value["seq"])
+            validate_agent_withdrawal(withdrawal, introduced_seq=ob.get("introduced_seq", 1), sequence=value["seq"])
     if "revision_decisions" in value:
         decisions = value["revision_decisions"]
         if not isinstance(decisions, list):
@@ -2017,8 +2021,8 @@ def validate_map_record(state: dict) -> None:
         _ident(value["coordinator_slot"], "coordinator slot")
     quiescent = value["quiescence"]
     if quiescent is not None:
-        fields = {"state"} if isinstance(quiescent, dict) and quiescent.get("state") == "closable" else {"state", "blocked", "interim_report"}
-        _exact(quiescent, fields, fields, "quiescence")
+        quiescent_fields = {"state"} if isinstance(quiescent, dict) and quiescent.get("state") == "closable" else {"state", "blocked", "interim_report"}
+        _exact(quiescent, quiescent_fields, quiescent_fields, "quiescence")
         if quiescent["state"] not in ("closable", "quiescent") or "blocked" in quiescent and not isinstance(quiescent["blocked"], list):
             raise refuse("obligation_invalid", "malformed", "persisted quiescence is a recorded projection", record="quiescence")
         if "interim_report" in quiescent:
