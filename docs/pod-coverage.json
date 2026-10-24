@@ -8422,7 +8422,10 @@
         "tests.test_history_reviews.ReviewEligibilityTests.test_native_governor_and_ambiguous_joins_preserve_vetoes",
         "tests.test_history_outcomes.ImplementationOutcomeTests.test_investigation_requires_success_and_settled_reviews_move",
         "tests.test_history_reviews.RenewedAssuranceTests.test_owner_withdrawal_after_renewal_releases_the_frozen_review",
-        "tests.test_history_reviews.RenewedAssuranceTests.test_a_coordinator_held_correction_still_pins_the_frozen_review"
+        "tests.test_history_reviews.RenewedAssuranceTests.test_a_coordinator_held_correction_still_pins_the_frozen_review",
+        "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_public_agent_withdrawal_retains_its_actual_epoch_and_actor",
+        "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_resolved_superseded_review_relocates_and_hydrates_losslessly",
+        "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_careful_denial_never_reaches_lineage_or_history"
       ],
       "status": "NOT_RUN"
     },
@@ -8524,7 +8527,10 @@
         "tests.test_decision_integration.ObjectiveToolTests.test_cancel_and_recreate_never_accepts_the_old_question",
         "tests.test_decision_integration.ObjectiveToolTests.test_two_objectives_same_memory_choice_do_not_misidentify_recovery",
         "tests.test_decision_integration.ObjectiveToolTests.test_concurrent_objective_memory_answers_commit_only_one_generation",
-        "tests.test_decision_integration.ObjectiveToolTests.test_objective_scope_aba_and_forged_question_updates_refuse"
+        "tests.test_decision_integration.ObjectiveToolTests.test_objective_scope_aba_and_forged_question_updates_refuse",
+        "tests.test_decision_integration.MachineCapacityRecoveryTests.test_eight_approvals_then_stricter_policy_recover_without_file_edit_or_replay",
+        "tests.test_decision_integration.ObjectiveCapacityRecoveryTests.test_all_eight_objective_slots_recover_without_reissuing_old_permission",
+        "tests.test_decision_integration.ObjectiveToolTests.test_independent_question_on_the_same_objective_preserves_valid_execution_grant"
       ],
       "status": "NOT_RUN"
     },
@@ -8594,7 +8600,9 @@
       ],
       "offline_test": [
         "tests.test_verified_decisions.VerifiedCheckpointTests.test_stored_actor_or_capability_fields_are_not_public_credentials",
-        "tests.test_verified_decisions.VerifiedCheckpointTests.test_verified_agent_revision_needs_no_previously_recorded_question"
+        "tests.test_verified_decisions.VerifiedCheckpointTests.test_verified_agent_revision_needs_no_previously_recorded_question",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_local_cooperative_compaction_keeps_its_truthful_actor",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_public_input_refuses_forged_stored_metadata"
       ],
       "status": "NOT_RUN"
     },
@@ -8625,7 +8633,13 @@
         "tests.test_verified_decisions.VerifiedStandingTests.test_saved_scoped_standing_activation_keeps_agent_origin",
         "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_saved_source_vouch_accepts_exact_revision_without_a_question",
         "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_new_source_vouch_refuses_stale_payload_state_and_wrong_scope",
-        "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_new_source_decision_policy_and_missing_verifier_have_no_effects"
+        "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_new_source_decision_policy_and_missing_verifier_have_no_effects",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_saved_agent_vouch_compacts_without_a_recorded_question_losslessly",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_stale_payload_refuses_without_receipt_or_state_effect",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_stale_state_refuses_without_receipt_or_state_effect",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_scope_for_another_record_refuses_without_effect",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_vouch_for_another_kind_refuses_without_effect",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_absent_verifier_never_turns_relay_into_session_authority"
       ],
       "status": "NOT_RUN"
     },
@@ -8646,7 +8660,16 @@
         "unit",
         "installed_bundle"
       ],
-      "offline_test": null,
+      "offline_test": [
+        "tests.test_verified_compaction.MaintenanceReaderTests.test_other_kind_stored_evidence_is_not_a_compaction_receipt",
+        "tests.test_verified_compaction.MaintenanceReaderTests.test_partial_or_forged_old_receipt_is_not_upgraded_into_authority",
+        "tests.test_verified_compaction.MaintenanceReaderTests.test_ordinary_request_never_erases_an_existing_new_evidence_marker",
+        "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_forged_resolution_sequence_is_rejected_before_history",
+        "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_person_actor_cannot_be_relabelled_as_agent_withdrawal",
+        "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_wrong_kind_cannot_resolve_a_retained_correction",
+        "tests.test_verified_history.VerifiedContainerReaderTests.test_genuine_preceding_reader_refuses_actual_verified_context_without_rewrite",
+        "tests.test_verified_history.VerifiedContainerReaderTests.test_genuine_preceding_reader_refuses_actual_verified_journal_without_rewrite"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -8657,7 +8680,11 @@
       ],
       "offline_test": [
         "tests.test_verified_history.VerifiedReaderTests.test_genuine_preceding_config_reader_refuses_new_semantics_without_write",
-        "tests.test_verified_history.VerifiedReaderTests.test_every_old_relay_wire_function_has_identical_preceding_code"
+        "tests.test_verified_history.VerifiedReaderTests.test_every_old_relay_wire_function_has_identical_preceding_code",
+        "tests.test_verified_compaction.MaintenanceReaderTests.test_coordinator_request_does_not_upgrade_an_older_record",
+        "tests.test_verified_compaction.MaintenanceReaderTests.test_project_lead_request_does_not_upgrade_an_older_record",
+        "tests.test_verified_compaction.MaintenanceReaderTests.test_session_compaction_keeps_exact_three_field_receipt_and_reader_floor",
+        "tests.test_verified_compaction.MaintenanceReaderTests.test_genuine_preceding_writer_receipt_reads_without_conversion"
       ],
       "status": "NOT_RUN"
     },
@@ -8675,7 +8702,10 @@
         "tests.test_verified_ordering.VerifiedPublicationTests.test_receipt_before_replace_recovers_only_identical_transition",
         "tests.test_verified_ordering.VerifiedPublicationTests.test_failure_after_replace_is_committed_and_retry_is_readback",
         "tests.test_decision_integration.ObjectiveToolTests.test_interrupted_memory_answer_finishes_only_context_after_personal_commit",
-        "tests.test_decision_integration.ObjectiveToolTests.test_interrupted_operation_consumption_never_issues_another_execute"
+        "tests.test_decision_integration.ObjectiveToolTests.test_interrupted_operation_consumption_never_issues_another_execute",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_actual_record_preflight_failure_precedes_receipt_and_publication",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_receipt_before_publication_recovers_only_identical_transition",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_response_loss_after_atomic_replace_recovers_committed_readback"
       ],
       "status": "NOT_RUN"
     },
@@ -8708,7 +8738,8 @@
         "live_native"
       ],
       "offline_test": [
-        "tests.test_verified_decisions.VerifiedCheckpointTests.test_packet_freeze_carries_current_summary_and_task_protocol_text"
+        "tests.test_verified_decisions.VerifiedCheckpointTests.test_packet_freeze_carries_current_summary_and_task_protocol_text",
+        "tests.test_verified_decisions.VerifiedCheckpointTests.test_refrozen_stale_summary_uses_current_policy_and_grants_no_tool_authority"
       ],
       "status": "NOT_RUN"
     },
@@ -8779,7 +8810,8 @@
       ],
       "offline_test": [
         "tests.test_decision_policy.DecisionPolicyTests.test_all_presets_and_invariant_person_only",
-        "tests.test_decision_integration.ObjectiveToolTests.test_completed_objective_closes_without_answering_an_unused_question"
+        "tests.test_decision_integration.ObjectiveToolTests.test_completed_objective_closes_without_answering_an_unused_question",
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_routine_remains_any_agent_under_all_presets"
       ],
       "status": "NOT_RUN"
     },

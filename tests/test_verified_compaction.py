@@ -24,7 +24,7 @@ from tests.history_support import synthetic_state
 from tests.kernel_support import KernelCase
 
 
-PRECEDING = "637bb6aaecd646ef9a6b7c0a2b254086da1f821d"
+PRECEDING = "438dde67737a68c6f1f175f11ed9c2d00c857e71"
 WAITING = {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
 
 
