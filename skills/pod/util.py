@@ -86,9 +86,40 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False,
 
 
 def decision_channel(value: dict) -> dict:
-    """Additive public projection, with earlier provenance explicit and stored bytes untouched."""
+    """Full decision inventory, with earlier channel provenance explicit and bytes untouched."""
     return {**value, "channel": value.get("channel", "session"),
             **({"channel_recorded": False} if "channel" not in value else {})}
+
+
+def public_decisions(value: Any, *, rule: bool = False) -> Any:
+    """Copy public facts without expanding new private decision authority.
+
+    Internal inventories and closure reports keep their full authenticated records.
+    Only new kernel actor records lose authority fields here; earlier session and
+    relay representations retain their documented semantics. Route rules also keep
+    their existing original-word exclusion, including nested request records.
+    """
+    if isinstance(value, list):
+        return [public_decisions(item, rule=rule) for item in value]
+    if not isinstance(value, dict):
+        return value
+    rule = rule or value.get("kind") == "route_rule"
+    authority = bool({"actor", "decision_binding", "decision_verification"} & value.keys())
+    private = ((DECISION_FIELDS - {"provenance", "channel"}) | {"decision_effect"}) if authority else set()
+    if authority or rule:
+        private = private | {"request", "instruction"}
+    result = {key: public_decisions(item, rule=rule) for key, item in value.items() if key not in private}
+    if authority:
+        actor = value.get("actor", (value.get("decision_verification") or {}).get("principal"))
+        if isinstance(actor, dict):
+            result["actor"] = {key: actor[key] for key in ("kind", "channel") if key in actor}
+            if "channel" not in result["actor"] and "channel" in value:
+                result["actor"]["channel"] = value["channel"]
+        if (private - {"actor"}) & value.keys():
+            result["decision_sha256"] = digest({key: value[key] for key in DECISION_FIELDS | {"decision_effect"} if key in value})
+        if "instruction" in value:
+            result["instruction_sha256"] = digest(value["instruction"])
+    return result
 
 
 def channel_fields(value: dict) -> dict:
