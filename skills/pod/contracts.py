@@ -37,6 +37,7 @@ ACTION_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun", "r
                 "merge", "release", "deploy", "cancel_validation")
 PURPOSES = ("validation", "diagnostic", "checkpoint", "release", "cancellation")
 AUTHORIZATION_SCOPES = ("publish", "merge", "release", "deploy")
+TOOL_QUESTION_SCHEMA = "pod-tool-question/v1"
 PR_NUMBER = {"type": "integer", "min": 1, "max": 2147483647}
 SEVERITIES = ("blocker", "major", "minor", "info")
 TRIAGE = ("required_correction", "advisory")
@@ -126,6 +127,9 @@ TABLE = {
         "boundary": record("boundary"), "map_revision": {"type": "integer", "minimum": 1},
         "resolves": text(), "stop_condition": text(), "delta_from": text(),
         "role_label": text(48), "purpose": text(160),
+        "routing_role": choice(("coordinator", "worker", "reviewer", "fixer", "auditor")),
+        "fallback_of": _DIGEST,
+        "decision_context": {"type": "object", "form": "bounded kernel-frozen policy and permission summary; grants no authority"},
     }, ("schema", "objective", "criteria", "responsibility", "scope", "actions", "candidate", "context",
         "dependencies", "route", "policy_revision", "plan_revision", "report_contract", "sources",
         "serves", "role", "boundary", "map_revision"), max_repr_length=65536),
@@ -156,6 +160,7 @@ TABLE = {
         **{key: text() for key in ("check", "resolves", "stop_condition", "question", "insufficiency", "existing_evidence", "uncovered_risk")},
         "boundary": record("boundary"), "scope": record("boundary"), "candidate": text(128),
         "unit": {**ident(), "only": "assurance; immutable once set"},
+        "audit_role": {**choice(("reviewer", "auditor")), "only": "assurance; immutable after designation"},
         "source": {"type": "object", "records": ["objective source", "user source", "policy citation"],
                    "form": "selected by provenance"},
         "state": choice(STATES), "executor": {"type": "text", "form": "coordinator or serving admission"},
@@ -275,10 +280,15 @@ TABLE["decision_relay"] = definition({key: text(512) for key in ("reference", "o
 TABLE["authorization relay"] = definition({key: text(512) for key in ("reference", "owner_source")},
                                           ("reference",))
 TABLE["issue revision relay"] = definition({"reference": text(512)}, ("reference",))
+TABLE["decision_action_relay"] = definition({"reference": text(512), "verification": choice(("decision",))},
+                                             ("reference", "verification"))
 TABLE["issue revision authority"] = definition({"operation": choice(("issue_revision",)),
-    "provenance": choice(("user_direct",)), "instruction": _OWNER_INSTRUCTION,
-    "channel": choice(("relayed",)), "relay": record("issue revision relay")},
-    ("operation", "provenance", "instruction", "channel", "relay"))
+    "provenance": choice(("user_direct", "agent_decision", "decision_request")), "instruction": _OWNER_INSTRUCTION,
+    "channel": choice(("relayed", "agent_session")),
+    "relay": {"type": "object", "records": ["issue revision relay", "decision_action_relay"]}},
+    ("operation", "provenance", "instruction", "channel"),
+    required_by_channel={"agent_session": ["operation", "provenance", "instruction", "channel"],
+                         "relayed": ["operation", "provenance", "instruction", "channel", "relay"]})
 STANDING_SCOPES = ("publish", "merge", "release", "install", "cleanup", "deploy")
 STANDING_EXCLUSIONS = ("deploy", "paid_resources", "secrets", "unique_deletion", "scope_growth")
 TABLE["standing decision"] = definition({
@@ -287,6 +297,8 @@ TABLE["standing decision"] = definition({
     "scope": {**items(6, choice(STANDING_SCOPES)), "min_items": 1, "unique": True},
     "widening": {**items(5, choice(STANDING_EXCLUSIONS)), "unique": True},
     "expires_at": {"type": "text", "nullable": True, "form": "future timezone-aware ISO timestamp"},
+    "scope_digest": _DIGEST,
+    "spending": choice(("included_subscription", "new_commitment")),
 }, ("provenance", "instruction"))
 TABLE["responder answer"] = definition({
     "question": text(512), "text": text(4096),
@@ -323,6 +335,14 @@ TABLE["group member"] = definition({"finding": ident(), "severity": choice(SEVER
 TABLE["worker_tab_instruction"] = definition({
     **{key: text(256) for key in ("objective", "dispatch", "terminal")}, "keep": {"type": "boolean"},
 }, ("objective", "dispatch", "terminal", "keep"))
+TABLE["objective tool"] = definition({
+    "project": text(4096), "objective": text(4096), "owner": text(4096),
+    "action": choice(("check", "review", "answer", "cancel")), "tool": text(128), "category": text(64),
+    "operation": text(256), "spending": choice(("included_subscription", "new_commitment")),
+    "invocation": text(128), "answer": text(64), "decision": {"type": "object"},
+}, ("project", "objective", "action"),
+    required_by_action={"check": ["tool", "category", "operation"], "review": ["tool", "category"],
+                        "answer": ["invocation", "answer", "decision"], "cancel": ["invocation"]})
 TABLE["report request"] = definition({
     **{key: {"type": "text"} for key in ("project", "objective", "admission_id")},
     "packet": {"type": "object", "form": "frozen packet result"}, "report": record("report"),
@@ -337,6 +357,22 @@ TABLE["context_reference"]["form"] = "each kind accepts exactly its variant's fi
 TABLE["packet_route"]["required_by_agent"] = {
     "direct": ["agent"], "other": sorted(TABLE["packet_route"]["fields"]),
 }
+
+# Additive input channels use the same records. Evidence is stored-only and the
+# mutation validator rejects it on public input before it can become authority.
+for _name in ("revision authority", "user source", "authorization", "standing decision", "withdrawal"):
+    _fields = TABLE[_name]["fields"]
+    if "channel" in _fields:
+        _fields["channel"] = choice(("session", "relayed", "agent_session"))
+    if "provenance" in _fields:
+        _fields["provenance"] = choice(("user_direct", "agent_decision", "decision_request"))
+    _relay_record = _fields.get("relay", {}).get("record", "decision_relay")
+    _fields["relay"] = {"type": "object", "records": [_relay_record, "decision_action_relay"],
+                        "form": "decision_request uses decision_action_relay; session channels carry no relay"}
+    _fields.update({key: {"type": "text" if key in ("decided_at", "recorded_at") else "object", "stored_only": True}
+                    for key in ("actor", "decided_at", "recorded_at", "decision_binding", "decision_verification")})
+TABLE["withdrawal"]["fields"]["by"] = choice(("user_direct", "agent_decision", "project_policy", "coordinator", "issue_revision"))
+TABLE["withdrawal"]["fields"]["accepted_seq"] = {"type": "integer", "stored_only": True}
 
 
 def fields(name):

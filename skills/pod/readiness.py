@@ -9,6 +9,7 @@ records left unfinished does.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .errors import PodError
@@ -20,6 +21,105 @@ STATES = ("working", "waiting", "finalizing", "closed", "closed_external", "coor
 # Who an external wait class names when its row carries no party of its own.
 WAIT_PARTIES = {"authority": "owner", "user_hold": "user"}
 MAX_LISTED = 32
+
+
+def decision_view(snapshot: dict | None, checkpoint: object = None, *, objective: bool = False) -> dict:
+    """Read-only policy, memory and known waits; actor labels confer no authority.
+
+    Machine pending rows use policy.projection's eight-row bound. Objective questions
+    use the existing question projection's independent count/byte bounds. An offered
+    setup question is never a recorded wait. Missing old facts remain unknown.
+    """
+    from . import policy
+    from .status import QUESTION_BYTES, recorded_questions
+
+    def unavailable(reason):
+        return {"decision_policy": {"status": "unavailable", "reason": reason}, "tool_permissions": None,
+                "waiting_decisions": {"status": "unavailable", "items": [], "total": None,
+                                      "truncated": False, "missing": ["decision_input"], "reason": reason},
+                "needs_you": None, "setup_question": None}
+    if not isinstance(snapshot, dict):
+        return unavailable("decision_input_unavailable")
+    if snapshot.get("status") not in (None, "valid", "missing", "setup_required"):
+        return unavailable(snapshot.get("reason") or "invalid_config")
+    try:
+        generation = snapshot.get("generation", 0)
+        if type(generation) is not int or generation < 0:
+            raise PodError("invalid_decision_generation", "Decision generation is unavailable")
+        projected = policy.projection(snapshot.get("policy"), snapshot.get("permissions", []),
+                                      snapshot.get("pending", []))
+    except PodError as exc:
+        return unavailable(exc.code)
+    current = snapshot.get("policy")
+    items = [{**row, "source": "machine"} for row in projected["pending"]]
+    missing, truncated, total = [], False, len(items)
+    if objective:
+        questions = recorded_questions(checkpoint)
+        missing.extend(questions["missing"])
+        truncated = questions["truncated"]
+        total = None if questions["total"] is None else total + questions["total"]
+        raw = checkpoint.get("questions", []) if isinstance(checkpoint, dict) else []
+        for question in questions["items"]:
+            index = question["index"]
+            row = raw[index]
+            known = isinstance(row, dict)
+            states = [row.get(key) for key in ("state", "status")] if known else []
+            resolved = known and (row.get("resolved") is True or row.get("answer") is not None
+                                 or any(value in ("answered", "resolved", "consumed", "refused", "cancelled", "closed")
+                                        for value in states))
+            pending = known and (row.get("resolved") is False
+                                 or any(value in ("pending", "waiting", "unresolved", "open") for value in states))
+            if resolved and not pending:
+                continue
+            categories = row.get("categories", [row["category"]] if "category" in row else None) if known else None
+            decider = None
+            if pending and not resolved and categories is not None:
+                try:
+                    decider = policy.required(current, categories)
+                except PodError:
+                    pass
+            gaps = []
+            if not pending or resolved:
+                gaps.append("resolution")
+            if decider is None:
+                gaps.append("categories")
+            if question["id"] is None and question["reference"] is None:
+                gaps.append("identity")
+            if gaps:
+                missing.append(f"questions[{index}]")
+            wait = {"source": "objective", "index": index, "id": question["id"],
+                    "reference": question["reference"], "categories": sorted(categories) if decider else None,
+                    "required": decider, "waiting_on": ("person" if decider == "person" else
+                                                         "agent" if decider else "unknown"), "missing": gaps}
+            if len(json.dumps([*items, wait], ensure_ascii=False).encode("utf-8")) > QUESTION_BYTES - 2048:
+                truncated = True
+                if "items" not in missing:
+                    missing.append("items")
+                break
+            items.append(wait)
+    needs_you = any(row["waiting_on"] == "person" for row in items)
+    return {"decision_policy": {"status": "available", "preset": projected["preset"],
+                                "categories": projected["categories"], "setup": projected["setup"],
+                                "generation": generation},
+            "tool_permissions": projected["permissions"],
+            "waiting_decisions": {"status": "partial" if missing or truncated else "complete", "items": items,
+                                  "total": total, "truncated": truncated, "missing": missing,
+                                  "reason": "projection_limit" if truncated else "question_facts_missing" if missing else None},
+            "needs_you": True if needs_you else None if total is None or truncated or any(
+                row["waiting_on"] == "unknown" for row in items) else False,
+            "setup_question": projected["setup_question"]}
+
+
+def decision_readiness(block: dict, decisions: dict, *, worker_tabs: list | None = None) -> dict:
+    """Add observed waits without turning setup or delivery into an approval gate."""
+    block = {**block, **decisions}
+    if decisions["needs_you"] is True and block["state"] in ("working", "waiting"):
+        block.update(state="waiting", acts_next="owner",
+                     summary="Waiting on you: a recorded decision needs your answer; not finished.")
+        if worker_tabs:
+            from .worker_tabs import wording
+            block["summary"] += " " + wording(worker_tabs)
+    return block
 
 
 def unavailable(reason: str, message: str) -> dict:

@@ -259,6 +259,8 @@ def compact(logical_state, *, protected_admissions=(), force=False,
         record["history"] = dict(FORMAT)
     if maintenance:
         record.setdefault("history", dict(FORMAT))["maintenance"] = _reference(list(maintenance), chunks)
+        if any("decision_binding" in row.get("authority", {}) for row in maintenance):
+            record["history"]["decision_channels"] = 5
     if not maintenance and len(_bytes(record)) >= len(_bytes(logical_state)):
         record, chunks = deepcopy(logical_state), {}
     if require_fit:
@@ -377,7 +379,7 @@ def _compaction_request(value):
 
 
 def _maintenance_valid(receipts):
-    from .util import owner_decision, DECISION_FIELDS
+    from .util import owner_decision, DECISION_FIELDS, exact
     if not isinstance(receipts, list) or not receipts:
         _fail("history_invalid", "Maintenance receipts must be a nonempty list")
     for receipt in receipts:
@@ -394,8 +396,11 @@ def _maintenance_valid(receipts):
                         or any(authority["facts"][key] != receipt[key] for key in ("input_sha256", "logical_sha256"))):
                     raise ValueError("request digest or facts differ")
             else:
-                if set(authority) != DECISION_FIELDS - {"relay"} or authority.get("provenance") != "user_direct":
-                    raise ValueError("session authority")
+                session_only = set(authority) == {"provenance", "instruction", "channel"} and authority.get("provenance") == "user_direct"
+                if not session_only:
+                    exact(authority, DECISION_FIELDS, {"provenance", "instruction", "channel"}, name="maintenance decision")
+                    from .relay import validate_decision_record
+                    validate_decision_record(authority, kind="compaction")
                 owner_decision(authority, kind="compaction", stored=True)
         except (PodError, ValueError, UnicodeError) as exc:
             raise PodError("history_invalid", "Malformed maintenance authority") from exc
@@ -408,8 +413,9 @@ def _hydrate(record, loader):
         return state, maintenance
     metadata = state.pop("history", None)
     if metadata is not None:
-        if (not isinstance(metadata, dict) or set(metadata) - {"schema", "maintenance"}
-                or metadata.get("schema") != FORMAT["schema"]):
+        if (not isinstance(metadata, dict) or set(metadata) - {"schema", "maintenance", "decision_channels"}
+                or metadata.get("schema") != FORMAT["schema"]
+                or "decision_channels" in metadata and metadata["decision_channels"] != 5):
             _fail("history_invalid", "Unsupported history reference format")
         if "maintenance" in metadata:
             maintenance = _maintenance_valid(_expand(metadata["maintenance"], loader, cache))
@@ -745,10 +751,14 @@ def record_compaction(project, objective, *, request=None, decision=None):
         try:
             decision = exact(decision, DECISION_FIELDS | {"repository", "objective", "facts"},
                              {"provenance", "instruction", "repository", "objective", "facts"}, name="compaction decision")
-            if decision["provenance"] != "user_direct":
+            from .relay import decision_input, _raw_decision
+            if decision["provenance"] != "user_direct" and not decision_input(decision):
                 raise ValueError("provenance")
             bounded_text(decision["instruction"], name="instruction", limit=1024)
-            decision = owner_decision(decision, kind="compaction")
+            if decision_input(decision):
+                _raw_decision(decision)
+            else:
+                decision = owner_decision(decision, kind="compaction")
         except (PodError, ValueError) as exc:
             raise PodError("compaction_decision_mismatch", "Compaction needs an exact session decision") from exc
     submitted = request if request is not None else decision
@@ -802,13 +812,38 @@ def record_compaction(project, objective, *, request=None, decision=None):
                             "reason": "<reason for lossless compaction>", "owner": state["owner"],
                             "repository": repository, "objective": objective, "facts": binding}}}
             return result
+        capability = None
+        if decision is not None and decision_input(decision):
+            from .relay import Decision
+            capability = Decision(project, objective, kind="compaction", effect={"repository": repository, "objective": objective, "facts": binding},
+                                  state={"logical": logical, "physical": _sha(raw)}, decision=decision,
+                                  resources={"record": binding["record"], "revision": str(binding["revision"])})
+            with capability.scope():
+                decision = owner_decision(decision, kind="compaction")
         receipt = {"authority": request if request is not None else
-                   {key: decision[key] for key in ("provenance", "instruction", "channel")},
+                   {key: decision[key] for key in DECISION_FIELDS if key in decision},
                    "decision": digest(submitted), "input_sha256": binding["input_sha256"], "logical_sha256": logical}
+        if capability is not None:
+            capability.finalize(receipt)
         record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, receipt], require_fit=False)
         if len(_bytes(record)) >= len(raw):
             return {**result, "status": "unchanged", "proposed_bytes": len(_bytes(record)), "written": False,
                     "reclaimable_bytes": 0}
-        publish_context(path, record, chunks)
+        _publish_compaction_decision(path, state, raw, record, chunks, capability, receipts)
         return {**result, "status": "compacted", "proposed_bytes": len(_bytes(record)), "written": True,
                 "reclaimable_bytes": len(raw) - len(_bytes(record))}
+
+
+def _publish_compaction_decision(path, state, raw, record, chunks, capability, receipts):
+    """Preflight the exact physical record, then consume and publish under authority."""
+    _require_size(record, current_bytes=len(raw))
+    if capability is None:
+        publish_context(path, record, chunks)
+        return
+    from . import config
+    with config._edit_lock(config.personal_path(capability.project)):
+        current, _, physical = _load(path, limit=MAINTENANCE_LIMIT)
+        capability.consume(current_state={"logical": digest(current), "physical": _sha(physical)},
+                           snapshot=config.load(capability.project), result={"record": record, "chunks": sorted(chunks)},
+                           keys=["physical_record:" + _sha(raw)], prior=[])
+        publish_context(path, record, chunks)

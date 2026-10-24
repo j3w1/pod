@@ -46,3 +46,7 @@ Put at most 16 settlement entries in one checkpoint value or report-accompanying
 ```
 
 Here `12` stands for the actual next sequence, `A2` must be fresh, and `O1` is the live coordinator obligation. Preserve the checkpoint's other required fields. The replacement assurance has no proof and needs fresh review. Every map and settlement check must pass before publication; a refused write, including a byte-limit refusal, settles nothing.
+
+## Current decision instructions
+
+Packet freeze returns a bounded `decision_context` and `task_instructions` from the current machine policy, remembered tool permissions and decision generation. Re-freezing a returned packet ignores its supplied summary and derives current context again; it never treats a copied summary as authority. Include that private context in the actual native Task instructions and deliver current instructions to the exact current Dispatch through supported native mail. It tells a worker to check current authority at every sensitive use; it is no operation approval. A source packet, worker summary or stale generation never widens authority. Keep original rule words and decision evidence out of public summaries.

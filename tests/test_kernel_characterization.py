@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -18,10 +19,14 @@ class StatusProjectionTests(unittest.TestCase):
                        "eligible": ["codex/gpt-6.1-sol/high"], "preferred": None,
                        "pinned": "codex/gpt-6.1-sol/high", "max_active": 2, "refresh": "manual",
                        "errors": [], "setup": None}
+        before = deepcopy(preferences)
         with patch("pod.status.load_config", return_value=preferences), \
              patch("pod.status.running_identity", return_value={"version": "0.6.4", "bundle_digest": "d"}), \
+             patch("pod.config.edit", side_effect=AssertionError("status wrote configuration")) as edit, \
              patch("pod.cli.current_run", return_value={"run": None}):
             result = execute(parser().parse_args(["status", "--json"]), Path("/fixture"))
+        edit.assert_not_called()
+        self.assertEqual(preferences, before)
         self.assertEqual(result, {
             "schema": "pod-cli/v5", "status": "selection_required", "run": None,
             "bundle_identity": {"running": {"version": "0.6.4", "bundle_digest": "d"},
@@ -32,6 +37,20 @@ class StatusProjectionTests(unittest.TestCase):
             "constraints": [], "route_decisions": [],
             "route_mismatch": False, "active_constraints": [], "effective_unknown": False,
             "installed_version_drift": False, "blocker": None,
+            "decision_policy": {"status": "available", "preset": "careful", "categories": {
+                "merge_publish": "person", "scope_changes": "person", "secrets": "person",
+                "speaking_for_person": "person", "production_deployment": "person",
+                "irreversible_deletion": "person", "model_choices": "trusted_agents",
+                "coordinator_changes": "person", "continuity": "any_agent", "routine": "any_agent",
+                "money": "person", "policy_changes": "person", "human_login": "person"},
+                "setup": "unasked", "generation": 0},
+            "tool_permissions": [],
+            "waiting_decisions": {"status": "complete", "items": [], "total": 0, "truncated": False,
+                                  "missing": [], "reason": None},
+            "needs_you": False,
+            "setup_question": {"text": "Who should decide? Choose Careful, Delegate, Hands-off or Custom.",
+                               "choices": ["careful", "delegate", "hands_off", "custom", "skip"],
+                               "required": "person"},
             "next_safe_action": "select a native Run", "usage": "unknown", "cost": "unknown"})
 
 

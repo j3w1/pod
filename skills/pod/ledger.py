@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import fcntl
@@ -14,6 +14,7 @@ from typing import Callable, Iterator
 
 from .contracts import bound, fields, required, input_record, policy_mismatch
 from .errors import PodError
+from .relay import decision_boundary, decision_commit_time
 from .history import load_context, prepare_context, publish_context
 from . import gitio
 from .installer import STATE_SCHEMAS, superseded_objectives, superseded_schemas
@@ -242,15 +243,20 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "decision_order", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
     if "standing_authorization" in state:
         from .standing import validate_record
         validate_record(state["standing_authorization"])
     if "pod_ticks" in state:
         from .pod_ticks import validate
         validate(state["pod_ticks"])
-    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2, 3, 4)):
+    if "decision_channels" in state and (type(state["decision_channels"]) is not int or state["decision_channels"] not in (1, 2, 3, 4, 5)):
         raise PodError("state_unsupported", "Decision channel representation is unsupported")
+    if "decision_order" in state:
+        from .relay import validate_order
+        validate_order(state["decision_order"])
+        if state.get("decision_channels") != 5:
+            raise PodError("state_unsupported", "Decision chronology requires marker 5")
     from .succession import validate_link
     for name in _SUCCESSION_FIELDS & set(state):
         validate_link(name, state[name])
@@ -280,15 +286,21 @@ def _validate_context(value: object) -> dict:
         if not isinstance(checkpoint_value.get("revision_decisions", []), list):
             raise PodError("state_unsupported", "Revision decision history is malformed")
         revisions = [row for row in checkpoint_value.get("revision_decisions", []) if requested(row)]
-        if revisions and state.get("decision_channels") != 4:
+        if revisions and state.get("decision_channels") not in (4, 5):
             raise PodError("state_unsupported", "Issue revision evidence requires its decision channel marker")
         if state.get("decision_channels") == 4 and not revisions:
             raise PodError("state_unsupported", "Issue revision history is missing")
         for row in revisions:
             validate_decision(row, checkpoint_value)
-        if state.get("decision_channels") == 4:
+        if state.get("decision_channels") == 4 or state.get("decision_channels") == 5 and checkpoint_value.get("obligations") is not None:
             from .obligations import validate_map_record
             validate_map_record(checkpoint_value)
+        from .contracts import TOOL_QUESTION_SCHEMA
+        questions = checkpoint_value.get("questions")
+        if isinstance(questions, list) and any(isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA for row in questions):
+            if state.get("decision_channels") != 5:
+                raise PodError("state_unsupported", "Objective tool questions require decision marker5")
+            _tool_question_rows(state)
     continuity = checkpoint_value.get("continuity") if isinstance(checkpoint_value, dict) else None
     if continuity is not None:
         _validate_continuity(continuity)
@@ -337,33 +349,40 @@ def _write(path: Path, value: dict, *, native: dict | None = None, protected=(),
     from .standing import observe_scope
     observe_scope(value)
     from .util import protect_decision_record
+    from .relay import stamp_decision
+    stamp_decision(value)
     protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
     record, chunks = prepare_context(path, value, native=native, protected=protected)
     if before_publish is not None:
         before_publish()
-    publish_context(path, record, chunks)
+    from .relay import publish_decision
+    publish_decision(path, value, lambda: publish_context(path, record, chunks))
 
 
 def _write_succession(path: Path, value: dict) -> None:
     """The claim's single write of a predecessor record, under that record's lock."""
     from .util import protect_decision_record
+    from .relay import stamp_decision, publish_decision
+    stamp_decision(value)
     protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
     record, chunks = prepare_context(path, value)
-    publish_context(path, record, chunks)
+    publish_decision(path, value, lambda: publish_context(path, record, chunks))
 
 
 def _write_retirement(path: Path, value: dict) -> None:
     """The owner's historical retirement: its single write of the record, under that record's lock."""
     from .util import protect_decision_record
+    from .relay import stamp_decision, publish_decision
+    stamp_decision(value)
     protect_decision_record(value)
     value["revision"] += 1
     _validate_context(value)
     record, chunks = prepare_context(path, value, purpose="retirement")
-    publish_context(path, record, chunks)
+    publish_decision(path, value, lambda: publish_context(path, record, chunks))
 
 
 def _run_references(state: dict) -> dict[str, str]:
@@ -750,6 +769,18 @@ def continuity_locked(project: Path, objective: str, *, owner: str, port,
         return _continuity_step(project, objective, state, owner=owner, port=port, current=current)
 
 
+def _continuity_decision(state, *, owner, decision, port):
+    from .relay import decision_input
+    if not isinstance(decision, dict) or not decision_input(decision) and decision.get("channel") != "session":
+        return None
+    history = (((state or {}).get("checkpoint") or {}).get("continuity") or {}).get("history", [])
+    return {"kind": "continuity", "effect": {"decision": decision, "binding": _run_references(state or _empty())},
+            "decision": decision, "keys": ["runtime_binding"], "resources": {"owner": owner},
+            "prior": [{"keys": ["runtime_binding"], "decided_at": row.get("decision", {}).get("decided_at")}
+                      for row in history if row.get("decision") is not None]}
+
+
+@decision_boundary(_continuity_decision)
 def owner_continuity(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:
     """Rebind an ambiguous continuity only on the Owner's exact-scope direct decision."""
     from .util import owner_decision, CHANNEL_FIELDS, channel_fields
@@ -764,7 +795,8 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
                         f"The continuity decision does not match the current facts: {reason}. Nothing was written",
                         {"reason": reason,
                          "next_action": "retry the mutation; if it reports ambiguity, ask the Owner again"})
-    if value["provenance"] != "user_direct":
+    from .relay import decision_input
+    if value["provenance"] != "user_direct" and not decision_input(value):
         raise mismatch("only a direct Owner instruction can rebind an ambiguous continuity")
     value = owner_decision(value, kind="continuity")
     if (not isinstance(value["ambiguity"], list) or not value["ambiguity"]
@@ -800,7 +832,7 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
                 or value["ambiguity"] != verdict["ambiguity"]):
             raise mismatch("objective, runtimes or reported ambiguity differ")
         entry = _apply_continuity(state, verdict, provenance="owner",
-                                  decision={"provenance": "user_direct", "instruction": value["instruction"],
+                                  decision={"provenance": value["provenance"], "instruction": value["instruction"],
                                             **channel_fields(value),
                                             "ambiguity": verdict["ambiguity"]})
         _write(path, state)
@@ -1081,7 +1113,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
-            "closure_at": datetime.now(timezone.utc).isoformat(),
+            "closure_at": decision_commit_time(),
             "pod_mapping_source": checkpoint_value.get("objective_source"),
             "pod_mapping_facts": state.get("pod_ticks", {}).get("facts"),
             "pod_mapping_read": state.get("pod_ticks", {}).get("read", {}),
@@ -1288,6 +1320,14 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     allowed = fields("checkpoint")
     required_fields = required("checkpoint")
     exact(value, allowed, required_fields, name="checkpoint")
+    from .contracts import TOOL_QUESTION_SCHEMA
+    old_questions = {row["id"]: row for row in (previous or {}).get("questions", [])
+                     if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA} if isinstance((previous or {}).get("questions", []), list) else {}
+    proposed_questions = value.get("questions")
+    proposed_tool = {row.get("id"): row for row in proposed_questions if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA} if isinstance(proposed_questions, list) else {}
+    if (any(row != old_questions.get(key) for key, row in proposed_tool.items())
+            or any(key not in proposed_tool and row["state"] in ("pending", "approved") for key, row in old_questions.items())):
+        raise PodError("tool_question_kernel_field", "Use tool check, answer or cancel for objective permission questions; carry stored rows unchanged")
     if value["schema"] != CHECKPOINT_SCHEMA or not isinstance(native.get("runtime"), str):
         raise PodError("invalid_checkpoint", f"Checkpoint needs {CHECKPOINT_SCHEMA} and current native runtime readback")
     if (not isinstance(value["criteria"], list) or len(value["criteria"]) > bound("checkpoint", "criteria", "max_items")
@@ -1572,7 +1612,69 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     return map_state, ctx
 
 
+def _checkpoint_decision(state, *, owner, value, native):
+    from .relay import decision_input
+    from .issue_revision import requested
+    raw = value.get("revision_authority") if isinstance(value, dict) else None
+    if not isinstance(raw, dict) or raw.get("channel") == "relayed" and not decision_input(raw):
+        return None
+    if not decision_input(raw) and ("channel" not in raw or "question" in raw):
+        # Existing question answers, including explicit session inputs, retain their
+        # recorded-question validation and receipt-free representation.
+        return None
+    from .obligations import expand_update
+    previous = (state or {}).get("checkpoint") or {}
+    intent = digest({key: item for key, item in value.items() if key != "revision_authority"})
+    from .relay import same_decision_input
+    last = previous.get("revision_decisions", [])[-1:]
+    if (last and last[0].get("decision_binding", {}).get("resources", {}).get("intent") == intent
+            and same_decision_input(raw, last[0])):
+        return {"replay": state}
+    if requested(raw):
+        return None
+    proposed = expand_update(map_of(state), value)
+    old = {row["id"]: row for row in previous.get("obligations", [])}
+    changed = [row for row in proposed.get("obligations", []) if isinstance(row, dict) and row != old.get(row.get("id"))]
+    kind = ("reopen" if value.get("reopen") is True else "governance" if value.get("governance_refresh") is True
+            else "withdrawal" if changed and all(row.get("state") == "withdrawn" for row in changed) else "revision")
+    effect = {"previous": previous, "proposed": proposed}
+    effect_kinds = {kind}
+    if any(row.get("state") == "withdrawn" for row in changed):
+        effect_kinds.add("withdrawal")
+    if "question" in raw:
+        reference = raw["question"]
+        question = next((row for row in previous.get("questions", []) if isinstance(row, dict)
+                         and reference in (row.get("id"), row.get("reference"))), None)
+        if question is not None:
+            for label in ("category", "categories"):
+                if label in question:
+                    effect[label] = question[label]
+        kind, effect = "question", {"effect": {"kind": kind, "effect": effect}}
+        effect_kinds.add("question")
+    keys = ["obligation:" + row["id"] for row in changed if isinstance(row.get("id"), str)]
+    if value.get("governance_refresh") is True:
+        keys.append("governance")
+    if value.get("reopen") is True:
+        keys.append("closure")
+    keys = keys or ["map"]
+    legacy_keys = [key for key in keys if not key.startswith("obligation:") or key.split(":", 1)[1] in old]
+    prior = []
+    if value.get("reopen") is True:
+        prior.append({"keys": ["closure"], "decided_at": (previous.get("closure") or {}).get("at")})
+        legacy_keys = [key for key in legacy_keys if key != "closure"]
+    if legacy_keys and any("decision_binding" not in row and row.get("operation") != "issue_revision"
+                           for row in previous.get("revision_decisions", [])):
+        prior.append({"keys": legacy_keys, "decided_at": None})
+    return {"kind": kind, "effect": effect, "decision": raw, "keys": keys,
+            "kinds": ["question", "revision", "governance", "withdrawal", "reopen"],
+            "effect_kinds": sorted(effect_kinds),
+            "resources": {"map_revision": str(previous.get("revision", 0)), "map_seq": str(previous.get("seq", 0) + 1),
+                          "intent": intent},
+            "prior": prior}
+
+
 @input_record("checkpoint")
+@decision_boundary(_checkpoint_decision)
 def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native: dict) -> dict:
     """Persist one validated checkpoint; while a map exists, every write is a map transition."""
     from .bundle import running_identity
@@ -1594,7 +1696,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
     if requested(value.get("revision_authority")) and "dispositions" in value:
         raise issue_refuse("combined_operation")
     path = _path(project, objective)
-    with _lock(path):
+    with _lock(path), ExitStack() as decision_stack:
         state = _read(path)
         previous = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
         try:
@@ -1650,8 +1752,11 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             checked, _ = issue_recheck_live(project, source)
             if checked.get("body_changed") or checked.get("amendment_changed"):
                 raise PodError("issue_reconciliation_required", "The SEAL completion binding changed during rebind")
-        issue_revision = Revision(project, objective, owner, state, core, proposed, data=revision_data) if issue_requested else None
+        issue_revision = Revision(project, objective, owner, state, core, proposed, data=revision_data,
+                                  intent=digest({key: item for key, item in value.items() if key != "revision_authority"})) if issue_requested else None
         if issue_revision is not None:
+            if issue_revision.capability is not None:
+                decision_stack.enter_context(issue_revision.capability.scope())
             proposed = {**proposed, "revision_authority": issue_revision.authority}
         from .pod_ticks import refresh as refresh_ticks
         prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
@@ -1686,6 +1791,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                                **({"continuity": continuity} if continuity else {})}
         from .pod_ticks import bind_criterion_scopes
         bind_criterion_scopes(state, previous, verified=(issue_revision.scope_bindings if issue_revision else None))
+        if map_state.get("closure"):
+            _end_tool_questions(state)
         _write(path, state, native=authority.get("native"),
                before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None)
         if isinstance(proposed, dict) and proposed.get("close") is True:
@@ -1827,6 +1934,62 @@ def _native_assignment_settled(shown: dict) -> bool:
             and projection.get("taskId") == dispatch["taskId"])
 
 
+def _routing_context(project, state, body, task, native, moment):
+    from .selection import semantic_role, failure_active
+    groups = [row for row in state["constraints"] if row["kind"] == "route_rule" and row.get("active", True)]
+    if not groups:
+        if body.get("fallback_of") is not None:
+            raise PodError("route_fallback_unavailable", "Fallback needs the current requested route rule")
+        return None, None
+    if len(groups) != 1:
+        raise PodError("route_rule_conflict", "Only one requested route rule may be active")
+    from .lineage import Lineage
+    lineage = Lineage((state.get("checkpoint") or {}).get("obligations", []))
+    served, seen = [], set()
+    for key in body["serves"]:
+        cursor = lineage.rows.get(lineage.effective(key))
+        while cursor is not None and cursor["id"] not in seen:
+            seen.add(cursor["id"])
+            served.append(cursor)
+            if body["role"] == "review":
+                break
+            parent = cursor.get("parent")
+            cursor = lineage.rows.get(lineage.effective(parent)) if parent is not None else None
+    role = semantic_role(body["role"], served, requested=body.get("routing_role"), composite=True)
+    reference = body.get("fallback_of")
+    if reference is None:
+        return role, None
+    prior = state["admissions"].get(reference)
+    group = groups[0]
+    if (prior is None or prior["task_id"] != task or prior["role"] != body["role"]
+            or prior.get("serves") != body["serves"]
+            or prior["recovery"].get("routing_responsibility") != body["responsibility"]
+            or prior["route_decision"].get("routing_role") != role
+            or prior["route_decision"].get("rule_id") != group["id"]
+            or prior["route_decision"].get("stage") != "primary"):
+        raise PodError("route_fallback_unavailable", "Fallback must name the same task, responsibility, role and current primary rule")
+    relevant = [row for row in prior["failures"] if not row.get("cleared_at") and row.get("task") == task]
+    if any(row["kind"] in ("auth_failed", "safety_refusal") and failure_active(row, now=moment) for row in relevant):
+        raise PodError("route_fallback_unavailable", "Authentication or safety refusal cannot unlock fallback")
+    candidates = [row for row in relevant if row["kind"] in ("unavailable", "rate_limited") and failure_active(row, now=moment)]
+    if not candidates:
+        raise PodError("route_fallback_unavailable", "Current attempt-local unavailable or rate-limited evidence is required")
+    matches = [row for row in native.get("assignments", []) if row.get("admission_id") == reference]
+    settlement = None
+    if prior.get("native_binding") is not None and len(matches) == 1 and matches[0].get("settled") is True:
+        settlement = "settled"
+    elif prior["state"] == "deferred" and prior.get("retry_of") is not None:
+        from .operations import _retry_after
+        parent = state["admissions"].get(prior["retry_of"])
+        _retry_after(project, state, parent, reference)
+        settlement = "no_start"
+    if settlement is None:
+        raise PodError("route_fallback_unavailable", "Fallback waits for exact native settlement or proved no-start")
+    failure = candidates[-1]
+    return role, {"admission": reference, "kind": failure["kind"], "rule_id": group["id"],
+                  "routing_role": role, "settlement": settlement}
+
+
 def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dict,
                    requested: dict, task_id: str, moment: datetime, projection: dict,
                    failures: list, reuse_of: str | None, native: dict) -> dict:
@@ -1853,8 +2016,10 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
             c["kind"] == "allow_delegation" and c["provenance"] == "user_direct" and c.get("active", True)
             for c in state["constraints"]):
         raise PodError("delegation_unauthorized", "Worker delegation lacks direct user intent")
+    routing_role, fallback = _routing_context(project, state, body, task_id, native, moment)
     checked = validate_choice(snapshot, state["constraints"], failures, requested,
-                              task=task_id, role=body.get("responsibility"), now=moment)
+                              task=task_id, role=body.get("responsibility"), now=moment,
+                              routing_role=routing_role, fallback=fallback)
     if not checked["allowed"]:
         if revision_changed:
             raise PodError("preference_changed",
@@ -1882,6 +2047,10 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
         if any(effective_route.get(key) in (None, "unknown")
                or requested[key] != effective_route[key] for key in ("agent", "model", "effort")):
             raise PodError("reuse_route_changed", "Terminal reuse cannot switch the prior effective model")
+    if routing_role is not None:
+        snapshot = {**snapshot, "decision_routing": {"routing_role": routing_role,
+                    **{key: checked[key] for key in ("stage", "rule_id", "pin_inapplicable", "preferred_route")},
+                    **({"fallback_of": body["fallback_of"]} if fallback is not None else {})}}
     return snapshot
 
 
@@ -1897,11 +2066,12 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
     from .catalog import route_key
     from .obligations import admit, reserved_admission_shape
     stamp = moment.isoformat()
+    routing = snapshot.get("decision_routing", {})
     pinned = snapshot.get("pinned")
     # Earlier rows keep `mode` and model-only `pinned_model`; new rows add the exact routes.
     decision = {"agent": requested["agent"], "model": requested["model"],
                 "requested_effort": requested["effort"], "requested_context": requested["context"],
-                "reason": requested["reason"] + ("; personal pin selected the route" if pinned else ""),
+                "reason": requested["reason"] + ("; personal pin selected the route" if pinned and not routing.get("pin_inapplicable") else ""),
                 "preference_revision": snapshot["revision"],
                 "policy_revision": snapshot["policy_revision"],
                 "pinned_model": pinned.split("/")[1] if pinned else None,
@@ -1912,6 +2082,7 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
                 "pod_version": __version__, "effective": {"agent": "unknown", "model": "unknown",
                 "effort": "unknown", "context": "unknown"},
                 "route_mismatch": False, "effective_unknown": True}
+    decision.update(routing)
     new_map = admit(map_state, body, ctx, admission_id=admission_id, accompanying=accompanying)
     shape = reserved_admission_shape(body, ctx, map_state)
     worktree_path = placement_binding.get("path") if isinstance(placement_binding, dict) else None
@@ -1932,6 +2103,8 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
            "boundary_exceeded": [], "admitted_seq": new_map["seq"]}
     from .display import admission_facts
     row["display"] = admission_facts(state, body, worktree_path, placement_naming)
+    if routing:
+        row["recovery"]["routing_responsibility"] = body["responsibility"]
     if retry_of is not None:
         row["retry_of"] = retry_of
         row["recovery"]["retry_of_dispatch_id"] = state["admissions"][retry_of]["native_binding"]["dispatchId"]
@@ -2147,7 +2320,8 @@ def _update_admission_locked(project: Path, objective: str, *, state: dict, owne
         raise PodError("admission_conflict", "The admission's reservation sequence is immutable")
     if display_before != ("display" in row, row.get("display")):
         raise PodError("admission_conflict", "The admission display facts are immutable")
-    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    from .relay import decision_commit_time
+    row["updated_at"] = decision_commit_time()
     _write(_path(project, objective), state)
     return row
 
@@ -2206,7 +2380,7 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
     from .issue_revision import refuse_alternate
     refuse_alternate(accompanying)
     path = _path(project, objective)
-    with _lock(path):
+    with _lock(path), ExitStack() as decision_stack:
         state = _read(path)
         row = state["admissions"].get(admission_id)
         if state["owner"] != owner or row is None:
@@ -2282,6 +2456,18 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         if prior_report is not None and (prior_report.get("observation_digest") != report_identity
                                          or prior_report.get("result_commit") != result_commit):
             raise PodError("report_conflict", "A consumed Dispatch report or result cannot be replaced")
+        raw_authority = (accompanying or {}).get("revision_authority")
+        report_intent = digest({"admission": admission_id, "map": accompanying, "observation": observation,
+                                "findings": findings, "proposals": proposals, "result_commit": result_commit})
+        last_decision = (map_state.get("revision_decisions") or [])[-1:]
+        from .relay import same_decision_input
+        if (isinstance(raw_authority, dict) and last_decision
+                and last_decision[0].get("decision_binding", {}).get("resources", {}).get("report_intent") == report_intent
+                and same_decision_input(raw_authority, last_decision[0])):
+            return {"ingestion": _stored_ingestion(row), "settled": True, "committed": True, "readback": True,
+                    "written": _report_written_ids(map_state, admission_id),
+                    "map": {"seq": map_state["seq"], "revision": map_state["revision"], "quiescence": map_state["quiescence"]},
+                    "report": report_projection(map_state, ctx, standing_normal=True), **tab_output()}
         if prior_report is not None and not accompanying and not findings and not proposals:
             if matching_route_settlement(row):
                 _write(path, state, native=authority.get("native"), protected=ctx["outstanding"])
@@ -2318,6 +2504,21 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             ctx["pending_route_settlements"] = (accompanying or {}).get("route_settlements", ())
             value, triaged = triage(map_state, dict(accompanying or {}), findings or [], proposals or [], ctx,
                                     admission_id=admission_id)
+            if isinstance(raw_authority, dict):
+                before = _read(path)
+                facts = _checkpoint_decision(before, owner=owner, value=value, native=authority["native"])
+                if facts is not None and "replay" not in facts:
+                    from .relay import Decision
+                    complete = {**facts["effect"], "report": {"admission": admission_id, "observation": observation,
+                                "findings": findings, "proposals": proposals, "result_commit": result_commit}}
+                    capability = Decision(project, objective, kind=facts["kind"], kinds=facts.get("effect_kinds"),
+                                          effect=complete, state=before, decision=facts["decision"],
+                                          resources={"objective": objective, **facts["resources"], "report_intent": report_intent})
+                    capability.keys, capability.kinds, capability.prior = facts["keys"], set(facts["kinds"]), facts["prior"]
+                    decision_stack.enter_context(capability.scope())
+                    ctx["closure_at"] = capability.commit_clock()
+                    if prior_report is None:
+                        row["report"]["consumed_at"] = row["updated_at"] = capability.commit_clock()
             if (prior_report is not None and not accompanying and value.get("obligations") == map_state["obligations"]
                     and value.get("proposals") == map_state["proposals"]):
                 if matching_route_settlement(row):
@@ -2341,6 +2542,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
                 exc.detail = {**(exc.detail or {}), "worker_tabs": ctx["worker_tabs"]}
             raise
         state["checkpoint"] = {**state["checkpoint"], **new_map}
+        if new_map.get("closure"):
+            _end_tool_questions(state)
         from .pod_ticks import bind_criterion_scopes
         bind_criterion_scopes(state, map_state)
         if observation.get("status") == "validated_observation" and report_value.get("outcome") == "succeeded":
@@ -2480,8 +2683,39 @@ def _intervention_locked(project: Path, objective: str, state: dict, *, task: st
                     "diagnosis_source": diagnosis_source,
                     "diagnosis_source_digest": diagnosis_source["sha256"] if diagnosis_source else None})
     return {"correction_identity": identity, "dispatch_authorized": False, "scope": key}
+def _constraint_decision(state, *, owner, action, value=None, constraint_id=None, decision=None):
+    if action == "list":
+        return None
+    from .relay import decision_input
+    raw = value if action == "add" else decision
+    if (not isinstance(raw, dict) or "instruction" not in raw
+            or raw.get("channel") == "relayed" and not decision_input(raw)):
+        return None
+    rows = (state or {}).get("constraints", [])
+    intent = digest({"action": action, "value": value, "id": constraint_id})
+    from .relay import same_decision_input
+    if action == "add":
+        recorded = next((row for row in rows if row.get("id") == value.get("id")), None)
+        if (recorded is not None and recorded.get("decision_binding", {}).get("resources", {}).get("intent") == intent
+                and same_decision_input(raw, recorded)):
+            return {"replay": {"constraints": rows}}
+    added = [value] if action == "add" else []
+    removed = [row for row in rows if row.get("active", True) and (
+        row.get("id") == constraint_id if action == "revoke" else value.get("kind") == row["kind"] == "route_rule")]
+    removed = [{**row, **({"effect": {"effects": [{"kind": "governance", "effect": {}}]}}
+                         if row["provenance"] == "repository" else {})} for row in removed]
+    grouped = any(row["kind"] == "route_rule" for row in added + removed)
+    keys = ["route_rule"] if grouped else ["constraint:" + str(value.get("id") if action == "add" else constraint_id)]
+    return {"kind": "constraint", "effect": {"added": added, "removed": removed}, "decision": raw,
+            "effect_kinds": ["constraint", "route_rule"] if grouped else ["constraint"],
+            "keys": keys, "resources": {"constraint": "requested-route-rule" if grouped else str(constraint_id or value.get("id")), "intent": intent},
+            "prior": [{"keys": keys, "decided_at": row.get("decided_at")} for row in removed]}
+
+
+@decision_boundary(_constraint_decision)
 def constraints_update(project: Path, objective: str, *, owner: str,
-                       action: str, value: dict | None = None, constraint_id: str | None = None) -> dict:
+                       action: str, value: dict | None = None, constraint_id: str | None = None,
+                       decision: dict | None = None) -> dict:
     from .config import load
     from .selection import validate_constraint
     path = _path(project, objective)
@@ -2505,6 +2739,11 @@ def constraints_update(project: Path, objective: str, *, owner: str,
         require_authority(project, objective, owner=owner, state=state)
         if action == "add":
             snapshot = load(project)
+            from .relay import current_decision
+            capability = current_decision()
+            if capability is not None and capability.matches(value, "constraint"):
+                from .util import owner_decision
+                value = owner_decision(value, kind="constraint")
             row = validate_constraint(value, snapshot)
             if row["kind"] == "keep_worker_tab" and row["value"]["objective"] != objective:
                 raise PodError("invalid_constraint", "Worker-tab instruction must name this objective")
@@ -2512,6 +2751,12 @@ def constraints_update(project: Path, objective: str, *, owner: str,
                 raise PodError("invalid_constraint", "Constraint id is required")
             if any(c.get("id") == row["id"] for c in state["constraints"]):
                 raise PodError("constraint_conflict", "Constraint id is already present")
+            if row["kind"] == "route_rule":
+                # A requested arrangement replaces only its own active group.
+                # Repository, issue and every independent restriction keep intersecting.
+                for previous in state["constraints"]:
+                    if previous["kind"] == "route_rule" and previous.get("active", True):
+                        previous["active"] = False
             state["constraints"].append(row)
         elif action == "revoke":
             matches = [c for c in state["constraints"] if c.get("id") == constraint_id]
@@ -2519,6 +2764,16 @@ def constraints_update(project: Path, objective: str, *, owner: str,
                 raise PodError("unknown_constraint", "Constraint id is unavailable")
             if matches[0]["kind"] == "keep_worker_tab":
                 raise PodError("constraint_authority", "Record revocation as a new user_direct keep_worker_tab instruction with keep false")
+            if decision is not None:
+                from .util import owner_decision
+                approval = owner_decision(decision, kind="constraint")
+                # Retain revocation authority without rewriting the original
+                # request or its actor: one inactive history row names the stop.
+                stop = {"id": "revoke:" + digest([constraint_id, approval]), "kind": matches[0]["kind"],
+                        "value": matches[0]["value"], "active": False, **approval}
+                if "role" in matches[0]:
+                    stop["role"] = matches[0]["role"]
+                state["constraints"].append(stop)
             matches[0]["active"] = False
         else:
             raise PodError("invalid_constraint_action", "Constraint action is unsupported")
@@ -2526,6 +2781,30 @@ def constraints_update(project: Path, objective: str, *, owner: str,
         return {"constraints": state["constraints"]}
 
 
+def _failure_clear_decision(state, *, owner, admission_id, kind, source, retry_after=None,
+                            clear=False, cleared_by=None, decision=None, native_reader=None):
+    from .relay import decision_input
+    if not clear or not isinstance(decision, dict) or decision.get("channel") == "relayed" and not decision_input(decision):
+        return None
+    row = (state or {}).get("admissions", {}).get(admission_id)
+    failures = [item for item in (row or {}).get("failures", []) if item["kind"] == kind and not item.get("cleared_at")]
+    intent = digest([admission_id, kind, source, cleared_by])
+    if not failures:
+        from .relay import same_decision_input
+        for item in reversed((row or {}).get("failures", [])):
+            approval = item.get("clear_decision") or {}
+            if (item["kind"] == kind and approval.get("decision_binding", {}).get("resources", {}).get("intent") == intent
+                    and same_decision_input(decision, approval)):
+                return {"replay": row}
+    key = "failure:" + digest([admission_id, kind])
+    return {"kind": "route_failure_clear", "effect": {"admission": admission_id, "failures": failures,
+            "source": source, "cleared_by": cleared_by}, "decision": decision, "keys": [key],
+            "resources": {"admission": admission_id, "failure": kind, "intent": intent},
+            "prior": [{"keys": [key], "decided_at": item.get("clear_decision", {}).get("decided_at")}
+                      for item in (row or {}).get("failures", []) if item["kind"] == kind and item.get("cleared_at")]}
+
+
+@decision_boundary(_failure_clear_decision)
 def route_failure(project: Path, objective: str, *, owner: str, admission_id: str,
                   kind: str, source: str, retry_after: str | None = None,
                   clear: bool = False, cleared_by: str | None = None,
@@ -2538,7 +2817,7 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
         raise PodError("invalid_route_failure", "Safety refusal has no timed retry")
     from .util import owner_decision, DECISION_FIELDS
     clear_decision = None
-    if clear and cleared_by == "user":
+    if clear and cleared_by in ("user", "agent"):
         value = exact(decision if decision is not None else {}, DECISION_FIELDS, name="clear_decision")
         clear_decision = owner_decision(value, kind="route_failure_clear")
     elif decision is not None:
@@ -2548,13 +2827,14 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
         retry_after = normalize_timestamp(retry_after, field="Retry-after", code="invalid_route_failure")
     def apply(row: dict) -> None:
         if clear:
-            if cleared_by not in ("user", "runtime_change"):
+            if cleared_by not in ("user", "agent", "runtime_change"):
                 raise PodError("invalid_route_failure", "Clear needs user or runtime-change provenance")
             matched = False
             for failure in row["failures"]:
                 if failure["kind"] == kind and not failure.get("cleared_at"):
-                    failure["cleared_at"] = datetime.now(timezone.utc).isoformat()
-                    failure["cleared_by"] = cleared_by
+                    from .relay import decision_commit_time
+                    failure["cleared_at"] = decision_commit_time()
+                    failure["cleared_by"] = ("agent" if clear_decision and clear_decision.get("actor", {}).get("kind") == "agent" else cleared_by)
                     if clear_decision is not None:
                         failure["clear_decision"] = clear_decision
                     matched = True
@@ -2594,3 +2874,305 @@ def route_failure(project: Path, objective: str, *, owner: str, admission_id: st
                                     "cleared_at": None, "cleared_by": None})
     return update_admission(project, objective, owner=owner, admission_id=admission_id, update=apply,
                             open_required=True)
+
+
+def _tool_question_rows(state):
+    from .contracts import TOOL_QUESTION_SCHEMA
+    from .config import validate_pending
+    from .relay import validate_decision_record, DECISION_RAW
+    values = (state.get("checkpoint") or {}).get("questions", [])
+    if not isinstance(values, list):
+        raise PodError("tool_questions_unavailable", "Record checkpoint questions as a list before asking a tool question")
+    result = []
+    seen = set()
+    core = {"id", "purpose", "tool", "category", "categories", "operation", "spending", "revisions", "state", "text", "choices"}
+    allowed = core | {"schema", "resolved", "native_sha256", "objective_revision", "map_seq", "map_revision", "decision", "answer",
+                      "accepted_revision", "accepted_seq", "cancelled_reason"}
+    for value in values:
+        if not isinstance(value, dict) or value.get("schema") != TOOL_QUESTION_SCHEMA:
+            continue
+        row = exact(value, allowed, core | {"schema", "resolved", "native_sha256", "objective_revision", "map_seq", "map_revision"}, name="objective tool question")
+        if (not isinstance(row["id"], str) or not re.fullmatch(r"[0-9a-f]{32}", row["id"])
+                or row["id"] in seen or not isinstance(row["native_sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", row["native_sha256"])
+                or type(row["objective_revision"]) is not int or not 1 <= row["objective_revision"] <= state["revision"]
+                or type(row["map_seq"]) is not int or not 0 <= row["map_seq"] <= (map_of(state) or {}).get("seq", 0)
+                or type(row["map_revision"]) is not int or not 0 <= row["map_revision"] <= (map_of(state) or {}).get("revision", 0)
+                or type(row["resolved"]) is not bool or row["resolved"] != (row["state"] != "pending")
+                or row["state"] not in ("pending", "approved", "answered", "refused", "consumed", "cancelled", "stale")):
+            raise PodError("state_unsupported", "Objective tool question identity or generation is inconsistent")
+        seen.add(row["id"])
+        adapted = {key: row[key] for key in core}
+        if "decision" in row:
+            kind = "tool_permission" if row["purpose"] == "memory" else "tool_operation"
+            approved = validate_decision_record(row["decision"], kind=kind)
+            if (type(row.get("accepted_revision")) is not int
+                    or not row["objective_revision"] <= row["accepted_revision"] <= state["revision"]
+                    or type(row.get("accepted_seq")) is not int or not row["map_seq"] <= row["accepted_seq"] <= (map_of(state) or {}).get("seq", 0)):
+                raise PodError("state_unsupported", "Objective tool approval retains its accepted generation")
+            adapted.update(decision=row["decision"], answer=row["answer"])
+            if "decision_binding" in row["decision"]:
+                adapted["principal"] = approved["actor"]
+            if row["state"] in ("cancelled", "stale"):
+                adapted["state"] = "answered" if row["purpose"] == "memory" else "approved" if row["answer"] == "approve" else "refused"
+            expected = {"objective": state["checkpoint"]["objective"], "tool": row["tool"], "category": row["category"],
+                        "invocation": row["id"], "purpose": row["purpose"]}
+            original = _pending_tool_question(row)
+            raw = {key: approved[key] for key in DECISION_RAW if key in approved}
+            if approved["channel"] == "relayed":
+                raw["provenance"] = "decision_request"
+            if (approved["decision_binding"]["resources"] != expected
+                    or approved["decision_binding"]["payload_sha256"] != digest({"effect": _tool_answer_effect(original, row["answer"]), "decision": raw})):
+                raise PodError("state_unsupported", "Objective tool approval does not bind this exact question")
+        elif row["state"] in ("cancelled", "stale"):
+            adapted["state"] = "pending"
+        elif row["state"] != "pending":
+            raise PodError("state_unsupported", "Answered tool question has no decision evidence")
+        validate_pending([adapted])
+        from .util import encoded
+        if len(encoded(row, compact=True)) > 2048:
+            raise PodError("pending_decision_too_large", "Complete objective tool question exceeds2048 bytes; shorten operation or decision evidence")
+        result.append(row)
+    return values, result
+
+
+def _pending_tool_question(row):
+    from copy import deepcopy
+    return {**{key: deepcopy(value) for key, value in row.items()
+               if key not in ("decision", "answer", "accepted_revision", "accepted_seq", "cancelled_reason")},
+            "state": "pending", "resolved": False}
+
+
+def _tool_answer_effect(question, answer):
+    return {"category": question["category"], "spending": question["spending"], "purpose": question["purpose"],
+            "question": question, "answer": answer}
+
+
+def _tool_native(project, objective, state, owner):
+    if owner != state["owner"]:
+        raise PodError("coordinator_conflict", "Only the recorded coordinator writes objective tool questions")
+    authority = require_authority(project, objective, owner=owner, state=state, persist_rebind=False)
+    binding = authority["native"].get("binding") or {}
+    if (binding.get("coordinator_handle") != owner or not isinstance(binding.get("id"), str)
+            or not binding["id"] or type(binding.get("consumer_generation")) is not int
+            or binding["consumer_generation"] < 0):
+        raise PodError("native_authority_unverified", "Objective permission questions need the exact current Run generation")
+    identity = {"owner": owner, "runtime": authority["runtime"], "references": authority["references"],
+                "binding": {key: binding.get(key) for key in ("id", "coordinator_handle", "consumer_generation")}}
+    return authority, digest(identity)
+
+
+def _write_tool_questions(project, objective, state, questions, authority):
+    from .obligations import accept_write
+    prior = map_of(state)
+    if prior is not None:
+        require_governance_current(project, prior)
+        ctx = kernel_context(project, objective, state, authority["native"])
+        ctx.update(operation="checkpoint", recorded_questions=state["checkpoint"].get("questions", []))
+        updated = accept_write(prior, {"seq": prior["seq"] + 1}, ctx)
+        state["checkpoint"] = {**state["checkpoint"], **updated}
+    state["checkpoint"]["questions"] = questions
+    _write(_path(project, objective), state, native=authority["native"])
+
+
+def tool_decision(project: Path, objective: str, *, action: str, owner: str | None = None, tool=None,
+                  category=None, operation=None, spending=None, invocation=None, answer=None, decision=None) -> dict:
+    """Use existing checkpoint questions; personal memory remains machine scoped."""
+    from copy import deepcopy
+    from uuid import uuid4
+    from . import config, tool_permissions, policy
+    from .contracts import TOOL_QUESTION_SCHEMA
+    from .relay import (Decision, validate_decision_record, same_decision_input, compact_tool_decision)
+    path = _path(project, objective)
+    with _lock(path):
+        state = _read(path)
+        if state.get("checkpoint") is None:
+            raise PodError("objective_unknown", "Record this objective before asking an objective tool question")
+        _require_open(state)
+        owner = owner or state["owner"]
+        questions, typed = _tool_question_rows(state)
+        questions = deepcopy(questions)
+        row = next((value for value in questions if isinstance(value, dict) and value.get("schema") == TOOL_QUESTION_SCHEMA
+                    and value.get("id") == invocation), None)
+        snapshot = config.load(project)
+        if snapshot["status"] not in ("valid", "missing"):
+            raise PodError("decision_config_unavailable", "Read and repair personal preferences before changing tool decisions")
+        if invocation is not None and row is None:
+            raise PodError("tool_invocation_unavailable", "This objective has no such current invocation; an old answer grants nothing")
+        if action == "answer":
+            if row is None or decision is None:
+                raise PodError("tool_answer_refused", "Answer a recorded question with its invocation and decision")
+            exact(decision, {"provenance", "instruction", "channel", "relay"}, {"provenance", "instruction"}, name="decision input")
+            authority, native = _tool_native(project, objective, state, owner)
+            if row["state"] != "pending":
+                if row.get("answer") == answer and same_decision_input(decision, row.get("decision", {})):
+                    return {"status": row["state"], "execute": False, "invocation": invocation, "committed": True, "readback": True}
+                raise PodError("tool_answer_refused", "Only an unresolved question accepts a new answer")
+            effect = _tool_answer_effect(deepcopy(row), answer)
+            resources = {"objective": objective, "tool": row["tool"], "category": row["category"], "invocation": row["id"], "purpose": row["purpose"]}
+            remembered = next((entry for entry in snapshot["tool_permissions"] if
+                               (entry["tool"], entry["category"]) == (row["tool"], row["category"])), None)
+            recovered = (row["purpose"] == "memory" and remembered is not None and remembered["mode"] == answer
+                         and remembered["decision"].get("decision_binding", {}).get("resources") == resources
+                         and same_decision_input(decision, remembered["decision"]))
+            if recovered:
+                capability = Decision.complete(project, objective, remembered["decision"], effect=effect)
+                capability.phases({"objective": path}, {"objective": deepcopy(state)})
+            else:
+                expected = {"policy": digest(snapshot["decision_policy"]), "memory": digest(snapshot["tool_permissions"]),
+                            "decision_generation": snapshot["decision_generation"], "invocation": row["id"]}
+                if (row["revisions"] != expected or row["native_sha256"] != native
+                        or row["map_revision"] != (map_of(state) or {}).get("revision", 0)
+                        or map_of(state) is None and row["objective_revision"] != state["revision"]):
+                    raise PodError("decision_stale", "Question state, native identity, policy or memory changed; check the operation again")
+                if answer not in row["choices"]:
+                    raise PodError("tool_answer_refused", "Choose one of this question's offered answers")
+                kind = "tool_permission" if row["purpose"] == "memory" else "tool_operation"
+                capability = Decision(project, objective, kind=kind, effect=effect,
+                                      state={"context": deepcopy(state), "authority": config.decision_state(snapshot)},
+                                      decision=decision, resources=resources, snapshot=snapshot)
+            with capability.scope():
+                if not recovered:
+                    _, refreshed = _tool_native(project, objective, state, owner)
+                    if refreshed != native:
+                        raise PodError("decision_stale", "Native identity changed during decision verification")
+                row.update(answer=answer, decision=compact_tool_decision(capability.record), resolved=True,
+                           state="answered" if row["purpose"] == "memory" else "approved" if answer == "approve" else "refused",
+                           accepted_revision=state["revision"] + 1, accepted_seq=(map_of(state) or {}).get("seq", -1) + 1)
+                if row["purpose"] == "memory" and not recovered:
+                    memory = tool_permissions.remember(snapshot["tool_permissions"], row["tool"], row["category"], answer, capability.record)
+                    capability.personal_change = {"tool_permissions": memory}
+                    capability.keys = ["memory:" + digest([row["tool"], row["category"]])]
+                else:
+                    capability.keys = ["invocation:" + row["id"]]
+                _write_tool_questions(project, objective, state, questions, authority)
+            return {"status": row["state"], "execute": False, "invocation": row["id"], "committed": True,
+                    **({"readback": True} if recovered else {}), **({"notice": capability.notice} if capability.notice else {})}
+        if action == "cancel":
+            if row is None or row["state"] != "pending":
+                raise PodError("tool_cancel_refused", "Cancel only a current unresolved question")
+            remembered = next((entry for entry in snapshot["tool_permissions"] if
+                               (entry["tool"], entry["category"]) == (row["tool"], row["category"])), None)
+            if (row["purpose"] == "memory" and remembered is not None
+                    and remembered["decision"].get("decision_binding", {}).get("resources", {}).get("invocation") == row["id"]):
+                raise PodError("tool_cancel_committed", "That memory choice already committed; replay its answer or use tool review")
+            authority, _ = _tool_native(project, objective, state, owner)
+            row.update(state="cancelled", resolved=True, cancelled_reason="coordinator cancelled the unanswered question")
+            _write_tool_questions(project, objective, state, questions, authority)
+            return {"status": "cancelled", "execute": False, "invocation": invocation}
+        if action not in ("check", "review"):
+            raise PodError("invalid_tool_action", "Tool action must be check, review, answer or cancel")
+        tool, category = tool_permissions._tool(tool), tool_permissions._category(category)
+        if action == "review":
+            if category == "money":
+                raise PodError("tool_review_money", "Money has no hands-off permission; approve each new spending commitment")
+            operation, spending = "Review remembered tool permission", None
+        if row is not None and (row["tool"], row["category"], row["operation"], row["spending"]) != (tool, category, operation, spending):
+            raise PodError("tool_invocation_mismatch", "Invocation binds another exact operation")
+        if row is not None and row["state"] in ("consumed", "refused", "cancelled", "stale"):
+            return {"status": "consumed" if row["state"] == "consumed" else "refused", "execute": False, "invocation": row["id"]}
+        if row is not None and row["state"] == "answered":
+            row, invocation = None, None
+        if row is None and action == "check":
+            row = next((value for value in questions if isinstance(value, dict) and value.get("schema") == TOOL_QUESTION_SCHEMA
+                        and value.get("state") == "pending"
+                        and (value["tool"], value["category"], value["operation"], value["spending"]) == (tool, category, operation, spending)), None)
+        live = {"policy": digest(snapshot["decision_policy"]), "memory": digest(snapshot["tool_permissions"]),
+                "decision_generation": snapshot["decision_generation"], "invocation": row["id"] if row else uuid4().hex}
+        if row is not None and row["state"] == "approved":
+            approved = validate_decision_record(row["decision"], kind="tool_operation")
+            capability = Decision._recorded(project, objective, approved)
+            capability.effect = _tool_answer_effect(_pending_tool_question(row), row["answer"])
+            prior_use = capability.prior_invocation()
+            authority, native = _tool_native(project, objective, state, owner)
+            if prior_use is None:
+                if (row["revisions"] != live or row["native_sha256"] != native
+                        or row["map_revision"] != (map_of(state) or {}).get("revision", 0)
+                        or map_of(state) is None and row["accepted_revision"] != state["revision"]):
+                    raise PodError("decision_stale", "Operation approval no longer matches this objective generation")
+                evaluated = {key: row[key] for key in ("id", "purpose", "tool", "category", "operation", "spending", "revisions", "state")}
+                evaluated["principal"] = approved["actor"]
+                result = tool_permissions.check(snapshot["decision_policy"], snapshot["tool_permissions"], tool, category,
+                                                operation, spending=spending, pending=evaluated, revisions=live)
+                if result["status"] != "allowed":
+                    return {**result, "execute": False, "invocation": row["id"]}
+                capability.revalidate_authorizer()
+                _, refreshed = _tool_native(project, objective, state, owner)
+                if refreshed != native:
+                    raise PodError("decision_stale", "Native identity changed before operation consumption")
+                capability.recheck_policy(snapshot)
+                capability.check_receipt()
+                capability.pending_use = row["id"]
+            else:
+                capability.completion_only = True
+                capability.check_receipt()
+            capability.phases({"objective": path}, {"objective": deepcopy(state)})
+            with capability.scope():
+                row.update(state="consumed", resolved=True)
+                _write_tool_questions(project, objective, state, questions, authority)
+            return {"status": "allowed" if capability.execute else "consumed", "execute": capability.execute,
+                    "invocation": row["id"], **({"readback": True} if not capability.execute else {})}
+        result = tool_permissions.check(snapshot["decision_policy"], snapshot["tool_permissions"], tool, category, operation,
+                                        spending=spending, revisions=live)
+        if action == "review":
+            result.update(status="permission_question", purpose="memory", choices=list(tool_permissions.MODES),
+                          text=f"For {tool} and {category.replace('_', ' ')}, remember hands-off or ask each time?")
+        if result["status"] == "allowed":
+            with config._edit_lock(config.personal_path(project)):
+                if config.decision_state(snapshot) != config.decision_state(config.load(project)):
+                    raise PodError("decision_stale", "Current policy or memory changed before the permission response")
+            return {**result, "execute": True}
+        text = config.tool_question_text(result, tool, category, operation)
+        try:
+            authority, native = _tool_native(project, objective, state, owner)
+        except PodError as exc:
+            if exc.code not in ("native_authority_unverified", "coordinator_conflict"):
+                raise
+            return {**result, "status": "coordinator_question", "execute": False, "question": text, "objective": objective,
+                    "next_action": "ask the recorded coordinator through native mail to record this exact tool question"}
+        if (row is not None and row["state"] == "pending" and row["revisions"] == live and row["native_sha256"] == native
+                and row["map_revision"] == (map_of(state) or {}).get("revision", 0)
+                and (map_of(state) is not None or row["objective_revision"] == state["revision"])):
+            return {**result, "execute": False, "invocation": row["id"], "question": row["text"]}
+        if row is not None:
+            row.update(state="stale", resolved=True, cancelled_reason="policy, memory, native or objective generation changed")
+        current_revisions = {"policy": live["policy"], "memory": live["memory"], "decision_generation": live["decision_generation"]}
+        current_map = map_of(state)
+        questions = [value for value in questions if not isinstance(value, dict) or value.get("schema") != TOOL_QUESTION_SCHEMA
+                     or value.get("state") == "pending"
+                     or value.get("state") == "approved" and current_map is not None
+                     and value["revisions"] == {**current_revisions, "invocation": value["id"]}
+                     and value["native_sha256"] == native and value["map_revision"] == current_map.get("revision", 0)]
+        if len([value for value in questions if isinstance(value, dict) and value.get("schema") == TOOL_QUESTION_SCHEMA]) >= 8:
+            raise PodError("pending_decision_limit", "Resolve an existing objective tool question before creating another")
+        identity = uuid4().hex
+        live["invocation"] = identity
+        question = {"schema": TOOL_QUESTION_SCHEMA, "id": identity, "purpose": result["purpose"], "tool": tool,
+                    "category": category, "categories": result["categories"], "operation": operation, "spending": spending,
+                    "revisions": live, "state": "pending", "resolved": False, "text": text, "choices": result["choices"],
+                    "native_sha256": native, "objective_revision": state["revision"] + 1, "map_seq": (map_of(state) or {}).get("seq", -1) + 1,
+                    "map_revision": (map_of(state) or {}).get("revision", 0)}
+        questions.append(question)
+        with config._edit_lock(config.personal_path(project)):
+            if config.decision_state(snapshot) != config.decision_state(config.load(project)):
+                raise PodError("decision_stale", "Policy or memory changed before question recording")
+            _write_tool_questions(project, objective, state, questions, authority)
+        return {**result, "execute": False, "invocation": identity, "question": text}
+
+
+def _end_tool_questions(state):
+    from .contracts import TOOL_QUESTION_SCHEMA
+    from .relay import Decision, validate_decision_record
+    questions = state.get("checkpoint", {}).get("questions", [])
+    for row in questions if isinstance(questions, list) else []:
+        if not isinstance(row, dict) or row.get("schema") != TOOL_QUESTION_SCHEMA:
+            continue
+        if row["state"] == "pending":
+            row.update(state="cancelled", resolved=True, cancelled_reason="objective closed before an answer was needed")
+        elif row["state"] == "approved":
+            approved = validate_decision_record(row["decision"], kind="tool_operation")
+            capability = Decision._recorded(None, state["checkpoint"]["objective"], approved)
+            if capability.prior_invocation() is not None:
+                row.update(state="consumed", resolved=True)
+            else:
+                row.update(state="stale", resolved=True, cancelled_reason="objective closed before the operation permission was used")

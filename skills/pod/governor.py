@@ -14,6 +14,7 @@ Authorization denial stays a separate class from "permitted but premature".
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 import platform
@@ -167,16 +168,36 @@ def _read_journal(path: Path) -> dict:
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise PodError("state_unsupported",
                        f"Governor journal is not {SCHEMA}; archive or remove it before governed actions")
-    exact(value, {"schema", "revision", "units", "actions", "counters", "decision_channels"},
+    exact(value, {"schema", "revision", "units", "actions", "counters", "decision_channels", "decision_order"},
           {"schema", "revision", "units", "actions", "counters"}, name="governor")
-    if "decision_channels" in value and (type(value["decision_channels"]) is not int or value["decision_channels"] not in (1, 2, 3)):
+    if "decision_channels" in value and (type(value["decision_channels"]) is not int or value["decision_channels"] not in (1, 2, 3, 5)):
         raise _malformed("decision channel representation")
+    if "decision_order" in value:
+        from .relay import validate_order
+        validate_order(value["decision_order"])
+        if value.get("decision_channels") != 5:
+            raise _malformed("decision chronology marker")
     if (not isinstance(value["actions"], list) or len(value["actions"]) > MAX_ACTIONS
             or not isinstance(value["units"], dict) or len(value["units"]) > MAX_UNITS
             or not isinstance(value["counters"], dict)):
         raise _malformed("inventory")
     for row in value["actions"]:
         _validate_row(row)
+        for key, kind in (("authorization", "authorization"), ("exception", "governor_exception")):
+            approval = row.get("exception") if key == "exception" else row["action"].get(key)
+            if isinstance(approval, dict) and "decision_binding" in approval:
+                from .relay import validate_decision_record, _raw_decision
+                from .policy import categories
+                checked = validate_decision_record(approval)
+                if kind not in checked["decision_binding"].get("kinds", [checked["decision_binding"]["kind"]]):
+                    raise _malformed("decision effect kind")
+                effect = row.get("decision_effect")
+                primary = "authorization" if checked["decision_binding"]["kind"] == "authorization" else "exception"
+                if (not isinstance(effect, dict) or primary not in effect
+                        or checked["decision_binding"]["payload_sha256"] != digest({"effect": effect, "decision": _raw_decision(effect[primary])})
+                        or checked["decision_binding"]["categories"] != categories(checked["decision_binding"]["kind"], effect)
+                        or key == "authorization" and _authorization_statement(approval) != _authorization_statement(effect["authorization"])):
+                    raise _malformed("complete decision effect binding")
     for name, unit in value["units"].items():
         _validate_unit(name, unit)
     return value
@@ -185,9 +206,34 @@ def _read_journal(path: Path) -> dict:
 def _write_journal(path: Path, journal: dict) -> None:
     from .evidence_closure import refuse_closed
     refuse_closed(path.parent)  # Backstop: a journal closed by evidence is never written again (R145).
-    from .util import protect_decision_record
+    from .util import protect_decision_record, encoded
+    from .relay import current_decision, _contains_binding, validate_order
+    capability = current_decision()
+    applies = (capability is not None and capability.kind in ("authorization", "governor_exception")
+               and _contains_binding(journal, capability.binding))
+    if applies and not capability.reused:
+        capability.finalize(journal)
+        order = {row["key"]: row for row in journal.get("decision_order", [])}
+        for key in capability.keys:
+            order[key] = {"key": key, "request_id": capability.binding["request_id"],
+                          "decided_at": capability.record["decided_at"], "actor": capability.actor["kind"]}
+        journal["decision_order"] = validate_order([order[key] for key in sorted(order)])
     protect_decision_record(journal)
     journal["revision"] += 1
+    if applies:
+        if len(encoded(journal, compact=True)) > MAX_JOURNAL:
+            raise PodError("record_too_large", "Complete Governor decision exceeds capacity; shorten its decision evidence")
+        from .config import load, _edit_lock, personal_path
+        current_state = _governor_decision_state(capability.project, capability.objective,
+                                                capability.binding["resources"]["unit"])
+        prior = _read_journal(path).get("decision_order", [])
+        with _edit_lock(personal_path(capability.project)):
+            snapshot = load(capability.project)
+            current_state["policy_revision"] = snapshot["policy_revision"]
+            capability.consume(current_state=current_state, snapshot=snapshot, result=journal, keys=capability.keys,
+                               prior=[{"keys": [row["key"]], "decided_at": row["decided_at"]} for row in prior])
+            atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
+        return
     atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
 
 
@@ -238,17 +284,20 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
             raise PodError("invalid_authorization", "standing is stored evidence, never a caller input")
         mandatory = {"schema", "candidate", "tree", "scope", "utc", "standing"}
         record = exact(value, mandatory | {"target", "pr"}, mandatory, name="authorization")
-        evidence = exact(record["standing"], {"id", "reference", "channel"}, {"id", "reference", "channel"},
+        evidence = exact(record["standing"], {"id", "reference", "channel", "decision_channels"}, {"id", "reference", "channel"},
                          name="standing authorization evidence")
         if (not isinstance(evidence["id"], str) or not re.fullmatch(r"Y[1-9][0-9]*", evidence["id"])
-                or evidence["channel"] not in ("session", "relayed")
+                or evidence["channel"] not in ("session", "relayed", "agent_session")
+                or "decision_channels" in evidence and evidence["decision_channels"] != 5
+                or evidence["channel"] == "agent_session" and evidence.get("decision_channels") != 5
                 or evidence["reference"] != f"standing_authorization/decisions/{int(evidence['id'][1:]) - 1}"):
             raise PodError("invalid_authorization", "Stored standing authorization evidence is malformed")
     else:
         record = exact(value, fields("authorization"), AUTHORIZATION_FIELDS, name="authorization")
         try:
-            record = owner_decision(record, kind="authorization",
+            record = owner_decision(record, kind="authorization", stored=stored,
                                     verified_authorization=stored or pending_relay)
+            record = {**record, "channel": record.get("channel", "session")}
         except PodError as exc:
             if exc.code in ("invalid_decision_channel", "invalid_decision_relay", "invalid_authorization relay",
                             "invalid_reference", "invalid_owner_source"):
@@ -275,7 +324,7 @@ def validate_authorization(value: object, *, candidate: str | None = None, tree:
     if "pr" in record and (type(record["pr"]) is not int
                            or not bound("authorization", "pr", "min") <= record["pr"] <= bound("authorization", "pr", "max")):
         raise PodError("invalid_authorization", "Authorization PR must be a positive bounded integer")
-    if record.get("channel") == "relayed":
+    if record.get("channel") == "relayed" and "decision_binding" not in record:
         if scope not in (["publish"], ["merge"]):
             action = "obtain the owner's consent typed in the coordinator's own session for this scope"
             raise PodError("relayed_authorization_refused", f"This scope requires session consent. Next: {action}",
@@ -323,6 +372,9 @@ def validate_action(value: object) -> dict:
         raise PodError("invalid_authorization", "relay_verification is stored evidence, never a caller input")
     if isinstance(action.get("authorization"), dict) and "standing" in action["authorization"]:
         raise PodError("invalid_authorization", "standing is stored evidence, never a caller input")
+    from .relay import DECISION_STORED
+    if isinstance(action.get("authorization"), dict) and DECISION_STORED & set(action["authorization"]):
+        raise PodError("invalid_authorization", "Stored decision evidence is never public authorization input")
     if action["kind"] not in KINDS:
         raise PodError("invalid_action", "Unsupported governed action kind")
     if "pr" in action and (action["kind"] != "merge" or type(action["pr"]) is not int
@@ -445,14 +497,14 @@ def _proves(row: dict, action: dict) -> bool:
     return row.get("run_event") == "workflow_dispatch"
 
 
-def _validate_exception(value: object) -> dict | None:
+def _validate_exception(value: object, *, stored: bool = False) -> dict | None:
     if value is None:
         return None
     from .util import DECISION_FIELDS, owner_decision
     record = exact(value, {"grant", "reason", "by"} | DECISION_FIELDS, {"grant", "reason", "by"}, name="exception")
     for key in ("grant", "reason", "by"):
         bounded_text(record[key], name=key, limit=512)
-    return owner_decision(record, kind="governor_exception")
+    return owner_decision(record, kind="governor_exception", stored=stored)
 
 
 def _exception_grant(governor_policy: dict, supplied: dict | None, *, action: dict, objective: str,
@@ -608,11 +660,130 @@ def _warn(warnings: list[dict], code: str, detail: str) -> None:
     warnings.append({"code": code, "detail": detail})
 
 
+def _governor_decision_state(project, objective, unit_name):
+    """Relevant prepared identity and native generation; observation metadata is excluded."""
+    from .ledger import require_authority
+    from .config import load
+    from .github import repository_context, _github_repository
+    state = _read(_path(project, objective))
+    authority = require_authority(project, objective, owner=state["owner"], state=state, persist_rebind=False)
+    native = authority["native"]
+    unit = _read_journal(_record_path(project, objective))["units"].get(unit_name) or {}
+    candidate = unit.get("candidate") or {}
+    binding = native.get("binding") or {}
+    if (not isinstance(binding.get("id"), str) or not binding["id"]
+            or binding.get("coordinator_handle") != state["owner"]
+            or type(binding.get("consumer_generation")) is not int or binding["consumer_generation"] < 0):
+        raise PodError("native_authority_unverified", "Verified decisions need the exact current Run and consumer generation")
+    target = merge_target(unit)
+    repositories = {}
+    if target is not None:
+        for scope, flags in (("publish", ["--push"]), ("merge", [])):
+            observed = gitio.read(project, ["remote", "get-url", "--all", *flags, target["remote"]])
+            urls = observed.stdout.splitlines() if observed is not None and observed.returncode == 0 else []
+            repositories[scope] = _github_repository(urls[0]) if len(urls) == 1 else None
+    return {"objective": objective, "repository": repository_context(project)["repo_key"],
+            "target_repositories": repositories,
+            "unit": unit_name, "candidate": {key: candidate.get(key) for key in ("id", "commit", "tree", "generation")},
+            "unit_generation": unit.get("generation"), "target": merge_target(unit),
+            "native": {"owner": state["owner"], "runtime": native.get("runtime"), "references": authority["references"],
+                       "binding": {key: binding.get(key) for key in ("id", "coordinator_handle", "consumer_generation")}},
+            "policy_revision": load(project)["policy_revision"]}
+
+
+def _authorization_statement(value):
+    keys = ("schema", "candidate", "tree", "scope", "authorized_by", "utc", "reference", "target", "pr")
+    result = {key: value[key] for key in keys if key in value}
+    if "utc" in result:
+        result["utc"] = normalize_timestamp(result["utc"], field="Authorization timestamp", code="invalid_authorization")
+    return result
+
+
+def _prepare_governor_decision(project, objective, context, journal, action, exception, scopes, stack):
+    from . import relay
+    raw = action.get("authorization")
+    auth_new, exception_new = relay.decision_input(raw), relay.decision_input(exception)
+    if not auth_new and not exception_new:
+        return
+    inputs = [value for value, needed in ((raw, auth_new), (exception, exception_new)) if needed]
+    if len(inputs) == 2 and relay._raw_decision(inputs[0]) != relay._raw_decision(inputs[1]):
+        raise PodError("decision_combination_required", "Approve the authorization and exception together with one exact decision")
+    canonical = _governor_decision_state(project, objective, action["unit"])
+    required_scopes = set(scopes)
+    if auth_new:
+        declared = raw.get("scope")
+        if (not isinstance(declared, list) or not declared or len(declared) > 8
+                or any(value not in AUTHORIZATION_SCOPES for value in declared)):
+            raise PodError("invalid_authorization", "Authorization scope is unsupported")
+        required_scopes.update(declared)
+    if auth_new and raw.get("channel") == "relayed":
+        if any(scope in ("publish", "merge") and canonical["target_repositories"].get(scope) is None for scope in required_scopes):
+            raise relay.refusal("relay_verifier_mismatch", fields=["target.repository"])
+    envelopes = [{"kind": scope, "effect": {}} for scope in sorted(required_scopes)]
+    base = {"action": envelopes[0]["kind"], "effects": envelopes[1:]}
+    kinds = (["authorization"] if auth_new else []) + (["governor_exception"] if exception_new else [])
+    kind = kinds[0]
+    effect = ({**base, "authorization": raw,
+               **({"effects": [*base["effects"], {"kind": "governor_exception", "effect": {"effect": {"kind": "authorization", "effect": base}}}],
+                   "exception": exception, "action_request": {key: value for key, value in action.items() if key != "authorization"}}
+                  if exception_new else {})}
+              if auth_new else {"effect": {"kind": "authorization", "effect": base}, "exception": exception,
+                                "action_request": {key: value for key, value in action.items() if key != "authorization"}})
+    resources = {"unit": action["unit"], "candidate": str(canonical["candidate"]["id"] or action["candidate"]),
+                 "repository": str(canonical["repository"]),
+                 "target": str(merge_target_name(journal["units"].get(action["unit"])) or action["target"]),
+                 "effects": "+".join(sorted(kinds))}
+    cached = None
+    cached_effect = None
+    for row in reversed(journal["actions"]):
+        saved = row["action"].get("authorization") if auth_new else row.get("exception")
+        if not isinstance(saved, dict) or "decision_binding" not in saved:
+            continue
+        matches = (relay.same_decision_input(inputs[0], saved)
+                   and (not auth_new or _authorization_statement(raw) == _authorization_statement(saved))
+                   and (not exception_new or row.get("exception") is not None
+                        and {key: row["exception"].get(key) for key in ("grant", "reason", "by")}
+                            == {key: exception.get(key) for key in ("grant", "reason", "by")}
+                        and {key: row["action"].get(key) for key in ("kind", "candidate", "target", "reason", "unit", "effects", "diagnostic", "inputs", "pr")}
+                            == {key: action.get(key) for key in ("kind", "candidate", "target", "reason", "unit", "effects", "diagnostic", "inputs", "pr")})
+                   and set(kinds) <= set(saved["decision_binding"].get("kinds", [saved["decision_binding"]["kind"]])))
+        if matches:
+            cached = saved
+            cached_effect = row.get("decision_effect")
+            break
+    if cached is not None:
+        capability = relay.Decision.reuse(project, objective, cached, state=canonical)
+        capability.effect = deepcopy(cached_effect)
+    else:
+        capability = relay.Decision(project, objective, kind=kind, kinds=kinds, effect=effect, state=canonical,
+                                      decision=inputs[0], resources=resources)
+    capability.kinds = set(kinds)
+    capability.keys = (["authorization:" + digest([action["unit"], resources["candidate"], resources["target"], scope,
+                                                   raw.get("pr") if scope == "merge" else None])
+                        for scope in raw["scope"]] if auth_new else [])
+    if exception_new:
+        capability.keys.append("exception:" + digest([action["unit"], resources["candidate"], action["kind"], action["target"]]))
+    stack.enter_context(capability.scope())
+
+
+def revalidate_decision_authorization(project, objective, consent, *, unit):
+    """Current candidate/identity/policy and the original host vouch, without a fresh use grant."""
+    from .relay import Decision
+    canonical = _governor_decision_state(project, objective, unit)
+    capability = Decision.reuse(project, objective, consent, state=canonical)
+    from .config import _edit_lock, load, personal_path
+    with _edit_lock(personal_path(project)):
+        snapshot = load(project)
+        canonical["policy_revision"] = snapshot["policy_revision"]
+        capability.recheck(canonical, snapshot)
+
+
 def _check_authority(action: dict, binding: dict | None, deploys: bool, releases: bool,
                      reasons: list[dict], merge_into: str | None = None, *,
                      project: Path | None = None, objective: str | None = None,
                      unit: dict | None = None, verifier: list[str] | None = None,
-                     context: dict | None = None, now: datetime | None = None) -> None:
+                     context: dict | None = None, now: datetime | None = None,
+                     decision_scope=None, decision_exception=None) -> None:
     kind = action["kind"]
     # 1. Authority and project requirements.
     scopes = set()
@@ -627,10 +798,15 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
         scopes.add("deploy")
     if releases:
         scopes.add("release")
+    if decision_scope is not None:
+        journal = _read_journal(_record_path(project, objective))
+        _prepare_governor_decision(project, objective, context, journal, action, decision_exception, scopes, decision_scope)
     standing_note = ""
     synthesized = False
     if action.get("authorization") is None and context is not None:
-        from .standing import synthesize
+        from .standing import synthesize, require_current_decision, state as standing_state
+        if project is not None and standing_state(context, now=now) == "active":
+            require_current_decision(project, objective, context)
         consent, standing_note = synthesize(context, binding, unit, scopes, pr=action.get("pr"), now=now)
         if consent is not None:
             action["authorization"] = consent
@@ -657,7 +833,7 @@ def _check_authority(action: dict, binding: dict | None, deploys: bool, releases
                     f"{', target ' + target if target else ''} is missing; "
                     f"{standing_note + '; ' if standing_note else ''}{NEXT_ACTIONS['authorization_missing']}")
         else:
-            if relayed:
+            if relayed and "decision_binding" not in authorized:
                 authorized = _verify_relay(project, objective, authorized, binding, unit, verifier, pr=action.get("pr"))
             action["authorization"] = authorized
 
@@ -979,7 +1155,8 @@ def _check_failure(latest: dict | None, reuse: dict | None, superseded: bool,
 def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *,
               managed: bool = False, native_projection: dict | None = None,
               project: Path | None = None, objective: str | None = None,
-              verifier: list[str] | None = None, now: datetime | None = None) -> dict:
+              verifier: list[str] | None = None, now: datetime | None = None,
+              decision_scope=None, decision_exception=None) -> dict:
     """Apply the decision order and return reasons, warnings, reuse and bindings."""
     reasons: list[dict] = []
     warnings: list[dict] = []
@@ -1013,7 +1190,8 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
 
     _check_authority(action, binding, deploys, releases, reasons,
                      merge_into=merge_target_name(unit) if kind == "merge" else None,
-                     project=project, objective=objective, unit=unit, verifier=verifier, context=state, now=now)
+                     project=project, objective=objective, unit=unit, verifier=verifier, context=state, now=now,
+                     decision_scope=decision_scope, decision_exception=decision_exception)
     _check_carried_consent(action, journal, reasons)
     if kind == "cancel_validation" and any(row["record_id"] == action["target"]
                                            and isinstance(row.get("carried_from"), dict) for row in journal["actions"]):
@@ -1112,21 +1290,25 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
     """Evaluate one request and journal the decision, with the objective lock held."""
     bounded_text(owner, name="owner")
     proposal = validate_action(action)
-    supplied = _validate_exception(exception)
+    from .relay import decision_input, current_decision
+    supplied = None if decision_input(exception) else _validate_exception(exception)
     policy = effective(project)
     governor_policy = policy["policy"]["waste_governor"]
     validate_execution_inputs(proposal, governor_policy, pull_request)
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
     moment = now.isoformat()
-    with _lock(context_path):
+    with _lock(context_path), ExitStack() as decision_scope:
         state = _owned_state(project, objective, owner, context_path, version=True)
         from .ledger import map_of, require_governance_current
         require_governance_current(project, map_of(state))
         journal = _read_journal(record_path)
         verdict = _evaluate(proposal, state, journal, governor_policy, managed=managed,
                             native_projection=native_projection, project=project, objective=objective,
-                            verifier=policy["preferences"].get("authorization_verifier"), now=now)
+                            verifier=policy["preferences"].get("authorization_verifier"), now=now,
+                            decision_scope=decision_scope, decision_exception=exception)
+        if decision_input(exception):
+            supplied = _validate_exception(exception)
         if verdict["purpose"] == "release":
             required_audits = {ob["id"] for ob in (map_of(state) or {}).get("obligations", [])
                               if ob["kind"] == "assurance" and ob["provenance"] == "project_policy"
@@ -1158,6 +1340,11 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         if proposal["kind"] == "merge":
             from .governance import merge_admission_target
             target_binding = merge_admission_target(project, map_of(state), merge_target(verdict["unit"]))
+        capability = current_decision()
+        if capability is not None and capability.kind in ("authorization", "governor_exception") and not capability.reused:
+            capability.finalize(proposal)
+            capability.finalize(exception_record)
+            moment = capability.commit_clock()
         record_id = digest({"action": proposal, "at": moment, "revision": journal["revision"]})
         counters = journal["counters"]
         _count(counters["decisions"], decision)
@@ -1172,7 +1359,7 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         executes = decision == "ALLOW"
         if executes:
             _compact(journal)
-            if (proposal.get("authorization") or {}).get("channel") == "relayed":
+            if "relay_verification" in (proposal.get("authorization") or {}):
                 from .relay import check_use
                 check_use(project, proposal["authorization"]["relay_verification"], consume=True)
             row = {"record_id": record_id, "logical_key": verdict["logical_key"], "attempt": verdict["attempt"],
@@ -1189,6 +1376,8 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
                    "receipt": {"started_at": moment, "finished_at": None, "observed_elapsed_s": None,
                                "provider": None, "evidence": list(proposal["evidence"]), "detail": None},
                    "classification": None, "classifications": [], "derived_from": None}
+            if capability is not None and capability.kind in ("authorization", "governor_exception"):
+                row["decision_effect"] = deepcopy(capability.effect)
             if "pr" in proposal:
                 row["action"]["pr"] = proposal["pr"]
             if proposal["kind"] in PUBLICATION_KINDS and verdict["unit"] and verdict["unit"].get("branch"):

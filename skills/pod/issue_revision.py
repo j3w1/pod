@@ -32,6 +32,14 @@ def refuse(reason: str, **detail) -> PodError:
 
 @input_record("issue revision authority")
 def input_authority(value: object) -> dict:
+    from .relay import decision_input, _raw_decision
+    if decision_input(value):
+        names = {"operation", "provenance", "instruction", "channel", "relay"}
+        row = exact(value, names, names - {"relay"}, name="issue revision authority")
+        _raw_decision(row)
+        if row["operation"] != OPERATION:
+            raise refuse("honest_relay_required")
+        return deepcopy(row)
     row = exact(value, _INPUT, _INPUT, name="issue revision authority")
     if (row["operation"] != OPERATION or row["provenance"] != "user_direct"
             or row["channel"] != "relayed"):
@@ -95,7 +103,9 @@ def _binding(project: Path, objective: str, owner: str, state: dict, source: dic
     terminal = shown["result"].get("terminal")
     after = orca.current_run()
     run = before.get("run") or {}
-    if (before != after or state.get("owner") != owner or run.get("coordinator_handle") != owner
+    stable = lambda value: (value.get("runtime"), tuple((value.get("run") or {}).get(key)
+        for key in ("id", "coordinator_handle", "consumer_generation")))
+    if (stable(before) != stable(after) or state.get("owner") != owner or run.get("coordinator_handle") != owner
             or authority["references"].get(run.get("id")) != before.get("runtime")
             or before.get("runtime") != authority["runtime"] or shown["runtime"] != authority["runtime"]
             or not isinstance(terminal, dict) or terminal.get("handle") != owner
@@ -244,7 +254,7 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
     for decision in prior.get("revision_decisions", []):
         if decision.get("operation") != OPERATION:
             continue
-        snapshot(decision["previous"], decision["relay_verification"][OPERATION]["map"]["seq"])
+        snapshot(decision["previous"], source_binding(decision)[OPERATION]["map"]["seq"])
     for admission in state.get("admissions", {}).values():
         checkpoint = admission.get("recovery", {}).get("checkpoint_binding", {})
         definitions = (admission.get("binding") or {}).get("definitions", {})
@@ -296,7 +306,7 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
                                for item in decision["criteria"])):
                 continue
             entry = (decision["previous"].get("pod_ticks") or {}).get("criterion_scopes", {}).get(row["id"], {})
-            if (requirement_epoch(local, row, prior) > decision["relay_verification"][OPERATION]["map"]["seq"]
+            if (requirement_epoch(local, row, prior) > source_binding(decision)[OPERATION]["map"]["seq"]
                     or local.get("acceptance") != entry.get("acceptance")
                     or old.get("definition") != row["definition"] and local.get("acceptance") is None):
                 continue
@@ -428,10 +438,19 @@ def _prior_scopes(state: dict, bodies: dict, proposed_source: dict) -> dict:
     return resolved, retained
 
 
+def source_binding(row):
+    """The same source/native binding under either verified authority transport."""
+    return row["source_binding"] if "source_binding" in row else row["relay_verification"]
+
+
+def _decision_effect(row):
+    return {key: row[key] for key in ("source_binding", "previous", "source", "criteria", "retired", "scope_facts")}
+
+
 class Revision:
     """Kernel-owned capability scoped to one validated transition under the objective lock."""
 
-    def __init__(self, project, objective, owner, state, core, proposed, *, data=None):
+    def __init__(self, project, objective, owner, state, core, proposed, *, data=None, intent=None):
         from . import obligations, relay
         from .config import effective
         prior = state.get("checkpoint") or {}
@@ -563,8 +582,24 @@ class Revision:
             "block_sha256": hashlib.sha256(self.lines[item["ref"]].encode("utf-8")).hexdigest()}
             for item in self.criteria}
         self.scope_bindings = {key: retained_scopes.get(key, scope) for key, scope in self.current_scopes.items()}
-        self.request = _binding(project, objective, owner, state, self.source, self.input["relay"]["reference"])
+        self.request = _binding(project, objective, owner, state, self.source, self.input.get("relay", {}).get("reference", "local-issue-revision"))
         self.command = effective(project)["preferences"].get("authorization_verifier")
+        self.capability = None
+        if relay.decision_input(self.input):
+            details = {"previous": {"source": deepcopy(prior["objective_source"]), "criteria": deepcopy(prior["criteria"]),
+                                   "obligations": deepcopy(prior["obligations"]), "pod_ticks": deepcopy(state.get("pod_ticks"))},
+                       "source": self.source, "criteria": self.criteria, "retired": self.withdrawn_ids,
+                       "scope_facts": {"previous": list(scope_facts.values()), "current": self.current_scopes,
+                                       "data_digests": sorted(data)}, "source_binding": self.request}
+            resources = {"source_previous": digest(prior["objective_source"]), "source_proposed": digest(self.source),
+                         "map_seq": str(prior["seq"] + 1), "intent": intent or digest(details)}
+            self.capability = relay.Decision(project, objective, kind=OPERATION, effect=_decision_effect(details),
+                                            state=self.original, decision=self.input, resources=resources)
+            self.capability.keys = ["issue_source", *["obligation:" + row["id"] for row in self.criteria],
+                                    *["obligation:" + key for key in self.withdrawn_ids]]
+            self.authority = {**self.input, **self.capability.record, **details}
+            self.verdict = self.capability.verdict
+            return
         self.verdict = relay.verify(self.command, self.request)
         if any(row.get("relay_verification", {}).get("single_use") == self.verdict["single_use"]
                for row in prior.get("revision_decisions", [])):
@@ -587,6 +622,15 @@ class Revision:
         if (request != self.request or effective(project)["preferences"].get("authorization_verifier") != self.command
                 or _lines(project, self.source) != self.lines):
             raise refuse("binding_changed_before_consumption")
+        if self.capability is not None:
+            if self.verdict is not None:
+                vouch = {key: self.verdict[key] for key in relay.BINDING_FIELDS | {"decision"}}
+                if relay.verify_decision(self.command, vouch) != self.verdict:
+                    raise relay.refusal("relay_verifier_mismatch")
+            if (_binding(project, objective, owner, deepcopy(self.original), self.source, self.request["reference"]) != request
+                    or _lines(project, self.source) != self.lines):
+                raise refuse("binding_changed_before_consumption")
+            return  # The existing objective publication hook consumes the exact capability under config lock.
         if relay.verify(self.command, request) != self.verdict:
             raise relay.refusal("relay_verifier_mismatch")
         if (_binding(project, objective, owner, deepcopy(self.original), self.source, self.request["reference"]) != request
@@ -608,12 +652,27 @@ def _validate_decision(row: dict, checkpoint: dict) -> None:
     """Stored-only evidence is fully retained; old helpers fail at decision_channels=4."""
     from . import obligations, relay
     from .github import validate_issue_binding
-    exact(row, _STORED | {"scope_facts"}, _STORED, name="stored issue revision")
-    input_authority({**{key: row[key] for key in _INPUT}, "relay": {"reference": row["relay"]["reference"]}})
-    verdict = relay.validate_verdict(row["relay_verification"])
-    if (row["kind"] != OPERATION or verdict["action"] != OPERATION or verdict["verified"] is not True
+    modern = "source_binding" in row
+    if modern:
+        from .util import DECISION_FIELDS
+        mandatory = {"operation", "provenance", "instruction", "channel", "seq", "kind", "previous", "source", "criteria", "retired", "scope_facts", "source_binding"}
+        exact(row, mandatory | DECISION_FIELDS, mandatory, name="stored issue revision")
+        relay.validate_decision_record(row, kind=OPERATION)
+        verdict = source_binding(row)
+        exact(verdict, relay.BINDING_FIELDS | {OPERATION}, relay.BINDING_FIELDS | {OPERATION}, name="stored issue source binding")
+        validate_binding(verdict[OPERATION], verdict["target"])
+        raw = {key: row[key] for key in relay.DECISION_RAW if key in row}
+        if row["channel"] == "relayed":
+            raw["provenance"] = "decision_request"
+        if row["decision_binding"]["payload_sha256"] != digest({"effect": _decision_effect(row), "decision": raw}):
+            raise refuse("stored_verification_binding")
+    else:
+        exact(row, _STORED | {"scope_facts"}, _STORED, name="stored issue revision")
+        input_authority({**{key: row[key] for key in _INPUT}, "relay": {"reference": row["relay"]["reference"]}})
+        verdict = relay.validate_verdict(row["relay_verification"])
+    if (row["kind"] != OPERATION or verdict["action"] != OPERATION or not modern and verdict["verified"] is not True
             or checkpoint.get("objective") is not None and verdict["objective"] != checkpoint["objective"]
-            or row["relay"] != {"reference": verdict["reference"], "owner_source": verdict["owner_source"]}
+            or not modern and row["relay"] != {"reference": verdict["reference"], "owner_source": verdict["owner_source"]}
             or type(row["seq"]) is not int or row["seq"] != verdict[OPERATION]["map"]["seq"] + 1
             or row["seq"] > checkpoint["seq"]):
         raise refuse("stored_verification_binding")

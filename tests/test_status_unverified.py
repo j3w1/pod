@@ -34,7 +34,8 @@ def baseline_status() -> types.ModuleType:
 
 # Additive status fields; every earlier field and render line is compared unchanged.
 READINESS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization",
-             "route_holds", "route_holds_truncated", "route_settlements", "route_settlements_truncated", "route_settlement_authority")
+             "route_holds", "route_holds_truncated", "route_settlements", "route_settlements_truncated", "route_settlement_authority",
+             "decision_policy", "tool_permissions", "waiting_decisions", "needs_you", "setup_question")
 
 
 def assert_render_after_readiness(test: unittest.TestCase, observed: dict, rendered: str, expected: str) -> None:
@@ -43,6 +44,9 @@ def assert_render_after_readiness(test: unittest.TestCase, observed: dict, rende
     test.assertEqual(first, observed["readiness"]["summary"])
     test.assertEqual(rest.count("Mode: normal\n"), 1)
     rest = rest.replace("Mode: normal\n", "", 1)
+    rest = "".join(line for line in rest.splitlines(keepends=True)
+                   if not line.startswith(("Decision policy: ", "Decision setup offered: ", "Decision waits: ",
+                                           "Tool permission: ", "Decision wait: ", "Needs you: ")))
     test.assertEqual(rest, expected)
 
 

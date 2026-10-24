@@ -340,7 +340,7 @@ def _relocate(source: dict, observed: dict, sources: list[dict]) -> dict:
 
 _OBLIGATION_FIELDS = fields("obligation")
 _DEFINITION = ("check", "resolves", "stop_condition", "scope", "question", "insufficiency",
-               "existing_evidence", "uncovered_risk", "proof_scope")
+               "existing_evidence", "uncovered_risk", "proof_scope", "audit_role")
 _STATE_FIELDS = {"active": "executor", "waiting": "wait", "blocked_external": "external",
                  "withdrawn": "withdrawal", "renewed": "renewal"}
 
@@ -352,6 +352,8 @@ def _structure(raw: Any) -> dict:
     _ident(ob["id"], "obligation id")
     if ob["kind"] not in KINDS or ob["provenance"] not in PROVENANCES:
         raise refuse("obligation_invalid", "malformed", "kind allowed: " + ", ".join(KINDS) + "; provenance allowed: " + ", ".join(PROVENANCES), obligation=ob["id"])
+    if "audit_role" in ob and (ob["kind"] != "assurance" or ob["audit_role"] not in ("reviewer", "auditor")):
+        raise refuse("obligation_invalid", "malformed", "Only assurance declares reviewer or auditor audit_role", obligation=ob["id"])
     for key in ("check", "resolves", "stop_condition", "question", "insufficiency",
                 "existing_evidence", "uncovered_risk"):
         if key in ob:
@@ -520,7 +522,8 @@ def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> d
     if value is None:
         return None
     record = _exact(value, DECISION_FIELDS | {"question"}, {"provenance", "instruction"}, "revision authority")
-    if record["provenance"] != "user_direct":
+    from .relay import decision_input
+    if record["provenance"] != "user_direct" and not decision_input(record):
         raise refuse("obligation_invalid", "provenance_unauthorized",
                      "a map revision is authorized only by a direct user instruction", record='authority')
     _text(record["instruction"], "instruction", limit=bound("revision authority", "instruction"))
@@ -748,6 +751,8 @@ def _write_obligations(prior_map: dict | None, value: dict, ctx: dict, seq: int,
             ctx["candidate_check"](ob["candidate"])
         ob["definition"] = definition_id(ob)
         if earlier is not None:
+            if "audit_role" in earlier and ob.get("audit_role") != earlier["audit_role"]:
+                raise refuse("obligation_invalid", "redefinition_unauthorized", "An assurance audit role is immutable after designation", obligation=ob["id"])
             for key in ("kind", "provenance", "parent", "unit"):
                 if ob.get(key) != earlier.get(key):
                     raise refuse("obligation_invalid", "redefinition_unauthorized",
@@ -1107,9 +1112,12 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     elif isinstance(raw_authority, dict) and "question" in raw_authority:
         reference = raw_authority["question"]
         questions = ctx.get("recorded_questions", [])
-        if not isinstance(questions, list) or not any(
+        from .relay import current_decision
+        capability = current_decision()
+        verified = capability is not None and capability.verified and capability.matches(raw_authority, "question")
+        if not verified and (not isinstance(questions, list) or not any(
                 question == reference or isinstance(question, dict) and reference in (question.get("id"), question.get("reference"))
-                for question in questions):
+                for question in questions)):
             raise refuse("decision_question_unrecorded", "unknown_referent", "the owner answer must name a currently recorded question",
                          record="revision authority",
                          next_action="record the question first, or obtain the owner's instruction in the coordinator's session")
@@ -1470,13 +1478,14 @@ def _ancestry(rows: dict[str, dict], *, lineage=None) -> None:
 
 
 @input_record("withdrawal")
-def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
+def _withdrawal(ob: dict, user: bool, authority: dict | None, *, stored: bool = False) -> dict:
     record = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"), "withdrawal", obligation=ob["id"])
     if "decision" in record:
         raise refuse("obligation_invalid", "withdrawal_unauthorized", "issue revision decision references are kernel-owned", obligation=ob["id"])
     _text(record["reason"], "reason", limit=bound("withdrawal", "reason"), obligation=ob["id"])
     by = record["by"]
-    allowed = (by == "user_direct" and user
+    actor_kind = ((authority or {}).get("actor") or {}).get("kind", "person")
+    allowed = (by == ("agent_decision" if actor_kind == "agent" else "user_direct") and user
                or by == "project_policy" and ob["provenance"] == "project_policy"
                and bool(ob.get("source", {}).get("gone"))
                or by == "coordinator" and ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance"))
@@ -1484,9 +1493,14 @@ def _withdrawal(ob: dict, user: bool, authority: dict | None) -> dict:
         raise refuse("obligation_invalid", "withdrawal_unauthorized",
                      "withdrawal by allowed: user_direct, project_policy, coordinator; current authority does not permit withdrawal", obligation=ob["id"])
     result = {"by": by, "reason": record["reason"]}
-    if by == "user_direct":
+    if by in ("user_direct", "agent_decision"):
         result["instruction"] = authority["instruction"]
-        result.update(channel_fields(owner_decision(authority, kind="withdrawal", stored="channel" not in authority)))
+        result.update(channel_fields(owner_decision(authority, kind="withdrawal", stored=stored or "channel" not in authority)))
+        if by == "agent_decision":
+            seq = authority.get("decision_binding", {}).get("resources", {}).get("map_seq")
+            if not isinstance(seq, str) or not seq.isdigit() or int(seq) < 1:
+                raise refuse("obligation_invalid", "withdrawal_unauthorized", "Agent withdrawal needs its accepted map sequence", obligation=ob["id"])
+            result["accepted_seq"] = int(seq)
         if CHANNEL_FIELDS & set(record) and channel_fields(record) != channel_fields(result):
             raise refuse("obligation_invalid", "withdrawal_unauthorized", "withdrawal channel must match its revision authority", obligation=ob["id"])
     elif CHANNEL_FIELDS & set(record):
@@ -1535,7 +1549,7 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                    if ctx["lineage"].effective(child.get("parent")) == ob["id"] and child["kind"] == "correction"
                    and child["state"] != "renewed"
                    and not (child["state"] == "satisfied"
-                            or child["state"] == "withdrawn" and child["withdrawal"]["by"] == "user_direct")]
+                            or child["state"] == "withdrawn" and child["withdrawal"]["by"] in ("user_direct", "agent_decision"))]
         for ob in rows.values() if ob["state"] == "satisfied" and ob["kind"] == "assurance"}
     open_corrections = {key: children for key, children in open_corrections.items() if children}
     for ob in rows.values():
@@ -1941,6 +1955,14 @@ def validate_map_record(state: dict) -> None:
     for field in ("seq", "revision"):
         if type(value[field]) is not int or value[field] < 1:
             raise refuse("obligation_invalid", "malformed", "persisted map sequence and revision are positive integers", record="persisted map")
+    for ob in value["obligations"]:
+        if not isinstance(ob, dict) or "withdrawal" not in ob:
+            continue
+        withdrawal = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"),
+                            "withdrawal", obligation=ob.get("id"))
+        if withdrawal.get("by") == "agent_decision":
+            from .relay import validate_agent_withdrawal
+            validate_agent_withdrawal(withdrawal, introduced_seq=ob.get("introduced_seq", 1), sequence=value["seq"])
     if "revision_decisions" in value:
         decisions = value["revision_decisions"]
         if not isinstance(decisions, list):
@@ -1999,8 +2021,8 @@ def validate_map_record(state: dict) -> None:
         _ident(value["coordinator_slot"], "coordinator slot")
     quiescent = value["quiescence"]
     if quiescent is not None:
-        fields = {"state"} if isinstance(quiescent, dict) and quiescent.get("state") == "closable" else {"state", "blocked", "interim_report"}
-        _exact(quiescent, fields, fields, "quiescence")
+        quiescent_fields = {"state"} if isinstance(quiescent, dict) and quiescent.get("state") == "closable" else {"state", "blocked", "interim_report"}
+        _exact(quiescent, quiescent_fields, quiescent_fields, "quiescence")
         if quiescent["state"] not in ("closable", "quiescent") or "blocked" in quiescent and not isinstance(quiescent["blocked"], list):
             raise refuse("obligation_invalid", "malformed", "persisted quiescence is a recorded projection", record="quiescence")
         if "interim_report" in quiescent:
@@ -2101,6 +2123,9 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
         if ob["state"] == "withdrawn":
             withdrawal = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"),
                                 "withdrawal", obligation=ob["id"])
+            if withdrawal.get("by") == "agent_decision":
+                from .relay import validate_agent_withdrawal
+                validate_agent_withdrawal(withdrawal, introduced_seq=ob["introduced_seq"], sequence=state["seq"])
             if withdrawal.get("by") == "issue_revision":
                 _exact(withdrawal, {"by", "reason", "decision"}, {"by", "reason", "decision"}, "issue revision withdrawal")
                 _text(withdrawal["reason"], "withdrawal reason", limit=1024)
@@ -2109,8 +2134,8 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
                     raise refuse("obligation_invalid", "withdrawal_unauthorized", "withdrawal needs its exact issue revision", obligation=ob["id"])
             else:
                 instruction = withdrawal.get("instruction") if isinstance(withdrawal, dict) else None
-                authority = _authority({"provenance": "user_direct", "instruction": instruction, **channel_fields(withdrawal)}, kind="withdrawal", stored=True) if isinstance(withdrawal, dict) and withdrawal.get("by") == "user_direct" else None
-                if _withdrawal(ob, authority is not None, authority) != withdrawal:
+                authority = _authority({"provenance": withdrawal["by"], "instruction": instruction, **channel_fields(withdrawal)}, kind="withdrawal", stored=True) if isinstance(withdrawal, dict) and withdrawal.get("by") in ("user_direct", "agent_decision") else None
+                if _withdrawal(ob, authority is not None, authority, stored=True) != withdrawal:
                     raise refuse("obligation_invalid", "withdrawal_unauthorized", "persisted withdrawal retains its complete authority record", obligation=ob["id"])
         unknown = validate_receipts(ob, ctx, seq=state["seq"])
         if unknown and unverifiable is not None:
@@ -2462,7 +2487,7 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
               "unfinished": [ob["id"] for ob in rows if ob["state"] not in TERMINAL],
               "blockers": blockers,
               "withdrawn": [{"obligation": ob["id"], "provenance": ob["provenance"],
-                             **(decision_channel(ob["withdrawal"]) if not legacy_report and ob["withdrawal"]["by"] == "user_direct" else ob["withdrawal"])}
+                             **(decision_channel(ob["withdrawal"]) if not legacy_report and ob["withdrawal"]["by"] in ("user_direct", "agent_decision") else ob["withdrawal"])}
                             for ob in rows if ob["state"] == "withdrawn"],
               "triage_downgrades": downgrades,
               "boundary_exceeded": [{"admission": key, "paths": row["boundary_exceeded"],
@@ -2521,6 +2546,9 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
         result["interim_report"] = "incomplete — " + str(len(result["unfinished"])) + " obligation(s) unfinished"
     if any(row.get("operation") == "issue_revision" for row in state.get("revision_decisions", [])):
         result["decision_channels"] = 4
+    if not legacy_report:
+        from .util import protect_decision_record
+        protect_decision_record(result)
     return result
 
 
@@ -2618,7 +2646,7 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
             detail = "renewed by " + ob["renewal"]["by"]
         elif ob["state"] == "withdrawn":
             detail = f"by {ob['withdrawal']['by']}: {ob['withdrawal']['reason']}"
-            if ob["withdrawal"]["by"] == "user_direct":
+            if ob["withdrawal"]["by"] in ("user_direct", "agent_decision"):
                 channel = decision_channel(ob["withdrawal"])
                 detail += " (" + channel["channel"] + ("; earlier record" if channel.get("channel_recorded") is False else "") + ")"
         else:
@@ -2651,7 +2679,7 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
         lines.append(f"Delivery   {state['delivery']['method']} {state['delivery']['result'][:12]}")
     def referent(ob):
         value = ob.get("executor") or ob.get("wait") or ob.get("external") or ob.get("withdrawal") or ob.get("renewal")
-        return decision_channel(value) if isinstance(value, dict) and value.get("by") == "user_direct" else value
+        return decision_channel(value) if isinstance(value, dict) and value.get("by") in ("user_direct", "agent_decision") else value
 
     return {"map": {"seq": state["seq"], "revision": state["revision"], "counts": counts,
                     "coordinator_slot": state.get("coordinator_slot"),

@@ -143,7 +143,27 @@ def _op_brief(request: dict) -> dict:
 
 
 def _op_packet(request: dict) -> dict:
-    return packet(request)
+    from .config import decision_context, load
+    # A prior packet body can be re-frozen. Its summary is disposable read-only
+    # metadata; validate the real request before any path or preference lookup.
+    request = {key: item for key, item in request.items() if key != "decision_context"} if isinstance(request, dict) else request
+    packet(request)
+    placement = request.get("worktree") or request.get("placement") or {}
+    project = Path(placement["path"]) if isinstance(placement, dict) and "path" in placement else None
+    context = decision_context(load(project))
+    frozen = packet({**request, "decision_context": context})
+    # Orca owns Task specs. The coordinator puts this text in the actual Task at
+    # creation, or sends current-packet guidance through this Dispatch's native mail.
+    # A fresh packet alone cannot replace the spec of an existing Task.
+    frozen["task_instructions"] = (
+        "Read the current frozen packet " + frozen["packet_id"] + ". " + context["every_sensitive_use"]
+        + " A saved summary grants no permission. Before a later retry or follow-up, read the coordinator's "
+        "current packet through native Dispatch mail; retain the admitted packet for uncertain-request recovery. "
+        "Use pod tool check with --objective for sensitive work in this objective; a worker sends unresolved "
+        "questions to its recorded coordinator through native mail. Only that coordinator records an objective answer. "
+        "Decision context: " + json.dumps(context, sort_keys=True, separators=(",", ":")))
+    frozen["coordinator_route"] = {"status": "unavailable", "reason": "native coordinator effective route is not exposed by this supported protocol"}
+    return frozen
 
 
 def _prepare_report(request, state, admission, shown, *, closing):
@@ -376,17 +396,33 @@ def _op_checkpoint(request: dict) -> dict:
 
 
 def _op_constraint(request: dict) -> dict:
-    exact(request, {"project", "objective", "owner", "action", "value", "id"},
+    exact(request, {"project", "objective", "owner", "action", "value", "id", "decision"},
           {"project", "objective", "owner", "action"}, name="request")
     from .ledger import constraints_update
     return constraints_update(Path(request["project"]), request["objective"],
                               owner=request["owner"], action=request["action"],
-                              value=request.get("value"), constraint_id=request.get("id"))
+                              value=request.get("value"), constraint_id=request.get("id"), decision=request.get("decision"))
 
 
 def _op_standing_authorization(request: dict) -> dict:
     from .standing import operate
     return operate(request)
+
+
+@input_record("objective tool")
+def _op_tool(request: dict) -> dict:
+    from .ledger import tool_decision
+    actions = {"check": {"tool", "category", "operation", "spending", "invocation"}, "review": {"tool", "category"},
+               "answer": {"invocation", "answer", "decision"}, "cancel": {"invocation"}}
+    kind = request.get("action") if isinstance(request, dict) else None
+    extra = actions.get(kind, set())
+    wanted = set(TABLE["objective tool"]["required_by_action"].get(kind, []))
+    exact(request, {"project", "objective", "owner", "action"} | extra,
+          {"project", "objective", "action"} | wanted, name="request")
+    if kind not in actions:
+        raise PodError("invalid_tool_action", "Tool action must be check, review, answer or cancel")
+    return tool_decision(Path(request["project"]), request["objective"], **{key: value for key, value in request.items()
+                                                                       if key not in ("project", "objective")})
 
 
 def _op_route_failure(request: dict) -> dict:
@@ -680,6 +716,14 @@ def _op_display(request: dict) -> dict:
     state = read(Path(request["project"]), request["objective"])
     if state is None:
         raise PodError("map_unavailable", "This objective has no recorded display facts")
+    from .config import load
+    snapshot = load(Path(request["project"]))
+    state = {**state, "decision_input": {"status": snapshot["status"],
+                                       "reason": snapshot["errors"][0]["code"] if snapshot["errors"] else None,
+                                       "policy": snapshot["decision_policy"],
+                                       "permissions": snapshot["tool_permissions"],
+                                       "pending": snapshot["pending_decisions"],
+                                       "generation": snapshot["decision_generation"]}}
     reads = []
     for argv in (["terminal", "list", "--json"], display_worktree_argv(), ["--version"]):
         try:
@@ -706,6 +750,7 @@ _OPERATIONS = {
     'checkpoint': _op_checkpoint,
     'constraint': _op_constraint,
     'standing-authorization': _op_standing_authorization,
+    'tool': _op_tool,
     'route-failure': _op_route_failure,
     'governor': _op_governor,
     'governor-outcome': _op_governor_outcome,

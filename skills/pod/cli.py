@@ -30,6 +30,36 @@ def parser() -> argparse.ArgumentParser:
     config = sub.add_parser("config", help="show or edit personal model preferences")
     config.add_argument("config_action", nargs="?", choices=("edit",))
     config.add_argument("--json", action="store_true")
+    policy = sub.add_parser("policy", help="choose who decides in plain words")
+    policy.add_argument("preset", nargs="?", choices=("careful", "delegate", "hands_off", "custom", "skip"))
+    policy.add_argument("--categories", help="complete Custom category map as JSON")
+    policy.add_argument("--input", help="decision JSON file, or - for stdin")
+    policy.add_argument("--json", action="store_true")
+    tool = sub.add_parser("tool", help="check current permission before each sensitive tool use")
+    tool_sub = tool.add_subparsers(dest="tool_action", required=True)
+    check = tool_sub.add_parser("check", help="check one exact invocation; never executes a tool")
+    check.add_argument("--tool", required=True)
+    check.add_argument("--category", required=True)
+    check.add_argument("--operation", required=True)
+    check.add_argument("--spending", choices=("included_subscription", "new_commitment"))
+    check.add_argument("--invocation")
+    check.add_argument("--objective")
+    check.add_argument("--json", action="store_true")
+    review = tool_sub.add_parser("review", help="reconsider one remembered tool/category mode")
+    review.add_argument("--tool", required=True)
+    review.add_argument("--category", required=True)
+    review.add_argument("--objective")
+    review.add_argument("--json", action="store_true")
+    answer = tool_sub.add_parser("answer", help="answer one pending memory or operation question")
+    answer.add_argument("--invocation", required=True)
+    answer.add_argument("--answer", required=True)
+    answer.add_argument("--input", help="decision JSON file, or - for stdin")
+    answer.add_argument("--objective")
+    answer.add_argument("--json", action="store_true")
+    cancel = tool_sub.add_parser("cancel", help="cancel one unanswered permission question")
+    cancel.add_argument("--invocation", required=True)
+    cancel.add_argument("--objective")
+    cancel.add_argument("--json", action="store_true")
     doctor = sub.add_parser("doctor", help="read-only installation and capability diagnostics")
     doctor.add_argument("--json", action="store_true")
     status = sub.add_parser("status", help="read-only objective and native work status")
@@ -122,7 +152,86 @@ def _config(project: Path, *, edit: bool) -> dict:
                    "observations": {"status": "not_read", "command": "pod models --json"}})
     if snapshot["errors"]:
         result["status"] = "setup_required" if snapshot["setup"] else "invalid"
+    result.update(_decision_view(snapshot))
     return result
+
+
+def _decision_view(snapshot: dict) -> dict:
+    if snapshot["status"] == "invalid":
+        from .readiness import decision_view
+        reason = snapshot["errors"][0]["code"] if snapshot["errors"] else "invalid_config"
+        return {**decision_view({"status": "invalid", "reason": reason}), "decision_generation": None}
+    from .policy import projection
+    view = projection(snapshot["decision_policy"], snapshot["tool_permissions"], snapshot["pending_decisions"])
+    waiting = {"items": view["pending"], "total": len(view["pending"]), "truncated": False,
+               "missing": [], "status": "known"}
+    return {"decision_policy": {key: view[key] for key in ("preset", "categories", "setup")},
+            "tool_permissions": view["permissions"], "waiting_decisions": waiting,
+            "needs_you": any(row["waiting_on"] == "person" for row in view["pending"]),
+            "setup_question": view["setup_question"], "decision_generation": snapshot["decision_generation"]}
+
+
+def _decision_input(path: str | None, *, instruction: str) -> dict:
+    from .util import bounded_json, bounded_stdin_json, exact
+    if path is not None:
+        value = bounded_stdin_json(limit=8192) if path == "-" else bounded_json(Path(path), limit=8192)
+        return exact(value, {"provenance", "instruction", "channel", "relay"},
+                     {"provenance", "instruction"}, name="decision input")
+    if not sys.stdin.isatty():
+        raise PodError("decision_input_required", "Answer in the session or terminal; pass its decision JSON through --input")
+    if input("Save this as your decision? [yes/no] ").strip().lower() != "yes":
+        raise PodError("decision_deferred", "Decision deferred")
+    return {"provenance": "user_direct", "instruction": instruction, "channel": "session"}
+
+
+def _policy_command(args, project):
+    from .config import set_decision_policy
+    snapshot = load_config(project)
+    name = args.preset
+    if name is None:
+        if snapshot["status"] == "invalid" or args.json or not sys.stdin.isatty():
+            return {"status": "ok", **_decision_view(snapshot)}
+        print("Who should decide? Careful, Delegate, Hands-off, Custom, or skip setup.")
+        name = input("Choice: ").strip().lower().replace("-", "_")
+    categories = None
+    if name == "custom" and args.categories is None and sys.stdin.isatty():
+        from .policy import AUTOMATIC, CATEGORIES, PERSON_ONLY
+        categories = {}
+        deciders = {"me": "person", "trusted agents": "trusted_agents", "any agent": "any_agent"}
+        for category in CATEGORIES:
+            if category in PERSON_ONLY | AUTOMATIC:
+                categories[category] = "person" if category in PERSON_ONLY else "any_agent"
+            else:
+                choice = input(f"Who decides {category.replace('_', ' ')}? me, trusted agents, any agent: ").strip().lower()
+                if choice not in deciders:
+                    raise PodError("invalid_decision_policy", "Choose me, trusted agents, or any agent")
+                categories[category] = deciders[choice]
+    elif args.categories is not None:
+        try:
+            categories = json.loads(args.categories)
+        except ValueError:
+            raise PodError("invalid_decision_policy", "Custom categories must be a complete JSON map") from None
+    decision = None if name == "skip" else _decision_input(args.input, instruction="Use decision policy " + name)
+    return set_decision_policy(project, name, categories=categories, decision=decision, displayed=snapshot)
+
+
+def _tool_command(args, project):
+    from .config import tool_answer, tool_check, tool_review, tool_cancel
+    if args.objective is not None:
+        from .ledger import tool_decision
+        values = {key: getattr(args, key) for key in ("tool", "category", "operation", "spending", "invocation", "answer")
+                  if hasattr(args, key)}
+        if args.tool_action == "answer":
+            values["decision"] = _decision_input(args.input, instruction="Answer this pending question: " + args.answer)
+        return tool_decision(project, args.objective, action=args.tool_action, **values)
+    if args.tool_action == "check":
+        return tool_check(project, args.tool, args.category, args.operation, spending=args.spending, invocation=args.invocation)
+    if args.tool_action == "review":
+        return tool_review(project, args.tool, args.category)
+    if args.tool_action == "cancel":
+        return tool_cancel(project, args.invocation)
+    return tool_answer(project, args.invocation, args.answer,
+                       decision=_decision_input(args.input, instruction="Answer this pending question: " + args.answer))
 
 
 def _doctor(project: Path) -> dict:
@@ -251,6 +360,10 @@ def _models(project: Path, action: str | None, *, check: bool = False,
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
+    if args.command == "policy":
+        return _policy_command(args, project)
+    if args.command == "tool":
+        return _tool_command(args, project)
     if args.command == "config":
         return _config(project, edit=getattr(args, "config_action", None) == "edit")
     if args.command in (None, "models"):
@@ -351,6 +464,8 @@ def _print_observation_status(report: dict) -> None:
 
 
 def _exit_code(args: argparse.Namespace, result: dict) -> int:
+    if args.command in ("policy", "tool"):
+        return 1 if result["status"] == "blocked" else 0
     if "projection" in result:
         # The route view succeeds as a read; its exit code still reports preference validity.
         return 0 if result["projection"]["preferences"]["status"] == "valid" else 1
@@ -418,6 +533,35 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Pinned route: {result['pinned'] or 'none'}")
             if result["summary"]["not_set"]:
                 print(f"Not set (not eligible): {result['summary']['not_set']} routes")
+        if result.get("waiting_decisions", {}).get("status") == "unavailable":
+            print("Decision waits: unavailable (" + result["waiting_decisions"]["reason"] + ")")
+    elif args.command in ("policy", "tool"):
+        policy_view = result.get("decision_policy", result.get("policy")) if args.command == "policy" else None
+        if policy_view is not None and policy_view.get("status") == "unavailable":
+            print("Decision policy: unavailable (" + policy_view["reason"] + ")")
+            print("Decision waits: unavailable (" + result["waiting_decisions"]["reason"] + ")")
+        elif policy_view is not None:
+            print("Decision policy: " + policy_view["preset"].replace("_", "-").capitalize())
+            print("Setup: " + policy_view["setup"])
+            deciders = {"person": "me", "trusted_agents": "trusted agents", "any_agent": "any agent"}
+            for category, decider in policy_view["categories"].items():
+                print("  " + category.replace("_", " ") + ": " + deciders[decider])
+            if result.get("setup_question"):
+                print(result["setup_question"]["text"])
+        elif result.get("question"):
+            print(result["question"])
+            if result.get("choices"):
+                print("Choices: " + ", ".join(choice.replace("_", " ") for choice in result["choices"]))
+            if result.get("invocation"):
+                print("Pending decision: " + result["invocation"])
+            if result.get("next_action"):
+                print("Next: " + result["next_action"])
+        elif result.get("setup_question"):
+            print(result["setup_question"]["text"])
+        else:
+            print("Decision " + result["status"] + ("; permission to execute" if result.get("execute") else ""))
+        if result.get("notice"):
+            print(result["notice"])
     elif args.command == "doctor":
         print(f"Pod {version()}: {result['installation']}")
         checks = result["installation_checks"]

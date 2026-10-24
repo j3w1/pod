@@ -17,8 +17,9 @@ from .errors import FieldRefusal, PodError
 from .contracts import bound, fields, required, input_record
 
 MAX_RECORD = 128 * 1024
-DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"}
-CHANNEL_FIELDS = {"channel", "relay"}
+DECISION_EVIDENCE = {"actor", "decided_at", "recorded_at", "decision_binding", "decision_verification"}
+DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"} | DECISION_EVIDENCE
+CHANNEL_FIELDS = {"channel", "relay"} | DECISION_EVIDENCE
 RELAYED_DECISIONS = {"question", "governance", "withdrawal", "claim", "retirement"}
 
 
@@ -45,6 +46,11 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False,
     """
     if not isinstance(value, dict):
         raise PodError("invalid_decision", "An owner decision must be an object")
+    from .relay import current_decision, decision_input, stored_or_capability
+    capability = current_decision()
+    if (decision_input(value) or DECISION_EVIDENCE & set(value)
+            or not stored and capability is not None and capability.matches(value, kind)):
+        return stored_or_capability(value, kind=kind, stored=stored)
     if "provenance" in value and value["provenance"] != "user_direct":
         raise PodError("invalid_decision", "Owner decision provenance must be user_direct")
     if "instruction" in value:
@@ -80,9 +86,41 @@ def owner_decision(value: dict, *, kind: str, stored: bool = False,
 
 
 def decision_channel(value: dict) -> dict:
-    """Additive public projection, with earlier provenance explicit and stored bytes untouched."""
+    """Full decision inventory, with earlier channel provenance explicit and bytes untouched."""
     return {**value, "channel": value.get("channel", "session"),
             **({"channel_recorded": False} if "channel" not in value else {})}
+
+
+def public_decisions(value: Any, *, rule: bool = False) -> Any:
+    """Copy public facts without expanding new private decision authority.
+
+    Internal inventories and closure reports keep their full authenticated records.
+    Only new kernel actor records lose authority fields here; earlier session and
+    relay representations retain their documented semantics. Route rules also keep
+    their existing original-word exclusion, including nested request records.
+    """
+    if isinstance(value, list):
+        return [public_decisions(item, rule=rule) for item in value]
+    if not isinstance(value, dict):
+        return value
+    rule = rule or value.get("kind") == "route_rule"
+    authority = (isinstance(value.get("actor"), dict)
+                 or bool({"decision_binding", "decision_verification"} & value.keys()))
+    private = ((DECISION_FIELDS - {"provenance", "channel"}) | {"decision_effect"}) if authority else set()
+    if authority or rule:
+        private = private | {"request", "instruction"}
+    result = {key: public_decisions(item, rule=rule) for key, item in value.items() if key not in private}
+    if authority:
+        actor = value.get("actor", (value.get("decision_verification") or {}).get("principal"))
+        if isinstance(actor, dict):
+            result["actor"] = {key: actor[key] for key in ("kind", "channel") if key in actor}
+            if "channel" not in result["actor"] and "channel" in value:
+                result["actor"]["channel"] = value["channel"]
+        if (private - {"actor"}) & value.keys():
+            result["decision_sha256"] = digest({key: value[key] for key in DECISION_FIELDS | {"decision_effect"} if key in value})
+        if "instruction" in value:
+            result["instruction_sha256"] = digest(value["instruction"])
+    return result
 
 
 def channel_fields(value: dict) -> dict:
@@ -123,7 +161,7 @@ def map_decisions(state: dict) -> list[dict]:
     for ob in state.get("obligations", []):
         if ob.get("provenance") == "user_direct":
             add("obligation", f"obligations/{ob['id']}/source", ob["source"])
-        if ob.get("withdrawal", {}).get("by") == "user_direct":
+        if ob.get("withdrawal", {}).get("by") in ("user_direct", "agent_decision"):
             add("withdrawal", f"obligations/{ob['id']}/withdrawal", ob["withdrawal"])
     return rows
 
@@ -134,7 +172,7 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
     def add(kind, reference, value):
         rows.append({"kind": kind, "reference": reference, "decision": decision_channel(value)})
     for index, value in enumerate(state.get("constraints", [])):
-        if value.get("provenance") == "user_direct":
+        if value.get("provenance") in ("user_direct", "agent_decision"):
             add("constraint", f"constraints/{index}", value)
     for index, value in enumerate(((state.get("checkpoint") or {}).get("continuity") or {}).get("history", [])):
         if isinstance(value.get("decision"), dict):
@@ -145,9 +183,16 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
         add("retirement", "historical_retirement", state["historical_retirement"])
     for index, value in enumerate(state.get("standing_authorization", {}).get("decisions", [])):
         add("standing_authorization", f"standing_authorization/decisions/{index}", value)
+    from .contracts import TOOL_QUESTION_SCHEMA
+    questions = (state.get("checkpoint") or {}).get("questions", [])
+    for value in questions if isinstance(questions, list) else []:
+        if isinstance(value, dict) and value.get("schema") == TOOL_QUESTION_SCHEMA and "decision" in value:
+            from .relay import validate_decision_record
+            add("tool_permission" if value["purpose"] == "memory" else "tool_operation",
+                f"checkpoint/questions/{value['id']}/decision", validate_decision_record(value["decision"]))
     for identity, admission in state.get("admissions", {}).items():
         for index, failure in enumerate(admission.get("failures", [])):
-            if failure.get("cleared_by") == "user":
+            if failure.get("cleared_by") in ("user", "agent"):
                 add("route_failure_clear", f"admissions/{identity}/failures/{index}/clear_decision", failure.get("clear_decision", {}))
     for value in (journal or {}).get("actions", []):
         for field, kind in (("authorization", "authorization"),):
@@ -160,22 +205,53 @@ def context_decisions(state: dict, journal: dict | None = None) -> list[dict]:
 
 
 def protect_decision_record(value: dict) -> None:
-    """Earlier readers must refuse channel fields and closure reports they cannot read faithfully."""
+    """Protect supported decision positions without interpreting opaque user content."""
     from .standing import SCHEMA as STANDING_SCHEMA, STATUS_SCHEMA as STANDING_STATUS_SCHEMA
+    from .contracts import TOOL_QUESTION_SCHEMA, STATE_SCHEMAS
     def representation(item):
         if isinstance(item, dict):
-            own = (4 if item.get("operation") == "issue_revision" and "relay_verification" in item
+            return (5 if "decision_binding" in item or "decision_order" in item or item.get("decision_channels") == 5 or item.get("schema") == TOOL_QUESTION_SCHEMA
+                   else 4 if item.get("operation") == "issue_revision" and "relay_verification" in item
                    or item.get("decision_channels") == 4
                    else 3 if item.get("schema") in (STANDING_SCHEMA, STANDING_STATUS_SCHEMA)
                    or item.get("schema") == "pod-authorization/v1" and "standing" in item
                    or item.get("decision_channels") == 3
                    else 2 if "relay_verification" in item or item.get("decision_channels") == 2
                    else 1 if (CHANNEL_FIELDS | {"decision_channels"}) & item.keys() else 0)
-            return max([own, *(representation(v) for v in item.values())])
-        if isinstance(item, list):
-            return max((representation(v) for v in item), default=0)
         return 0
-    version = representation(value)
+
+    containers = [value]
+    if value.get("schema") == STATE_SCHEMAS["context"] and isinstance(value.get("checkpoint"), dict):
+        containers.append(value["checkpoint"])
+    for container in tuple(containers):
+        report = (container.get("closure") or {}).get("report")
+        if isinstance(report, dict):
+            containers.append(report)
+    records = list(containers)
+    for container in containers:
+        # Inventories add a default session channel for old rows. That projection
+        # does not mean a channel was stored, so it must not raise their reader floor.
+        decisions = (context_decisions(container) if container.get("schema") == STATE_SCHEMAS["context"] else [])
+        if container.get("schema") == STATE_SCHEMAS["checkpoint"]:
+            decisions += map_decisions(container)
+        for row in decisions:
+            decision = row["decision"]
+            if decision.get("channel_recorded") is False:
+                decision = {key: item for key, item in decision.items() if key not in ("channel", "channel_recorded")}
+            records.append(decision)
+        records.extend((container.get("standing_authorization"), container.get("history")))
+        records.extend(row.get("decision") for row in container.get("owner_decisions", []))
+        continuity = container.get("continuity") or {}
+        for row in continuity.get("history", []):
+            records.extend((row.get("decision"), row.get("resolution")))
+        questions = container.get("questions", [])
+        if isinstance(questions, list):
+            records.extend(row for row in questions if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA)
+        # Carried journal decisions still require their reader floor even though
+        # they are excluded from the current owner's decision inventory.
+        for row in container.get("actions", []):
+            records.extend(((row.get("action") or {}).get("authorization"), row.get("exception")))
+    version = max(map(representation, records), default=0)
     if version:
         value["decision_channels"] = version
 _ZONED_TIMESTAMP = re.compile(
@@ -481,9 +557,10 @@ def matching_route_settlement(row: dict, *, seq: int | None = None) -> bool:
     if not route_hold(row):
         return False
     row["route_decision"].setdefault("mismatch_occurrence", route_occurrence(row))
+    from .relay import decision_commit_time
     row["route_decision"].setdefault("settlements", []).append({
         "basis": "matching_report", "occurrence": route_occurrence(row),
-        "utc": datetime.now(timezone.utc).isoformat(),
+        "utc": decision_commit_time(),
         **({"seq": seq} if seq is not None else {}), "report_digest": row["report"]["observation_digest"]})
     return True
 

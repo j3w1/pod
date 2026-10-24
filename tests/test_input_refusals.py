@@ -34,6 +34,7 @@ REQUIRED = {
     "integration-observe": ("project", "candidate"),
     "checkpoint": (*OWNED, "value"),
     "constraint": (*OWNED, "action"),
+    "tool": ("project", "objective", "action"),
     "standing-authorization": (*OWNED, "action"),
     "route-failure": (*OWNED, "admission_id", "kind", "source"),
     "governor": (*OWNED, "action"),
@@ -90,7 +91,7 @@ class OperationFieldRefusalTests(unittest.TestCase):
                                   "optional": envelope["error"]["detail"]["optional"],
                                   **({"bounded_fields": envelope["error"]["detail"]["bounded_fields"],
                                       "next_action": envelope["error"]["detail"]["next_action"]}
-                                     if operation in ("packet", "admission", "standing-authorization") else {})})
+                                     if operation in ("packet", "admission", "standing-authorization", "tool") else {})})
                 shape = envelope["error"]["detail"]
                 self.assertEqual(set(shape["accepted"]) - set(shape["optional"]), set(required))
                 self.assertEqual(shape["accepted"], sorted(shape["accepted"]))

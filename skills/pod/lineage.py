@@ -7,7 +7,7 @@ from .util import digest
 FROZEN = ("withdrawn", "renewed")
 DEFINITION = ("kind", "provenance", "source", "parent", "check", "resolves", "stop_condition",
               "scope", "question", "insufficiency", "existing_evidence", "uncovered_risk",
-              "proof_scope", "boundary", "unit", "adopts", "finding")
+              "proof_scope", "boundary", "unit", "audit_role", "adopts", "finding")
 
 
 def copied_identity(row):
@@ -52,7 +52,7 @@ class Lineage:
                     _invalid("a replacement retains its predecessor")
                 if old["renewal"].get("definition") != copied_identity(old):
                     _invalid("the frozen predecessor retains the copied definition identity")
-                if any(row.get(field) != old.get(field) for field in ("kind", "provenance", "parent", "unit", "adopts", "finding")):
+                if any(row.get(field) != old.get(field) for field in ("kind", "provenance", "parent", "unit", "audit_role", "adopts", "finding")):
                     _invalid("ordinary immutable identity fields survive renewal")
         self.tips = {}
         for key in self.rows:
@@ -99,6 +99,11 @@ class Lineage:
                             item["resolved_seq"] = max(accepted)
                         else:
                             item.pop("resolved_seq", None)
+                    elif (child is not None and child.get("state") == "withdrawn"
+                          and child.get("withdrawal", {}).get("by") == "agent_decision"):
+                        from .relay import validate_agent_withdrawal
+                        withdrawal = child["withdrawal"]
+                        item["resolved_seq"] = validate_agent_withdrawal(withdrawal, introduced_seq=child.get("introduced_seq", 1))
                     elif child is None or child.get("state") != "withdrawn" or child.get("withdrawal", {}).get("by") != "user_direct":
                         item.pop("resolved_seq", None)
                 result.append(item)

@@ -21,7 +21,7 @@ from tests.test_succession import SuccessionCase
 BASELINE = "5f7298bab47c4a3263496dc2a7fe50ecfcda0530"  # Pod 0.12.0, the last status without readiness
 REPOSITORY = Path(__file__).resolve().parents[1]
 NEW_FIELDS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization",
-              "window_continuation")
+              "window_continuation", "decision_policy", "tool_permissions", "waiting_decisions", "needs_you", "setup_question")
 DECISION_FIELDS = ("owner_decisions", "derived_governance_decisions")
 
 
@@ -439,7 +439,8 @@ class CompatibilityTests(ReadinessCase):
         lines = observed_text.splitlines(keepends=True)
         self.assertEqual(lines[0].rstrip("\n"), observed["readiness"]["summary"])
         added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ", "PoD#", "Mode: ",
-                 "Window continuation: ")
+                 "Window continuation: ", "Decision policy: ", "Decision setup offered: ", "Decision waits: ",
+                 "Tool permission: ", "Needs you: ")
         self.assertEqual(sum(line.startswith("Worker tab: ") for line in lines), len(observed.get("worker_tabs", [])))
         self.assertEqual("".join(line for line in lines[1:] if not line.startswith(added)),
                          expected_text)
