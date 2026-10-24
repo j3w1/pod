@@ -24,6 +24,29 @@ QUESTION_BYTES = 32 * 1024
 QUESTION_FACT_BYTES = 4096
 
 
+def decision_status(preferences: dict, checkpoint: object = None, *, objective: bool = False) -> dict:
+    """Join raw config facts with the shared pure visibility projection."""
+    from .readiness import decision_view
+    if preferences.get("status") == "invalid":
+        return decision_view(None)
+    return decision_view({"policy": preferences.get("decision_policy"),
+                          "permissions": preferences.get("tool_permissions", []),
+                          "pending": preferences.get("pending_decisions", []),
+                          "generation": preferences.get("decision_generation", 0)},
+                         checkpoint, objective=objective)
+
+
+def public_status(value, *, rule=False):
+    """Copy public facts, removing original route-rule words throughout a rule row."""
+    if isinstance(value, list):
+        return [public_status(item, rule=rule) for item in value]
+    if isinstance(value, dict):
+        rule = rule or value.get("kind") == "route_rule"
+        return {key: public_status(item, rule=rule) for key, item in value.items()
+                if not (rule and key in ("request", "instruction"))}
+    return value
+
+
 def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavailable") -> dict:
     """Only recorded facts, including explicit gaps in the earlier opaque question forms."""
     result = {"schema": "pod-recorded-questions/v1", "status": "unavailable",
@@ -269,6 +292,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     preferences = load_config(project)
     running = running_identity()
     result = {"schema": "pod-cli/v5", "status": "selection_required", "run": run,
+              **decision_status(preferences),
               "bundle_identity": {"running": running, "checkpoint": None, "drift": None},
               "preferences": {key: preferences[key] for key in PREFERENCE_KEYS},
               "routes": project_routes(project, preferences=preferences, observations=NOT_READ)["summary"],
@@ -330,6 +354,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 return result
             state = read(project, objective)
             result["recorded_questions"] = recorded_questions(state.get("checkpoint") if state else None)
+            result.update(decision_status(preferences, state.get("checkpoint") if state else None, objective=True))
             if state is None or not isinstance(state.get("checkpoint"), dict):
                 from .ledger import state_root
                 result.update({"status": "blocked", "blocker": "objective_unknown",
@@ -370,6 +395,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         if objective is not None:
             result["readiness"] = unavailable(exc.code, f"the objective record cannot be read ({exc.code})")
             result["recorded_questions"] = recorded_questions(None, reason=exc.code)
+            result.update(decision_status(preferences, None, objective=True))
         if exc.code == "record_too_large":
             from .history import CONTEXT_LIMIT, WARN_AT, COMPACT_AT
             result["record_capacity"] = {"status": "unavailable", "physical_bytes": (exc.detail or {}).get("current_bytes"),
@@ -398,6 +424,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     checkpoint = state.get("checkpoint") if state else None
     if state is not None:
         result["recorded_questions"] = recorded_questions(checkpoint)
+        result.update(decision_status(preferences, checkpoint, objective=True))
         from .standing import projection as standing_projection
         result["standing_authorization"] = standing_projection(state)
     recorded = checkpoint_identity(checkpoint) if checkpoint else None
@@ -631,7 +658,12 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         except PodError as exc:
             result["record_capacity"] = {"status": "unavailable", "code": exc.code}
             result["readiness"] = unavailable(exc.code, f"the objective history cannot be read ({exc.code})")
-    return result
+    if "readiness" in result:
+        from .readiness import decision_readiness
+        result["readiness"] = decision_readiness(result["readiness"], {
+            key: result[key] for key in ("decision_policy", "tool_permissions", "waiting_decisions", "needs_you",
+                                        "setup_question")}, worker_tabs=result.get("worker_tabs"))
+    return public_status(result)
 
 
 def _claim_recorded(project: Path, state: dict) -> bool:
@@ -653,6 +685,7 @@ def project_for_state(checkpoint: dict, project: Path) -> Path:
 
 
 def render(result: dict) -> None:
+        result = public_status(result)
         if result.get("closure_basis") == "evidence" or (result.get("record_class") == "older"
                                                          and result.get("evidence_closure")):
             from .evidence_closure import render as render_closed
@@ -665,6 +698,22 @@ def render(result: dict) -> None:
             print(f"Record capacity: {capacity['physical_bytes']}/{capacity['limit_bytes']} bytes. "
                   + clean(capacity["next_action"]))
         print(f"Pod status: {result['status']}; objective {result.get('objective') or 'unknown'}")
+        decisions = result.get("decision_policy", {})
+        if decisions.get("status") == "available":
+            print(f"Decision policy: {decisions['preset']}; setup {decisions['setup']}")
+            if result.get("setup_question"):
+                print("Decision setup offered: " + clean(result["setup_question"]["text"]))
+            for permission in result.get("tool_permissions") or []:
+                print(f"Tool permission: {clean(permission['tool'])} | {permission['category']} | {permission['mode']}")
+        elif decisions:
+            print("Decision policy: unavailable")
+        waits = result.get("waiting_decisions", {})
+        for wait in waits.get("items", []):
+            print(f"Decision wait: {wait['waiting_on']}; requires {wait['required'] or 'unknown'}")
+        if waits.get("status") in ("partial", "unavailable"):
+            print("Decision waits: " + waits["status"] + "; some facts are unknown")
+        if result.get("needs_you") is True:
+            print("Needs you: a recorded decision needs your answer")
         if result.get("route_settlement_authority"):
             print("Route settlement: " + clean(result["route_settlement_authority"]))
         if "standing_authorization" in result:
