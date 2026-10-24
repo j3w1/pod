@@ -413,7 +413,12 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
     `refresh` is `manual` unless a valid file allows automatic refresh.
     """
     path = personal or personal_path(project)
-    data = _read_bytes(path)
+    read_error = None
+    try:
+        data = _read_bytes(path)
+    except PodError as exc:
+        data = None
+        read_error = {"code": exc.code, "message": "Personal configuration is unavailable"}
     revision = hashlib.sha256(data).hexdigest() if data is not None else None
     try:
         metadata = path.stat(follow_symlinks=False) if data is not None else None
@@ -421,9 +426,11 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
         metadata = None
     file_stamp = (f"{metadata.st_dev}:{metadata.st_ino}:{metadata.st_ctime_ns}"
                   if metadata is not None else None)
-    errors = []
+    errors = [read_error] if read_error else []
     diagnostic: dict = {}
-    if data is not None and (metadata is None or not stat.S_ISREG(metadata.st_mode)):
+    if read_error:
+        document = None
+    elif data is not None and (metadata is None or not stat.S_ISREG(metadata.st_mode)):
         document = None
         errors.append({"code": "unsafe_config", "message": "Configuration metadata is unavailable"})
     else:
@@ -433,7 +440,7 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
             document = None
             errors.append({"code": exc.code, "message": str(exc)})
     older = diagnostic.get("v1") if document is None else None
-    if data is None:
+    if data is None and not read_error:
         errors.append({"code": "config_missing", "message": "Personal preferences are missing"})
         status = "missing"
     else:
@@ -909,6 +916,11 @@ def tool_check(project: Path | None, tool: str, category: str, operation: str, *
     evaluated = None
     if pending is not None and pending["purpose"] == "operation":
         if pending["state"] == "approved":
+            # A durable use receipt proves past consumption even if authority has
+            # since changed. This readback publishes nothing and grants no use.
+            _, prior_use = _tool_use_receipt(pending)
+            if prior_use is not None:
+                return {"status": "consumed", "execute": False, "invocation": invocation, "readback": True}
             if pending["revisions"] != revisions:
                 raise PodError("decision_stale", "Policy or permission state changed after operation approval")
             from .relay import validate_decision_record
@@ -1022,15 +1034,39 @@ def tool_answer(project: Path | None, invocation: str, answer: str, *, decision:
             "decision_generation": saved["decision_generation"], **({"notice": saved["notice"]} if saved.get("notice") else {})}
 
 
+def _tool_use_receipt(pending: dict) -> tuple[Path, dict | None]:
+    from .ledger import state_root
+    from .util import bounded_json
+    path = state_root(None) / ".relay-authorizations" / (digest("pod-tool-use:" + pending["id"]) + ".json")
+    if not (path.exists() or path.is_symlink()):
+        return path, None
+    use = bounded_json(path, limit=1024)
+    # The immutable approved row binds the complete invocation. Its old transition
+    # digest need not equal today's authority for a readback with execute:false.
+    if (not isinstance(use, dict) or set(use) != {"schema", "authorization", "transition"} or use["schema"] != "pod-relay-use/v1"
+            or use["authorization"] != digest(pending) or not isinstance(use["transition"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", use["transition"]) is None):
+        raise PodError("tool_invocation_reused", "Invocation already consumed with another binding")
+    return path, use
+
+
 def _consume_tool(project: Path | None, snapshot: dict, pending: dict, result: dict) -> dict:
-    from .ledger import _lock, state_root
+    from .ledger import _lock
+    from .relay import Decision
     from .util import atomic_json, bounded_json
     path = personal_path(project)
-    receipt = state_root(None) / ".relay-authorizations" / (digest("pod-tool-use:" + pending["id"]) + ".json")
+    receipt, prior_use = _tool_use_receipt(pending)
+    if prior_use is not None:
+        return {"status": "consumed", "execute": False, "invocation": pending["id"], "readback": True}
+    # Host lookup stays outside the short config lock, as on objective use.
+    capability = Decision._recorded(project, None, pending["decision"], snapshot=snapshot)
+    capability.revalidate_authorizer()
+    capability.check_receipt()
     with _edit_lock(path):
         current = load(project)
-        if decision_state(snapshot) != decision_state(current):
-            raise PodError("decision_stale", "Policy or memory changed before operation consumption")
+        if (current["status"] != "valid" or decision_state(snapshot) != decision_state(current)
+                or snapshot["authorization_verifier"] != current["authorization_verifier"]):
+            raise PodError("decision_stale", "Policy, memory or verifier changed before operation consumption")
         raw = _read_bytes(path)
         document = _parse(raw)
         updated = deepcopy(document)

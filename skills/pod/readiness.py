@@ -33,12 +33,15 @@ def decision_view(snapshot: dict | None, checkpoint: object = None, *, objective
     from . import policy
     from .status import QUESTION_BYTES, recorded_questions
 
-    unavailable = {"decision_policy": {"status": "unavailable"}, "tool_permissions": None,
-                   "waiting_decisions": {"status": "unavailable", "items": [], "total": None,
-                                         "truncated": False, "missing": ["decision_input"]},
-                   "needs_you": None, "setup_question": None}
+    def unavailable(reason):
+        return {"decision_policy": {"status": "unavailable", "reason": reason}, "tool_permissions": None,
+                "waiting_decisions": {"status": "unavailable", "items": [], "total": None,
+                                      "truncated": False, "missing": ["decision_input"], "reason": reason},
+                "needs_you": None, "setup_question": None}
     if not isinstance(snapshot, dict):
-        return unavailable
+        return unavailable("decision_input_unavailable")
+    if snapshot.get("status") not in (None, "valid", "missing", "setup_required"):
+        return unavailable(snapshot.get("reason") or "invalid_config")
     try:
         generation = snapshot.get("generation", 0)
         if type(generation) is not int or generation < 0:
@@ -46,7 +49,7 @@ def decision_view(snapshot: dict | None, checkpoint: object = None, *, objective
         projected = policy.projection(snapshot.get("policy"), snapshot.get("permissions", []),
                                       snapshot.get("pending", []))
     except PodError as exc:
-        return {**unavailable, "decision_policy": {"status": "unavailable", "reason": exc.code}}
+        return unavailable(exc.code)
     current = snapshot.get("policy")
     items = [{**row, "source": "machine"} for row in projected["pending"]]
     missing, truncated, total = [], False, len(items)
