@@ -487,10 +487,11 @@ class StorageBoundaryTests(ProductionCase):
         subs=[self.sub(f"S{i}",state="blocked_external",external={"party":"user","need":"input","unblocks_when":"provided"}) for i in range(64)]
         self.intake(*subs)
         root=objective_root(self.project,"objective");path=root / "context.json"
+        # Unsatisfied rows retain current-candidate receipts; satisfied copies can archive.
         for turn in range(6):
             before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
             value={"schema":"pod-checkpoint/v3", "seq":read(self.project,"objective")["checkpoint"]["seq"]+1,
-                   "update":{row["id"]:{"state":"satisfied","evidence":[{
+                   "update":{row["id"]:{"state":"blocked_external","external":row["external"],"evidence":[{
                        "check":"c"*512,"command":"d"*512,"result":"r"*512,"reference":f"{row['id']}-observation-{turn}"}]}
                        for row in subs}}
             request={"project":str(self.project),"objective":"objective","owner":"owner","value":value}

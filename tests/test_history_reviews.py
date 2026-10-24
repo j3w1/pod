@@ -9,7 +9,7 @@ from unittest.mock import patch
 from pod.errors import PodError
 from pod.history import COMPACT_AT, CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
 from pod.util import digest, encoded
-from tests.history_support import size, synthetic_state
+from tests.history_support import inline_copies, size, synthetic_state
 
 
 OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
@@ -310,13 +310,14 @@ class LiveShapeTests(unittest.TestCase):
         unpadded = _read(path)
         cls.prior = deepcopy(unpadded)
         cls.prior["source_rejections"] = {"synthetic-padding": ""}
-        # The preceding mechanism's physical shape: every review inline, other settled history moved,
-        # 400 bytes below the limit (the pending report adds about a kilobyte).
+        # The preceding mechanism's physical shape: every review and receipt copy inline, other settled
+        # history moved, 400 bytes below the limit (the pending report adds about a kilobyte).
         reviews = set(cls.prior["admissions"])
         shaped, _ = compact(cls.prior, protected_admissions=reviews, force=True)
-        cls.prior["source_rejections"]["synthetic-padding"] = "x" * (CONTEXT_LIMIT - 400 - size(shaped))
+        cls.prior["source_rejections"]["synthetic-padding"] = (
+            "x" * (CONTEXT_LIMIT - 400 - size(inline_copies(shaped, cls.prior))))
         shaped, chunks = compact(cls.prior, protected_admissions=reviews, force=True)
-        publish_context(path, shaped, chunks)
+        publish_context(path, inline_copies(shaped, cls.prior), chunks)
         cls.prior_bytes = path.stat().st_size
         cls.capacity = capacity(path, _read(path))
         case.report(pending, frozen, outcome="succeeded", map={"seq": seq() + 1, "update": {"A": WAITING}})
