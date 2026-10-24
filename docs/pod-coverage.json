@@ -8530,7 +8530,14 @@
         "tests.test_decision_integration.ObjectiveToolTests.test_objective_scope_aba_and_forged_question_updates_refuse",
         "tests.test_decision_integration.MachineCapacityRecoveryTests.test_eight_approvals_then_stricter_policy_recover_without_file_edit_or_replay",
         "tests.test_decision_integration.ObjectiveCapacityRecoveryTests.test_all_eight_objective_slots_recover_without_reissuing_old_permission",
-        "tests.test_decision_integration.ObjectiveToolTests.test_independent_question_on_the_same_objective_preserves_valid_execution_grant"
+        "tests.test_decision_integration.ObjectiveToolTests.test_independent_question_on_the_same_objective_preserves_valid_execution_grant",
+        "tests.test_tool_use_revalidation.MachineToolUseTests.test_withdrawn_vouch_refuses_without_consumption",
+        "tests.test_tool_use_revalidation.ObjectiveToolUseTests.test_withdrawn_vouch_refuses_without_consumption",
+        "tests.test_tool_use_revalidation.MachineToolUseTests.test_expired_host_vouch_refuses_without_consumption",
+        "tests.test_tool_use_revalidation.ObjectiveToolUseTests.test_expired_host_vouch_refuses_without_consumption",
+        "tests.test_tool_use_revalidation.MachineToolUseTests.test_changed_scope_refuses_even_with_positive_verdict",
+        "tests.test_tool_use_revalidation.ObjectiveToolUseTests.test_changed_scope_refuses_even_with_positive_verdict",
+        "tests.test_tool_use_revalidation.MachineToolUseTests.test_verifier_race_refuses_before_use_receipt"
       ],
       "status": "NOT_RUN"
     },
@@ -8602,7 +8609,8 @@
         "tests.test_verified_decisions.VerifiedCheckpointTests.test_stored_actor_or_capability_fields_are_not_public_credentials",
         "tests.test_verified_decisions.VerifiedCheckpointTests.test_verified_agent_revision_needs_no_previously_recorded_question",
         "tests.test_verified_compaction.VerifiedCompactionTests.test_local_cooperative_compaction_keeps_its_truthful_actor",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_public_input_refuses_forged_stored_metadata"
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_public_input_refuses_forged_stored_metadata",
+        "tests.test_tool_question_privacy.PublicDecisionPrivacyTests.test_public_summary_cannot_replace_private_authority"
       ],
       "status": "NOT_RUN"
     },
@@ -8705,7 +8713,9 @@
         "tests.test_decision_integration.ObjectiveToolTests.test_interrupted_operation_consumption_never_issues_another_execute",
         "tests.test_verified_compaction.VerifiedCompactionTests.test_actual_record_preflight_failure_precedes_receipt_and_publication",
         "tests.test_verified_compaction.VerifiedCompactionTests.test_receipt_before_publication_recovers_only_identical_transition",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_response_loss_after_atomic_replace_recovers_committed_readback"
+        "tests.test_verified_compaction.VerifiedCompactionTests.test_response_loss_after_atomic_replace_recovers_committed_readback",
+        "tests.test_tool_use_revalidation.MachineToolUseTests.test_interrupted_consumption_recovers_without_current_authority_or_execution",
+        "tests.test_tool_use_revalidation.ObjectiveToolUseTests.test_interrupted_consumption_recovers_without_current_authority_or_execution"
       ],
       "status": "NOT_RUN"
     },
@@ -8727,7 +8737,12 @@
       ],
       "offline_test": [
         "tests.test_decision_visibility.DecisionViewTests.test_old_opaque_or_unclassified_facts_are_unknown",
-        "tests.test_decision_visibility.DecisionViewTests.test_missing_and_truncated_questions_never_claim_complete_absence"
+        "tests.test_decision_visibility.DecisionViewTests.test_missing_and_truncated_questions_never_claim_complete_absence",
+        "tests.test_unknown_decision_views.UnknownDecisionViewsTests.test_unsupported_schema_is_unavailable_in_public_json_and_text_without_writes",
+        "tests.test_unknown_decision_views.UnknownDecisionViewsTests.test_invalid_yaml_is_unavailable_without_false_setup_or_wait_facts",
+        "tests.test_unknown_decision_views.UnknownDecisionViewsTests.test_unreadable_config_is_unavailable_instead_of_a_read_error_or_setup_offer",
+        "tests.test_unknown_decision_views.UnknownDecisionViewsTests.test_unsafe_config_symlink_is_unavailable_and_target_bytes_are_unchanged",
+        "tests.test_unknown_decision_views.UnknownDecisionViewsTests.test_display_boundary_carries_invalidity_transiently_without_native_writes"
       ],
       "status": "NOT_RUN"
     },
@@ -8779,7 +8794,16 @@
         "unit",
         "independent_review"
       ],
-      "offline_test": "tests.test_decision_visibility.DecisionPublicStatusTests.test_public_status_sanitizes_original_rule_words_and_preserves_private_state",
+      "offline_test": [
+        "tests.test_decision_visibility.DecisionPublicStatusTests.test_public_status_sanitizes_original_rule_words_and_preserves_private_state",
+        "tests.test_tool_question_privacy.PublicDecisionPrivacyTests.test_objective_json_projects_tool_route_and_revision_inventories",
+        "tests.test_tool_question_privacy.PublicDecisionPrivacyTests.test_actual_display_command_exposes_wait_facts_without_private_evidence",
+        "tests.test_tool_question_privacy.PublicDecisionPrivacyTests.test_private_inventory_and_authentication_keep_original_proof",
+        "tests.test_tool_question_privacy.RetiredDecisionPrivacyTests.test_retired_list_json_does_not_expand_authority_evidence",
+        "tests.test_tool_question_privacy.ClaimedDecisionPrivacyTests.test_claimed_list_json_keeps_both_objectives_without_private_proof",
+        "tests.test_tool_question_privacy.GovernorDecisionPrivacyTests.test_governor_authorization_json_sanitizes_both_public_inventories",
+        "tests.test_tool_question_privacy.PublicDecisionProjectionTests.test_safe_scalar_actor_summary_remains_unchanged_and_idempotent"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -8799,7 +8823,8 @@
       ],
       "offline_test": [
         "tests.test_decision_policy.DecisionPolicyTests.test_missing_and_skip_are_distinct_and_read_only",
-        "tests.test_decision_integration.MachinePolicyTests.test_missing_policy_is_read_only_and_skip_latches_careful"
+        "tests.test_decision_integration.MachinePolicyTests.test_missing_policy_is_read_only_and_skip_latches_careful",
+        "tests.test_unknown_decision_views.UnknownDecisionViewsTests.test_missing_file_and_readable_absent_policy_keep_implicit_careful_offer"
       ],
       "status": "NOT_RUN"
     },
