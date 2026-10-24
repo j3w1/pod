@@ -6,7 +6,7 @@
 
 Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119), [A216](#a216), [A252](#a252), [A256](#a256)
 
-Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status` with `--list [--repository PATH | --worktree PATH] [--delivered]`, `pod sweep [--repository PATH]... [--objective NAME]... [--json]` (R148), `pod doctor`, `pod update`, `pod config`/`config edit`, and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output; the model read optionally restricts its rows with `--eligible-only`. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
+Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status` with `--list [--repository PATH | --worktree PATH] [--delivered]`, `pod sweep [--repository PATH]... [--objective NAME]... [--json]` (R148), `pod doctor`, `pod update`, `pod config`/`config edit`, `pod policy`, `pod tool check`/`tool review`/`tool answer`/`tool cancel` (R163–R164), and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output; the model read optionally restricts its rows with `--eligible-only`. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
 
 ### R04 — Maintain one canonical trigger-led skill router
 
@@ -602,7 +602,7 @@ Each row has `layer` (`task_worktree`, `coordinator_tab`, `worker_worktree` or `
 R120 permits verified relayed `publish` or `merge` consent through the existing
 Governor operations. The same verifier also confirms a relayed standing-authorization
 activation or revocation and a responder answer, through the two further actions
-described after the refusal table (R136, R138). No verifier is installed or configured
+described after the refusal table (R136, R138). R166 adds the separate `decision` action; all these old wire shapes, including `orca_window`, remain unchanged. No verifier is installed or configured
 by default. The host
 may set `authorization_verifier` in its one personal `pod/v2` config to an argv
 list of 1-16 nonempty strings, each at most 4096 characters without NUL; the first
@@ -1002,3 +1002,48 @@ A bound source CLOSED with stateReason COMPLETED may undergo the same proof-driv
 
 - <a id="a526"></a>**A526** — Pre-send CLOSED/COMPLETED and mid-send completion tick without reopen or owner decision; a lost response still has ambiguous authorship.
 - <a id="a527"></a>**A527** — Completed state cannot bypass source materiality/role/amendment holds, unknown-write recovery or due-tick gates; renewal-only pending and independent invalidation keep their existing proof behavior.
+
+### R163 — Ask who decides on this machine
+
+Type: B,H · Scenarios: [A580](#a580), [A581](#a581), [A582](#a582), [A555](#a555)
+
+The first coordinator use without a stored machine policy asks the person one question in the session or through the interactive `pod policy` prompt. Offer Careful, Delegate, Hands-off, Custom and skip. An absent policy evaluates as Careful on reads; skip persists a first-use Careful latch without inventing an owner decision. Only the person, including a host-verified person, sets or changes policy by answering again. No policy/tool decision flow tells the person to edit a file.
+
+Careful uses person for merging/publishing, scope/coordinator changes and sensitive categories, and trusted agents for model choices. Delegate uses trusted agents and Hands-off uses any agent for configurable decisions. In every preset, Custom included, continuity and routine work stay automatic: completed-objective closure, PoD ticking and already-authorized cleanup gain no question. Money/new commitments, policy changes and human-only login stay person-only; normal included subscription use is routine. Unknown effects are `unclassified` and person-only. All applicable categories intersect, taking the strictest decider; Careful >= Delegate >= Hands-off in strictness for every category.
+
+`pod policy [careful|delegate|hands_off|custom|skip] [--categories JSON] [--input FILE|-] [--json]` reads without a preset in noninteractive/JSON mode. In a terminal it asks and confirms the choice; Custom asks each configurable category as words with “me”, “trusted agents” and “any agent”, and fixes the invariant categories. The complete Custom map uses the category/decider vocabulary projected by config. The policy and its private decision live in the existing personal config. Host/project restrictions remain binding. On a shared account, claimed session identity is cooperative unless the host attests the person.
+
+- <a id="a580"></a>**A580** — A missing policy reads as implicit Careful and offers one setup question without writing; skipping stores Careful once, stops repeat offers and cannot replace an existing policy.
+- <a id="a581"></a>**A581** — Every preset keeps money, policy changes and human-only login person-only and continuity/routine automatic; Careful model choices use trusted agents, with category-wise Careful at least as strict as Delegate and Delegate at least as strict as Hands-off.
+- <a id="a582"></a>**A582** — Only the person or a host-attested person changes policy; local cooperative agents cannot claim person/trusted identity, and shared-account session claims remain explicitly cooperative.
+- <a id="a555"></a>**A555** — Interactive policy choice and complete Custom category answers use the safe targeted writer; machine input is bounded decision JSON, never a request to edit a file or a caller verdict.
+
+### R164 — Remember tool permission without reusing operation approval
+
+Type: B,H · Scenarios: [A556](#a556), [A557](#a557), [A558](#a558), [A559](#a559)
+
+Before every sensitive operation the agent runs `pod tool check --tool ID --category CATEGORY --operation TEXT [--spending included_subscription|new_commitment] [--invocation ID] [--objective ID] [--json]`. Categories are secrets, money, speaking for the person, production deployment and irreversible deletion. The agent classifies the actual operation; Pod neither scans for tools nor executes them, and accepts no secret values. The boundary is cooperative unless the host enforces it.
+
+Memory is keyed by exact tool and category on this machine. First use asks whether agents may use it hands-off or must ask each time. `pod tool review --tool ID --category CATEGORY [--objective ID] [--json]` asks that memory question again for a non-money permission, then uses the existing answer command; it never grants an operation. Loosening and tightening use the same scoped/current-policy authority. A changed mode applies to new uses immediately; stale memory-choice questions cannot restore the prior mode. Money review refuses and directs exact per-commitment approval. `pod tool answer --invocation ID --answer CHOICE [--input FILE|-] [--objective ID] [--json]` records only an offered answer by an eligible decision maker; memory and operation questions are separate. Money permits only ask-each-time memory and each new commitment needs the person's exact approval; explicitly included subscription use is automatic. Machine policy and memory intersect conservatively. A trusted agent's host scope must cover the full effect.
+
+With an objective, use its existing `checkpoint.questions` with `schema: pod-tool-question/v1`, kernel identity/purpose, exact operation and authority revisions, native binding hash, material map revision and pending/resolved state. Keep active kernel rows unchanged on ordinary checkpoints; omitting `questions` carries them. `pod tool cancel --invocation ID [--objective ID] [--json]` cancels only an unanswered question. A worker unable to record the objective question receives `coordinator_question` and routes the exact request through native mail, without an execution grant. No duplicate machine pending row is created. Closure expires unused questions automatically. Independent objective question edits do not advance personal generation or invalidate an unrelated objective's approval; actual personal memory changes do. Cancel/recreate, material scope ABA and forged checkpoint edits cannot recover an old approval.
+
+After a memory answer, check again. A one-operation answer binds invocation, tool/category, operation/spending, policy/memory revisions and decision generation, and never silently approves another use. Every sensitive check reads current authority; only an integrated `execute: true` result permits proceeding. A pure evaluator result or worker summary is not a grant. Consumption/replay uses the existing machine receipt home; interrupted consumption returns readback without new execution permission. External execution is outside Pod and has no exactly-once guarantee. Bounds remain 32 memory entries, eight unresolved tool questions in each machine or objective question home, 2048 bytes for a complete stored question and the existing 64 KiB personal config budget; aggregate fit is checked before effects.
+
+- <a id="a556"></a>**A556** — First sensitive tool/category use asks one hands_off/ask_each_time memory question; exact identities are remembered, tool review changes memory both ways through the same current-policy answered decision with an honest changed_at, money review refuses, and no discovery, installation, secret handling or tool execution occurs. Objective questions use the existing checkpoint without duplicate machine pending rows.
+- <a id="a557"></a>**A557** — A memory answer grants no operation; ask_each_time approval binds one pending invocation and only its exact operation and authority revisions. The integrated check alone can return execute true.
+- <a id="a558"></a>**A558** — The stricter machine policy and memory wins; trusted agents need current attested scope, new money always needs the person and has no hands_off entry, while included subscription use is automatic without a question.
+- <a id="a559"></a>**A559** — Policy/memory/generation drift, changed operation, denial and consumed invocations cannot grant use; receipt recovery yields consumed/readback with no fresh execute permission. Cancel/recreate, material scope ABA, forged checkpoint updates and competing memory answers cannot restore stale authority; an independent objective's question alone leaves an existing approval valid.
+
+### R168 — Project decision waits without exposing authority evidence
+
+Type: B,H · Scenarios: [A572](#a572), [A573](#a573), [A578](#a578), [A579](#a579)
+
+Public config/status add `decision_policy`, `tool_permissions`, `waiting_decisions`, `needs_you` and `setup_question`. Permission summaries carry tool/category/mode and `changed_at` from the validated kernel decision time, null for older unclocked rows, without private decisions. Waiting projections state total, truncation, missing facts and status; `needs_you` is boolean only with sufficient known facts, otherwise null. Known normalized objective questions contribute actual category-based waits without inventing the subject of old opaque questions. Setup offers do not alter completion gates or manufacture an owner wait. Readiness, finalization, existing question projections and all old fields retain their meanings.
+
+Display proposes a decision-needed mark only for a known person wait. Synthetic projection, actual native metadata appearance/clear and desktop rendering are separate evidence. Never mutate host-owned titles to obtain a mark. Public output sanitizes original model-rule words and private authority evidence while keeping the actor channel truthful. The installed decision reference serves the recurring moment of policy setup, tool use and decision approval; R71 remains the documentation contract.
+
+- <a id="a572"></a>**A572** — Config and status expose policy, sanitized tool memory, waiting decisions and needs_you; a known person wait differs from an agent wait, and a setup offer alone is not a recorded wait.
+- <a id="a573"></a>**A573** — Missing, opaque, unsupported or truncated old question facts remain unknown/partial and cannot claim no wait; status remains read-only and retains readiness/finalization facts.
+- <a id="a578"></a>**A578** — New decision and model-rule summaries contain no original request words, private decision/verifier evidence, host-specific roles, personal paths, runtime identifiers or secret values; existing native-reference status fields keep their meanings and synthetic fixtures remain separately identified.
+- <a id="a579"></a>**A579** — The installed router keeps its five headings, one unique trigger for every reference and no reference-to-reference links; recurring decision guidance owns its detailed rules once.

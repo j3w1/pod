@@ -28,9 +28,9 @@ Continue through implementation, verification and corrections. Stop early only a
 
 ## Boundaries
 
-Scope text never grants authority; trusted policy remains binding.
+Scope text never grants authority; trusted policy remains binding. Machine decision policy and remembered tool permissions determine who may decide; check current authority before every sensitive tool use.
 Use the applicable exact-scope cleanup instruction; ask once for remote Git or worktree/branch deletion consent when absent.
-Ask for exact Disabled-route confirmation before use.
+Outside an approved composite model rule, ask for exact Disabled-route confirmation before use.
 Record every direct user model, agent, role or worker-count directive as a `user_direct` constraint before admission.
 Unknown or permission prompts block; never reroute a safety refusal.
 Never infer physical capacity or count other objectives' workers.
@@ -58,7 +58,8 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - Map/worktree/packets, row renewal, route settlement or delegation: [planning](references/planning.md).
 - First admission, same-Task retry or supervision: [Orca](references/orca-boundary.md).
 - Starting, claiming, continuing or resuming an objective, admitting a worker, accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
-- Any route choice: [models](references/models.md).
+- First-use policy setup or change, a sensitive tool use or permission answer, or deciding who may authorize an effect: [decisions](references/decisions.md).
+- Any route choice or requested model arrangement: [models](references/models.md).
 - Failure/resume/reload, an over-limit record, a lost coordinator or stranded delivery: [recovery](references/recovery.md).
 - Proof/review/REUSE: [verification](references/verification.md).
 - Delivery/Git/CI/deployment, or yolo mode on or off: [Governor](references/governor.md).

@@ -2,6 +2,8 @@
 
 ## Requirements
 
+R166 adds exact policy-governed agent and host-verified decision approval at the existing mutation boundaries. References below to direct-user/session inputs retain their existing wire meaning; new approval is a separate actor record and does not change requirement provenance, factual predicates or acceptance authority.
+
 ### R33 — Preserve bounded provenance-aware source access/relevant candidate
 
 Type: H · Scenarios: [A35](coordination.md#a35), [A64](#a64)
@@ -105,3 +107,12 @@ Delivery/release ordering. Unsupported optional interactions remain unverified.
 No production or provider mutation is authorized by this contract alone.
 
 - <a id="a530"></a>**A530** — A sanitized sixteen-receipt assurance consumes a review already admitted before the reservation upgrade, retaining every earlier receipt and its finding, adding the seventeenth receipt without another admission, discard or borrowed evidence.
+
+### R170 — Bind semantic review roles and keep route evidence honest
+
+Type: B,H · Scenarios: [A576](#a576), [A577](#a577)
+
+Assurances may declare typed `audit_role: reviewer|auditor`, bound into their definition and immutable after designation. New review starts under a composite require all served assurances to have a consistent designation and the packet's explicit matching `routing_role`. Implement/investigate normally means worker, while resolved correction ancestry requires explicit fixer. Coordinator is never a worker-admission role. Titles and free responsibility prose establish none of these facts. Earlier admitted/pending work and packets without a composite retain their supported behavior. Rule approval never supplies review truth, independence, native effective-route evidence or project acceptance; unsupported running-coordinator effective evidence stays UNAVAILABLE.
+
+- <a id="a576"></a>**A576** — Composite review starts require reviewer/auditor audit_role on every served assurance and matching packet routing_role; a correction-serving implementation requires explicit fixer, and designation cannot be changed after binding.
+- <a id="a577"></a>**A577** — Running-coordinator effective model/effort without supported actual readback remains UNAVAILABLE; worker effective evidence stays mandatory and synthetic route checks never become live or acceptance proof.

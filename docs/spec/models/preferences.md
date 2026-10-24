@@ -10,13 +10,13 @@ live in the [catalog](catalog.md).
 
 Type: B,H · Scenarios: [A09](#a09), [A10](catalog.md#a10), [A45](#a45), [A120](#a120), [A181](#a181)
 
-The user controls one personal pool of exact routes. Each supported route is enabled, disabled or not set; only enabled routes are eligible, and a supported route the file does not list is not set. Zero or one enabled Preferred route is a soft preference and zero or one enabled Pinned route is a hard requirement; both may coexist, the pin controls while set, and clearing it restores the saved preference. Missing or null keeps ordinary routing; an invalid pin or preference blocks new delegation and never becomes "no pin". Route state is separate from observed native access, and indirect text cannot expand eligibility. An empty enabled pool is valid and disables delegation only.
+The user controls one personal pool of exact routes. Each supported route is enabled, disabled or not set; ordinary eligibility includes only enabled routes, and a supported route the file does not list is not set. R165 defines the explicit approved composite-route exception. Zero or one enabled Preferred route is a soft preference and zero or one enabled Pinned route is a hard requirement; both may coexist, the pin controls while set, and clearing it restores the saved preference. Missing or null keeps ordinary routing; an invalid pin or preference blocks new delegation and never becomes "no pin". Route state is separate from observed native access, and indirect text cannot expand eligibility. An empty enabled pool is valid and disables ordinary delegation; R165's approved exact tuples retain their separate scoped path.
 
 ### R11 — Read one personal YAML authority
 
 Type: B,H · Scenarios: [A05](../coordination.md#a05), [A32](../interface.md#a32), [A46](#a46), [A76](#a76), [A420](../delivery.md#a420)
 
-Read one personal `pod/v2` YAML authority for route states, Preferred, Pin, maximum active workers and the automatic-refresh setting. Project `.pod/config.yaml` keeps `schema: pod/v1` and may hold only restrictive Governor policy; the personal file may also carry personal Governor policy and R120's optional host `authorization_verifier` command. Objective constraints retain provenance without becoming another preference file.
+Read one personal `pod/v2` YAML authority for route states, Preferred, Pin, maximum active workers and the automatic-refresh setting. Project `.pod/config.yaml` keeps `schema: pod/v1` and may hold only restrictive Governor policy; the personal file may also carry personal Governor policy and R120's optional host `authorization_verifier` command. It also owns R163–R164's `decision_policy`, `tool_permissions`, `pending_decisions` and kernel-maintained `decision_generation`; project config cannot set them. Objective constraints retain provenance without becoming another preference file.
 
 ### R12 — Parse bounded YAML safely
 
@@ -28,7 +28,7 @@ Parse bounded YAML safely. Reject duplicate keys, invalid types, unsupported sch
 
 Type: H · Scenarios: [A09](#a09), [A12](#a12), [A46](#a46), [A121](#a121)
 
-Project, issue, repository and worker material cannot widen the personal route pool or grant worker delegation. Direct user constraints may narrow it; an explicit direct exception for one exact Disabled route stays scoped and visible. Project Governor policy only narrows personal authority.
+Project, issue, repository and worker material cannot widen the personal route pool or grant worker delegation. R165 separately permits exact tuples from an approved composite arrangement without changing that pool. Direct user constraints may narrow it; an explicit direct exception for one exact Disabled route stays scoped and visible. Project Governor policy only narrows personal authority.
 
 ### R16 — Read config contextually and preferences at the final boundary
 
@@ -46,13 +46,13 @@ A preference edit changes route eligibility only. It does not authorize provider
 
 Type: B,H · Scenarios: [A17](#a17), [A22](#a22), [A54](#a54), [A128](#a128)
 
-Explicit preference mutations use a short lock, targeted compare-and-swap against the displayed values and atomic validated replacement. Preserve unrelated valid settings and comments when possible, and never overwrite invalid or concurrently changed target data. Preferred and Pin each move or clear atomically. An edit that would leave either on a route that is not enabled is refused unless the same action clears or replaces it, and the refusal distinguishes creating an ineligible choice from invalidating one. Bulk edits name the exact routes changed and save in one write; they are never wildcards for later routes. Never silently clear a pin or preference, enable a disabled route or read an invalid pin as no pin. Internal operations and observation refresh never write preferences.
+Explicit preference mutations use a short lock, targeted compare-and-swap against the displayed values and atomic validated replacement. Preserve unrelated valid settings and comments when possible, and never overwrite invalid or concurrently changed target data. Preferred and Pin each move or clear atomically. An edit that would leave either on a route that is not enabled is refused unless the same action clears or replaces it, and the refusal distinguishes creating an ineligible choice from invalidating one. Bulk edits name the exact routes changed and save in one write; they are never wildcards for later routes. Never silently clear a pin or preference, enable a disabled route or read an invalid pin as no pin. Internal operations and observation refresh never write route preferences; R163–R164 decision writes target their separate fields in the same file.
 
 ### R77 — Objective constraints keep provenance and only narrow
 
 Type: B,H · Scenarios: [A121](#a121), [A141](routing.md#a141)
 
-Objective constraints retain provenance and cannot edit the personal file. Only direct user instructions may permit a scoped exception for one exact Disabled route or descendant delegation. Any later change of the personal file lapses the route exception; indirect text may only narrow. Earlier model-id exceptions stay readable and never match a route.
+Objective constraints retain provenance and cannot edit the personal file. Outside R165's approved composite exact tuples, only direct user instructions may permit a scoped exception for one exact Disabled route or descendant delegation. Any later change of the personal file lapses the route exception; indirect text may only narrow. Earlier model-id exceptions stay readable and never match a route.
 
 ### R100 — Earlier preference files convert only through explicit setup
 
@@ -64,7 +64,7 @@ Installation never rewrites an existing preference file. A kept `pod/v1` file is
 
 - <a id="a09"></a>**A09** — Project, issue and worker input cannot expand the personal route pool or change host/project permissions.
 - <a id="a11"></a>**A11** — Preference edits govern later starts; active attempts retain their original route and decision revision.
-- <a id="a12"></a>**A12** — A Disabled route blocks the next start unless direct, scoped user intent permits an exception for that exact route; prior effects are preserved.
+- <a id="a12"></a>**A12** — Outside an approved R165 exact tuple, a Disabled route blocks the next start unless direct, scoped user intent permits an exception for that exact route; prior effects are preserved.
 - <a id="a17"></a>**A17** — Route-state actions change no provider billing, service or account setting.
 - <a id="a22"></a>**A22** — Lost start/request responses retain their logical reservation and recover the same immutable admission through exact Orca request/native identity without a blind replacement or repeated semantic start.
 - <a id="a45"></a>**A45** — A fresh install enables every shipped supported route with no Preferred or Pin, `max_active: 2` and `refresh: automatic`, without a model-approval ceremony or model call.
@@ -76,7 +76,7 @@ Installation never rewrites an existing preference file. A kept `pod/v1` file is
 - <a id="a54"></a>**A54** — Concurrent edits preserve unrelated keys, refuse a stale targeted key and never overwrite invalid YAML.
 - <a id="a76"></a>**A76** — `pod config edit` targets the personal file and preserves invalid user edits while blocking delegation.
 - <a id="a120"></a>**A120** — One personal file holds enabled and disabled route states plus at most one Preferred and one Pinned route; an unlisted supported route is not set and ineligible.
-- <a id="a121"></a>**A121** — Direct constraints narrow the pool; a scoped exception names one exact Disabled route, needs explicit user intent and lapses after any preference file change; earlier model-id exceptions stay readable and inert.
+- <a id="a121"></a>**A121** — Outside R165's separately approved exact tuples, direct constraints narrow the pool; a scoped exception names one exact Disabled route, needs explicit user intent and lapses after any preference file change; earlier model-id exceptions stay readable and inert.
 - <a id="a124"></a>**A124** — Preference changes before final admission refuse stale choices; post-row edits preserve an in-flight request and pending replay ignores preferences. Observation refresh or cache eviction between selection and final admission, or an absent observation module, leaves the admission unchanged.
 - <a id="a128"></a>**A128** — Two concurrent workspaces preserve unrelated edits and reject a stale targeted edit; failed persistence never reports Saved.
 - <a id="a181"></a>**A181** — Missing/null Preferred and Pin preserve ordinary routing; each moves or clears atomically and survives restart, comments and unrelated edits. Creating a Preferred or Pin on a route that is not enabled, and invalidating one by disabling or unsetting its route, are refused with distinct reasons unless the same action clears or replaces it. Unknown, malformed, unsupported, stale-target, invalid YAML and failed saves never widen routing or silently drop the pin, and safely parsed invalid values remain visible as bounded diagnostics.
