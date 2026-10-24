@@ -219,17 +219,28 @@ def compact(logical_state, *, protected_admissions=(), force=False,
                 for finding_index, finding in enumerate(old_ob["findings"]):
                     new_ob["findings"][finding_index] = reference(finding)
         selected = {json.dumps(item, sort_keys=True) for item in old_ob.get("evidence", [])}
+        satisfied = old_ob.get("state") == "satisfied"
         for index, receipt in enumerate(old_ob.get("receipts", [])):
             evidence = receipt.get("evidence") or {}
             candidate = evidence.get("candidate")
-            # Current/selected proof stays inline, as do failed/unknown tests.
-            if (protect_receipts or candidate in protected_candidates or not candidate or candidate == current
-                    or json.dumps(evidence, sort_keys=True) in selected):
+            copy = json.dumps(evidence, sort_keys=True) in selected
+            if protect_receipts or candidate in protected_candidates or not candidate:
                 continue
-            if old_ob.get("kind") == "assurance":
-                eligible = (receipt.get("reuse") is None and evidence.get("attempt") in movable
-                            and ("reported_seq" in receipt or "accepted_seq" in receipt))
+            # Current/selected proof stays inline, except a satisfied row's receipt copy:
+            # the row itself keeps that evidence and reuse inline for every reader.
+            if not satisfied and (candidate == current or copy):
+                continue
+            consumed = "reported_seq" in receipt or "accepted_seq" in receipt
+            if old_ob.get("kind") == "assurance" and satisfied and copy:
+                attempt = evidence.get("attempt")
+                eligible = (consumed and isinstance(attempt, str) and attempt in logical_state.get("admissions", {})
+                            and attempt not in protected
+                            and receipt.get("reuse") in (None, old_ob.get("reuse")))
+            elif old_ob.get("kind") == "assurance":
+                eligible = (candidate != current and receipt.get("reuse") is None
+                            and evidence.get("attempt") in movable and consumed)
             else:
+                # Failed or unknown tests stay inline.
                 eligible = evidence.get("status") == "PASS" and "accepted_seq" in receipt
             if eligible:
                 new_ob["receipts"][index] = reference(receipt)

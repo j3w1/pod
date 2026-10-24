@@ -82,9 +82,9 @@ class ReusedReceiptCapacityTests(unittest.TestCase):
             self.assertEqual(_read(path), expected)
             for logical, stored in zip(expected["checkpoint"]["obligations"][1:],
                                        physical["checkpoint"]["obligations"][1:]):
-                self.assertTrue(all(is_reference(item) for item in stored["receipts"][:-1]))
-                self.assertEqual(stored["receipts"][-1], logical["receipts"][-1])
-                self.assertEqual(stored["evidence"], logical["evidence"])
+                # A satisfied row's selected copy moves too; the row keeps its own evidence and reuse (A552).
+                self.assertTrue(all(is_reference(item) for item in stored["receipts"]))
+                self.assertEqual((stored["evidence"], stored.get("reuse")), (logical["evidence"], logical.get("reuse")))
             print("reused_receipt_capacity=" + str({"prior_bytes": size(self.prior),
                 "proposed_bytes": size(self.proposed), "physical_bytes": path.stat().st_size,
                 "limit_bytes": CONTEXT_LIMIT}))
@@ -143,6 +143,10 @@ class ReusedReceiptCapacityTests(unittest.TestCase):
             changed = deepcopy(self.proposed)
             obligation = changed["checkpoint"]["obligations"][1]
             obligation["evidence"] = [deepcopy(obligation["receipts"][0]["evidence"])]
+            record, _ = prepare_context(path, changed)
+            # On a satisfied row the fresh selection is a copy the row keeps inline itself (A552).
+            self.assertTrue(is_reference(record["checkpoint"]["obligations"][1]["receipts"][0]))
+            obligation.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
             record, _ = prepare_context(path, changed)
             self.assertEqual(record["checkpoint"]["obligations"][1]["receipts"][0], obligation["receipts"][0])
             for outcome in ("pending", "UNKNOWN", "FAILED"):

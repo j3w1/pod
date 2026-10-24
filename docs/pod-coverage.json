@@ -8449,6 +8449,52 @@
         "tests.test_history_reviews.LiveShapeTests.test_compaction_reports_the_bytes_it_reclaims"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A552",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_receipt_copies.ReceiptCopyTests.test_receipt_copies_move_while_rows_keep_their_evidence_and_reuse",
+        "tests.test_history_boundaries.ReusedReceiptCapacityTests.test_same_valid_logical_write_fits_with_exact_reuse_and_selected_siblings",
+        "tests.test_history_receipt_copies.LaterWriteTests.test_moved_copies_hydrate_for_restatement_reuse_and_renewal"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A553",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_receipt_copies.ReceiptCopyTests.test_failed_unknown_unaccepted_and_unsatisfied_copies_stay_inline",
+        "tests.test_history_receipt_copies.ReceiptCopyTests.test_assurance_copies_keep_their_review_and_reuse_vetoes",
+        "tests.test_history_receipt_copies.ReceiptCopyTests.test_protected_receipts_and_candidates_stay_inline",
+        "tests.test_history_receipt_copies.ReceiptCopyTests.test_governor_joins_native_outstanding_and_unreadable_joins_keep_copies_inline",
+        "tests.test_history_boundaries.ReusedReceiptCapacityTests.test_fresh_selection_and_governor_candidate_are_replanned",
+        "tests.test_history_receipt_copies.LaterWriteTests.test_rows_that_leave_satisfied_keep_current_proof_inline_as_before"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A554",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_receipt_copies.LiveShapeTests.test_genuine_prechange_writer_refuses_the_pending_report_without_writing",
+        "tests.test_history_receipt_copies.LiveShapeTests.test_pending_report_records_once_receipt_copies_move",
+        "tests.test_history_receipt_copies.LiveShapeTests.test_validation_closure_replay_and_status_are_identical_after_compaction",
+        "tests.test_history_receipt_copies.LiveShapeTests.test_compaction_reports_the_bytes_the_copies_reclaim"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
