@@ -80,7 +80,7 @@ class ImplementationOutcomeTests(unittest.TestCase):
             ("unreported", lambda row: row.update(report=None)),
             ("reserved", lambda row: row.update(state="reserved")),
             ("unresolved", lambda row: row.update(state="unresolved")),
-            ("unvalidated", lambda row: row["report"].update(status="reconciliation_required")),
+            ("unrecognized report status", lambda row: row["report"].update(status="observed")),
             ("invalid outcome", lambda row: row["report"].update(outcome="UNKNOWN")),
         ])
 
@@ -91,7 +91,8 @@ class ImplementationOutcomeTests(unittest.TestCase):
             ("route mismatch", lambda row: row["route_decision"].update(route_mismatch=True)),
         ])
 
-    def test_review_and_investigation_still_require_success(self):
+    def test_investigation_requires_success_and_settled_reviews_move(self):
+        # Validated investigations still need success; reviews follow A549 (any outcome once settled).
         state = deepcopy(self.state)
         for index, row in enumerate(state["admissions"].values()):
             row["role"] = "review" if index < 5 else "investigate"
@@ -99,7 +100,7 @@ class ImplementationOutcomeTests(unittest.TestCase):
                 "receipts": [{"reported_seq": 10, "evidence": {"attempt": row["admission_id"]}}]})
         record, chunks = compact(state)
         for index, (key, row) in enumerate(state["admissions"].items()):
-            self.assertEqual(is_reference(record["admissions"][key]), index % 5 == 0)
+            self.assertEqual(is_reference(record["admissions"][key]), index < 5 or index % 5 == 0)
         self.assertEqual(hydrate(record, chunks.__getitem__), state)
 
     def test_native_governor_and_ambiguous_joins_preserve_vetoes(self):
