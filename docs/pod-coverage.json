@@ -8413,7 +8413,7 @@
       ],
       "offline_test": [
         "tests.test_history_reviews.ReviewEligibilityTests.test_settled_reviews_of_every_outcome_move_at_trigger_exactly",
-        "tests.test_history_reviews.ReviewEligibilityTests.test_current_and_unresolved_reviews_stay_inline",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_unresolved_reviews_stay_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_unsettled_reviews_stay_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_unreadable_lineage_keeps_every_unsuccessful_review_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_a_later_unresolved_finding_returns_a_moved_review_inline",
@@ -8897,6 +8897,59 @@
         "tests.test_decision_policy.DecisionPolicyTests.test_local_and_attested_agent_evaluations_remain_distinct",
         "tests.test_decision_integration.MachinePolicyTests.test_policy_changes_require_person_even_under_hands_off",
         "tests.test_decision_integration.MachinePolicyTests.test_verified_person_policy_and_agent_denial"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A583",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_current_consumed_reviews_of_every_outcome_move_at_the_unchanged_trigger",
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_accepted_sequence_and_closed_consumed_reviews_can_move"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A584",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_current_reviews_need_their_single_served_consumed_receipt_for_every_outcome",
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_unsettled_report_route_and_failure_vetoes_remain",
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_unsuccessful_current_reviews_keep_the_resolved_finding_rule",
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_current_implementation_and_investigation_remain_inline",
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_native_governor_and_protection_vetoes_remain"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A585",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_current_reviews.CurrentReviewProductionTests.test_genuine_prechange_writer_refuses_the_next_admission_without_publication",
+        "tests.test_history_current_reviews.CurrentReviewProductionTests.test_near_limit_next_admission_moves_only_consumed_current_reviews",
+        "tests.test_history_current_reviews.CurrentReviewProductionTests.test_capacity_and_read_only_detection_report_current_review_savings"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A586",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history_current_reviews.CurrentReviewProductionTests.test_subsequent_report_and_restatement_hydrate_current_review_history",
+        "tests.test_history_current_reviews.CurrentReviewProductionTests.test_closed_validation_bindings_evidence_receipt_conflicts_and_all_views_are_identical",
+        "tests.test_history_current_reviews.CurrentReviewProductionTests.test_capacity_and_read_only_detection_report_current_review_savings"
       ],
       "status": "NOT_RUN"
     }
