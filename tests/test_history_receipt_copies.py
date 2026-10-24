@@ -10,6 +10,7 @@ from pod.errors import PodError
 from pod.history import CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
 from pod.util import encoded
 from tests.history_support import inline_copies, size, synthetic_state
+from tests.records_support import start_before_review_guard
 
 
 OLD = f"{1:040x}"
@@ -345,9 +346,10 @@ class LaterWriteTests(unittest.TestCase):
         case.move()
         reuse([*corrections, "A"])
         cls.reused = snapshot()
-        # A correction reopens, so its assurance leaves satisfied too and is reviewed again.
+        # Retain an already-admitted review from before the review-order guard:
+        # the current reader and writer still hydrate its reopened proof rows.
         case.write(None, seq=seq() + 1, update={"K1": WAITING, "A": WAITING})
-        cls.rereview = case.start("review-again", case.packet(["A"], role="review"))
+        cls.rereview = start_before_review_guard(case, "review-again", case.packet(["A"], role="review"))
         cls.left = snapshot()
         case.write(renew=[{"id": "K0", "as": "K0R", **WAITING}])
         cls.renewed = snapshot()

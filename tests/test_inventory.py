@@ -340,6 +340,20 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
                 for anchor in anchors:
                     self.assertIn(anchor, text)
 
+    def test_correction_cycle_has_one_ordered_owner(self):
+        root = self.root / "skills/pod"
+        steps = ("1. Consume the fixer's report.", "2. Satisfy the correction with its proof.",
+                 "3. Admit the verifying review.", "4. Consume the review with the assurance waiting.",
+                 "5. Satisfy the assurance with that review attempt.")
+        texts = {str(path.relative_to(root)): path.read_text()
+                 for path in [root / "SKILL.md", *(root / "references").glob("*.md")]}
+        for step in steps:
+            self.assertEqual({name: text.count(step) for name, text in texts.items() if step in text},
+                             {"references/verification.md": 1})
+        text = texts["references/verification.md"]
+        positions = [text.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
+
     def test_skill_states_its_boundaries(self):
         root = self.root / "skills" / "pod"
         texts = {"SKILL.md": " ".join((root / "SKILL.md").read_text().lower().split())}

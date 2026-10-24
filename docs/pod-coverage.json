@@ -7676,7 +7676,7 @@
       "offline_test": [
         "tests.test_records_boundaries.RenewalAssuranceTests.test_assurance_and_correction_renewal_keep_review_order",
         "tests.test_records_renewal.RenewalTests.test_closure_retains_renewed_rows_and_requires_fresh_tip_proof",
-        "tests.test_records_corrections.AdmissionLineageTests.test_reopening_or_renewing_predecessor_correction_allows_fresh_tip_review"
+        "tests.test_records_corrections.AdmissionLineageTests.test_reopening_or_renewing_predecessor_correction_holds_review_until_proved"
       ],
       "status": "NOT_RUN"
     },
@@ -8950,6 +8950,51 @@
         "tests.test_history_current_reviews.CurrentReviewProductionTests.test_subsequent_report_and_restatement_hydrate_current_review_history",
         "tests.test_history_current_reviews.CurrentReviewProductionTests.test_closed_validation_bindings_evidence_receipt_conflicts_and_all_views_are_identical",
         "tests.test_history_current_reviews.CurrentReviewProductionTests.test_capacity_and_read_only_detection_report_current_review_savings"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A587",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_order.ReviewOrderBoundaryTests.test_refusal_is_atomic_then_fixer_proof_permits_the_same_review",
+        "tests.test_review_order.ReviewOrderBoundaryTests.test_admission_map_cannot_supply_unaccepted_resolution",
+        "tests.test_review_order.ReviewOrderBoundaryTests.test_advisory_findings_do_not_block_admission",
+        "tests.test_review_order.ReviewOrderBoundaryTests.test_user_withdrawn_correction_does_not_block_admission",
+        "tests.test_review_order.ReviewSequenceTests.test_no_required_finding_keeps_older_sequence_free_proof_valid"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A588",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_order.ReviewOrderBoundaryTests.test_old_admission_reports_ordering_at_report_and_checkpoint",
+        "tests.test_review_order.ReviewOrderBoundaryTests.test_environment_change_retains_binding_change_classification",
+        "tests.test_review_order.ReviewSequenceTests.test_both_sequences_must_strictly_follow_resolution",
+        "tests.test_review_order.ReviewSequenceTests.test_unknown_or_invalid_sequence_evidence_never_qualifies",
+        "tests.test_review_order.ReviewSequenceTests.test_accepted_sequence_fallback_is_only_for_older_receipts",
+        "tests.test_review_order.ReviewSequenceTests.test_ordering_diagnostics_are_bounded_without_losing_the_count",
+        "tests.test_review_order.ReviewSequenceTests.test_binding_changes_keep_precedence_over_ordering"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A589",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_order.ReviewOrderBoundaryTests.test_grouped_findings_follow_renewed_assurance_and_correction",
+        "tests.test_records_corrections.AdmissionLineageTests.test_reopening_or_renewing_predecessor_correction_holds_review_until_proved",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_correction_cycle_has_one_ordered_owner"
       ],
       "status": "NOT_RUN"
     }

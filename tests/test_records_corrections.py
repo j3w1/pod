@@ -113,7 +113,7 @@ class AdmissionLineageTests(unittest.TestCase):
             "update": {"A2": {"state": "satisfied", "evidence": [{"attempt": cls.review["admission_id"]}]}}})
         cls.saved, cls.port = files(case), deepcopy(case.port.__dict__)
 
-    def test_reopening_or_renewing_predecessor_correction_allows_fresh_tip_review(self):
+    def test_reopening_or_renewing_predecessor_correction_holds_review_until_proved(self):
         case = self.case
         root = objective_root(case.project, "objective")
         for route in ("update", "renew"):
@@ -136,7 +136,15 @@ class AdmissionLineageTests(unittest.TestCase):
                         update={"A2": {"state": "satisfied", "evidence": [{"attempt": self.review["admission_id"]}]}})
                 self.assertEqual(caught.exception.detail["detail"], "evidence_invalidated")
                 self.assertEqual(files(case), before)
-                admitted = case.start("fresh-" + route, case.packet(["A2"], role="review"))["admission"]
+                packet = case.packet(["A2"], role="review")
+                with self.assertRaises(PodError) as caught:
+                    case.start("fresh-" + route, packet)
+                self.assertEqual(caught.exception.code, "review_precedes_resolution")
+                self.assertEqual(files(case), before)
+                key = "K" if route == "update" else "K2"
+                case.write(seq=read(case.project, "objective")["checkpoint"]["seq"] + 1,
+                           update={key: {"state": "satisfied", "evidence": [case.proof(key, reference="fresh-" + route)]}})
+                admitted = case.start("fresh-" + route, packet)["admission"]
                 self.assertEqual(admitted["serves"], ["A2"])
 
 

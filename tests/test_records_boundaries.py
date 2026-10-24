@@ -7,6 +7,7 @@ from pod.errors import PodError
 from tests.pod_tick_support import TickCase
 from tests.issue41_support import ProductionCase
 from tests import kernel_support as boundaries
+from tests.records_support import start_before_review_guard
 
 
 class RenewalTickTests(TickCase):
@@ -137,7 +138,7 @@ class RenewalAssuranceTests(ProductionCase):
         state = read(self.project, "objective")["checkpoint"]
         self.assertEqual(next(row for row in state["obligations"] if row["id"] == "K2")["parent"], "A")
         frozen = self.packet(["A2"], role="review")
-        early = self.start("early", frozen)["admission"]; self.settle(early)
+        early = start_before_review_guard(self, "early", frozen)["admission"]; self.settle(early)
         rows = [row for row in self.stored() if row["state"] != "renewed"]
         next(row for row in rows if row["id"] == "K2").update(state="satisfied", evidence=[self.proof("K2")])
         next(row for row in rows if row["id"] == "K2").pop("wait")

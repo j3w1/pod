@@ -478,16 +478,66 @@ def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
     return record
 
 
+def review_ordering(ob: dict, ctx: dict, *, attempt: str | None = None) -> list[dict]:
+    """Required findings that lack resolution, or whose resolution does not precede proof.
+
+    Admission checks resolution alone. Evidence additionally checks both reservation
+    and report consumption; older accepted receipts retain their accepted_seq fallback.
+    All readers use the effective renewal lineage, never wall-clock timestamps.
+    """
+    from .obligations import _admissions
+    lineage = ctx.get("lineage")
+    findings = lineage.findings(ob["id"]) if lineage else ob.get("findings", [])
+    admission = _admissions(ctx).get(attempt) or {}
+    receipt = next((item for item in ob.get("receipts", [])
+                    if item["evidence"].get("attempt") == attempt), {}) if attempt is not None else {}
+    reported = receipt.get("reported_seq", receipt.get("accepted_seq"))
+    admitted = admission.get("admitted_seq")
+    result = []
+    for finding in findings:
+        if finding.get("triage") != "required_correction":
+            continue
+        recorded, resolved = finding.get("recorded_seq"), finding.get("resolved_seq")
+        unresolved = (type(recorded) is not int or type(resolved) is not int
+                      or resolved < recorded)
+        if unresolved or attempt is not None and (type(admitted) is not int or type(reported) is not int
+                                                  or admitted <= resolved or reported <= resolved):
+            item = {"finding": finding["finding"],
+                    "correction": lineage.effective(finding.get("correction")) if lineage else finding.get("correction"),
+                    "recorded_seq": recorded, "resolved_seq": resolved}
+            if "findings" in finding:
+                item["findings"] = list(finding["findings"])
+            if attempt is not None:
+                item.update(attempt=attempt, admitted_seq=admitted, reported_seq=reported)
+            result.append(item)
+    return result
+
+
+def refuse_premature_review(ob: dict, ctx: dict) -> None:
+    from .obligations import refuse
+    unresolved = review_ordering(ob, ctx)
+    if unresolved:
+        raise refuse("review_precedes_resolution", "review_precedes_resolution",
+                     "required findings must be resolved before admitting their verifying review",
+                     obligation=ob["id"], findings=unresolved[:8], remaining=max(0, len(unresolved) - 8),
+                     next_action="consume the fixer's report and satisfy the named corrections with their proof first; "
+                     "then admit the verifying review")
+
+
 def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None = None) -> dict:
     """Classify all invalid proof without changing a receipt or declaring REUSE."""
     from .obligations import definition_id
     rows = ob.get("evidence", [])
+    ordering = ([finding for row in rows for finding in review_ordering(ob, ctx, attempt=row["attempt"])]
+                if ob["kind"] == "assurance" else [])
     if any(row.get("definition") != definition_id(ob) for row in rows):
         classification = "definition change"
     elif any(row.get("governance") != gov for row in rows):
         classification = "governance change"
     elif any(not binding_current(row.get("binding") if ob["kind"] == "assurance" else row, ctx) for row in rows):
         classification = "binding change"
+    elif ordering:
+        classification = "ordering"
     elif (any(row.get("candidate") != ctx.get("candidate") for row in rows)
           and evidence_valid({key: value for key, value in ob.items() if key != "reuse"},
                              {**ctx, "candidate": rows[0].get("candidate")}, gov)):
@@ -498,12 +548,17 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
     label, touched, _ = reuse_eligibility(ob, source, ctx) if classification == "candidate-only" else ("ineligible", [], None)
     correction = (f"add reuse {{from: {source}}} to {ob['id']}" if label == "eligible"
                   else f"record fresh evidence for {ob['id']}" + (" after governance refresh/rebind" if classification == "governance change" else ""))
+    if classification == "ordering":
+        correction = ("consume the fixer's report and satisfy the named corrections with proof; "
+                      f"then admit and consume a fresh review before satisfying {ob['id']}")
     if corrections:
         label = "ineligible"
         correction = ("an assurance is satisfied only when its corrections are; resolve "
                       + ",".join(corrections[:8]) + f"; record fresh evidence for {ob['id']}")
     return {"obligation": ob["id"], "classification": classification, "eligibility": label,
             "paths": touched[:8], "correction": correction,
+            **({"ordering": {"findings": ordering[:8], "remaining": max(0, len(ordering) - 8)}}
+               if classification == "ordering" else {}),
             **({"corrections": corrections[:8], "remaining_corrections": max(0, len(corrections) - 8)} if corrections else {})}
 
 
@@ -525,22 +580,7 @@ def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) 
             return False
         if ob["kind"] == "assurance":
             admission = _admissions(ctx).get(row["attempt"])
-            # Both reservation and report consumption must follow correction
-            # resolution. Wall-clock admission stamps provide neither ordering.
-            # Older accepted receipts can use accepted_seq as their report bound.
-            receipt = next((item for item in ob.get("receipts", [])
-                            if item["evidence"].get("attempt") == row["attempt"]), None)
-            proof_seq = (receipt or {}).get("reported_seq", (receipt or {}).get("accepted_seq"))
-            admitted_seq = admission.get("admitted_seq") if isinstance(admission, dict) else None
-            superseded = any(
-                finding.get("triage") == "required_correction"
-                and (not isinstance(proof_seq, int) or not isinstance(admitted_seq, int)
-                     or not isinstance(finding.get("recorded_seq"), int)
-                     or not isinstance(finding.get("resolved_seq"), int)
-                     or finding["resolved_seq"] < finding["recorded_seq"]
-                     or proof_seq <= finding["resolved_seq"]
-                     or admitted_seq <= finding["resolved_seq"])
-                for finding in (ctx["lineage"].findings(ob["id"]) if ctx.get("lineage") else ob.get("findings", [])))
+            superseded = bool(review_ordering(ob, ctx, attempt=row["attempt"]))
             if (not _review_assignment(ob, admission) or row["attempt"] in _outstanding(ctx)
                     or not review_completed(admission) or admission.get("candidate") != row.get("candidate")
                     or (admission.get("binding") or {}).get("definitions", {}).get(ob["id"]) != row["definition"]

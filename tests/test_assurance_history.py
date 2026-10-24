@@ -5,6 +5,7 @@ from copy import deepcopy
 from pod.ledger import read
 from pod.obligations import label_qualification
 from tests import kernel_support as boundaries
+from tests.records_support import start_before_review_guard
 
 
 class AssuranceHistoryTests(boundaries.KernelCase):
@@ -87,7 +88,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
             state="waiting", wait={"class": "sequenced", "referent": "O1"})
         self.write(rows)
         packet = self.packet(["A"], role="review")
-        noisy = self.start("noisy-review", packet)["admission"]
+        noisy = start_before_review_guard(self, "noisy-review", packet)["admission"]
         self.settle(noisy)
         rows = self.stored()
         assurance = next(row for row in rows if row["id"] == "A")
@@ -174,7 +175,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
             state="waiting", wait={"class": "sequenced", "referent": "O1"})
         self.write(rows)
         packet = self.packet(["A"], role="review")
-        premature = self.start("review-before-fix", packet)["admission"]
+        premature = start_before_review_guard(self, "review-before-fix", packet)["admission"]
         self.settle(premature)
         rows = self.stored()
         assurance = next(row for row in rows if row["id"] == "A")
@@ -197,7 +198,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
             state="waiting", wait={"class": "sequenced", "referent": "O1"})
         self.write(rows)
         packet = self.packet(["A"], role="review")
-        premature = self.start("admitted-before-fix", packet)["admission"]
+        premature = start_before_review_guard(self, "admitted-before-fix", packet)["admission"]
         self.settle(premature)
         rows = self.stored()
         assurance = next(row for row in rows if row["id"] == "A")
