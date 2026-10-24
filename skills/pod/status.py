@@ -37,14 +37,9 @@ def decision_status(preferences: dict, checkpoint: object = None, *, objective: 
 
 
 def public_status(value, *, rule=False):
-    """Copy public facts, removing original route-rule words throughout a rule row."""
-    if isinstance(value, list):
-        return [public_status(item, rule=rule) for item in value]
-    if isinstance(value, dict):
-        rule = rule or value.get("kind") == "route_rule"
-        return {key: public_status(item, rule=rule) for key, item in value.items()
-                if not (rule and key in ("request", "instruction"))}
-    return value
+    """Public boundary only; private helpers retain the complete authority inventory."""
+    from .util import public_decisions
+    return public_decisions(value, rule=rule)
 
 
 def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavailable") -> dict:
