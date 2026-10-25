@@ -645,6 +645,7 @@
   "tests.test_records_boundaries.RenewalMappingTests.test_verified_r149_mapping_keeps_approved_ids_through_renewal": 1.0,
   "tests.test_records_boundaries.RenewalTickTests.test_successive_renewal_holds_but_reopening_tip_proof_ends_hold": 1.6,
   "tests.test_records_boundaries.RenewalTickTests.test_tick_pending_transfers_requirement_scope_without_proofs": 1.5,
+  "tests.test_records_corrections.AdmissionLineageTests.test_reopening_or_renewing_predecessor_correction_holds_review_until_proved": 1.2,
   "tests.test_records_reservations.ReceiptReservationTests.test_sibling_result_states_reserve_until_consumed": 2.3,
   "tests.test_relayed_authorization.RelayAcceptanceTests.test_status_and_closure_show_relay_without_running_verifier": 1.3,
   "tests.test_relayed_authorization.RelayBoundaryTests.test_another_objective_cannot_reuse_consumed_key": 1.2,
@@ -740,6 +741,8 @@
   "tests.test_retry_no_start.RefusalGuardTests.test_terminal_and_running_status": 1.4,
   "tests.test_retry_ready.ReadyRefusalTests.test_missing_and_null_status": 1.1,
   "tests.test_retry_ready.ReadyRefusalTests.test_other_status": 1.0,
+  "tests.test_review_order.ReviewOrderBoundaryTests.test_refusal_is_atomic_then_fixer_proof_permits_the_same_review": 1.5,
+  "tests.test_review_order.ReviewOrderBoundaryTests.test_user_withdrawn_correction_does_not_block_admission": 1.0,
   "tests.test_review_scope_reconciliation.ScopeReconciliationTests.test_first_scope_mismatch_requires_reconciliation_and_withholds_binding": 1.2,
   "tests.test_route_upgrade.GenuineInstallUpgradeTests.test_genuine_067_install_keeps_preferences_and_setup_converts_them": 5.8,
   "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_another_calls_locked_rebind_refuses_and_stays_reserved": 1.0,
@@ -1063,9 +1066,9 @@
  },
  "schema": "suite-lanes/v1",
  "source": {
-  "date": "2026-10-24",
-  "head_sha": "89b366b100278dc728043b8cca10287e165ce505",
+  "date": "2026-10-25",
+  "head_sha": "7a36e9cc01f731fe17da84933e50e8d29b127ddc",
   "kind": "run",
-  "run_id": 40105885396
+  "run_id": 40159984229
  }
 }
