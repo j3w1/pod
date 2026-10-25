@@ -11,7 +11,7 @@ from pod.util import encoded
 from tests.issue41_support import ProductionCase
 from tests import kernel_support as boundaries
 from tests.common import proof
-from tests.records_support import start_before_reservations
+from tests.records_support import start_before_reservations, start_before_review_guard
 
 
 def size(value):
@@ -95,9 +95,11 @@ class RecordsCapacityTests(unittest.TestCase):
             if group == 1:
                 # The original three findings are now consumed. New admissions
                 # must reserve capacity normally, so follow the exact renewal.
+                # This existing shape keeps corrections unresolved: use the genuine
+                # pre-review-guard admission, retaining its capacity reservations.
                 before = cls.files()
                 try:
-                    case.start("post-upgrade-review", case.packet(["A"], role="review", sources=sources))
+                    start_before_review_guard(case, "post-upgrade-review", case.packet(["A"], role="review", sources=sources))
                 except PodError as exc:
                     cls.admission_refusal = exc
                 else:
@@ -109,7 +111,7 @@ class RecordsCapacityTests(unittest.TestCase):
                 action["renew"][0]["as"] = "A2"
                 case.write(**action)
                 frozen = case.packet(["A2"], role="review", sources=sources)
-                admission = case.start("post-upgrade-review", frozen)["admission"]; case.settle(admission)
+                admission = start_before_review_guard(case, "post-upgrade-review", frozen)["admission"]; case.settle(admission)
                 cls.fresh = admission["admission_id"]
                 report_body.update(assignment=frozen["packet_id"], attempt=admission["native_binding"]["dispatchId"])
             served = "A" if group == 0 else "A2"

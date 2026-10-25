@@ -10,6 +10,7 @@ from pod.errors import PodError
 from pod.history import COMPACT_AT, CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
 from pod.util import digest, encoded
 from tests.history_support import inline_copies, size, synthetic_state
+from tests.records_support import start_before_review_guard
 
 
 OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
@@ -270,9 +271,10 @@ class LiveShapeTests(unittest.TestCase):
         def seq():
             return read(case.project, "objective")["checkpoint"]["seq"]
 
-        def review(name, result, correction=None):
+        def review(name, result, correction=None, *, before_guard=False):
             frozen = case.packet(["A"], role="review")
-            admission = case.start(name, frozen)["admission"]
+            admission = (start_before_review_guard(case, name, frozen) if before_guard
+                         else case.start(name, frozen))["admission"]
             case.settle(admission)
             update, triage = {"A": WAITING}, []
             if correction:
@@ -301,9 +303,10 @@ class LiveShapeTests(unittest.TestCase):
             move()
         cls.unresolved = review("review-open", "failed", "KU")
         move()
-        cls.current = review("review-current", "partial", "KC")
+        # These two already-admitted records predate the review-order guard.
+        cls.current = review("review-current", "partial", "KC", before_guard=True)
         frozen = case.packet(["A"], role="review")
-        pending = case.start("review-pending", frozen)["admission"]
+        pending = start_before_review_guard(case, "review-pending", frozen)["admission"]
         case.settle(pending)
         cls.pending = pending["admission_id"]
         unpadded = _read(path)

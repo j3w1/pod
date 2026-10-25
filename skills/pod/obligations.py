@@ -2320,9 +2320,10 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
         raise refuse("unbound_assignment", "role_kind_mismatch", "a review attempt serves exactly one assurance obligation", record='admission refusal')
     if binding["role"] != "review" and "assurance" in kinds:
         raise refuse("unbound_assignment", "role_kind_mismatch", "only a review attempt serves an assurance obligation", record='admission refusal')
-    from .assurance import reserve_capacity
+    from .assurance import refuse_premature_review, reserve_capacity
     for served in binding["serves"]:
         if rows[served]["kind"] == "assurance":
+            refuse_premature_review(rows[served], ctx)
             reserve_capacity(rows[served], {**ctx, "accepted_map": state}, seq=state["seq"] + 1)
     if binding["role"] == "investigate" and not (body.get("resolves") and body.get("stop_condition")):
         raise refuse("unbound_assignment", "missing_resolves", "an investigation names resolves and stop_condition", record='admission refusal')
