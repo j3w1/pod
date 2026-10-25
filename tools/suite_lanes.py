@@ -1053,14 +1053,25 @@ def command_refresh(root: Path, args) -> int:
         manifest["source"] = {"kind": "run", "run_id": args.run or 0, "head_sha": "", "date": ""}
     elif args.run or args.pr or args.latest:
         run = resolve_run(args)
-        meta = json.loads(_gh("run", "view", str(run), "--json", "headSha,createdAt,status"))
+        meta = json.loads(_gh("run", "view", str(run), "--json", "headSha,createdAt,status,event"))
         if meta["status"] != "completed":
             raise Finding(f"REFRESH run {run} is still {meta['status']}: wait for it to finish", usage=True)
         bodies = parse_timings(_gh("run", "view", str(run), "--log"))
-        if any(body.get("sha") != meta["headSha"]
-               or body.get("run_id", str(run)) != str(run) for body in bodies):
-            raise Finding("REFRESH timing identity disagrees with the selected hosted run")
         manifest, changes = merge_timings(manifest, bodies)
+        if any(body.get("run_id", str(run)) != str(run) for body in bodies):
+            raise Finding("REFRESH timing identity disagrees with the selected hosted run")
+        checkout = bodies[0]["sha"]  # merge_timings has validated one complete same-checkout run.
+        if checkout != meta["headSha"]:
+            # pull_request tests the synthetic merge checkout; headSha is the PR branch head.
+            # Verify their relationship without rewriting either identity, including for earlier
+            # logs without run_id. Other events retain exact head/checkout equality.
+            if meta["event"] != "pull_request" or not re.fullmatch(r"[0-9a-f]{40}", checkout):
+                raise Finding("REFRESH timing identity disagrees with the selected hosted run")
+            commit = json.loads(_gh("api", f"repos/{{owner}}/{{repo}}/git/commits/{checkout}"))
+            parents = commit.get("parents", [])
+            if (commit.get("sha") != checkout or len(parents) != 2
+                    or parents[1].get("sha") != meta["headSha"]):
+                raise Finding("REFRESH timing identity disagrees with the selected hosted run")
         manifest["source"] = {"kind": "run", "run_id": run, "head_sha": meta["headSha"],
                               "date": meta["createdAt"][:10]}
     if args.prune:
@@ -1074,6 +1085,9 @@ def command_refresh(root: Path, args) -> int:
                 changes.append(f"- override {key} (no such test)")
         manifest["overrides"] = {key: value for key, value in manifest["overrides"].items()
                                  if key in known or key in prefixes}
+    problems = manifest_problems(manifest)
+    if problems:
+        raise Finding("REFRESH invalid updated manifest: " + "; ".join(problems))
     print("\n".join(changes) if changes else "no changes")
     if changes and not args.dry_run:
         manifest_path(root).write_text(dump_manifest(manifest), encoding="utf-8")

@@ -459,7 +459,8 @@ class HostedProjectionTests(unittest.TestCase):
             for change in ({"sha": "different"}, {"run_id": "100"}):
                 bodies = [dict(body, **change) for body in measured_bodies()]
                 log = "\n".join(sl.MARKER + json.dumps(body) for body in bodies)
-                metadata = json.dumps({"status": "completed", "headSha": "commit", "createdAt": "2026-10-25"})
+                metadata = json.dumps({"status": "completed", "headSha": "commit", "createdAt": "2026-10-25",
+                                       "event": "push"})
                 with self.subTest(change=change), patch.object(sl, "_gh", side_effect=[metadata, log]):
                     with self.assertRaisesRegex(sl.Finding, "selected hosted run"):
                         sl.command_refresh(root, args)
@@ -507,6 +508,98 @@ class HostedProjectionTests(unittest.TestCase):
             self.assertTrue(sl.manifest_problems(bad))
 
 
+class HostedRefreshIdentityTests(unittest.TestCase):
+    HEAD, CHECKOUT, BASE = "a" * 40, "b" * 40, "c" * 40
+
+    def metadata(self, event="pull_request"):
+        return json.dumps({"status": "completed", "headSha": self.HEAD,
+                           "createdAt": "2026-10-25T00:00:00Z", "event": event})
+
+    def log(self, bodies):
+        return "\n".join(sl.MARKER + json.dumps(body) for body in bodies)
+
+    def commit(self, parents=None):
+        return json.dumps(dict(sha=self.CHECKOUT,
+                               parents=[{"sha": sha} for sha in (parents if parents is not None
+                                                                else [self.BASE, self.HEAD])]))
+
+    def test_pr_selection_keeps_head_and_measured_merge_checkout_distinct(self):
+        bodies = [dict(body, sha=self.CHECKOUT, run_id="99") for body in measured_bodies()]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            synthetic_tree(root, {}, manifest())
+            responses = [json.dumps({"headRefOid": self.HEAD}),
+                         json.dumps([{"databaseId": 99, "status": "completed"}]),
+                         self.metadata(), self.log(bodies), self.commit()]
+            with patch.object(sl, "_gh", side_effect=responses) as gh:
+                self.assertEqual(sl.command_refresh(root, sl.parser().parse_args(["refresh", "--pr", "7"])), 0)
+            gh.assert_any_call("run", "view", "99", "--json", "headSha,createdAt,status,event")
+            gh.assert_called_with("api", f"repos/{{owner}}/{{repo}}/git/commits/{self.CHECKOUT}")
+            saved = sl.load_manifest(root)
+        self.assertEqual(saved["source"], {"kind": "run", "run_id": 99, "head_sha": self.HEAD,
+                                           "date": "2026-10-25"})
+        self.assertEqual(saved["calibration"]["sha"], self.CHECKOUT)
+        self.assertEqual(saved["calibration"]["run_id"], "99")
+
+    def test_legacy_pr_logs_verify_merge_parent_and_retain_existing_calibration(self):
+        original, _ = sl.merge_timings(manifest(), measured_bodies())
+        bodies = [dict(timing_body(lane, 1, 1, {}, fast=(1, 0.3)), sha=self.CHECKOUT) for lane in sl.LANES]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            synthetic_tree(root, {}, original)
+            with patch.object(sl, "_gh", side_effect=[self.metadata(), self.log(bodies), self.commit()]):
+                self.assertEqual(sl.command_refresh(root, sl.parser().parse_args(["refresh", "--run", "99"])), 0)
+            saved = sl.load_manifest(root)
+        self.assertEqual(saved["source"]["head_sha"], self.HEAD)
+        self.assertEqual(saved["fast_mean_seconds"], 0.3)
+        self.assertEqual(saved["calibration"], original["calibration"])
+
+    def test_push_and_explicit_pr_head_checkout_need_no_merge_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for event in ("push", "pull_request"):
+                for run_identity in ({}, {"run_id": "99"}):
+                    synthetic_tree(root, {}, manifest())
+                    bodies = [dict(body, sha=self.HEAD, **run_identity) for body in measured_bodies()]
+                    with self.subTest(event=event, identity=run_identity), patch.object(
+                            sl, "_gh", side_effect=[self.metadata(event), self.log(bodies)]) as gh:
+                        self.assertEqual(sl.command_refresh(root, sl.parser().parse_args(
+                            ["refresh", "--run", "99"])), 0)
+                        self.assertEqual(gh.call_count, 2)
+                    self.assertEqual(sl.load_manifest(root)["calibration"]["sha"], self.HEAD)
+
+    def test_unrelated_pr_checkout_refuses_even_with_selected_run_id(self):
+        bodies = [dict(body, sha=self.CHECKOUT, run_id="99") for body in measured_bodies()]
+        commits = [self.commit(parents=[]), self.commit(parents=[self.HEAD, self.BASE]),
+                   json.dumps({"sha": self.BASE, "parents": [{"sha": self.BASE}, {"sha": self.HEAD}]})]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            synthetic_tree(root, {}, manifest())
+            before = sl.manifest_path(root).read_bytes()
+            for commit in commits:
+                with self.subTest(commit=commit), patch.object(
+                        sl, "_gh", side_effect=[self.metadata(), self.log(bodies), commit]):
+                    with self.assertRaisesRegex(sl.Finding, "selected hosted run"):
+                        sl.command_refresh(root, sl.parser().parse_args(["refresh", "--run", "99"]))
+                self.assertEqual(sl.manifest_path(root).read_bytes(), before)
+
+    def test_other_events_and_unrelated_run_ids_cannot_borrow_pr_merge_semantics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            synthetic_tree(root, {}, manifest())
+            before = sl.manifest_path(root).read_bytes()
+            cases = [(event, "99") for event in ("push", "pull_request_target", "workflow_dispatch")]
+            cases.append(("pull_request", "100"))
+            for event, run_id in cases:
+                bodies = [dict(body, sha=self.CHECKOUT, run_id=run_id) for body in measured_bodies()]
+                with self.subTest(event=event, run_id=run_id), patch.object(
+                        sl, "_gh", side_effect=[self.metadata(event), self.log(bodies)]) as gh:
+                    with self.assertRaisesRegex(sl.Finding, "selected hosted run"):
+                        sl.command_refresh(root, sl.parser().parse_args(["refresh", "--run", "99"]))
+                    self.assertEqual(gh.call_count, 2)
+                self.assertEqual(sl.manifest_path(root).read_bytes(), before)
+
+
 class RefreshIntegrityTests(unittest.TestCase):
     def refuse(self, bodies, message=None):
         before = manifest()
@@ -549,6 +642,35 @@ class RefreshIntegrityTests(unittest.TestCase):
             full = measured_bodies()
             full[0].update(change)
             with self.subTest(change=change): self.refuse(full)
+
+    def test_finite_fast_timings_that_overflow_refuse_before_any_manifest_write(self):
+        bodies = [timing_body(lane, 1, 1, {}, fast=(1, 1e308)) for lane in sl.LANES]
+        self.assertEqual(len(sl.validated_legs(bodies)), len(sl.LANES))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            synthetic_tree(root, {}, manifest())
+            before = sl.manifest_path(root).read_bytes()
+            log = root / "overflow.log"
+            log.write_text("\n".join(sl.MARKER + json.dumps(body) for body in bodies))
+            for options in ([], ["--dry-run"]):
+                with self.subTest(options=options):
+                    refused = cli(root, "refresh", "--log", str(log), *options)
+                    self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+                    self.assertIn("invalid updated manifest", refused.stderr)
+                    self.assertIn("fast_mean_seconds", refused.stderr)
+                    self.assertEqual(sl.manifest_path(root).read_bytes(), before)
+                    self.assertEqual(sl.load_manifest(root), manifest())
+
+    def test_large_finite_aggregate_can_still_write_a_readable_manifest(self):
+        bodies = [timing_body(lane, 1, 1, {}, fast=(1, 1e307)) for lane in sl.LANES]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            synthetic_tree(root, {}, manifest())
+            log = root / "finite.log"
+            log.write_text("\n".join(sl.MARKER + json.dumps(body) for body in bodies))
+            written = cli(root, "refresh", "--log", str(log))
+            self.assertEqual(written.returncode, 0, written.stdout + written.stderr)
+            self.assertEqual(sl.load_manifest(root)["fast_mean_seconds"], 1e307)
 
     def test_duplicate_test_ids_across_chunks_and_lanes_refuse(self):
         full = measured_bodies()
