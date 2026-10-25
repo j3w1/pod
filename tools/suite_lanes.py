@@ -63,7 +63,10 @@ class Finding(Exception):
 
 
 def _number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _count(value) -> bool:
@@ -81,8 +84,8 @@ def manifest_problems(manifest: object) -> list[str]:
     if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
         return [f"schema must be {SCHEMA}"]
     problems = []
-    if set(manifest) != KEYS:
-        problems.append("keys must be exactly " + ", ".join(sorted(KEYS)))
+    if set(manifest) - {"calibration"} != KEYS:
+        problems.append("required keys are " + ", ".join(sorted(KEYS)) + "; only calibration is optional")
     if not (_number(manifest.get("fast_mean_seconds")) and manifest["fast_mean_seconds"] > 0):
         problems.append("fast_mean_seconds must be a positive number")
     budgets = manifest.get("budgets")
@@ -125,7 +128,47 @@ def manifest_problems(manifest: object) -> list[str]:
     source = manifest.get("source")
     if not isinstance(source, dict) or source.get("kind") not in ("estimate", "run"):
         problems.append("source.kind must be estimate or run")
+    if "calibration" in manifest:
+        try:
+            validate_calibration(manifest["calibration"])
+        except Finding as exc:
+            problems.append(str(exc))
     return problems
+
+
+def validate_calibration(value: object) -> None:
+    """Keep every measured denominator and its same-run identity, never just a naked multiplier."""
+    if (not isinstance(value, dict) or set(value) != {"plan", "sha", "run_id", "method", "lanes"}
+            or not isinstance(value["plan"], str) or not value["plan"]
+            or not isinstance(value["sha"], str)
+            or not isinstance(value["run_id"], str)
+            or value["run_id"] != "" and not value["run_id"].isascii()
+            or value["run_id"] != "" and not value["run_id"].isdecimal()
+            or value["method"] not in ("timing_lines", "verified_plan")
+            or not isinstance(value["lanes"], dict) or set(value["lanes"]) != set(LANES)):
+        raise Finding("calibration needs plan, sha, method and every lane's measured shares")
+    for lane, samples in value["lanes"].items():
+        if not isinstance(samples, list) or not samples:
+            raise Finding(f"calibration {lane} needs measured shares")
+        for sample in samples:
+            if (not isinstance(sample, dict) or set(sample) != {"shard", "of", "workers", "wall_seconds",
+                                                               "planned_worker_seconds"}
+                    or not all(_count(sample[key]) for key in ("shard", "of", "workers"))
+                    or sample["shard"] > sample["of"]
+                    or not _number(sample["wall_seconds"]) or sample["wall_seconds"] < 0
+                    or not _number(sample["planned_worker_seconds"]) or sample["planned_worker_seconds"] <= 0
+                    or not _number(sample["wall_seconds"] / sample["planned_worker_seconds"])
+                    or lane == "serial" and sample["workers"] != 1):
+                raise Finding(f"calibration {lane} has an invalid measured share")
+        if (len({(sample["of"], sample["workers"]) for sample in samples}) != 1
+                or len(samples) != samples[0]["of"]
+                or sorted(sample["shard"] for sample in samples) != list(range(1, samples[0]["of"] + 1))):
+            raise Finding(f"calibration {lane} needs each share exactly once")
+
+
+def wall_ratio(manifest: dict, lane: str) -> float:
+    samples = manifest.get("calibration", {}).get("lanes", {}).get(lane, [])
+    return max([1.0, *(sample["wall_seconds"] / sample["planned_worker_seconds"] for sample in samples)])
 
 
 def load_manifest(root: Path) -> dict:
@@ -317,6 +360,11 @@ def shard_bins(plan: dict, lane: str, shard: int) -> list[list[str]]:
     return entry["bins"][(shard - 1) * entry["workers"]:shard * entry["workers"]]
 
 
+def planned_worker_seconds(plan: dict, manifest: dict, lane: str, shard: int) -> float:
+    return max((sum(estimate(manifest, test_id) for test_id in group)
+                for group in shard_bins(plan, lane, shard)), default=0.0)
+
+
 def projection(plan: dict, manifest: dict) -> list[dict]:
     rows = []
     for lane in LANES:
@@ -325,6 +373,8 @@ def projection(plan: dict, manifest: dict) -> list[dict]:
         rows.append({"lane": lane, "tests": sum(len(group) for group in entry["bins"]),
                      "shards": entry["shards"], "workers": entry["workers"],
                      "seconds": round(sum(loads), 1), "largest": round(max(loads, default=0.0), 1),
+                     "ratio": wall_ratio(manifest, lane),
+                     "projected": max(loads, default=0.0) * wall_ratio(manifest, lane),
                      "target": manifest["lanes"][lane]["target_seconds"],
                      "empty": [shard for shard in range(1, entry["shards"] + 1)
                                if not any(shard_bins(plan, lane, shard))]})
@@ -360,14 +410,36 @@ def check(root: Path, manifest: dict, ids: list[str], lanes: dict, unclassified:
         if row["empty"]:
             findings.append(f"PROJECTION {row['lane']} shards {row['empty']} have no tests: lower "
                             f"lanes.{row['lane']}.shards and drop their ci.yml include rows")
-        if row["largest"] > row["target"]:
+        if (row["largest"] > row["target"] or row["projected"] > row["target"]
+                and not at_parallel_cap(row, manifest)):
             slowest = sorted((test_id for test_id in ids if lanes[test_id] == row["lane"]),
                              key=lambda item: (-estimate(manifest, item), item))[:3]
-            findings.append(f"PROJECTION {row['lane']} largest worker {row['largest']} s > {row['target']} s "
-                            f"({row['shards']}x{row['workers']}): set lanes.{row['lane']}.shards to "
-                            f"{row['shards'] + 1} and add its ci.yml include row (at most "
-                            f"budgets.max_parallel_shards), or make these faster: {', '.join(slowest)}")
+            findings.append(projection_message(row) + ": " +
+                            ("no further parallel shard increase is authorized; make these faster: "
+                             if at_parallel_cap(row, manifest) else
+                             f"set lanes.{row['lane']}.shards to {row['shards'] + 1} and add its ci.yml "
+                             "include row (parallel at most budgets.max_parallel_shards), or make these faster: ")
+                            + ', '.join(slowest))
     return findings
+
+
+def at_parallel_cap(row: dict, manifest: dict) -> bool:
+    return row["lane"] == "parallel" and row["shards"] >= manifest["budgets"]["max_parallel_shards"]
+
+
+def projection_message(row: dict) -> str:
+    return (f"PROJECTION {row['lane']} share {row['projected']:.1f} s > {row['target']} s "
+            f"(largest worker {row['largest']} s x ratio {row['ratio']:.3f}, "
+            f"{row['shards']}x{row['workers']})")
+
+
+def projection_warnings(plan: dict, manifest: dict) -> list[str]:
+    return [projection_message(row) +
+            f": parallel cap {manifest['budgets']['max_parallel_shards']} reached; "
+            f"residual {row['projected'] - row['target']:.1f} s; improve runtime; "
+            "budget, target or cap changes need an owner decision"
+            for row in projection(plan, manifest)
+            if at_parallel_cap(row, manifest) and row["largest"] <= row["target"] < row["projected"]]
 
 
 def prepare(root: Path):
@@ -638,7 +710,8 @@ def gate_message(kind: str, test_id: str, seconds: float, alone: float | None, m
 
 
 def timing_lines(*, lane: str, shard: int, of: int, workers: int, digest: str, results: dict, manifest: dict,
-                 wall: float, skips: int, fixture_errors: int, ran: int | None = None) -> list[str]:
+                 wall: float, skips: int, fixture_errors: int, ran: int | None = None,
+                 planned_worker: float | None = None, clean: bool = True) -> list[str]:
     """Chunked log lines that `refresh` reads back: passing durations near or above the record threshold."""
     ran = len(results) if ran is None else ran
     threshold = manifest["budgets"]["record_at_seconds"] / 2
@@ -651,11 +724,14 @@ def timing_lines(*, lane: str, shard: int, of: int, workers: int, digest: str, r
     lines = []
     for part in range(parts):
         body = {"schema": TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "workers": workers,
-                "cpus": os.cpu_count(), "sha": os.environ.get("GITHUB_SHA", ""), "plan": digest,
+                "cpus": os.cpu_count(), "sha": os.environ.get("GITHUB_SHA", ""),
+                "run_id": os.environ.get("GITHUB_RUN_ID", ""), "plan": digest,
                 "part": part + 1, "parts": parts, "planned": len(results), "ran": ran, "skips": skips,
-                "fixture_errors": fixture_errors, "wall": round(wall, 1),
+                "fixture_errors": fixture_errors, "clean": clean, "wall": round(wall, 1),
                 "fast": {"count": len(fast), "seconds": round(sum(fast), 3)},
                 "seconds": dict(listed[part * CHUNK:(part + 1) * CHUNK])}
+        if planned_worker is not None:
+            body["planned_worker_seconds"] = planned_worker
         lines.append(MARKER + json.dumps(body, sort_keys=True, separators=(",", ":")))
     return lines
 
@@ -670,7 +746,7 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
             forbid_skips: bool, concurrency: int, target: float | None = None) -> dict:
     """Run stages of (worker name, ids) one after another, each through the worker pool."""
     started = time.monotonic()
-    outcome = {"results": {}, "problems": [], "warnings": [], "skips": 0, "fixture_errors": 0, "ran": 0}
+    outcome = {"results": {}, "problems": [], "warnings": [], "skips": 0, "fixture_errors": 0, "ran": 0, "clean": True}
     with tempfile.TemporaryDirectory(prefix="suite-lanes-") as scratch:
         directory = Path(scratch)
         for stage in stages:
@@ -681,6 +757,7 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
                                         item["log_file"].read_text(encoding="utf-8", errors="replace")))
                 accounted = account(item["ids"], _read_events(item["events"]), name=item["name"],
                                     exit_note=item["note"], forbid_skips=forbid_skips, exit_code=item["code"])
+                outcome["clean"] = outcome["clean"] and not accounted["problems"]
                 outcome["results"].update(accounted["results"])
                 outcome["problems"] += accounted["problems"]
                 outcome["skips"] += accounted["skips"]
@@ -778,7 +855,9 @@ def command_run(root: Path, args) -> int:
         for line in timing_lines(lane=args.lane, shard=args.shard, of=args.of, workers=plan[args.lane]["workers"],
                                  digest=digest, results=outcome["results"], manifest=manifest, wall=outcome["wall"],
                                  skips=outcome["skips"], fixture_errors=outcome["fixture_errors"],
-                                 ran=outcome["ran"]):
+                                 ran=outcome["ran"],
+                                 planned_worker=planned_worker_seconds(plan, manifest, args.lane, args.shard),
+                                 clean=outcome["clean"]):
             print(line)
     report = summary(title, outcome)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -796,39 +875,110 @@ def command_run(root: Path, args) -> int:
 
 # Refresh ----------------------------------------------------------------------------------------
 
+def _unique_keys(pairs: list[tuple]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate timing key {key}")
+        result[key] = value
+    return result
+
+
 def parse_timings(text: str) -> list[dict]:
     bodies = []
     for raw in text.splitlines():
         position = raw.find(MARKER)
         if position >= 0:
             try:
-                body = json.loads(raw[position + len(MARKER):])
-            except ValueError:
-                continue
-            if isinstance(body, dict) and body.get("schema") == TIMINGS_SCHEMA:
-                bodies.append(body)
+                body = json.loads(raw[position + len(MARKER):], object_pairs_hook=_unique_keys)
+            except ValueError as exc:
+                raise Finding("REFRESH malformed POD_TEST_TIMINGS line: use complete unmodified logs") from exc
+            if not isinstance(body, dict) or body.get("schema") != TIMINGS_SCHEMA:
+                raise Finding("REFRESH unsupported POD_TEST_TIMINGS schema")
+            bodies.append(body)
     return bodies
 
 
-def merge_timings(manifest: dict, bodies: list[dict]) -> tuple[dict, list[str]]:
-    """Fold one CI run's timing lines into the manifest, with hysteresis against churn."""
+def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:
+    """Validate a complete single run before allowing any duration or calibration update."""
     if not bodies:
         raise Finding("REFRESH found no POD_TEST_TIMINGS lines: name a finished suite-lanes CI run")
-    if len({body["plan"] for body in bodies}) != 1:
-        raise Finding("REFRESH legs disagree on the plan digest: refresh from a single run of one commit")
     legs: dict[tuple, dict] = {}
+    identities, calibrated = set(), set()
     for body in bodies:
-        legs.setdefault((body["lane"], body["shard"], body["of"]), {})[body["part"]] = body
-    expected = {(lane, shard, config["shards"]) for lane, config in manifest["lanes"].items()
-                for shard in range(1, config["shards"] + 1)}
-    missing = sorted(expected - set(legs))
-    if missing:
-        raise Finding("REFRESH is missing legs " + ", ".join(f"{lane} {shard}/{of}" for lane, shard, of in missing)
-                      + ": use a run in which every test leg finished")
-    seconds, fast_count, fast_total = {}, 0, 0.0
+        if (not isinstance(body, dict) or body.get("schema") != TIMINGS_SCHEMA
+                or body.get("lane") not in LANES
+                or not all(_count(body.get(key)) for key in ("shard", "of", "workers", "part", "parts"))
+                or body["shard"] > body["of"] or body["part"] > body["parts"]
+                or not isinstance(body.get("plan"), str) or not body["plan"]
+                or not isinstance(body.get("sha"), str)
+                or not isinstance(body.get("run_id", ""), str)
+                or body.get("run_id", "") != "" and not body["run_id"].isascii()
+                or body.get("run_id", "") != "" and not body["run_id"].isdecimal()
+                or not all(type(body.get(key)) is int and body[key] >= 0
+                           for key in ("planned", "ran", "skips", "fixture_errors"))
+                or body["ran"] != body["planned"] or body["skips"] or body["fixture_errors"]
+                or "clean" in body and body["clean"] is not True
+                or not _number(body.get("wall")) or body["wall"] < 0
+                or not isinstance(body.get("fast"), dict) or set(body["fast"]) != {"count", "seconds"}
+                or type(body["fast"]["count"]) is not int or body["fast"]["count"] < 0
+                or not _number(body["fast"]["seconds"]) or body["fast"]["seconds"] < 0
+                or body["fast"]["count"] == 0 and body["fast"]["seconds"] != 0
+                or not isinstance(body.get("seconds"), dict)
+                or not all(isinstance(key, str) and key and _number(value) and value >= 0
+                           for key, value in body["seconds"].items())
+                or body["lane"] == "serial" and body["workers"] != 1):
+            raise Finding("REFRESH invalid or unsuccessful share timing metadata: use complete passing shares")
+        has_planned = "planned_worker_seconds" in body
+        if has_planned and (not _number(body["planned_worker_seconds"]) or body["planned_worker_seconds"] <= 0
+                            or not _number(body["wall"] / body["planned_worker_seconds"])
+                            or body.get("clean") is not True):
+            raise Finding("REFRESH planned worker measurement needs a finite positive denominator, finite ratio "
+                          "and clean worker completion")
+        calibrated.add(has_planned)
+        identities.add((body["plan"], body["sha"], body.get("run_id", "")))
+        key = (body["lane"], body["shard"], body["of"])
+        parts = legs.setdefault(key, {})
+        if body["part"] in parts and parts[body["part"]] != body:
+            raise Finding("REFRESH conflicting duplicate timing part")
+        parts[body["part"]] = body
+    if len(identities) != 1:
+        raise Finding("REFRESH legs disagree on the plan digest, SHA or run identity: "
+                      "refresh from a single run of one commit")
+    if len(calibrated) != 1:
+        raise Finding("REFRESH mixed planned-worker telemetry: use one complete run")
+    seen = set()
+    for lane in LANES:
+        shares = [key for key in legs if key[0] == lane]
+        topology = {(key[2], legs[key][min(legs[key])]["workers"]) for key in shares}
+        if len(topology) != 1:
+            raise Finding(f"REFRESH missing legs or inconsistent topology in {lane}")
+        of, _ = next(iter(topology))
+        if len(shares) != of or sorted(key[1] for key in shares) != list(range(1, of + 1)):
+            raise Finding(f"REFRESH missing legs in {lane}: use a run in which every test leg finished")
     for (lane, shard, of), parts in sorted(legs.items()):
-        if set(parts) != set(range(1, parts[min(parts)]["parts"] + 1)):
+        first = parts[min(parts)]
+        if len(parts) != first["parts"] or set(parts) != set(range(1, first["parts"] + 1)):
             raise Finding(f"REFRESH leg {lane} {shard}/{of} has incomplete timing lines")
+        metadata = {key: value for key, value in first.items() if key not in ("part", "seconds")}
+        count = 0
+        for body in parts.values():
+            if {key: value for key, value in body.items() if key not in ("part", "seconds")} != metadata:
+                raise Finding(f"REFRESH inconsistent chunk metadata in {lane} {shard}/{of}")
+            if seen.intersection(body["seconds"]):
+                raise Finding("REFRESH duplicate test ids across timing parts or shares")
+            seen.update(body["seconds"])
+            count += len(body["seconds"])
+        if count + first["fast"]["count"] != first["planned"]:
+            raise Finding(f"REFRESH incomplete passing test counts in {lane} {shard}/{of}")
+    return legs
+
+
+def merge_timings(manifest: dict, bodies: list[dict]) -> tuple[dict, list[str]]:
+    """Fold one complete CI run into the manifest; earlier logs retain earlier calibration."""
+    legs = validated_legs(bodies)
+    seconds, fast_count, fast_total = {}, 0, 0.0
+    for parts in legs.values():
         for body in parts.values():
             seconds.update(body["seconds"])
         fast_count += parts[1]["fast"]["count"]
@@ -852,6 +1002,20 @@ def merge_timings(manifest: dict, bodies: list[dict]) -> tuple[dict, list[str]]:
         if mean > 0 and abs(mean - manifest["fast_mean_seconds"]) >= 0.01:
             changes.append(f"~ fast_mean_seconds {manifest['fast_mean_seconds']} -> {mean}")
             updated["fast_mean_seconds"] = mean
+    first = bodies[0]
+    if "planned_worker_seconds" in first:
+        calibration = {"plan": first["plan"], "sha": first["sha"], "run_id": first.get("run_id", ""),
+                       "method": "timing_lines",
+                       "lanes": {lane: [] for lane in LANES}}
+        for (lane, shard, of), parts in sorted(legs.items()):
+            body = parts[1]
+            calibration["lanes"][lane].append({"shard": shard, "of": of, "workers": body["workers"],
+                                              "wall_seconds": body["wall"],
+                                              "planned_worker_seconds": body["planned_worker_seconds"]})
+        validate_calibration(calibration)
+        if calibration != manifest.get("calibration"):
+            updated["calibration"] = calibration
+            changes.append("~ calibration (same-run wall / planned worker, lane maximum with floor 1)")
     return updated, changes
 
 
@@ -892,7 +1056,11 @@ def command_refresh(root: Path, args) -> int:
         meta = json.loads(_gh("run", "view", str(run), "--json", "headSha,createdAt,status"))
         if meta["status"] != "completed":
             raise Finding(f"REFRESH run {run} is still {meta['status']}: wait for it to finish", usage=True)
-        manifest, changes = merge_timings(manifest, parse_timings(_gh("run", "view", str(run), "--log")))
+        bodies = parse_timings(_gh("run", "view", str(run), "--log"))
+        if any(body.get("sha") != meta["headSha"]
+               or body.get("run_id", str(run)) != str(run) for body in bodies):
+            raise Finding("REFRESH timing identity disagrees with the selected hosted run")
+        manifest, changes = merge_timings(manifest, bodies)
         manifest["source"] = {"kind": "run", "run_id": run, "head_sha": meta["headSha"],
                               "date": meta["createdAt"][:10]}
     if args.prune:
@@ -964,12 +1132,16 @@ def main(argv: list[str] | None = None) -> int:
             return command_refresh(root, args)
         manifest, ids, lanes, unclassified, plan = prepare(root)
         if args.command == "plan" and args.json:
-            print(json.dumps({"digest": plan_digest(plan), "lanes": plan}, indent=1, sort_keys=True))
+            print(json.dumps({"digest": plan_digest(plan), "lanes": plan, "projection": projection(plan, manifest)},
+                             indent=1, sort_keys=True))
             return 0
         for row in projection(plan, manifest):
             print(f"{row['lane']}: {row['tests']} tests, {row['shards']} shard(s) x {row['workers']} worker(s), "
                   f"{row['seconds']} s recorded or estimated, largest worker {row['largest']} s "
+                  f"x wall ratio {row['ratio']:.3f} = projected share {row['projected']:.1f} s "
                   f"(target {row['target']} s)")
+        for warning in projection_warnings(plan, manifest):
+            print("warning: " + warning)
         print(f"plan {plan_digest(plan)}")
         if args.command == "plan":
             return 0

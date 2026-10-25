@@ -56,6 +56,13 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(sl.manifest_problems(value), [])
         self.assertLessEqual(value["lanes"]["parallel"]["shards"], value["budgets"]["max_parallel_shards"])
         self.assertEqual(sl.dump_manifest(value), (ROOT / "tests" / "suite_lanes.json").read_text())
+        import re
+        rows = re.findall(r"\{lane: (\w+), shard: (\d+), of: (\d+)\}",
+                          (ROOT / ".github/workflows/ci.yml").read_text())
+        expected = [(lane, str(shard), str(config["shards"]))
+                    for lane, config in value["lanes"].items() for shard in range(1, config["shards"] + 1)]
+        self.assertEqual(sorted(rows), sorted(expected))
+
 
 
 SOURCES = {
@@ -186,7 +193,7 @@ class PlanTests(unittest.TestCase):
         self.assertIn("GroupedTable", text)
         self.assertIn("TIMING tests.m.C.test_b", text)
         self.assertIn("INCIDENTS tests/incidents/test_quiet.py", text)
-        self.assertIn("PROJECTION parallel largest worker 400.0 s > 180 s", text)
+        self.assertIn("PROJECTION parallel share 400.0 s > 180 s", text)
         self.assertIn("set lanes.parallel.shards to 3 and add its ci.yml include row", text)
         self.assertIn("PROJECTION serial shards [1] have no tests", text)
         self.assertTrue(all("refresh --prune" in item for item in findings if item.startswith("STALE")))
@@ -301,8 +308,10 @@ class GateTests(unittest.TestCase):
 
 
 def timing_body(lane, shard, of, seconds, *, part=1, parts=1, plan="p", fast=(10, 2.0)):
-    return {"schema": sl.TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "plan": plan, "part": part,
-            "parts": parts, "fast": {"count": fast[0], "seconds": fast[1]}, "seconds": seconds}
+    return {"schema": sl.TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "plan": plan, "sha": "commit",
+            "workers": 1 if lane == "serial" else 2, "part": part, "parts": parts,
+            "planned": len(seconds) + fast[0], "ran": len(seconds) + fast[0], "skips": 0, "fixture_errors": 0,
+            "wall": 20.0, "fast": {"count": fast[0], "seconds": fast[1]}, "seconds": seconds}
 
 
 class RefreshTests(unittest.TestCase):
@@ -318,7 +327,9 @@ class RefreshTests(unittest.TestCase):
                                 manifest=value, wall=12.0, skips=0, fixture_errors=0, ran=233)
         self.assertEqual(len(lines), 3)
         log = "\n".join(f"tests (parallel 1/2)\tRouted suite share\t2026-10-12T00:00:00.0Z {line}" for line in lines)
-        bodies = sl.parse_timings(log + "\nnoise POD_TEST_TIMINGS {broken\n")
+        bodies = sl.parse_timings(log + "\nunrelated log noise\n")
+        with self.assertRaisesRegex(sl.Finding, "malformed"):
+            sl.parse_timings(log + "\nnoise POD_TEST_TIMINGS {broken\n")
         self.assertEqual([body["part"] for body in bodies], [1, 2, 3])
         merged = {key: item for body in bodies for key, item in body["seconds"].items()}
         self.assertEqual(len(merged), 231)
@@ -356,6 +367,208 @@ class RefreshTests(unittest.TestCase):
         for name, bodies in cases.items():
             with self.subTest(name=name), self.assertRaises(sl.Finding):
                 sl.merge_timings(value, bodies)
+
+
+def measured_bodies(value=None, *, ratio=2.0):
+    value = value or manifest()
+    return [dict(timing_body(lane, shard, config["shards"], {}),
+                 workers=config["workers"], wall=100 * ratio, planned_worker_seconds=100.0, clean=True)
+            for lane, config in value["lanes"].items() for shard in range(1, config["shards"] + 1)]
+
+
+class HostedProjectionTests(unittest.TestCase):
+    def test_same_run_ratio_changes_target_check_without_changing_worker_estimates(self):
+        ids = [f"tests.m.C.test_{i}" for i in range(4)]
+        value = manifest(durations=dict.fromkeys(ids, 100.0))
+        lanes = dict.fromkeys(ids, "parallel")
+        plan = sl.build_plan(ids, lanes, value)
+        gap, _ = sl.merge_timings(value, measured_bodies(value, ratio=2.1))
+        steady, _ = sl.merge_timings(value, measured_bodies(value, ratio=1.0))
+        with tempfile.TemporaryDirectory() as root:
+            gap_findings = sl.check(Path(root), gap, ids, lanes, [], plan)
+            steady_findings = sl.check(Path(root), steady, ids, lanes, [], plan)
+        self.assertTrue(any("share 210.0 s > 180 s" in item and "shards to 3" in item
+                            for item in gap_findings))
+        self.assertFalse(any("share" in item for item in steady_findings))
+        row = sl.projection(plan, gap)[0]
+        self.assertEqual((row["largest"], row["ratio"], row["projected"]), (100.0, 2.1, 210.0))
+        self.assertEqual(sl.plan_digest(plan), sl.plan_digest(sl.build_plan(ids, lanes, gap)))
+
+    def test_ratio_uses_maximum_not_mean_and_never_reduces_a_plan(self):
+        bodies = measured_bodies(ratio=0.2)
+        bodies[1]["wall"] = 240.0
+        value, _ = sl.merge_timings(manifest(), bodies)
+        self.assertEqual(sl.wall_ratio(value, "parallel"), 2.4)
+        self.assertEqual(sl.wall_ratio(value, "serial"), 1.0)
+        self.assertEqual(value["calibration"]["lanes"]["parallel"][1]["planned_worker_seconds"], 100.0)
+        # Observed durations and the refreshed fast mean cannot replace the logged denominator.
+        value["fast_mean_seconds"] = 40
+        self.assertEqual(sl.wall_ratio(value, "parallel"), 2.4)
+
+    def test_cap_warns_only_for_new_calibrated_excess_and_keeps_raw_failure(self):
+        value = manifest()
+        value["lanes"]["parallel"]["shards"] = 6
+        value, _ = sl.merge_timings(value, measured_bodies(value))
+        ids = [f"tests.m.C.test_{i}" for i in range(12)]
+        lanes = dict.fromkeys(ids, "parallel")
+        with tempfile.TemporaryDirectory() as root:
+            value["durations"] = dict.fromkeys(ids, 100.0)
+            plan = sl.build_plan(ids, lanes, value)
+            self.assertFalse(any("share" in item for item in sl.check(Path(root), value, ids, lanes, [], plan)))
+            warning = sl.projection_warnings(plan, value)[0]
+            self.assertIn("cap 6 reached; residual 20.0 s", warning)
+            self.assertIn("owner decision", warning)
+            value["durations"][ids[0]] = 200.0
+            plan = sl.build_plan(ids, lanes, value)
+            findings = sl.check(Path(root), value, ids, lanes, [], plan)
+        self.assertTrue(any("share 400.0" in item for item in findings))
+        self.assertFalse(any("shards to 7" in item for item in findings))
+        self.assertEqual(sl.projection_warnings(plan, value), [])
+
+    def test_earlier_manifest_and_logs_preserve_existing_calibration(self):
+        original = manifest()
+        self.assertEqual(sl.wall_ratio(original, "parallel"), 1)
+        calibrated, _ = sl.merge_timings(original, measured_bodies())
+        earlier = [{key: item for key, item in body.items() if key != "planned_worker_seconds"}
+                  for body in measured_bodies()]
+        updated, _ = sl.merge_timings(calibrated, earlier)
+        self.assertEqual(updated["calibration"], calibrated["calibration"])
+        self.assertNotIn("calibration", sl.merge_timings(original, earlier)[0])
+        # A finished older topology is complete in its own right after increasing current shards.
+        original["lanes"]["parallel"]["shards"] = 6
+        self.assertIn("calibration", sl.merge_timings(original, measured_bodies())[0])
+
+    def test_logged_denominator_comes_from_the_original_share_plan(self):
+        value = manifest(durations={"tests.m.C.test_a": 70.1234567, "tests.m.C.test_b": 30.0})
+        ids = list(value["durations"])
+        plan = sl.build_plan(ids, dict.fromkeys(ids, "parallel"), value)
+        denominator = sl.planned_worker_seconds(plan, value, "parallel", 1)
+        results = {ids[0]: {"outcome": "success", "seconds": 0.5}}
+        body = sl.parse_timings(sl.timing_lines(lane="parallel", shard=1, of=2, workers=2,
+                               digest=sl.plan_digest(plan), results=results, manifest=value,
+                               wall=200, skips=0, fixture_errors=0, planned_worker=denominator)[0])[0]
+        self.assertEqual(body["planned_worker_seconds"], 70.1234567)
+        self.assertNotEqual(body["planned_worker_seconds"], sum(body["seconds"].values()))
+
+    def test_selected_hosted_run_identity_must_match_log_before_write(self):
+        args = sl.parser().parse_args(["refresh", "--run", "99"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            synthetic_tree(root, {}, manifest())
+            before = sl.manifest_path(root).read_bytes()
+            for change in ({"sha": "different"}, {"run_id": "100"}):
+                bodies = [dict(body, **change) for body in measured_bodies()]
+                log = "\n".join(sl.MARKER + json.dumps(body) for body in bodies)
+                metadata = json.dumps({"status": "completed", "headSha": "commit", "createdAt": "2026-10-25"})
+                with self.subTest(change=change), patch.object(sl, "_gh", side_effect=[metadata, log]):
+                    with self.assertRaisesRegex(sl.Finding, "selected hosted run"):
+                        sl.command_refresh(root, args)
+                self.assertEqual(sl.manifest_path(root).read_bytes(), before)
+
+    def test_refresh_writes_calibration_only_and_refusal_preserves_manifest_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = manifest(fast_mean_seconds=0.2)
+            synthetic_tree(root, {}, original)
+            bodies = measured_bodies()
+            log = root / "hosted.log"
+            log.write_text("\n".join(sl.MARKER + json.dumps(body) for body in bodies))
+            path = sl.manifest_path(root)
+            before = path.read_bytes()
+            dry = cli(root, "refresh", "--log", str(log), "--dry-run")
+            self.assertEqual(dry.returncode, 0, dry.stdout + dry.stderr)
+            self.assertEqual(path.read_bytes(), before)
+            written = cli(root, "refresh", "--log", str(log))
+            self.assertEqual(written.returncode, 0, written.stdout + written.stderr)
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved["durations"], original["durations"])
+            self.assertEqual(saved["fast_mean_seconds"], original["fast_mean_seconds"])
+            self.assertEqual(sl.wall_ratio(saved, "parallel"), 2.0)
+            before = path.read_bytes()
+            bodies.pop()
+            log.write_text("\n".join(sl.MARKER + json.dumps(body) for body in bodies))
+            refused = cli(root, "refresh", "--log", str(log))
+            self.assertEqual(refused.returncode, 1)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_manifest_rejects_invalid_or_incomplete_calibration(self):
+        good, _ = sl.merge_timings(manifest(), measured_bodies())
+        self.assertEqual(sl.manifest_problems(good), [])
+        for bad_value in (0, -1, float("nan"), float("inf"), True):
+            bad = deepcopy(good)
+            bad["calibration"]["lanes"]["parallel"][0]["planned_worker_seconds"] = bad_value
+            with self.subTest(value=bad_value):
+                self.assertTrue(sl.manifest_problems(bad))
+        for transform in (lambda c: c["lanes"].pop("serial"),
+                          lambda c: c["lanes"]["parallel"].pop(),
+                          lambda c: c["lanes"]["parallel"].append(c["lanes"]["parallel"][0])):
+            bad = deepcopy(good)
+            transform(bad["calibration"])
+            self.assertTrue(sl.manifest_problems(bad))
+
+
+class RefreshIntegrityTests(unittest.TestCase):
+    def refuse(self, bodies, message=None):
+        before = manifest()
+        saved = deepcopy(before)
+        with self.assertRaises(sl.Finding) as raised:
+            sl.merge_timings(before, bodies)
+        if message:
+            self.assertIn(message, str(raised.exception))
+        self.assertEqual(before, saved)
+
+    def test_duplicate_parts_replay_only_identical_content(self):
+        full = measured_bodies()
+        self.assertEqual(sl.merge_timings(manifest(), full)[0], sl.merge_timings(manifest(), full + [full[0]])[0])
+        self.refuse(full + [dict(full[0], wall=1)], "conflicting duplicate")
+
+    def test_inconsistent_identity_topology_and_chunks_refuse(self):
+        cases = {"sha": {"sha": "other"}, "plan": {"plan": "other"},
+                 "of": {"of": 3}, "workers": {"workers": 3},
+                 "part": {"parts": 2}, "mixed telemetry": {"planned_worker_seconds": None}, "run": {"run_id": "2"}}
+        for name, change in cases.items():
+            full = measured_bodies()
+            full[0].update(change)
+            with self.subTest(name=name): self.refuse(full)
+        full = measured_bodies()
+        full[0].pop("planned_worker_seconds")
+        self.refuse(full, "mixed planned-worker")
+        full = measured_bodies()
+        full[0]["parts"] = 2
+        full.append(dict(full[0], part=2, wall=1))
+        self.refuse(full, "inconsistent chunk")
+
+    def test_invalid_numbers_and_unsuccessful_counts_refuse(self):
+        for change in ({"wall": float("nan")}, {"wall": float("inf")}, {"wall": -1},
+                       {"planned_worker_seconds": 0}, {"planned_worker_seconds": True},
+                       {"planned_worker_seconds": 1e-320},
+                       {"ran": 9}, {"planned": True}, {"skips": 1}, {"fixture_errors": 1}, {"clean": False},
+                       {"fast": {"count": 10, "seconds": float("inf")}},
+                       {"fast": {"count": 0, "seconds": 2}}, {"seconds": {"test": -1}},
+                       {"seconds": {"test": float("nan")}}, {"seconds": {"test": 1}}):
+            full = measured_bodies()
+            full[0].update(change)
+            with self.subTest(change=change): self.refuse(full)
+
+    def test_duplicate_test_ids_across_chunks_and_lanes_refuse(self):
+        full = measured_bodies()
+        for body in full[:2]:
+            body.update(seconds={"tests.m.C.test_a": 2}, planned=11, ran=11)
+        self.refuse(full, "duplicate test ids")
+        full = measured_bodies()
+        full[0].update(seconds={"tests.m.C.test_a": 2}, planned=12, ran=12, parts=2)
+        full.append(dict(full[0], part=2))
+        self.refuse(full, "duplicate test ids")
+
+    def test_bad_marker_schema_and_metadata_are_findings_not_python_errors(self):
+        for log in (sl.MARKER + "{broken", sl.MARKER + "[]", sl.MARKER + '{"schema":"other"}',
+                    sl.MARKER + '{"schema":"x","schema":"y"}'):
+            with self.subTest(log=log), self.assertRaises(sl.Finding): sl.parse_timings(log)
+        for change in ({"lane": []}, {"fast": []}, {"seconds": []}, {"part": 0}, {"shard": 3},
+                       {"workers": False}, {"parts": "2"}, {"sha": None}):
+            full = measured_bodies()
+            full[0].update(change)
+            with self.subTest(change=change): self.refuse(full)
 
 
 SYNTHETIC = {
@@ -447,6 +660,10 @@ class WorkerTests(unittest.TestCase):
             mismatch = cli(root, "run", "--lane", "parallel", "--shard", "1", "--of", "2")
         self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
         self.assertIn("2 tests, 0 failed", passing.stdout)
+        passing_body = sl.parse_timings(passing.stdout)[0]
+        self.assertEqual(passing_body["planned_worker_seconds"], ONE_SHARD["fast_mean_seconds"])
+        self.assertTrue(passing_body["clean"])
+        self.assertFalse(sl.parse_timings(late.stdout)[0]["clean"])
         self.assertEqual(crashing.returncode, 1)
         self.assertIn("IN FLIGHT tests.test_demo.Crash.test_exit: worker parallel-1.", crashing.stdout)
         self.assertEqual(late.returncode, 1, late.stdout)

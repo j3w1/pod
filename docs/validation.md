@@ -77,7 +77,20 @@ fast mean. Class and module fixtures are not timed, and a lane may repeat a clas
 in several workers, so keep them cheap. Every pull request and `main` push runs the full suite:
 lanes decide where a test runs, never whether it runs. Every share computes the same plan from
 the checkout, so test definitions must not depend on the runner; `refresh` refuses a run whose
-shares disagree on the plan digest.
+shares disagree on the plan digest or commit identity, or have missing/inconsistent chunks, duplicate
+listed test IDs, invalid timings or incomplete passing-test accounting. Identical chunk replay is
+harmless. New logs also attest clean worker completion; earlier logs lack that extra evidence.
+A complete earlier run may have a different shard topology from today's manifest.
+
+New timing lines record `planned_worker_seconds` from that share's original checkout plan alongside
+its wall seconds. Refresh stores every share's pair and plan/commit identity in optional manifest
+`calibration`; each lane uses its maximum wall/planned ratio, floored at one. `check` reports the
+raw largest worker, ratio and projected share wall time. It never reconstructs a planned denominator
+from observed test seconds or the updated manifest. A earlier manifest without calibration uses one.
+Earlier logs can still refresh durations and preserve previous calibration, but cannot create a
+measurement without an independently verified original plan. The checked-in earlier calibration
+is marked `verified_plan`; future direct log measurements use `timing_lines`. Ratios describe the
+recorded run, including overhead, and do not guarantee future runner speed.
 
 Each hosted lane share proves that every planned test ran exactly once and that each worker
 finished cleanly after its last test, and fails on any skip. Suite-health limits bound hosted
@@ -89,8 +102,12 @@ it also fails beyond twice its lane target. These limits govern the suite's own 
 necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`
 and commit the manifest; `refresh` reads only that run's log lines. Split a growing table into
 named group methods (`tests.common.GroupedTable`) before any method nears the ceiling. When
-`check` projects a lane over its target, raise that lane's shards in the manifest and add the
-matching `ci.yml` rows, up to `max_parallel_shards`. Budgets, lane targets,
+`check` projects a share over its target, raise that lane's shards in the manifest and add the
+matching `ci.yml` rows, up to `max_parallel_shards` for parallel. Raw largest-worker overload remains
+a hard finding. Below that parallel cap, calibrated share overload is also a hard finding. At the
+parallel cap, calibrated-only overload is a warning naming projected seconds, target and residual;
+it does not suggest another shard. Report actual hosted share times and any residual after the
+bounded remedy. The existing hosted failure beyond twice the target stays unchanged. Budgets, lane targets,
 `max_parallel_shards` and any override that keeps a flagged test out of `serial` change only by
 owner decision.
 

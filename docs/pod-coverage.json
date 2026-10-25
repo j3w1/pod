@@ -8997,6 +8997,55 @@
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_correction_cycle_has_one_ordered_owner"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A590",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_suite_lanes.HostedProjectionTests.test_same_run_ratio_changes_target_check_without_changing_worker_estimates",
+        "tests.test_suite_lanes.HostedProjectionTests.test_ratio_uses_maximum_not_mean_and_never_reduces_a_plan",
+        "tests.test_suite_lanes.HostedProjectionTests.test_logged_denominator_comes_from_the_original_share_plan"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A591",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_suite_lanes.RefreshIntegrityTests.test_inconsistent_identity_topology_and_chunks_refuse",
+        "tests.test_suite_lanes.RefreshIntegrityTests.test_duplicate_parts_replay_only_identical_content",
+        "tests.test_suite_lanes.RefreshIntegrityTests.test_invalid_numbers_and_unsuccessful_counts_refuse",
+        "tests.test_suite_lanes.RefreshIntegrityTests.test_duplicate_test_ids_across_chunks_and_lanes_refuse",
+        "tests.test_suite_lanes.RefreshIntegrityTests.test_bad_marker_schema_and_metadata_are_findings_not_python_errors",
+        "tests.test_suite_lanes.HostedProjectionTests.test_manifest_rejects_invalid_or_incomplete_calibration",
+        "tests.test_suite_lanes.HostedProjectionTests.test_refresh_writes_calibration_only_and_refusal_preserves_manifest_bytes",
+        "tests.test_suite_lanes.HostedProjectionTests.test_selected_hosted_run_identity_must_match_log_before_write"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A592",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_suite_lanes.HostedProjectionTests.test_earlier_manifest_and_logs_preserve_existing_calibration",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A593",
+      "required_evidence": [
+        "unit",
+        "hosted_ci"
+      ],
+      "offline_test": [
+        "tests.test_suite_lanes.HostedProjectionTests.test_cap_warns_only_for_new_calibrated_excess_and_keeps_raw_failure",
+        "tests.test_suite_lanes.ManifestTests.test_the_checked_in_manifest_is_valid_and_owner_capped"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
