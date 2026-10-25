@@ -71,13 +71,13 @@ class RecordsCapacityTests(unittest.TestCase):
                 row.pop("wait"); row.update(state="withdrawn", withdrawal={"by": "coordinator", "reason": "synthetic completed branch"})
         case.write(rows)
         state = _read(cls.path)
-        # Fill legal opaque request metadata, leaving every proof binding intact.
+        # Fill legal opaque source-rejection metadata, which stays inline even
+        # when settled current reviews archive, leaving every proof binding intact.
         # The production writer still plans, chunks, preflights and publishes it.
         physical, _ = compact(state, force=True)
         allowance = 488 * 1024 - size(physical) - 64
         if allowance > 0:
-            first = next(iter(state["admissions"].values()))
-            first["request"]["synthetic_padding"] = "p" * allowance
+            state["source_rejections"]["synthetic_padding"] = "p" * allowance
         _write(cls.path, state)
         cls.before = _read(cls.path)
         cls.metrics = {"fixture": "sanitized-96-row", "before": {**cls.measure(),

@@ -89,14 +89,13 @@ class ReviewEligibilityTests(unittest.TestCase):
                 self.assertTrue(is_reference(record["admissions"]["attempt-002"]))
                 self.assertEqual(hydrate(record, chunks.__getitem__), state)
 
-    def test_current_and_unresolved_reviews_stay_inline(self):
+    def test_unresolved_reviews_stay_inline(self):
         def correction(**fields):
             return lambda state, row: correction_of(state, row["admission_id"]).update(fields)
 
         def withdrawn(by):
             return correction(state="withdrawn", withdrawal={"by": by, "reason": "synthetic"}, evidence=[])
         self.check_vetoes([
-            ("current candidate", lambda state, row: row.update(candidate=state["checkpoint"]["candidate"])),
             ("open correction", correction(state="active", executor="coordinator", evidence=[])),
             ("unaccepted correction proof", lambda state, row: correction_of(state, row["admission_id"])["receipts"][0].pop("accepted_seq")),
             ("coordinator-withdrawn correction", withdrawn("coordinator")),
@@ -380,10 +379,10 @@ class LiveShapeTests(unittest.TestCase):
         self.assertGreater(self.capacity["reclaimable_bytes"], 0)
         self.assertLess(self.physical_bytes, CONTEXT_LIMIT)
         moved = {key for key, row in self.physical["admissions"].items() if is_reference(row)}
-        self.assertEqual(moved, set(self.settled))
-        for key in (self.unresolved, self.current, self.pending):
+        self.assertEqual(moved, {*self.settled, self.pending})
+        for key in (self.unresolved, self.current):
             self.assertEqual(self.physical["admissions"][key], self.proposed["admissions"][key])
-        self.assertEqual({row["report"]["outcome"] for key, row in self.proposed["admissions"].items() if key in moved},
+        self.assertEqual({row["report"]["outcome"] for key, row in self.proposed["admissions"].items() if key in self.settled},
                          {"failed", "partial", "blocked", "uncertain"})
         self.assertEqual(self.proposed["admissions"][self.pending]["report"]["outcome"], "succeeded")
         for key, row in self.prior["admissions"].items():
@@ -396,7 +395,9 @@ class LiveShapeTests(unittest.TestCase):
         self.assertFalse(any(is_reference(row) for row in self.closed_inline["admissions"].values()))
         self.assertEqual(self.compacted["status"], "compacted")
         moved = {key for key, row in self.closed_compacted["admissions"].items() if is_reference(row)}
-        self.assertEqual(moved, {*self.settled, self.unresolved})
+        self.assertEqual(moved, {*self.settled, self.unresolved,
+                                 *(key for key, row in self.after["logical"]["admissions"].items()
+                                   if row["report"]["outcome"] == "succeeded")})
         self.assertEqual(self.before["replay"], ())
         self.assertIsNotNone(self.before["closure"])
         self.assertEqual(encoded(self.before, compact=True), encoded(self.after, compact=True))

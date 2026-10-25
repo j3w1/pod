@@ -103,7 +103,7 @@ OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
 
 
 def admission_movable(state, key, row, protected=frozenset()) -> bool:
-    """Conservative, role-aware predicate for consumed superseded results.
+    """Conservative, role-aware predicate for consumed results.
 
     A consumed report proves prior native settlement; archiving does not
     change the admission's bound state or current native outstanding predicate.
@@ -113,7 +113,7 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
     candidate = (state.get("checkpoint") or {}).get("candidate")
     report = row.get("report") or {}
     if (key in protected or row.get("state") not in ("closed", "bound")
-            or not row.get("candidate") or row.get("candidate") == candidate
+            or not row.get("candidate")
             or report.get("status") not in ("validated_observation", "reconciliation_required")
             or report.get("outcome") not in OUTCOMES
             or row.get("route_decision", {}).get("effective_unknown") is True
@@ -121,6 +121,8 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
             or any(not failure.get("cleared_at") for failure in row.get("failures", []))):
         return False
     role = row.get("role")
+    if row.get("candidate") == candidate and (role != "review" or not _review_consumed(state, key, row)):
+        return False
     if role == "implement":
         return row.get("disposition") is not None
     if role == "investigate":
