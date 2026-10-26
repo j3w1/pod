@@ -1628,6 +1628,7 @@ def _checkpoint_decision(state, *, owner, value, native):
     from .relay import same_decision_input
     last = previous.get("revision_decisions", [])[-1:]
     if (last and last[0].get("decision_binding", {}).get("resources", {}).get("intent") == intent
+            and all(raw.get(key) == last[0].get(key) for key in ("allowance", "delegation"))
             and same_decision_input(raw, last[0])):
         return {"replay": state}
     if requested(raw):

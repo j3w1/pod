@@ -106,7 +106,7 @@ def public_decisions(value: Any, *, rule: bool = False) -> Any:
     rule = rule or value.get("kind") == "route_rule"
     authority = (isinstance(value.get("actor"), dict)
                  or bool({"decision_binding", "decision_verification"} & value.keys()))
-    private = ((DECISION_FIELDS - {"provenance", "channel"}) | {"decision_effect"}) if authority else set()
+    private = ((DECISION_FIELDS - {"provenance", "channel"}) | {"decision_effect", "delegation"}) if authority else set()
     if authority or rule:
         private = private | {"request", "instruction"}
     result = {key: public_decisions(item, rule=rule) for key, item in value.items() if key not in private}
@@ -117,7 +117,7 @@ def public_decisions(value: Any, *, rule: bool = False) -> Any:
             if "channel" not in result["actor"] and "channel" in value:
                 result["actor"]["channel"] = value["channel"]
         if (private - {"actor"}) & value.keys():
-            result["decision_sha256"] = digest({key: value[key] for key in DECISION_FIELDS | {"decision_effect"} if key in value})
+            result["decision_sha256"] = digest({key: value[key] for key in DECISION_FIELDS | {"decision_effect", "delegation"} if key in value})
         if "instruction" in value:
             result["instruction_sha256"] = digest(value["instruction"])
     return result

@@ -299,7 +299,7 @@ and the verified standing-authorization activation and revocation of R136. R149'
 checkpoint-only issue revision has its separate verified path below. A responder's
 answer (R138) is never an owner decision and appears on no owner list. A general `revision_authority` answer supplies
 `question`, resolving to a string or the `id`/`reference` of a question previously
-recorded in the checkpoint; Pod preserves that reference. [R150](assurance.md#r150--keep-findings-goal-scoped-and-bound-review-rounds) excludes review-allowance answers from relayed question authority. A question added in the
+recorded in the checkpoint; Pod preserves that reference. [R173](assurance.md#r173--keep-findings-goal-scoped-and-bound-review-rounds) requires sourced delegated lead authority or an actual person's own decision for review-allowance answers. A question added in the
 same write is not a previously recorded question. A relayed general revision
 without that binding refuses `relayed_decision_refused` with a next action.
 

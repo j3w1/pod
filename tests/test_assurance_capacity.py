@@ -172,6 +172,9 @@ class AssuranceCapacityTests(unittest.TestCase):
         admission, packet = self.restore(63)
         self.case.report(admission, packet, outcome="failed", map={"seq": _read(self.path)["checkpoint"]["seq"] + 1,
             "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}})
+        self.case.write()
+        self.case.write(revision_authority={"provenance": "user_direct", "instruction": "Continue the capacity case",
+            "question": "review-allowance-3", "allowance": {"choice": "continue", "rounds": 1}})
         packet = self.case.packet(["A"], role="review")
         before = self.files()
         workers = deepcopy(self.case.port.workers)

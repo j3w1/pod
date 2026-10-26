@@ -9081,7 +9081,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_review_rounds.ReviewRoundsTests.test_third_finished_round_blocks_fourth_and_checkpoints_one_owner_question",
+        "tests.test_review_rounds.ReviewRoundsTests.test_third_finished_round_blocks_fourth_and_checkpoints_one_lead_question",
         "tests.test_review_rounds.ReviewRoundsTests.test_public_status_is_read_only_and_caller_cannot_answer_by_editing_a_row"
       ],
       "status": "NOT_RUN"
@@ -9109,7 +9109,11 @@
       "offline_test": [
         "tests.test_review_rounds.ReviewRoundsTests.test_continue_expires_and_asks_with_the_new_granted_number",
         "tests.test_review_rounds.ReviewRoundsTests.test_continue_after_five_earlier_rounds_grants_two_further_rounds",
-        "tests.test_review_rounds.ReviewRoundsTests.test_continuation_bounds_and_answer_replay_cannot_grant_twice"
+        "tests.test_review_rounds.ReviewRoundsTests.test_continuation_bounds_and_answer_replay_cannot_grant_twice",
+        "tests.test_review_rounds.ReviewRoundsTests.test_sourced_lead_answer_retains_delegation_and_private_source",
+        "tests.test_review_rounds.ReviewRoundsTests.test_changed_lead_answer_is_not_replayed_as_an_earlier_grant",
+        "tests.test_review_rounds.ReviewRoundsTests.test_verified_person_and_sourced_verified_lead_keep_their_actual_actor",
+        "tests.test_review_rounds.ReviewRoundsTests.test_earlier_owner_answer_history_survives_current_lead_question_projection"
       ],
       "status": "NOT_RUN"
     },
@@ -9144,8 +9148,13 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_review_rounds.ReviewRoundsTests.test_relayed_allowance_answers_refuse_without_verifier_or_effect",
-        "tests.test_review_rounds.ReviewRoundsTests.test_responder_cannot_answer_owner_allowance_even_under_yolo"
+        "tests.test_review_rounds.ReviewRoundsTests.test_unsourced_relayed_allowance_refuses_without_verifier_or_effect",
+        "tests.test_review_rounds.ReviewRoundsTests.test_responder_cannot_answer_owner_allowance_even_under_yolo",
+        "tests.test_review_rounds.ReviewRoundsTests.test_lead_answer_requires_source_reason_and_lead_basis",
+        "tests.test_review_rounds.ReviewRoundsTests.test_worker_cannot_record_lead_answer_for_coordinator",
+        "tests.test_review_rounds.ReviewRoundsTests.test_lead_answer_never_bypasses_current_machine_policy",
+        "tests.test_review_rounds.ReviewRoundsTests.test_lead_continue_does_not_authorize_a_requirement_revision",
+        "tests.test_review_rounds.ReviewRoundsTests.test_unsourced_agent_cannot_simplify_by_withdrawing_a_correction"
       ],
       "status": "NOT_RUN"
     }

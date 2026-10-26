@@ -11,6 +11,7 @@ from pod.history import COMPACT_AT, CONTEXT_LIMIT, compact, hydrate, is_referenc
 from pod.util import encoded
 from tests.history_support import size
 from tests.test_history_reviews import OUTCOMES, correction_of, outcome, review_state
+from tests.records_support import start_before_review_guard, report_before_goal_links
 
 
 def current_reviews():
@@ -191,7 +192,8 @@ class CurrentReviewProductionTests(unittest.TestCase):
 
         def review(name, result="succeeded", correction=None):
             frozen = case.packet(["A"], role="review")
-            admission = case.start(name, frozen)["admission"]
+            # Synthetic earlier admissions preserve the pre-allowance history shape.
+            admission = start_before_review_guard(case, name, frozen)["admission"]
             case.settle(admission)
             update, triage = {"A": WAITING}, []
             if correction:
@@ -199,7 +201,8 @@ class CurrentReviewProductionTests(unittest.TestCase):
                                       "check": "repair the finding", "proof_scope": ["src"], **WAITING}
                 triage = [{"finding": "F1", "severity": "major", "triage": "required_correction",
                            "correction": correction, "summary": "repair required"}]
-            case.report(admission, frozen, outcome=result, map={"seq": seq() + 1, "update": update}, triage=triage)
+            report_before_goal_links(case, admission, frozen, outcome=result,
+                                     map={"seq": seq() + 1, "update": update}, triage=triage)
             return admission["admission_id"]
 
         # A resolved unsuccessful review has no served consumed receipt and must stay inline even now.
@@ -219,7 +222,7 @@ class CurrentReviewProductionTests(unittest.TestCase):
         cls.detected_open = run("record-compaction", {"project": str(case.project), "objective": "objective"})
         cls.detection_unchanged = before == {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
         frozen = case.packet(["A"], role="review")
-        pending = case.start("next-current-review", frozen)["admission"]
+        pending = start_before_review_guard(case, "next-current-review", frozen)["admission"]
         cls.pending = pending["admission_id"]
         cls.physical = json.loads(path.read_bytes())
         cls.proposed = _read(path)

@@ -61,6 +61,6 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - First-use policy setup or change, a sensitive tool use or permission answer, or deciding who may authorize an effect: [decisions](references/decisions.md).
 - Any route choice or requested model arrangement: [models](references/models.md).
 - Failure/resume/reload, an over-limit record, a lost coordinator or stranded delivery: [recovery](references/recovery.md).
-- Proof/review/REUSE: [verification](references/verification.md).
+- Proof/review/REUSE, finding triage or a review allowance decision: [verification](references/verification.md).
 - Delivery/Git/CI/deployment, or yolo mode on or off: [Governor](references/governor.md).
 - Before cleanup, a sweep or worktree/branch deletion; after worker release or when deciding immediate worktree reuse: [cleanup](references/cleanup.md).

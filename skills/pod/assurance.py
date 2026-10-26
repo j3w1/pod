@@ -421,7 +421,7 @@ def review_completed(admission: Any) -> bool:
 
 
 def review_allowance(state: dict, ctx: dict) -> dict:
-    """R150: derive the allowance from admissions and accepted owner decisions only."""
+    """R173: derive the allowance from admissions and accepted decisions only."""
     from .display import review_rounds
     reviews = review_rounds(ctx)
     decisions = [row for row in state.get("revision_decisions", []) if "allowance" in row]
@@ -431,7 +431,7 @@ def review_allowance(state: dict, ctx: dict) -> dict:
             granted = int(row["question"].removeprefix("review-allowance-")) + row["allowance"].get("rounds", 1)
     finished = bool(reviews and reviews[-1].get("report")
                     and reviews[-1]["admission_id"] not in ctx.get("outstanding", []))
-    open_assurance = any(ob["kind"] in ("assurance", "correction") and ob["state"] not in ("satisfied", "withdrawn")
+    open_assurance = any(ob["kind"] in ("assurance", "correction") and ob["state"] not in ("satisfied", "withdrawn", "renewed")
                          for ob in state.get("obligations", []))
     status = ("stopped" if any(row["allowance"]["choice"] == "stop" for row in decisions) else
               "clear" if not open_assurance else "open" if len(reviews) < granted else
@@ -442,10 +442,13 @@ def review_allowance(state: dict, ctx: dict) -> dict:
 
 
 def allowance_question(rounds: int, granted: int) -> dict:
-    return {"id": f"review-allowance-{rounds}", "owner_only": True, "kind": "review_allowance", "resolved": False,
+    return {"id": f"review-allowance-{rounds}", "owner_only": False, "recipient": "repository_lead",
+            "kind": "review_allowance", "resolved": False, "choices": ["stop as incomplete", "simplify", "continue N"],
             "text": f"{rounds} review rounds have been used, against {granted} granted, and assurance is unfinished. "
                     "Stop as incomplete, simplify named obligations for one verification round, "
-                    "or continue for a stated 1..8 rounds. Type the answer in the coordinator's own tab."}
+                    "or continue for a stated 1..8 rounds. The coordinator asks the repository lead through native mail "
+                    "and records its delegated answer with the lead message reference and reason. "
+                    "Do not raise a maintainer card or owner-question notice."}
 
 
 def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
@@ -456,7 +459,7 @@ def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
             return questions
         raise PodError("invalid_checkpoint", "Review allowance questions require a question list")
     result = [row for row in questions if not (
-        isinstance(row, dict) and str(row.get("id", "")).startswith("review-allowance-")
+        isinstance(row, dict) and any(str(row.get(key, "")).startswith("review-allowance-") for key in ("id", "reference"))
         or isinstance(row, str) and row.startswith("review-allowance-"))]
     granted = 3
     for decision in state.get("revision_decisions", []):
@@ -480,6 +483,35 @@ def allowance_answer(value: Any) -> dict:
         raise refuse("obligation_invalid", "malformed", "continue grants 1..8 rounds; stop and simplify take no rounds",
                      record="review allowance answer")
     return dict(row)
+
+
+def allowance_authority(record: dict) -> None:
+    """Reuse the delegated lead source shape and the enclosing decision capability.
+
+    As with route settlement, the coordinator relays the lead; Pod does not authenticate
+    that role. Workers cannot checkpoint for it. The machine decision policy still applies.
+    """
+    from .obligations import _exact, _text, refuse
+    delegation = record.get("delegation")
+    if delegation is None:
+        if record.get("provenance") == "user_direct" and record.get("channel", "session") == "session":
+            return
+        # The generic verifier can attest an actual person's own decision.
+        from .relay import current_decision
+        capability = current_decision()
+        actor = record.get("actor") or (capability.actor if capability is not None else {})
+        if actor.get("kind") == "person" and ("decision_binding" in record or capability is not None):
+            return
+        raise refuse("obligation_invalid", "allowance_source_required", "only a sourced repository-lead decision or actual person answer grants review",
+                     record="revision authority", next_action="ask the repository lead through native mail and record its source and reason; never relabel a worker or reviewer as the lead")
+    row = _exact(delegation, contract_fields("review allowance delegation"),
+                 {"basis", "source", "reason"}, "review allowance delegation")
+    source = _exact(row["source"], {"reference"}, {"reference"}, "route settlement source")
+    _text(source["reference"], "reference", limit=512)
+    _text(row["reason"], "reason", limit=1024)
+    if row["basis"] != "lead_decision" or record.get("provenance") not in ("agent_decision", "decision_request"):
+        raise refuse("obligation_invalid", "allowance_source_required", "record the repository lead as a delegated agent decision, never as the person's own words",
+                     record="revision authority")
 
 
 def _reuse_valid(ob: dict, ctx: dict, candidate: str) -> bool:

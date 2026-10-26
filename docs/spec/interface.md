@@ -114,7 +114,7 @@ The router instructs the coordinator to read a reference when the current action
 
 `SKILL.md` has exactly Roles, Done when, Boundaries, Helpers and Read when needed. Each bundled reference has one unique triggered router link and no reference-to-reference links. Validation retains frontmatter/metadata restrictions, VERSION, inventory and symlink rules, required and forbidden helper forms, launcher, interface, catalog and observations checks, and the 64 KiB per-file bundle byte bound. Metadata and VERSION restrictions are reported before body checks. Word and line counts cause neither refusals nor warnings; printed per-file stored word counts and their single total are informational and do not measure the context an agent loads. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle's applicable task references, preserving authority, completion, judgment and recovery; templates serve authoring and revision, while repository docs provide contributor checks and detailed contracts.
 
-[R150](assurance.md#r150--keep-findings-goal-scoped-and-bound-review-rounds)'s review allowance, goal-scoped findings and review report-contract guidance follow this contract in the [verification reference](../../skills/pod/references/verification.md).
+[R173](assurance.md#r173--keep-findings-goal-scoped-and-bound-review-rounds)'s review allowance, goal-scoped findings and review report-contract guidance follow this contract in the [verification reference](../../skills/pod/references/verification.md).
 
 ### R73 — The model workspace is one table of exact routes
 
@@ -895,7 +895,7 @@ Native status failure does not erase question facts already read from the checkp
 | `schema` | `pod-recorded-questions/v1`. |
 | `status` | `complete`, `partial` or `unavailable`. |
 | `checkpoint` | Object with `seq` and `revision`, each the recorded nonnegative integer or `null` when missing/unsupported. |
-| `items` | Ordered projected rows, each with `index` (zero-based recorded position), `id`, `reference`, `text`, `choices`, `resolution` and `missing`, plus `owner_only` when recorded as a boolean. Position is not a stable question identity. |
+| `items` | Ordered projected rows, each with `index` (zero-based recorded position), `id`, `reference`, `text`, `choices`, `resolution` and `missing`, plus `owner_only` when recorded as a boolean and `recipient` when recorded as `repository_lead`. Position is not a stable question identity. |
 | `total` | Recorded list length, including unsupported or unprojected rows; `null` when the list is unavailable. |
 | `truncated` | Whether count/byte bounds omitted any recorded rows. |
 | `missing` | Top-level missing facts: `checkpoint`, `checkpoint.seq`, `checkpoint.revision`, `questions`, or `items` when truncated. |

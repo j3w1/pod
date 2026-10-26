@@ -1,4 +1,4 @@
-"""R150: real admission/checkpoint/report boundaries, replacing only external ports."""
+"""R173: real admission/checkpoint/report boundaries, replacing only external ports."""
 from copy import deepcopy
 import shutil
 import unittest
@@ -14,6 +14,8 @@ class ReviewRoundsTests(unittest.TestCase):
         cls.case = case = ProductionCase()
         case.setUp()
         cls.addClassCleanup(case.doCleanups)
+        from pod.config import set_decision_policy
+        set_decision_policy(case.project, "hands_off", decision={"provenance": "user_direct", "instruction": "Fixture policy"})
         case.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
                      "check": "review src", "scope": {"paths": ["src"]}, "question": "does src meet R1?",
                      "candidate": case.candidate, "existing_evidence": "tests", "insufficiency": "no review",
@@ -33,8 +35,9 @@ class ReviewRoundsTests(unittest.TestCase):
         seed.repair()
         cls.save("repaired", seed.pending)
         seed.restore("one")
-        # Synthetic earlier-admission control: 0.21.9 admitted reviews without an allowance.
-        with patch("pod.obligations.review_allowance", return_value={"state": "open", "rounds": 0, "granted": 99}):
+        # Synthetic earlier-admission control: the earlier writer had neither new admission gate.
+        with patch("pod.assurance.refuse_premature_review"), patch(
+                "pod.obligations.review_allowance", return_value={"state": "open", "rounds": 0, "granted": 99}):
             seed.finish(finding=seed.finding())
             for _ in range(4):
                 seed.begin()
@@ -123,11 +126,17 @@ class ReviewRoundsTests(unittest.TestCase):
         return error
 
     def answer(self, choice, *, rounds=None, rows=None, **fields):
-        question = self.case.write()["report"]["review_allowance"]["question"]
+        question = self.questions()[-1]["id"]
         authority = {"provenance": "user_direct", "channel": "session", "instruction": f"Choose {choice}",
                      "question": question, "allowance": {"choice": choice, **({"rounds": rounds} if rounds is not None else {})},
                      **fields}
         return self.case.write(rows, revision_authority=authority)
+
+    def lead_answer(self, choice="continue", *, rounds=1, rows=None, **fields):
+        return self.answer(choice, rounds=rounds if choice == "continue" else None, rows=rows,
+                           provenance="agent_decision", channel="agent_session", delegation={
+                               "basis": "lead_decision", "source": {"reference": "native-mail/lead-answer"},
+                               "reason": "The named remaining proof fits this bounded continuation"}, **fields)
 
     def questions(self):
         return [row for row in self.facts()["checkpoint"]["questions"]
@@ -182,15 +191,19 @@ class ReviewRoundsTests(unittest.TestCase):
         for finding in (self.finding(blocks="x" * 129), self.finding(triage="advisory", reason="minor concern")):
             self.unchanged_refusal("obligation_invalid", lambda: self.finish(finding=finding), "malformed")
 
-    def test_third_finished_round_blocks_fourth_and_checkpoints_one_owner_question(self):
+    def test_third_finished_round_blocks_fourth_and_checkpoints_one_lead_question(self):
         self.assertEqual([row["id"] for row in self.questions()], ["review-allowance-3"])
         error = self.unchanged_refusal("review_allowance_reached", self.begin, "due")
         self.assertEqual(error.detail["referent"]["question"], self.questions()[0])
-        for questions in ([], self.questions() * 2, []):
+        question = self.questions()[0]
+        reference_only = {key: value for key, value in question.items() if key != "id"}
+        reference_only["reference"] = question["id"]
+        for questions in ([], self.questions() * 2, [reference_only, question], []):
             self.case.write(questions=questions)
             self.assertEqual(len(self.questions()), 1)
-        self.assertTrue(self.questions()[0]["owner_only"])
-        self.assertNotIn("choices", self.questions()[0])
+        self.assertFalse(self.questions()[0]["owner_only"])
+        self.assertEqual(self.questions()[0]["recipient"], "repository_lead")
+        self.assertIn("Do not raise a maintainer card or owner-question notice", self.questions()[0]["text"])
 
     def test_repaired_correction_without_reverification_still_asks(self):
         self.restore("repaired")
@@ -218,7 +231,8 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertEqual(observed["report"]["review_allowance"]["state"], "due")
         projection = observed["recorded_questions"]
         self.assertEqual(projection["status"], "complete")
-        self.assertTrue(projection["items"][0]["owner_only"])
+        self.assertFalse(projection["items"][0]["owner_only"])
+        self.assertEqual(projection["items"][0]["recipient"], "repository_lead")
         self.assertEqual(projection["items"][0]["resolution"], {"resolved": False})
         self.assertEqual(self.facts(), before)
         self.case.write(questions=[{**self.questions()[0], "resolved": True, "status": "answered", "answer": "continue"}])
@@ -234,8 +248,9 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertEqual(self.questions(), [])
 
     def test_continue_expires_and_asks_with_the_new_granted_number(self):
-        result = self.answer("continue", rounds=2)
+        result = self.lead_answer(rounds=2)
         self.assertEqual(result["report"]["review_allowance"]["granted"], 5)
+        self.repair()
         for _ in range(2):
             self.begin()
             self.finish()
@@ -255,16 +270,17 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertIn("3 granted", question["text"])
         error = self.unchanged_refusal("review_allowance_reached", self.begin, "due")
         self.assertEqual(error.detail["referent"]["question"], question)
-        result = self.answer("continue", rounds=2)["report"]["review_allowance"]
+        result = self.lead_answer(rounds=2)["report"]["review_allowance"]
         self.assertEqual((result["rounds"], result["granted"], result["state"]), (5, 7, "open"))
         self.assertEqual(self.questions()[0]["text"], question["text"])
+        self.repair()
         for _ in range(2):
             self.begin()
             self.finish()
         self.case.write()
         self.assertEqual([row["id"] for row in self.questions()], ["review-allowance-5", "review-allowance-7"])
         self.unchanged_refusal("review_allowance_reached", self.begin, "due")
-        self.answer("continue", rounds=1)
+        self.lead_answer()
         self.assertEqual(self.case.write()["report"]["review_allowance"]["granted"], 8)
 
     def test_simplify_after_five_earlier_rounds_grants_one_verification_round(self):
@@ -273,6 +289,7 @@ class ReviewRoundsTests(unittest.TestCase):
         next(row for row in rows if row["id"] == "K")["check"] = "repair the simplified result"
         result = self.answer("simplify", rows=rows)["report"]["review_allowance"]
         self.assertEqual((result["rounds"], result["granted"], result["state"]), (5, 6, "open"))
+        self.repair()
         self.begin()
         self.finish()
         self.case.write()
@@ -286,8 +303,8 @@ class ReviewRoundsTests(unittest.TestCase):
         rows = self.case.stored()
         correction = next(row for row in rows if row["id"] == "K")
         correction.pop("wait")
-        correction.update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "Remove this requirement"})
-        self.answer("simplify", rows=rows)
+        correction.update(state="withdrawn", withdrawal={"by": "agent_decision", "reason": "Remove this requirement"})
+        self.lead_answer("simplify", rows=rows)
         self.begin()
         self.finish()
         self.case.write()
@@ -297,7 +314,7 @@ class ReviewRoundsTests(unittest.TestCase):
     def test_simplified_verification_can_finish_cleanly(self):
         rows = self.case.stored()
         next(row for row in rows if row["id"] == "K")["check"] = "repair the simplified result"
-        self.answer("simplify", rows=rows)
+        self.lead_answer("simplify", rows=rows)
         self.repair()
         self.begin()
         self.finish(clean=True)
@@ -305,19 +322,19 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertTrue(all(row.get("resolved") for row in self.questions()))
 
     def test_stop_reports_every_unfinished_obligation_and_prevents_review(self):
-        result = self.answer("stop")["report"]
+        result = self.lead_answer("stop")["report"]
         self.assertEqual(result["review_allowance"]["state"], "stopped")
         self.assertEqual(set(result["unfinished"]), {"O1", "A", "K"})
         self.assertIn("incomplete", result["interim_report"])
         self.assertEqual(result["satisfied"], [])
         self.unchanged_refusal("review_allowance_reached", self.begin, "stopped")
 
-    def test_relayed_allowance_answers_refuse_without_verifier_or_effect(self):
+    def test_unsourced_relayed_allowance_refuses_without_verifier_or_effect(self):
         with patch("pod.relay.verify", side_effect=AssertionError("allowance called relay verifier")):
-            self.unchanged_refusal("relayed_decision_refused", lambda: self.case.write(revision_authority={
+            self.unchanged_refusal("obligation_invalid", lambda: self.case.write(revision_authority={
                 "provenance": "user_direct", "instruction": "continue", "channel": "relayed",
                 "relay": {"reference": "verified-relay", "owner_source": "authenticated fixture"},
-                "question": "review-allowance-3", "allowance": {"choice": "continue", "rounds": 1}}))
+                "question": "review-allowance-3", "allowance": {"choice": "continue", "rounds": 1}}), "allowance_source_required")
 
     def test_responder_cannot_answer_owner_allowance_even_under_yolo(self):
         self.case.op("standing-authorization", action="activate", decision={
@@ -337,3 +354,98 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertEqual((decision["kind"], decision["channel"]), ("question", "session"))
         self.unchanged_refusal("obligation_invalid", lambda: self.case.write(revision_authority={
             key: value for key, value in decision.items() if key not in ("seq", "kind")}), "allowance_not_due")
+
+    def test_sourced_lead_answer_retains_delegation_and_private_source(self):
+        result = self.lead_answer()
+        decision = result["checkpoint"]["revision_decisions"][-1]
+        self.assertEqual((decision["kind"], decision["provenance"], decision["channel"]),
+                         ("question", "agent_decision", "agent_session"))
+        self.assertEqual(decision["delegation"]["basis"], "lead_decision")
+        self.assertEqual(decision["delegation"]["source"], {"reference": "native-mail/lead-answer"})
+        self.assertIn("bounded continuation", decision["delegation"]["reason"])
+        from pod.status import public_status
+        self.assertNotIn("delegation", public_status(decision))
+        self.assertEqual(self.case.write()["report"]["review_allowance"]["granted"], 4)
+
+    def test_lead_answer_requires_source_reason_and_lead_basis(self):
+        for delegation in (None, {}, {"basis": "lead_decision", "source": {"reference": ""}, "reason": "reason"},
+                           {"basis": "lead_decision", "source": {"reference": "mail"}, "reason": ""},
+                           *({"basis": role, "source": {"reference": "mail"}, "reason": "reason"}
+                             for role in ("reviewer_decision", "worker_decision"))):
+            with self.subTest(delegation=delegation):
+                self.unchanged_refusal("obligation_invalid", lambda: self.answer("continue", rounds=1,
+                    provenance="agent_decision", channel="agent_session",
+                    **({"delegation": delegation} if delegation is not None else {})))
+
+    def test_worker_cannot_record_lead_answer_for_coordinator(self):
+        import os
+        from pod.internal import run
+        with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "worker"}):
+            self.unchanged_refusal("coordinator_conflict", lambda: run("checkpoint", {
+                "project": str(self.case.project), "objective": "objective", "owner": "worker",
+                "value": self.case.core(revision_authority={"provenance": "agent_decision",
+                    "channel": "agent_session", "instruction": "continue", "question": "review-allowance-3",
+                    "allowance": {"choice": "continue", "rounds": 1}})}))
+
+    def test_lead_answer_never_bypasses_current_machine_policy(self):
+        from pod.config import personal_path, set_decision_policy
+        path = personal_path(self.case.project)
+        before = path.read_bytes()
+        self.addCleanup(path.write_bytes, before)
+        set_decision_policy(self.case.project, "careful", decision={"provenance": "user_direct", "instruction": "Fixture careful policy"})
+        self.unchanged_refusal("decision_policy_denied", self.lead_answer)
+
+    def test_changed_lead_answer_is_not_replayed_as_an_earlier_grant(self):
+        self.lead_answer()
+        # Reuse the same checkpoint content so only the answer differs.
+        self.unchanged_refusal("obligation_invalid", lambda: self.answer("continue", rounds=2,
+            provenance="agent_decision", channel="agent_session", delegation={
+                "basis": "lead_decision", "source": {"reference": "native-mail/lead-answer"},
+                "reason": "The named remaining proof fits this bounded continuation"}), "allowance_not_due")
+
+    def test_lead_continue_does_not_authorize_a_requirement_revision(self):
+        rows = self.case.stored()
+        next(row for row in rows if row["id"] == "K")["check"] = "an unrelated revised check"
+        self.unchanged_refusal("obligation_invalid", lambda: self.lead_answer(rows=rows), "allowance_scope_exceeded")
+
+    def test_unsourced_agent_cannot_simplify_by_withdrawing_a_correction(self):
+        rows = self.case.stored()
+        correction = next(row for row in rows if row["id"] == "K")
+        correction.pop("wait")
+        correction.update(state="withdrawn", withdrawal={"by": "agent_decision", "reason": "remove K"})
+        self.unchanged_refusal("obligation_invalid", lambda: self.answer("simplify", rows=rows,
+            provenance="agent_decision", channel="agent_session"), "allowance_source_required")
+
+    def test_verified_person_and_sourced_verified_lead_keep_their_actual_actor(self):
+        from datetime import datetime, timezone
+        decided_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        def verdict(kind, request):
+            binding = request["decision"]
+            return {**request, "verified": True, "decided_at": decided_at,
+                    "single_use": "fixture:" + binding["request_id"], "principal": {
+                        "kind": kind, "identity": "fixture-" + kind, "scope": {
+                            "kinds": binding["kinds"], "categories": binding["categories"],
+                            "resources": binding["resources"]}}}
+        for kind in ("person", "agent"):
+            with self.subTest(kind=kind):
+                self.restore("due")
+                with patch("pod.relay.verify_decision", side_effect=lambda _, request: verdict(kind, request)):
+                    extra = {"delegation": {"basis": "lead_decision", "source": {"reference": "native-mail/lead"},
+                                             "reason": "Bounded remaining verification"}} if kind == "agent" else {}
+                    result = self.answer("continue", rounds=1, provenance="decision_request", channel="relayed",
+                                         relay={"reference": "fixture-vouch", "verification": "decision"}, **extra)
+                record = result["checkpoint"]["revision_decisions"][-1]
+                self.assertEqual(record["actor"]["kind"], kind)
+                self.assertEqual(record["provenance"], "user_direct" if kind == "person" else "agent_decision")
+                self.assertEqual(self.case.write()["report"]["review_allowance"]["granted"], 4)
+
+    def test_earlier_owner_answer_history_survives_current_lead_question_projection(self):
+        self.answer("continue", rounds=1)
+        before = deepcopy(self.facts()["checkpoint"]["revision_decisions"])
+        self.repair()
+        self.begin()
+        self.finish()
+        self.case.write()
+        self.assertEqual(self.facts()["checkpoint"]["revision_decisions"], before)
+        self.assertEqual(self.questions()[-1]["recipient"], "repository_lead")
+        self.assertEqual(self.questions()[0]["answer"], {"choice": "continue", "rounds": 1})

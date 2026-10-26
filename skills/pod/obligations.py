@@ -521,7 +521,7 @@ def _proposal(raw: Any) -> dict:
 def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> dict | None:
     if value is None:
         return None
-    record = _exact(value, DECISION_FIELDS | {"question", "allowance"}, {"provenance", "instruction"}, "revision authority")
+    record = _exact(value, DECISION_FIELDS | {"question", "allowance", "delegation"}, {"provenance", "instruction"}, "revision authority")
     from .relay import decision_input
     if record["provenance"] != "user_direct" and not decision_input(record):
         raise refuse("obligation_invalid", "provenance_unauthorized",
@@ -529,13 +529,17 @@ def _authority(value: Any, *, kind: str = "revision", stored: bool = False) -> d
     _text(record["instruction"], "instruction", limit=bound("revision authority", "instruction"))
     if "question" in record:
         _text(record["question"], "question", limit=bound("revision authority", "question"))
-    if "allowance" in record or str(record.get("question", "")).startswith("review-allowance-"):
-        from .assurance import allowance_answer
-        owner_decision(record, kind="review allowance", stored=stored)
+    allowance = "allowance" in record or str(record.get("question", "")).startswith("review-allowance-")
+    if "delegation" in record and not allowance:
+        raise refuse("obligation_invalid", "malformed", "delegation answers only a review allowance", record="revision authority")
+    if allowance:
+        from .assurance import allowance_answer, allowance_authority
         if not str(record.get("question", "")).startswith("review-allowance-"):
             raise refuse("obligation_invalid", "malformed", "an allowance answers its recorded review-allowance question", record="revision authority")
         allowance_answer(record.get("allowance"))
-    return owner_decision(record, kind=kind, stored=stored)
+        record = owner_decision(record, kind=kind, stored=stored)
+        allowance_authority(record)
+    return record if allowance else owner_decision(record, kind=kind, stored=stored)
 
 
 # --------------------------------------------------------------------------- facts
@@ -1203,13 +1207,21 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
         allowance = review_allowance(prior_map or {}, ctx)
         if ctx.get("operation") != "checkpoint" or allowance["state"] != "due" or authority["question"] != allowance["question"]:
             raise refuse("obligation_invalid", "allowance_not_due", "answer the current due allowance through a checkpoint", question=authority["question"])
+        if "delegation" in authority:
+            definition_changes = [key for key, earlier in prior_rows.items() if key in rows
+                                  and (definition_id(rows[key]) != definition_id(earlier)
+                                       or rows[key]["state"] == "withdrawn" and earlier["state"] != "withdrawn")]
+            if (set(rows) != set(prior_rows) or refresh or reopen or "renew" in value or "mapping_repair" in value
+                    or definition_changes and authority["allowance"]["choice"] != "simplify"):
+                raise refuse("obligation_invalid", "allowance_scope_exceeded", "a delegated allowance covers one answer; only simplify may revise or withdraw named existing obligations",
+                             record="revision authority")
         if authority["allowance"]["choice"] == "simplify" and not any(
                 earlier["state"] != "withdrawn" and (definition_id(rows[key]) != definition_id(earlier)
-                    or rows[key]["state"] == "withdrawn" and rows[key]["withdrawal"]["by"] == "user_direct")
+                    or rows[key]["state"] == "withdrawn" and rows[key]["withdrawal"]["by"] in ("user_direct", "agent_decision"))
                 for key, earlier in prior_rows.items() if key in rows):
             raise refuse("obligation_invalid", "simplification_required", "simplify must withdraw or revise a named obligation in this write",
                          question=authority["question"],
-                         next_action="name and withdraw or revise at least one obligation through the existing owner-authorized procedure")
+                         next_action="name and withdraw or revise at least one obligation through the existing authorized procedure")
 
     # Coverage: every original criterion has an objective obligation (R39).
     covered = _covered(rows, ctx)
@@ -1991,7 +2003,7 @@ def validate_map_record(state: dict) -> None:
                 from .issue_revision import validate_decision
                 validate_decision(row, state)
                 continue
-            _exact(row, DECISION_FIELDS | {"seq", "question", "kind", "allowance"}, {"seq", "provenance", "instruction", "kind"}, "revision decision")
+            _exact(row, DECISION_FIELDS | {"seq", "question", "kind", "allowance", "delegation"}, {"seq", "provenance", "instruction", "kind"}, "revision decision")
             if type(row["seq"]) is not int or not 1 <= row["seq"] <= value["seq"]:
                 raise refuse("obligation_invalid", "malformed", "revision decision names its accepted sequence", record="revision decision")
             if row["kind"] not in ("question", "governance", "withdrawal", "revision"):
@@ -2002,7 +2014,7 @@ def validate_map_record(state: dict) -> None:
                 question = re.fullmatch(r"review-allowance-([1-9][0-9]*)", row["question"])
                 rounds = int(question[1]) if question else 0
                 if row["kind"] != "question" or stopped or rounds < granted:
-                    raise refuse("obligation_invalid", "malformed", "allowance history retains each successive owner answer once", record="revision decision")
+                    raise refuse("obligation_invalid", "malformed", "allowance history retains each successive answer once", record="revision decision")
                 stopped = row["allowance"]["choice"] == "stop"
                 if not stopped:
                     granted = rounds + row["allowance"].get("rounds", 1)
@@ -2329,8 +2341,8 @@ def admission_refusal(state: dict | None, body: dict, ctx: dict, *, admission_id
         allowance = review_allowance(state, ctx)
         if allowance["rounds"] >= allowance["granted"] or allowance["state"] == "stopped":
             action = ("wait for the running round to settle and consume its report" if allowance["state"] == "running" else
-                      "the owner stopped review; report incomplete with every unfinished obligation" if allowance["state"] == "stopped" else
-                      "checkpoint the owner-only allowance question and obtain a session answer" if allowance["state"] == "due" else
+                      "review was stopped; report incomplete with every unfinished obligation" if allowance["state"] == "stopped" else
+                      "checkpoint the repository-lead allowance question and record its sourced delegated answer" if allowance["state"] == "due" else
                       "finish normally; assurance is clear")
             raise refuse("review_allowance_reached", allowance["state"], "the objective's granted review rounds are used",
                          rounds=allowance["rounds"], granted=allowance["granted"], state=allowance["state"], next_action=action,
@@ -2545,7 +2557,7 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
               "label": label_qualification(state, ctx, ctx.get("candidate"))}
     if any(ob["state"] == "renewed" for ob in rows):
         result["renewed"] = [{"obligation": ob["id"], **ob["renewal"]} for ob in rows if ob["state"] == "renewed"]
-    # R150 projections appear once review has happened, so earlier report shapes stay unchanged.
+    # R173 projections appear once review has happened, so earlier report shapes stay unchanged.
     findings = [{"obligation": ob["id"], **{key: deepcopy(finding[key]) for key in
                  ("finding", "severity", "triage", "blocks", "correction") if key in finding}}
                 for ob in rows for finding in ob.get("findings", [])]

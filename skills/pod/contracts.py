@@ -250,7 +250,10 @@ TABLE["revision authority"] = definition({"provenance": choice(("user_direct",))
                                           "operation": {**choice(("issue_revision",)), "form": "selects the checkpoint-only issue revision authority record"},
                                           "question": text(), "channel": choice(("session", "relayed")),
                                           "allowance": record("review allowance answer"),
+                                          "delegation": record("review allowance delegation"),
                                           "relay": {"type": "object"}}, ("provenance", "instruction"))
+TABLE["review allowance delegation"] = definition({"basis": choice(("lead_decision",)),
+    "source": record("route settlement source"), "reason": text(1024)}, ("basis", "source", "reason"))
 TABLE["review allowance answer"] = definition({"choice": choice(("stop", "simplify", "continue")),
     "rounds": {"type": "integer", "minimum": 1, "maximum": 8, "only": "continue"}}, ("choice",))
 TABLE["disposition"] = definition({"admission": {"type": "text"}, "integrated_into": text(128),

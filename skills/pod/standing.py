@@ -607,8 +607,8 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
         if action == "answer":
             questions = (context.get("checkpoint") or {}).get("questions", [])
             if answer["question"].startswith("review-allowance-"):
-                raise PodError("responder_answer_refused", "Only a session owner answer can decide a review allowance",
-                               {"next_action": "obtain the owner's session answer through checkpoint revision_authority"})
+                raise PodError("responder_answer_refused", "A responder cannot decide a repository-lead review allowance",
+                               {"next_action": "ask the repository lead through native mail and record its sourced delegated decision through checkpoint revision_authority"})
             if not isinstance(questions, list) or not any(question == answer["question"] or isinstance(question, dict)
                     and answer["question"] in (question.get("id"), question.get("reference")) for question in questions):
                 raise PodError("decision_question_unrecorded", "Responder answer must name a currently recorded question",

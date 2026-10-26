@@ -86,6 +86,8 @@ def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavaila
                "choices": None, "resolution": None, "missing": []}
         if type(source.get("owner_only")) is bool:
             row["owner_only"] = source["owner_only"]
+        if source.get("recipient") == "repository_lead":
+            row["recipient"] = source["recipient"]
         if row["id"] is None and row["reference"] is None:
             row["missing"].append("identity")
         if row["text"] is None:
