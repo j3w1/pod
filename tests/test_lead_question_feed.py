@@ -83,7 +83,7 @@ class LeadQuestionFeedTests(unittest.TestCase):
         ordinary = {"id": "owner-choice", "text": "Choose the owner outcome", "choices": ["yes", "no"],
                     "resolved": False}
         policy = {**ordinary, "id": "policy-choice", "categories": ["policy_changes"]}
-        self.case.write(questions=[ordinary, policy, "legacy owner question"])
+        self.case.write(questions=[ordinary, policy, "earlier owner question"])
         tool = tool_decision(self.case.project, "objective", action="check", tool="fixture-vault",
                              category="secrets", operation="read fixture data")
         result = self.public()
