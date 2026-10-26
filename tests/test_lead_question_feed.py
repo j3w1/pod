@@ -71,7 +71,7 @@ class LeadQuestionFeedTests(unittest.TestCase):
 
     def test_identity_recipient_kind_and_text_lookalikes_reach_owner_feed(self):
         self.lookalikes_reach_owner_feed([
-            {"id": "ordinary-owner"}, {"id": "review-allowance-99"}, {"recipient": "owner"},
+            {"id": "ordinary-owner"}, {"id": "review-allowance-99"}, {"recipient": "owner"}, {"owner_only": True},
             {"kind": "owner_question"}, {"text": "A separate actual owner decision"}])
 
     def test_boolean_sensitive_policy_and_schema_lookalikes_reach_owner_feed(self):
