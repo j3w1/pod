@@ -889,8 +889,8 @@ and live proof remain separate from synthetic subprocess tests.
 
 `pod status --objective ID --json`, and a status selecting one objective by Run,
 add `recorded_questions` with exactly this supported schema. R173 excludes only its
-exact current kernel-derived lead allowance row from this owner feed; status exposes
-that unchanged row separately as `review_allowance_question`. Stored questions,
+proven kernel-owned unanswered lead allowance rows from this owner feed; status exposes
+an unchanged unanswered row separately as `review_allowance_question`. Stored questions,
 answered history and full raw decision/attention accounting remain intact. Consumers must inspect
 its status and gaps: absent or unavailable projection never means an empty list.
 Native status failure does not erase question facts already read from the checkpoint.
@@ -901,7 +901,7 @@ Native status failure does not erase question facts already read from the checkp
 | `status` | `complete`, `partial` or `unavailable`. |
 | `checkpoint` | Object with `seq` and `revision`, each the recorded nonnegative integer or `null` when missing/unsupported. |
 | `items` | Ordered projected rows, each with `index` (zero-based recorded position), `id`, `reference`, `text`, `choices`, `resolution` and `missing`, plus `owner_only` when recorded as a boolean and `recipient` when recorded as `repository_lead`. Position is not a stable question identity. |
-| `total` | Owner-feed row count, including unsupported or unprojected rows, after R173's exact derived-row exclusion; `null` when the list is unavailable. Original recorded positions remain the item indices. |
+| `total` | Owner-feed row count, including unsupported or unprojected rows, after R173's proven origin-based exclusion; `null` when the list is unavailable. Original recorded positions remain the item indices. |
 | `truncated` | Whether count/byte bounds omitted any recorded rows. |
 | `missing` | Top-level missing facts: `checkpoint`, `checkpoint.seq`, `checkpoint.revision`, `questions`, or `items` when truncated. |
 | `reason` | `null` for complete; `question_facts_missing` or `projection_limit` for partial; `checkpoint_unavailable`, `questions_missing`, `questions_unsupported`, or the record-read failure code for unavailable. |

@@ -9090,7 +9090,8 @@
         "tests.test_lead_question_feed.LeadQuestionFeedTests.test_identity_recipient_kind_and_text_lookalikes_reach_owner_feed",
         "tests.test_lead_question_feed.LeadQuestionFeedTests.test_boolean_sensitive_policy_and_schema_lookalikes_reach_owner_feed",
         "tests.test_lead_question_feed.LeadQuestionFeedTests.test_mixed_ordinary_legacy_policy_and_real_tool_questions_keep_attention",
-        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_recorded_lead_answer_stays_visible_and_grants_only_its_bounded_round"
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_recorded_lead_answer_stays_visible_and_grants_only_its_bounded_round",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_forged_or_edited_origin_claims_remain_visible_owner_questions"
       ],
       "status": "NOT_RUN"
     },
@@ -9104,7 +9105,9 @@
         "tests.test_review_rounds.ReviewRoundsTests.test_repaired_correction_without_reverification_still_asks",
         "tests.test_review_rounds.ReviewRoundsTests.test_running_third_round_has_no_question_and_no_fourth_admission",
         "tests.test_review_rounds.ReviewRoundsTests.test_clean_third_round_finishes_without_question",
-        "tests.test_review_rounds.ReviewRoundsTests.test_consumed_failed_third_round_is_finished_without_passing_assurance"
+        "tests.test_review_rounds.ReviewRoundsTests.test_consumed_failed_third_round_is_finished_without_passing_assurance",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_carried_clean_completion_preserves_the_original_lead_source",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_empty_and_omitted_questions_preserve_owned_clean_completion_history"
       ],
       "status": "NOT_RUN"
     },
@@ -9121,7 +9124,8 @@
         "tests.test_review_rounds.ReviewRoundsTests.test_sourced_lead_answer_retains_delegation_and_private_source",
         "tests.test_review_rounds.ReviewRoundsTests.test_changed_lead_answer_is_not_replayed_as_an_earlier_grant",
         "tests.test_review_rounds.ReviewRoundsTests.test_verified_person_and_sourced_verified_lead_keep_their_actual_actor",
-        "tests.test_review_rounds.ReviewRoundsTests.test_earlier_owner_answer_history_survives_current_lead_question_projection"
+        "tests.test_review_rounds.ReviewRoundsTests.test_earlier_owner_answer_history_survives_current_lead_question_projection",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_next_due_and_candidate_movement_retain_prior_source_and_answer"
       ],
       "status": "NOT_RUN"
     },
@@ -9134,7 +9138,8 @@
       "offline_test": [
         "tests.test_review_rounds.ReviewRoundsTests.test_simplify_requires_a_named_change_and_grants_exactly_one_round",
         "tests.test_review_rounds.ReviewRoundsTests.test_simplify_after_five_earlier_rounds_grants_one_verification_round",
-        "tests.test_review_rounds.ReviewRoundsTests.test_simplified_verification_can_finish_cleanly"
+        "tests.test_review_rounds.ReviewRoundsTests.test_simplified_verification_can_finish_cleanly",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_answers_simplification_stop_and_renewal_preserve_question_origin"
       ],
       "status": "NOT_RUN"
     },

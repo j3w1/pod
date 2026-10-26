@@ -1324,6 +1324,17 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     old_questions = {row["id"]: row for row in (previous or {}).get("questions", [])
                      if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA} if isinstance((previous or {}).get("questions", []), list) else {}
     proposed_questions = value.get("questions")
+    from .assurance import REVIEW_ORIGIN
+    if isinstance(proposed_questions, list):
+        # Only an unchanged retained kernel row may carry private origin metadata.
+        # A forged/edited claim remains an ordinary visible question, without that claim.
+        previous_questions = (previous or {}).get("questions", [])
+        previous_questions = previous_questions if isinstance(previous_questions, list) else []
+        value["questions"] = proposed_questions = [
+            {**row, REVIEW_ORIGIN: None}
+            if isinstance(row, dict) and REVIEW_ORIGIN in row and not any(
+                row == old and digest(row) == digest(old) for old in previous_questions) else row
+            for row in proposed_questions]
     proposed_tool = {row.get("id"): row for row in proposed_questions if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA} if isinstance(proposed_questions, list) else {}
     if (any(row != old_questions.get(key) for key, row in proposed_tool.items())
             or any(key not in proposed_tool and row["state"] in ("pending", "approved") for key, row in old_questions.items())):

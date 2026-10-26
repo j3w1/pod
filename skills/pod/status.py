@@ -13,7 +13,7 @@ from .orca import current_run, worker_rows
 from .routes import project as project_routes
 from .selection import active_constraints, failure_active
 from .term import clean
-from .util import digest, route_summary, route_hold, route_next_action, route_settlement_projection
+from .util import route_summary, route_hold, route_next_action, route_settlement_projection
 
 PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
                    "max_active", "refresh", "errors", "setup")
@@ -117,12 +117,12 @@ def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavaila
 
 
 def _question_status(state: dict | None) -> dict:
-    """The CE owner feed excludes only an exact, currently derived lead question.
+    """The CE owner feed excludes only proven kernel-owned unanswered lead questions.
 
     Keep the full recorded projection for decision/attention accounting. No marker
     supplied on an opaque question confers this exception, even a matching id/text.
     """
-    from .assurance import allowance_question, review_allowance
+    from .assurance import REVIEW_ORIGIN, owned_allowance_question
     from .ledger import map_of
     from .obligations import validate_map_record
     checkpoint = (state or {}).get("checkpoint")
@@ -131,15 +131,13 @@ def _question_status(state: dict | None) -> dict:
     if mapped is not None:
         try:
             validate_map_record(mapped)
-            allowance = review_allowance(mapped, state)
-            if allowance["state"] == "due":
-                canonical = allowance_question(allowance["rounds"], allowance["granted"])
-                questions = checkpoint.get("questions")
-                if isinstance(questions, list):
-                    excluded = [index for index, row in enumerate(questions)
-                                if row == canonical and digest(row) == digest(canonical)]
-                    if excluded:
-                        lead = canonical
+            questions = checkpoint.get("questions")
+            if isinstance(questions, list):
+                excluded = [index for index, row in enumerate(questions)
+                            if isinstance(row, dict) and row.get("resolved") is False
+                            and owned_allowance_question(row, mapped, state)]
+                if excluded:
+                    lead = {key: value for key, value in questions[excluded[-1]].items() if key != REVIEW_ORIGIN}
         except (PodError, KeyError, TypeError, ValueError):
             pass  # Unproved provenance never removes an owner question.
     return {"recorded_questions": recorded_questions(checkpoint, _exclude=excluded),

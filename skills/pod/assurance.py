@@ -451,13 +451,47 @@ def allowance_question(rounds: int, granted: int) -> dict:
                     "Do not raise a maintainer card or owner-question notice."}
 
 
+REVIEW_ORIGIN = "_pod_review_origin"  # Private checkpoint metadata, never caller authority.
+
+
+def owned_allowance_question(row: Any, state: dict, ctx: dict) -> bool:
+    """Validate the retained kernel source independently of today's due/clear state."""
+    from .display import review_rounds
+    if not isinstance(row, dict) or not isinstance(origin := row.get(REVIEW_ORIGIN), dict):
+        return False
+    if (set(origin) != {"admission", "seq", "granted"} or type(origin["seq"]) is not int
+            or not 1 <= origin["seq"] <= state["seq"] or type(origin["granted"]) is not int):
+        return False
+    reviews = review_rounds(ctx)
+    index = next((i for i, admission in enumerate(reviews)
+                  if admission["admission_id"] == origin["admission"] and admission.get("report")
+                  and admission.get("admitted_seq", origin["seq"]) < origin["seq"]), None)
+    if index is None:
+        return False
+    granted = 3
+    for decision in state.get("revision_decisions", []):
+        if "allowance" in decision and decision["seq"] < origin["seq"]:
+            if decision["allowance"]["choice"] == "stop":
+                return False
+            granted = int(decision["question"].removeprefix("review-allowance-")) + decision["allowance"].get("rounds", 1)
+    if origin["granted"] != granted or index + 1 < granted:
+        return False
+    canonical = allowance_question(index + 1, granted)
+    public = {key: value for key, value in row.items() if key != REVIEW_ORIGIN}
+    forms = [canonical, *({**canonical, "resolved": True, "status": "answered", "answer": decision["allowance"]}
+                         for decision in state.get("revision_decisions", []) if "allowance" in decision
+                         and decision.get("question") == canonical["id"] and decision["seq"] >= origin["seq"])]
+    return any(public == form and digest(public) == digest(form) for form in forms)
+
+
 def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
-    """Checkpoint projection owns reserved rows, including CE's top-level answer facts."""
+    """Retain kernel-owned questions and sources, including CE's top-level answer facts."""
     allowance = review_allowance(state, ctx)
     if not isinstance(questions, list):
         if allowance["state"] != "due" and not any("allowance" in row for row in state.get("revision_decisions", [])):
             return questions
         raise PodError("invalid_checkpoint", "Review allowance questions require a question list")
+    previous = [row for row in ctx.get("recorded_questions", []) if owned_allowance_question(row, state, ctx)]
     generated, superseded = [], []
     granted = 3
     for decision in state.get("revision_decisions", []):
@@ -467,14 +501,24 @@ def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
             superseded.append(question)
             generated.append({**question, "resolved": True, "status": "answered",
                               "answer": deepcopy(decision["allowance"])})
+            prior = next((row for row in previous if row["id"] == question["id"]), None)
+            if prior is not None:
+                generated[-1][REVIEW_ORIGIN] = prior[REVIEW_ORIGIN]
             if decision["allowance"]["choice"] != "stop":
                 granted = rounds + decision["allowance"].get("rounds", 1)
     if allowance["state"] == "due":
-        generated.append(allowance_question(allowance["rounds"], allowance["granted"]))
+        from .display import review_rounds
+        question = allowance_question(allowance["rounds"], allowance["granted"])
+        prior = next((row for row in previous if row["id"] == question["id"]), None)
+        generated.append({**question, REVIEW_ORIGIN: (prior[REVIEW_ORIGIN] if prior is not None else {
+            "admission": review_rounds(ctx)[-1]["admission_id"], "seq": state["seq"], "granted": allowance["granted"]})})
+        superseded.append(question)  # Upgrade only the currently justified earlier unmarked form.
+    generated.extend(row for row in previous if not any(item["id"] == row["id"] for item in generated))
+    superseded.extend({key: value for key, value in row.items() if key != REVIEW_ORIGIN} for row in previous)
     # Own only exact derived rows. Caller labels, ids or a reserved-looking string
     # cannot erase an ordinary/tool question; accepted answers replace their old row.
     return [row for row in questions if not any(row == owned and digest(row) == digest(owned)
-                                               for owned in generated + superseded)] + generated
+                                               for owned in generated + superseded + previous)] + generated
 
 
 def allowance_answer(value: Any) -> dict:

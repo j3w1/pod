@@ -137,7 +137,9 @@ boundaries; fixture records stay separate from native and preceding-mechanism au
 
 For the lead allowance, feed actual candidate public status to the currently installed
 host owner-question consumer in disposable host/Pod stores. Absent, present and timed-out
-lead facts must create no owner request or claimable card for the kernel-derived row;
+lead facts must create no owner request or claimable card through due, carried clean-clear,
+answered/continue/simplify/stop, renewal and next-due transitions. Exercise carried, omitted,
+empty and public-round-tripped inputs and forged ownership claims;
 ordinary, earlier, tool/sensitive, policy, mixed and lookalike controls must still reach
 the owner feed. Record the installed consumer hash. This compatibility fixture is
 separate from live host notification proof; no real card or service operation is permitted.

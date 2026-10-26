@@ -139,7 +139,9 @@ class ReviewRoundsTests(unittest.TestCase):
                                "reason": "The named remaining proof fits this bounded continuation"}, **fields)
 
     def questions(self):
-        return [row for row in self.facts()["checkpoint"]["questions"]
+        from pod.assurance import REVIEW_ORIGIN
+        return [{key: value for key, value in row.items() if key != REVIEW_ORIGIN}
+                for row in self.facts()["checkpoint"]["questions"]
                 if isinstance(row, dict) and row.get("kind") == "review_allowance"]
 
     def test_linked_required_group_and_reuse_statement_are_retained(self):

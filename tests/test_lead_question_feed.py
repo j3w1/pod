@@ -4,7 +4,7 @@ from copy import deepcopy
 from io import StringIO
 import unittest
 
-from pod.assurance import allowance_question
+from pod.assurance import REVIEW_ORIGIN, allowance_question
 from pod.config import load
 from pod.errors import PodError
 from pod.ledger import tool_decision
@@ -17,6 +17,11 @@ class LeadQuestionFeedTests(unittest.TestCase):
     def setUpClass(cls):
         rounds.ReviewRoundsTests.setUpClass()
         cls.addClassCleanup(rounds.ReviewRoundsTests.doClassCleanups)
+        seed = rounds.ReviewRoundsTests()
+        seed.restore("third")
+        seed.finish()
+        seed.case.write()
+        rounds.ReviewRoundsTests.save("clean-due", seed.pending)
 
     def setUp(self):
         self.fixture = rounds.ReviewRoundsTests()
@@ -121,8 +126,90 @@ class LeadQuestionFeedTests(unittest.TestCase):
         self.assertEqual(result["blocker"], "objective_run_mismatch")
         self.assertEqual(result["recorded_questions"]["total"], 0)
         self.assertEqual(result["review_allowance_question"], allowance_question(3, 3))
+
         def unavailable(_):
             raise PodError("fixture_unavailable", "unavailable")
         result = self.public(worker_rows_fn=unavailable)
         self.assertEqual(result["recorded_questions"]["total"], 0)
         self.assertEqual(result["review_allowance_question"], allowance_question(3, 3))
+
+    def clear_clean_review(self, mode):
+        rows = self.case.stored()
+        for row in rows:
+            row.pop("wait", None)
+            row.pop("executor", None)
+            row.update(state="satisfied", evidence=[{"attempt": self.fixture.pending[0]["admission_id"]}]
+                       if row["id"] == "A" else [self.case.proof(row["id"])])
+        value = self.case.core(obligations=rows)
+        if mode == "carried":
+            value["questions"] = deepcopy(self.fixture.facts()["checkpoint"]["questions"])
+        elif mode == "public":
+            value["questions"] = self.fixture.questions()
+        elif mode == "omitted":
+            value.pop("questions")
+        return self.case.op("checkpoint", value=value)
+
+    def clear_controls(self, modes):
+        for mode in modes:
+            with self.subTest(mode=mode):
+                self.fixture.restore("clean-due")
+                before = deepcopy(self.fixture.facts()["checkpoint"]["questions"])
+                self.clear_clean_review(mode)
+                result = self.public()
+                self.assertEqual(result["report"]["unfinished"], [])
+                self.assertEqual(result["report"]["review_allowance"]["state"], "clear")
+                self.assertEqual(result["recorded_questions"]["items"], [])
+                self.assertEqual(self.fixture.facts()["checkpoint"]["questions"], before)
+                self.assertFalse(result["review_allowance_question"]["resolved"])
+
+    def test_carried_clean_completion_preserves_the_original_lead_source(self):
+        self.clear_controls(("carried", "public"))
+
+    def test_empty_and_omitted_questions_preserve_owned_clean_completion_history(self):
+        self.clear_controls(("empty", "omitted"))
+
+    def test_answers_simplification_stop_and_renewal_preserve_question_origin(self):
+        for choice in ("continue", "simplify", "stop", "renew"):
+            with self.subTest(choice=choice):
+                self.fixture.restore("due")
+                origin = self.fixture.facts()["checkpoint"]["questions"][0][REVIEW_ORIGIN]
+                if choice == "renew":
+                    self.case.write(renew=[{"id": "A", "as": "A2"}])
+                else:
+                    rows = self.case.stored()
+                    if choice == "simplify":
+                        next(row for row in rows if row["id"] == "K")["check"] = "simplified repair"
+                    self.fixture.lead_answer(choice, rows=rows)
+                self.assertEqual(self.fixture.facts()["checkpoint"]["questions"][0][REVIEW_ORIGIN], origin)
+                result = self.public()
+                self.assertTrue(all(row["resolution"]["resolved"] for row in result["recorded_questions"]["items"]))
+
+    def test_next_due_and_candidate_movement_retain_prior_source_and_answer(self):
+        origin = deepcopy(self.fixture.facts()["checkpoint"]["questions"][0][REVIEW_ORIGIN])
+        self.fixture.lead_answer()
+        self.fixture.repair()
+        self.fixture.begin()
+        self.fixture.finish()
+        self.case.write()
+        self.case.move()
+        rows = self.case.stored()
+        next(row for row in rows if row["id"] == "K")["evidence"] = [self.case.proof("K")]
+        self.case.write(rows)
+        result = self.public()
+        self.assertEqual(result["review_allowance_question"]["id"], "review-allowance-4")
+        stored = self.fixture.facts()["checkpoint"]["questions"]
+        self.assertEqual(stored[0][REVIEW_ORIGIN], origin)
+        self.assertNotEqual(stored[-1][REVIEW_ORIGIN], origin)
+        self.assertEqual(result["recorded_questions"]["items"][0]["resolution"]["answer"], {"choice": "continue", "rounds": 1})
+
+    def test_forged_or_edited_origin_claims_remain_visible_owner_questions(self):
+        for change in ({"seq": 999}, {"admission": "unknown"}, {"granted": 9}, {"seq": True}):
+            with self.subTest(change=change):
+                self.fixture.restore("due")
+                row = deepcopy(self.fixture.facts()["checkpoint"]["questions"][0])
+                row[REVIEW_ORIGIN].update(change)
+                self.case.write(questions=[row])
+                result = self.public()
+                self.assertEqual(result["recorded_questions"]["total"], 1)
+                self.assertEqual(result["recorded_questions"]["items"][0]["text"], row["text"])
+                self.assertIsNone(self.fixture.facts()["checkpoint"]["questions"][0][REVIEW_ORIGIN])
