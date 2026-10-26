@@ -252,6 +252,12 @@ def protect_decision_record(value: dict) -> None:
         for row in container.get("actions", []):
             records.extend(((row.get("action") or {}).get("authorization"), row.get("exception")))
     version = max(map(representation, records), default=0)
+    if value.get("schema") == STATE_SCHEMAS["context"] and isinstance(value.get("checkpoint"), dict):
+        from .assurance import owned_allowance_question
+        checkpoint = value["checkpoint"]
+        questions = checkpoint.get("questions", [])
+        if isinstance(questions, list) and any(owned_allowance_question(row, checkpoint, value) for row in questions):
+            value.setdefault("question_channels", 1)
     if version:
         value["decision_channels"] = version
 _ZONED_TIMESTAMP = re.compile(

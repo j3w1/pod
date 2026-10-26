@@ -9091,7 +9091,12 @@
         "tests.test_lead_question_feed.LeadQuestionFeedTests.test_boolean_sensitive_policy_and_schema_lookalikes_reach_owner_feed",
         "tests.test_lead_question_feed.LeadQuestionFeedTests.test_mixed_ordinary_legacy_policy_and_real_tool_questions_keep_attention",
         "tests.test_lead_question_feed.LeadQuestionFeedTests.test_recorded_lead_answer_stays_visible_and_grants_only_its_bounded_round",
-        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_forged_or_edited_origin_claims_remain_visible_owner_questions"
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_forged_or_edited_origin_claims_remain_visible_owner_questions",
+        "tests.test_question_capability.QuestionCapabilityTests.test_genuine_preceding_reader_and_writer_refuse_owned_due_and_clear",
+        "tests.test_question_capability.QuestionCapabilityTests.test_current_reader_refuses_missing_or_unknown_capability_without_mutation",
+        "tests.test_question_capability.QuestionCapabilityTests.test_caller_flags_cannot_introduce_or_lower_the_capability",
+        "tests.test_question_capability.QuestionCapabilityTests.test_capability_survives_tool_decision_answer_and_compaction",
+        "tests.test_question_capability.QuestionCapabilityTests.test_capability_survives_closure_and_unknown_values_cannot_be_downgraded"
       ],
       "status": "NOT_RUN"
     },

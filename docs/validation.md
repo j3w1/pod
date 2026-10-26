@@ -141,7 +141,10 @@ lead facts must create no owner request or claimable card through due, carried c
 answered/continue/simplify/stop, renewal and next-due transitions. Exercise carried, omitted,
 empty and public-round-tripped inputs and forged ownership claims;
 ordinary, earlier, tool/sensitive, policy, mixed and lookalike controls must still reach
-the owner feed. Record the installed consumer hash. This compatibility fixture is
+the owner feed. Pass actual persisted records to a separate genuine preceding reader/writer
+and its full installed host observation path; unsupported owned semantics must refuse or
+be unavailable without byte changes or owner requests. Verify capability persistence,
+anti-forgery and downgrade refusal through affected writes. Record reader/consumer hashes. This compatibility fixture is
 separate from live host notification proof; no real card or service operation is permitted.
 
 If a post-merge trial fails, preserve exact evidence and leave the objective

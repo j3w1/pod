@@ -243,7 +243,9 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "decision_order", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "decision_order", "question_channels", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    if "question_channels" in state and (type(state["question_channels"]) is not int or state["question_channels"] != 1):
+        raise PodError("state_unsupported", "Question representation is unsupported")
     if "standing_authorization" in state:
         from .standing import validate_record
         validate_record(state["standing_authorization"])
@@ -292,7 +294,7 @@ def _validate_context(value: object) -> dict:
             raise PodError("state_unsupported", "Issue revision history is missing")
         for row in revisions:
             validate_decision(row, checkpoint_value)
-        if state.get("decision_channels") == 4 or state.get("decision_channels") == 5 and checkpoint_value.get("obligations") is not None:
+        if state.get("decision_channels") == 4 or (state.get("decision_channels") == 5 or state.get("question_channels") == 1) and checkpoint_value.get("obligations") is not None:
             from .obligations import validate_map_record
             validate_map_record(checkpoint_value)
         from .contracts import TOOL_QUESTION_SCHEMA
@@ -310,6 +312,13 @@ def _validate_context(value: object) -> dict:
             raise PodError("state_unsupported", "Admission key is malformed")
         _validate_admission(key, row, runtimes=runtimes)
     _validate_route_references(state)
+    checkpoint_value = state.get("checkpoint")
+    if (isinstance(checkpoint_value, dict) and checkpoint_value.get("obligations") is not None
+            and isinstance(checkpoint_value.get("questions"), list)):
+        from .assurance import owned_allowance_question
+        if state.get("question_channels") != 1 and any(
+                owned_allowance_question(row, checkpoint_value, state) for row in checkpoint_value["questions"]):
+            raise PodError("state_unsupported", "Owned questions require their reader capability")
     if (not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict)
             or not isinstance(state["constraints"], list) or len(state["constraints"]) > 64):
         raise PodError("state_unsupported", "Context evidence is malformed")

@@ -297,6 +297,11 @@ class LiveShapeTests(unittest.TestCase):
                                                     for row in case.stored()
                                                     if row["state"] == "satisfied" and row["kind"] == "correction"})
 
+        # Synthetic preceding-writer shape: this size comparison predates owned
+        # questions. Do not manufacture new semantics then strip their capability.
+        old_questions = patch("pod.assurance.allowance_questions", side_effect=lambda state, ctx, questions: questions)
+        old_questions.start()
+        cls.addClassCleanup(old_questions.stop)
         cls.settled = []
         for index, result in enumerate(("failed", "partial", "blocked", "uncertain", "failed", "partial")):
             cls.settled.append(review(f"review-{index}", result, f"K{index}"))
@@ -311,6 +316,7 @@ class LiveShapeTests(unittest.TestCase):
         case.settle(pending)
         cls.pending = pending["admission_id"]
         unpadded = _read(path)
+        old_questions.stop()
         cls.prior = deepcopy(unpadded)
         cls.prior["source_rejections"] = {"synthetic-padding": ""}
         # The preceding mechanism's physical shape: every review and receipt copy inline, other settled

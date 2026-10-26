@@ -891,7 +891,7 @@ and live proof remain separate from synthetic subprocess tests.
 add `recorded_questions` with exactly this supported schema. R173 excludes only its
 proven kernel-owned unanswered lead allowance rows from this owner feed; status exposes
 an unchanged unanswered row separately as `review_allowance_question`. Stored questions,
-answered history and full raw decision/attention accounting remain intact. Consumers must inspect
+answered history and full raw decision/attention accounting remain intact. R90's private context capability makes preceding 0.21.21 readers safely refuse these owned records; their unavailable projection is not compatibility PASS. Consumers must inspect
 its status and gaps: absent or unavailable projection never means an empty list.
 Native status failure does not erase question facts already read from the checkpoint.
 

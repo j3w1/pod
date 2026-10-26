@@ -402,7 +402,7 @@ genuine 0.17.0 readers refuse them. A context that holds a `standing_authorizati
 record, and a Governor journal holding a row whose authorization carries `standing`
 (R137), use `decision_channels: 3`; genuine 0.18.0 readers refuse them. R149's issue
 revision evidence and contexts/reports containing it use `decision_channels: 4`,
-which preceding helpers refuse. Other
+which preceding helpers refuse. R90's independent private `question_channels: 1` protects owned lead-question semantics at the context boundary; it grants no decision authority and does not replace these channel discriminators. Other
 channel-bearing records retain `1` and existing records read unchanged, without
 conversion.
 

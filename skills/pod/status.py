@@ -128,7 +128,7 @@ def _question_status(state: dict | None) -> dict:
     checkpoint = (state or {}).get("checkpoint")
     excluded, lead = [], None
     mapped = map_of(state)
-    if mapped is not None:
+    if mapped is not None and state.get("question_channels") == 1:
         try:
             validate_map_record(mapped)
             questions = checkpoint.get("questions")
