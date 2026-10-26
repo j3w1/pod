@@ -458,20 +458,23 @@ def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
         if allowance["state"] != "due" and not any("allowance" in row for row in state.get("revision_decisions", [])):
             return questions
         raise PodError("invalid_checkpoint", "Review allowance questions require a question list")
-    result = [row for row in questions if not (
-        isinstance(row, dict) and any(str(row.get(key, "")).startswith("review-allowance-") for key in ("id", "reference"))
-        or isinstance(row, str) and row.startswith("review-allowance-"))]
+    generated, superseded = [], []
     granted = 3
     for decision in state.get("revision_decisions", []):
         if "allowance" in decision:
             rounds = int(decision["question"].removeprefix("review-allowance-"))
-            result.append({**allowance_question(rounds, granted), "resolved": True, "status": "answered",
-                           "answer": deepcopy(decision["allowance"])})
+            question = allowance_question(rounds, granted)
+            superseded.append(question)
+            generated.append({**question, "resolved": True, "status": "answered",
+                              "answer": deepcopy(decision["allowance"])})
             if decision["allowance"]["choice"] != "stop":
                 granted = rounds + decision["allowance"].get("rounds", 1)
     if allowance["state"] == "due":
-        result.append(allowance_question(allowance["rounds"], allowance["granted"]))
-    return result
+        generated.append(allowance_question(allowance["rounds"], allowance["granted"]))
+    # Own only exact derived rows. Caller labels, ids or a reserved-looking string
+    # cannot erase an ordinary/tool question; accepted answers replace their old row.
+    return [row for row in questions if not any(row == owned and digest(row) == digest(owned)
+                                               for owned in generated + superseded)] + generated
 
 
 def allowance_answer(value: Any) -> dict:

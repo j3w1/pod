@@ -5976,7 +5976,9 @@
         "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_explicit_unknown_objective_has_unavailable_projection",
         "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_explicit_objective_keeps_projection_on_run_mismatch",
         "tests.test_recorded_questions.RecordedQuestionSelectionTests.test_single_objective_run_has_same_projection_as_explicit_selection",
-        "tests.test_readiness.CompatibilityTests.test_open_work_for_the_owner_and_a_peer"
+        "tests.test_readiness.CompatibilityTests.test_open_work_for_the_owner_and_a_peer",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_owner_projection_limits_exclude_only_the_lead_and_keep_source_positions",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_run_mismatch_and_unavailable_native_read_keep_lead_feed_routing"
       ],
       "status": "NOT_RUN"
     },
@@ -9082,7 +9084,13 @@
       ],
       "offline_test": [
         "tests.test_review_rounds.ReviewRoundsTests.test_third_finished_round_blocks_fourth_and_checkpoints_one_lead_question",
-        "tests.test_review_rounds.ReviewRoundsTests.test_public_status_is_read_only_and_caller_cannot_answer_by_editing_a_row"
+        "tests.test_review_rounds.ReviewRoundsTests.test_public_status_is_read_only_and_caller_cannot_answer_by_editing_a_row",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_current_lead_question_stays_visible_without_an_owner_feed_row",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_exact_text_and_labels_without_due_admissions_remain_owner_questions",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_identity_recipient_kind_and_text_lookalikes_reach_owner_feed",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_boolean_sensitive_policy_and_schema_lookalikes_reach_owner_feed",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_mixed_ordinary_legacy_policy_and_real_tool_questions_keep_attention",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_recorded_lead_answer_stays_visible_and_grants_only_its_bounded_round"
       ],
       "status": "NOT_RUN"
     },

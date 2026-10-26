@@ -195,10 +195,7 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in self.questions()], ["review-allowance-3"])
         error = self.unchanged_refusal("review_allowance_reached", self.begin, "due")
         self.assertEqual(error.detail["referent"]["question"], self.questions()[0])
-        question = self.questions()[0]
-        reference_only = {key: value for key, value in question.items() if key != "id"}
-        reference_only["reference"] = question["id"]
-        for questions in ([], self.questions() * 2, [reference_only, question], []):
+        for questions in ([], self.questions() * 2, []):
             self.case.write(questions=questions)
             self.assertEqual(len(self.questions()), 1)
         self.assertFalse(self.questions()[0]["owner_only"])
@@ -231,12 +228,12 @@ class ReviewRoundsTests(unittest.TestCase):
         self.assertEqual(observed["report"]["review_allowance"]["state"], "due")
         projection = observed["recorded_questions"]
         self.assertEqual(projection["status"], "complete")
-        self.assertFalse(projection["items"][0]["owner_only"])
-        self.assertEqual(projection["items"][0]["recipient"], "repository_lead")
-        self.assertEqual(projection["items"][0]["resolution"], {"resolved": False})
+        self.assertEqual((projection["items"], projection["total"]), ([], 0))
+        self.assertEqual(observed["review_allowance_question"], self.questions()[0])
         self.assertEqual(self.facts(), before)
         self.case.write(questions=[{**self.questions()[0], "resolved": True, "status": "answered", "answer": "continue"}])
-        self.assertNotIn("answer", self.questions()[0])
+        self.assertNotIn("answer", observed["review_allowance_question"])
+        self.assertFalse(self.questions()[-1]["resolved"])
         self.unchanged_refusal("review_allowance_reached", self.begin, "due")
 
     def test_clean_third_round_finishes_without_question(self):

@@ -307,7 +307,9 @@ or an unsupported questions container are unavailable, never evidence of no
 questions. Missing row facts and bounded truncation are partial and name their
 gaps. The projection is read-only and adds no question store, native scrape,
 private-service dependency, decision permission or lifecycle authority. Every prior
-status field and human rendering keeps its behavior.
+status field and human rendering keeps its behavior except R173's explicit lead-only
+owner-feed routing and additive visible lead question; raw decision waits keep their
+existing counts and uncertainty semantics.
 
 ### R139 — Show the objective's yolo mode and extend the relay verifier to it
 
@@ -886,7 +888,10 @@ and live proof remain separate from synthetic subprocess tests.
 ### Recorded-question status contract
 
 `pod status --objective ID --json`, and a status selecting one objective by Run,
-add `recorded_questions` with exactly this supported schema. Consumers must inspect
+add `recorded_questions` with exactly this supported schema. R173 excludes only its
+exact current kernel-derived lead allowance row from this owner feed; status exposes
+that unchanged row separately as `review_allowance_question`. Stored questions,
+answered history and full raw decision/attention accounting remain intact. Consumers must inspect
 its status and gaps: absent or unavailable projection never means an empty list.
 Native status failure does not erase question facts already read from the checkpoint.
 
@@ -896,7 +901,7 @@ Native status failure does not erase question facts already read from the checkp
 | `status` | `complete`, `partial` or `unavailable`. |
 | `checkpoint` | Object with `seq` and `revision`, each the recorded nonnegative integer or `null` when missing/unsupported. |
 | `items` | Ordered projected rows, each with `index` (zero-based recorded position), `id`, `reference`, `text`, `choices`, `resolution` and `missing`, plus `owner_only` when recorded as a boolean and `recipient` when recorded as `repository_lead`. Position is not a stable question identity. |
-| `total` | Recorded list length, including unsupported or unprojected rows; `null` when the list is unavailable. |
+| `total` | Owner-feed row count, including unsupported or unprojected rows, after R173's exact derived-row exclusion; `null` when the list is unavailable. Original recorded positions remain the item indices. |
 | `truncated` | Whether count/byte bounds omitted any recorded rows. |
 | `missing` | Top-level missing facts: `checkpoint`, `checkpoint.seq`, `checkpoint.revision`, `questions`, or `items` when truncated. |
 | `reason` | `null` for complete; `question_facts_missing` or `projection_limit` for partial; `checkpoint_unavailable`, `questions_missing`, `questions_unsupported`, or the record-read failure code for unavailable. |
@@ -923,7 +928,7 @@ them or proof that unrecorded questions do not exist.
 
 - <a id="a426"></a>**A426** — Public status projects populated questions and explicit empty lists with recorded ids/references, text, choices and resolution facts, checkpoint seq/revision and complete status. A changed question keeps its recorded id and exposes the new text/resolution and checkpoint sequence without writing on read.
 - <a id="a427"></a>**A427** — Existing string questions and partial/unsupported row forms remain readable with explicit missing facts and partial status; no id or resolution is invented. Missing questions and unsupported containers report unavailable with unknown total, rather than complete emptiness.
-- <a id="a428"></a>**A428** — A failed record read reports unavailable with its code. Missing sequence/revision, oversized facts, count and byte limits report explicit partial gaps/truncation. The projection preserves every prior status field and rendering, introduces no effect and does not change stored records or question authority.
+- <a id="a428"></a>**A428** — A failed record read reports unavailable with its code. Missing sequence/revision, oversized facts, count and byte limits report explicit partial gaps/truncation. R173's exact derived lead exception preserves ordinary owner-feed facts and bounds, original indices, separate lead visibility and full decision/attention counts; arbitrary labels or lookalikes cannot hide owner questions. The projection introduces no effect and changes no stored record or question authority.
 
 ### Standing-authorization status contract
 

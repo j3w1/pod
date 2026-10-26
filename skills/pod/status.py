@@ -13,7 +13,7 @@ from .orca import current_run, worker_rows
 from .routes import project as project_routes
 from .selection import active_constraints, failure_active
 from .term import clean
-from .util import route_summary, route_hold, route_next_action, route_settlement_projection
+from .util import digest, route_summary, route_hold, route_next_action, route_settlement_projection
 
 PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
                    "max_active", "refresh", "errors", "setup")
@@ -42,7 +42,7 @@ def public_status(value, *, rule=False):
     return public_decisions(value, rule=rule)
 
 
-def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavailable") -> dict:
+def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavailable", _exclude=()) -> dict:
     """Only recorded facts, including explicit gaps in the earlier opaque question forms."""
     result = {"schema": "pod-recorded-questions/v1", "status": "unavailable",
               "checkpoint": {"seq": None, "revision": None}, "items": [], "total": None,
@@ -78,8 +78,9 @@ def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavaila
         except (ValueError, TypeError, UnicodeError, RecursionError):
             return None, False
 
-    result.update(total=len(questions), status="complete", reason=None)
-    for index, raw in enumerate(questions[:QUESTION_LIMIT]):
+    eligible = [(index, raw) for index, raw in enumerate(questions) if index not in _exclude]
+    result.update(total=len(eligible), status="complete", reason=None)
+    for index, raw in eligible[:QUESTION_LIMIT]:
         source = raw if isinstance(raw, dict) else {"reference": raw, "text": raw} if isinstance(raw, str) else {}
         row = {"index": index, "id": text(source.get("id"), 512), "reference": text(source.get("reference"), 512),
                "text": text(source.get("text", source.get("question")), 4096),
@@ -107,12 +108,42 @@ def recorded_questions(checkpoint: object, *, reason: str = "checkpoint_unavaila
         if len(json.dumps(projected, ensure_ascii=False).encode("utf-8")) > QUESTION_BYTES - 512:
             break
         result["items"].append(row)
-    result["truncated"] = len(result["items"]) < len(questions)
+    result["truncated"] = len(result["items"]) < len(eligible)
     if result["truncated"]:
         result["missing"].append("items")
     if result["missing"] or any(row["missing"] for row in result["items"]):
         result.update(status="partial", reason="projection_limit" if result["truncated"] else "question_facts_missing")
     return result
+
+
+def _question_status(state: dict | None) -> dict:
+    """The CE owner feed excludes only an exact, currently derived lead question.
+
+    Keep the full recorded projection for decision/attention accounting. No marker
+    supplied on an opaque question confers this exception, even a matching id/text.
+    """
+    from .assurance import allowance_question, review_allowance
+    from .ledger import map_of
+    from .obligations import validate_map_record
+    checkpoint = (state or {}).get("checkpoint")
+    excluded, lead = [], None
+    mapped = map_of(state)
+    if mapped is not None:
+        try:
+            validate_map_record(mapped)
+            allowance = review_allowance(mapped, state)
+            if allowance["state"] == "due":
+                canonical = allowance_question(allowance["rounds"], allowance["granted"])
+                questions = checkpoint.get("questions")
+                if isinstance(questions, list):
+                    excluded = [index for index, row in enumerate(questions)
+                                if row == canonical and digest(row) == digest(canonical)]
+                    if excluded:
+                        lead = canonical
+        except (PodError, KeyError, TypeError, ValueError):
+            pass  # Unproved provenance never removes an owner question.
+    return {"recorded_questions": recorded_questions(checkpoint, _exclude=excluded),
+            **({"review_allowance_question": lead} if lead is not None else {})}
 
 
 def _attention(native: dict | None) -> dict | str:
@@ -352,7 +383,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 result.update(continued)
                 return result
             state = read(project, objective)
-            result["recorded_questions"] = recorded_questions(state.get("checkpoint") if state else None)
+            result.update(_question_status(state))
             result.update(decision_status(preferences, state.get("checkpoint") if state else None, objective=True))
             if state is None or not isinstance(state.get("checkpoint"), dict):
                 from .ledger import state_root
@@ -422,7 +453,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         return result
     checkpoint = state.get("checkpoint") if state else None
     if state is not None:
-        result["recorded_questions"] = recorded_questions(checkpoint)
+        result.update(_question_status(state))
         result.update(decision_status(preferences, checkpoint, objective=True))
         from .standing import projection as standing_projection
         result["standing_authorization"] = standing_projection(state)
@@ -713,6 +744,8 @@ def render(result: dict) -> None:
             print("Decision waits: " + waits["status"] + "; some facts are unknown")
         if result.get("needs_you") is True:
             print("Needs you: a recorded decision needs your answer")
+        if result.get("review_allowance_question"):
+            print("Repository lead: " + clean(result["review_allowance_question"]["text"]))
         if result.get("route_settlement_authority"):
             print("Route settlement: " + clean(result["route_settlement_authority"]))
         if "standing_authorization" in result:

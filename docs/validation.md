@@ -135,6 +135,13 @@ allowance during review. Exercise report ingestion, review admission, checkpoint
 question deduplication, sourced delegated lead decisions, current machine policy and unsourced/reviewer/worker refusals through their production
 boundaries; fixture records stay separate from native and preceding-mechanism audit evidence.
 
+For the lead allowance, feed actual candidate public status to the currently installed
+host owner-question consumer in disposable host/Pod stores. Absent, present and timed-out
+lead facts must create no owner request or claimable card for the kernel-derived row;
+ordinary, earlier, tool/sensitive, policy, mixed and lookalike controls must still reach
+the owner feed. Record the installed consumer hash. This compatibility fixture is
+separate from live host notification proof; no real card or service operation is permitted.
+
 If a post-merge trial fails, preserve exact evidence and leave the objective
 incomplete. Distinguish product defects from environment/trial faults. Product fixes
 use a linked corrective delivery unit, independent audit under the preceding
