@@ -4,7 +4,7 @@ from copy import deepcopy
 from io import StringIO
 import unittest
 
-from pod.assurance import REVIEW_ORIGIN, allowance_question
+from pod.assurance import REVIEW_ORIGIN, allowance_question, review_allowance
 from pod.config import load
 from pod.errors import PodError
 from pod.ledger import tool_decision
@@ -45,12 +45,36 @@ class LeadQuestionFeedTests(unittest.TestCase):
         self.assertEqual(result["review_allowance_question"], self.fixture.questions()[0])
         self.assertEqual((result["report"]["review_allowance"]["state"],
                           result["report"]["review_allowance"]["rounds"]), ("due", 3))
+        for projection in (result["report"], result["obligations"]):
+            self.assertEqual(projection["review_allowance"]["question"], "review-allowance-3")
         self.assertEqual(result["waiting_decisions"]["total"], 1)
         self.assertIsNone(result["needs_you"])
         output = StringIO()
         with redirect_stdout(output):
             render(result)
         self.assertIn("Repository lead: " + self.fixture.questions()[0]["text"], output.getvalue())
+
+    def test_public_open_and_running_allowances_omit_only_null_question(self):
+        for seed, expected in (("one", "open"), ("third", "running")):
+            with self.subTest(seed=seed):
+                self.fixture.restore(seed)
+                facts = self.fixture.facts()
+                private = review_allowance(facts["checkpoint"], {"admissions": facts["admissions"]})
+                self.assertIsNone(private["question"])
+                result = self.public()
+                for projection in (result["report"], result["obligations"]):
+                    allowance = projection["review_allowance"]
+                    self.assertEqual(allowance["state"], expected)
+                    self.assertNotIn("question", allowance)
+                    self.assertEqual(allowance, {key: value for key, value in private.items() if key != "question"})
+
+    def test_public_stopped_allowance_has_no_null_question_and_keeps_answer(self):
+        self.fixture.answer("stop")
+        result = self.public()
+        for projection in (result["report"], result["obligations"]):
+            self.assertEqual(projection["review_allowance"]["state"], "stopped")
+            self.assertNotIn("question", projection["review_allowance"])
+        self.assertEqual(self.fixture.questions()[0]["answer"]["choice"], "stop")
 
     def test_exact_text_and_labels_without_due_admissions_remain_owner_questions(self):
         self.fixture.restore("one")
@@ -158,6 +182,8 @@ class LeadQuestionFeedTests(unittest.TestCase):
                 result = self.public()
                 self.assertEqual(result["report"]["unfinished"], [])
                 self.assertEqual(result["report"]["review_allowance"]["state"], "clear")
+                for projection in (result["report"], result["obligations"]):
+                    self.assertNotIn("question", projection["review_allowance"])
                 self.assertEqual(result["recorded_questions"]["items"], [])
                 self.assertEqual(self.fixture.facts()["checkpoint"]["questions"], before)
                 self.assertFalse(result["review_allowance_question"]["resolved"])

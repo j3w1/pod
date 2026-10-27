@@ -2563,7 +2563,8 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
                 for ob in rows for finding in ob.get("findings", [])]
     allowance = review_allowance(state, ctx)
     if findings or allowance["rounds"] or any("allowance" in row for row in state.get("revision_decisions", [])):
-        result.update(review_findings=findings, review_allowance=allowance)
+        result.update(review_findings=findings, review_allowance={
+            key: value for key, value in allowance.items() if key != "question" or value is not None})
     if any(ob["kind"] == "delivery" for ob in rows):
         delivery_status = ctx.get("governor_delivery") or {}
         result["delivery_authorization"] = delivery_status.get("units") or {
@@ -2753,7 +2754,8 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
                     "delivery": state.get("delivery"),
                     "retained_history": retained,
                     "observations": state.get("observations"), "label": label,
-                    "review_allowance": allowance,
+                    "review_allowance": {key: value for key, value in allowance.items()
+                                         if key != "question" or value is not None},
                     "obligations": [{"id": ob["id"], "state": ob["state"],
                                      "referent": referent(ob),
                                      **({"acceptances": deepcopy(ob["acceptances"])}

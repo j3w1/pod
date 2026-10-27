@@ -4,9 +4,10 @@ from copy import deepcopy
 import unittest
 
 from pod.ledger import read
+from pod.errors import PodError
 from tests.issue41_support import ProductionCase
 from tests import test_records_boundaries as renewal
-from tests.records_support import start_before_reservations
+from tests.records_support import start_before_reservations, start_before_review_guard
 
 
 class PreUpgradeReviewTests(unittest.TestCase):
@@ -17,15 +18,27 @@ class PreUpgradeReviewTests(unittest.TestCase):
         case.setUp(); cls.addClassCleanup(case.doCleanups)
         renewal.RenewalAssuranceTests.policy(case)
         cls.waiting = {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
+        # Synthetic older admissions with current persistence, not a complete earlier writer.
         for index in range(16):
             frozen = case.packet(["A"], role="review")
-            admission = case.start(f"review-{index}", frozen)["admission"]; case.settle(admission)
+            admission = start_before_review_guard(case, f"review-{index}", frozen)["admission"]
+            case.settle(admission)
             case.report(admission, frozen, map={"seq": read(case.project, "objective")["checkpoint"]["seq"] + 1,
                                                "update": {"A": cls.waiting}})
         cls.retained = deepcopy(next(row for row in case.stored() if row["id"] == "A")["receipts"])
         cls.frozen = case.packet(["A"], role="review")
         cls.admission = start_before_reservations(case, "pre-upgrade", cls.frozen)["admission"]
         case.settle(cls.admission)
+
+    def test_current_admission_still_refuses_after_the_historical_seed(self):
+        before = read(self.case.project, "objective")
+        starts = len(self.case.port.starts)
+        with self.assertRaises(PodError) as caught:
+            self.case.start("current-review", self.frozen)
+        self.assertEqual(caught.exception.code, "review_allowance_reached")
+        self.assertEqual(caught.exception.detail["referent"]["granted"], 3)
+        self.assertEqual(read(self.case.project, "objective"), before)
+        self.assertEqual(len(self.case.port.starts), starts)
 
     def test_preexisting_review_consumes_after_upgrade_without_another_admission(self):
         case = self.case

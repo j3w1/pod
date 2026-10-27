@@ -9096,7 +9096,8 @@
         "tests.test_question_capability.QuestionCapabilityTests.test_current_reader_refuses_missing_or_unknown_capability_without_mutation",
         "tests.test_question_capability.QuestionCapabilityTests.test_caller_flags_cannot_introduce_or_lower_the_capability",
         "tests.test_question_capability.QuestionCapabilityTests.test_capability_survives_tool_decision_answer_and_compaction",
-        "tests.test_question_capability.QuestionCapabilityTests.test_capability_survives_closure_and_unknown_values_cannot_be_downgraded"
+        "tests.test_question_capability.QuestionCapabilityTests.test_capability_survives_closure_and_unknown_values_cannot_be_downgraded",
+        "tests.test_completed_review_upgrade.PreUpgradeReviewTests.test_current_admission_still_refuses_after_the_historical_seed"
       ],
       "status": "NOT_RUN"
     },
@@ -9112,7 +9113,9 @@
         "tests.test_review_rounds.ReviewRoundsTests.test_clean_third_round_finishes_without_question",
         "tests.test_review_rounds.ReviewRoundsTests.test_consumed_failed_third_round_is_finished_without_passing_assurance",
         "tests.test_lead_question_feed.LeadQuestionFeedTests.test_carried_clean_completion_preserves_the_original_lead_source",
-        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_empty_and_omitted_questions_preserve_owned_clean_completion_history"
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_empty_and_omitted_questions_preserve_owned_clean_completion_history",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_public_open_and_running_allowances_omit_only_null_question",
+        "tests.test_lead_question_feed.LeadQuestionFeedTests.test_public_stopped_allowance_has_no_null_question_and_keeps_answer"
       ],
       "status": "NOT_RUN"
     },
