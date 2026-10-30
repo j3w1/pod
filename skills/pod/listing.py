@@ -94,6 +94,39 @@ def _schema(raw: dict) -> str:
     return "current"
 
 
+def read_record(target: Path, context: dict, entry) -> dict | None:
+    """The shared record-membership read for summary and full-status cohorts.
+
+    The raw value is transient input to the caller, not another status view.
+    Unknown membership stays explicit; only a matching repository state key
+    proves that a readable named record belongs to this repository.
+    """
+    from .ledger import record_name
+    try:
+        if entry.is_symlink():
+            return {"error": "unsafe_state"}
+        if not entry.is_dir(follow_symlinks=False):
+            return None
+        with os.scandir(entry.path) as contents:
+            names = {item.name for item in contents}
+    except OSError:
+        return {"error": "unreadable"}
+    if "context.json" not in names:
+        return {"error": "unattributed"} if names - {".lock"} else None
+    try:
+        raw = load_context(Path(entry.path) / "context.json", validate=False)
+    except PodError as exc:
+        return {"error": exc.code}
+    if not isinstance(raw, dict):
+        return {"error": "state_unsupported"}
+    name = _name(raw)
+    if name is None:
+        return {"error": "unattributed"}
+    if record_name(target, context, name) != entry.name:
+        return None
+    return {"objective": name, "raw": raw}
+
+
 def objective_list(project: Path, *, repository: str | None = None, worktree: str | None = None,
                    delivered: bool = False) -> dict:
     """Every recorded objective of one repository, or of one worktree of it.
@@ -101,7 +134,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     `delivered` adds each open objective's read-only delivery proof (R148), which reads Orca and GitHub; the plain
     list stays record-only."""
     from .github import repository_context
-    from .ledger import CONTEXT_LIMIT, record_name, state_root
+    from .ledger import state_root
     target = Path(worktree or repository or project).expanduser().resolve()
     if not target.is_dir():
         raise PodError("list_scope_unavailable", "The listed repository or worktree path is not a directory")
@@ -128,35 +161,16 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     directories = [entry for entry in directories if not entry.name.startswith(".")]
     result["scan"] = {"directories": len(directories), "scanned": min(len(directories), MAX_SCAN)}
     for entry in directories[:MAX_SCAN]:
-        try:
-            if entry.is_symlink():
-                unreadable.append({"record": entry.name, "code": "unsafe_state"})
-                continue
-            if not entry.is_dir(follow_symlinks=False):
-                continue
-            with os.scandir(entry.path) as contents:
-                names = {item.name for item in contents}
-        except OSError:
-            unreadable.append({"record": entry.name, "code": "unreadable"})
+        record = read_record(target, context, entry)
+        if record is None:
             continue
-        if "context.json" not in names:
-            if names - {".lock"}:
-                unattributed.append(entry.name)  # Pod files without the record that names them.
-            continue
-        try:
-            raw = load_context(Path(entry.path) / "context.json", validate=False)
-        except PodError as exc:
-            unreadable.append({"record": entry.name, "code": exc.code})
-            continue
-        if not isinstance(raw, dict):
-            unreadable.append({"record": entry.name, "code": "state_unsupported"})
-            continue
-        name = _name(raw)
-        if name is None:
+        if record.get("error") == "unattributed":
             unattributed.append(entry.name)
             continue
-        if record_name(target, context, name) != entry.name:
-            continue  # Another repository's record, or another name under this key.
+        if "error" in record:
+            unreadable.append({"record": entry.name, "code": record["error"]})
+            continue
+        raw, name = record["raw"], record["objective"]
         facts = _facts(raw)
         from .evidence_closure import block as closure_block, compact
         closure = closure_block(Path(entry.path))

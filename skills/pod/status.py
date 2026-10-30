@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 
 from .bundle import RELOAD_ACTION, checkpoint_identity, identity_drift_message, identity_label, identity_matches, running_identity
@@ -22,6 +24,33 @@ NOT_READ = {"status": "not_read", "sources": {}}
 QUESTION_LIMIT = 64
 QUESTION_BYTES = 32 * 1024
 QUESTION_FACT_BYTES = 4096
+
+
+@dataclass(frozen=True)
+class StatusInputs:
+    """Common discovery for one bounded read, never objective or native proof.
+
+    A batch checks these inputs again before publishing. Each status still reads
+    its own record, Governor, source, exact native assignments and ownership.
+    Nothing survives the command or supplies a cached status on a later page.
+    """
+
+    project: Path
+    preferences: dict
+    running: dict
+    routes: dict
+
+    @classmethod
+    def read(cls, project: Path) -> StatusInputs:
+        preferences = load_config(project)
+        running = running_identity()
+        routes = project_routes(project, preferences=preferences, observations=NOT_READ)["summary"]
+        return cls(project.resolve(), preferences, running, routes)
+
+    def identity(self) -> str:
+        from .util import digest
+        return digest({"project": str(self.project), "preferences": self.preferences,
+                       "running": self.running, "routes": self.routes})
 
 
 def decision_status(preferences: dict, checkpoint: object = None, *, objective: bool = False) -> dict:
@@ -283,14 +312,16 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
 
 
 def status(project: Path, run: str | None, *, objective: str | None = None, current_run_fn=current_run,
-           worker_rows_fn=worker_rows) -> dict:
-    preferences = load_config(project)
-    running = running_identity()
+           worker_rows_fn=worker_rows, read_context: StatusInputs | None = None) -> dict:
+    inputs = StatusInputs.read(project) if read_context is None else read_context
+    if inputs.project != project.resolve():
+        raise PodError("status_context_mismatch", "Shared status discovery belongs to another project")
+    preferences, running = deepcopy(inputs.preferences), dict(inputs.running)
     result = {"schema": "pod-cli/v5", "status": "selection_required", "run": run,
               **decision_status(preferences),
               "bundle_identity": {"running": running, "checkpoint": None, "drift": None},
               "preferences": {key: preferences[key] for key in PREFERENCE_KEYS},
-              "routes": project_routes(project, preferences=preferences, observations=NOT_READ)["summary"],
+              "routes": deepcopy(inputs.routes),
               "constraints": [], "route_decisions": [], "route_mismatch": False,
               "active_constraints": [],
               "effective_unknown": False,

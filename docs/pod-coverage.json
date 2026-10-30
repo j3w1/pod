@@ -314,7 +314,34 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_cli.CliTests.test_doctor_reads_no_accounts_or_models",
+      "offline_test": [
+        "tests.test_cli.CliTests.test_doctor_reads_no_accounts_or_models",
+        "tests.test_status_batch.BatchEquivalenceTests.test_every_full_report_equals_singular_including_closed_and_shared_run",
+        "tests.test_status_batch.BatchEquivalenceTests.test_unknown_native_settlement_remains_unverified_and_not_active",
+        "tests.test_status_batch.BatchEquivalenceTests.test_common_discovery_is_shared_but_each_objective_is_projected",
+        "tests.test_status_batch.BatchEquivalenceTests.test_a_nonzero_full_json_report_is_retained_as_a_typed_failure",
+        "tests.test_status_batch.BatchInventoryTests.test_unreadable_oversized_and_unattributed_records_are_not_dropped",
+        "tests.test_status_batch.BatchInventoryTests.test_foreign_repository_is_excluded_and_redirected_record_is_explicit",
+        "tests.test_status_batch.BatchInventoryTests.test_empty_repository_is_complete_and_scan_overflow_is_not",
+        "tests.test_status_batch.BatchInventoryTests.test_unknown_objective_read_is_a_typed_nonzero_report",
+        "tests.test_status_batch.BatchPagingTests.test_pages_cover_more_than_the_existing_summary_presentation_limit",
+        "tests.test_status_batch.BatchPagingTests.test_repeated_page_retains_its_offset_and_adds_no_coverage",
+        "tests.test_status_batch.BatchPagingTests.test_changed_record_or_cohort_refuses_old_cursor_without_restart",
+        "tests.test_status_batch.BatchPagingTests.test_missing_page_does_not_claim_whole_cohort_completion",
+        "tests.test_status_batch.BatchPagingTests.test_malformed_cursor_and_option_bounds_are_explicit",
+        "tests.test_status_batch.BatchCurrencyTests.test_record_changed_during_projection_invalidates_the_page",
+        "tests.test_status_batch.BatchCurrencyTests.test_runtime_generation_or_caller_binding_change_invalidates_the_page",
+        "tests.test_status_batch.BatchCurrencyTests.test_governor_change_without_a_context_revision_invalidates_the_page",
+        "tests.test_status_batch.BatchCurrencyTests.test_preference_or_bundle_change_invalidates_common_discovery",
+        "tests.test_status_batch.BatchCurrencyTests.test_changed_context_between_pages_is_not_silently_read_as_current",
+        "tests.test_status_batch.BatchFailureTests.test_late_full_json_is_not_a_timely_success",
+        "tests.test_status_batch.BatchFailureTests.test_existing_outer_deadline_is_not_restarted_by_a_larger_request",
+        "tests.test_status_batch.BatchFailureTests.test_full_reports_page_before_output_bound_and_unicode_uses_bytes",
+        "tests.test_status_batch.BatchFailureTests.test_partial_or_exceptional_projection_has_a_typed_outcome",
+        "tests.test_status_batch.BatchFailureTests.test_unencodable_json_or_unexpected_record_error_does_not_erase_siblings",
+        "tests.test_status_batch.BatchCliTests.test_public_cli_outputs_complete_json_and_preserves_nonzero_failure",
+        "tests.test_status_batch.BatchCliTests.test_mixed_or_incomplete_selectors_refuse_before_a_read"
+      ],
       "status": "NOT_RUN"
     },
     {

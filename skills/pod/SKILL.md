@@ -37,7 +37,7 @@ Never infer physical capacity or count other objectives' workers.
 
 ## Helpers
 
-Use `pod config --json`, `pod doctor --json`, `pod status --objective ID`, `pod internal <op> --input FILE` (or `-`); fallback `~/.local/bin/pod`; missing launcher: `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh`.
+Use `pod config --json`, `pod doctor --json`, `pod status --objective ID`, `pod status --all --json` for repository full-status pages, and `pod internal <op> --input FILE` (or `-`); fallback `~/.local/bin/pod`; missing launcher: `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh`.
 Do not run source-checkout helpers or create another configuration source.
 Before writing a packet, report, checkpoint/map, admission or Governor action, read `internal contract` with `record` naming that input record or `all` for the bounded field table.
 Acknowledgements retain next-request/recovery facts; shape/text refusals list every bounded field, complete accepted/optional names and next action.

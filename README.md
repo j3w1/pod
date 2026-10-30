@@ -75,6 +75,8 @@ Names never include ids, branches or prompt text, and Pod never renames somethin
 
 A small task can finish with zero workers. Missing Orca delegation support blocks delegation while safe direct work and diagnosis continue. Pod does not configure Orca or sign in to your agent applications.
 
+For full status across a repository, run `pod status --all --json`. It returns bounded pages with a cohort identity and an explicit result for each record. Follow every returned cursor; incomplete or changed reads retain their failures. The [public interface contract](docs/spec/interface.md#r48--read-only-status-and-doctor-report-preferences) explains paging and remaining deadlines for callers.
+
 ## Who decides and sensitive tools
 
 On first use, Pod asks who should decide on this machine. Careful asks you about consequential changes; Delegate lets trusted agents decide; Hands-off lets agents decide; Custom lets you choose by category. Skipping keeps Careful. Use `pod policy` to answer or change the choice, without editing a file. New spending, policy changes and human-only login steps always need you. Normal included subscription use, routine continuity, closure, PoD ticking and already-authorized cleanup remain automatic.

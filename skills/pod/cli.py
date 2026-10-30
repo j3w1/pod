@@ -67,8 +67,13 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--run")
     status.add_argument("--list", action="store_true", dest="list_objectives",
                         help="list the objectives recorded for a repository or worktree")
+    status.add_argument("--all", action="store_true", dest="full_status",
+                        help="read a bounded page of full status for every repository objective")
+    status.add_argument("--cursor", help="with --all: the exact next_cursor from the preceding page")
+    status.add_argument("--page-size", type=int, help="with --all: maximum records in this page (1-128)")
+    status.add_argument("--timeout", type=float, help="with --all: original remaining whole-read seconds (at most 30)")
     scope = status.add_mutually_exclusive_group()
-    scope.add_argument("--repository", metavar="PATH", help="with --list: this repository (default: here)")
+    scope.add_argument("--repository", metavar="PATH", help="with --list or --all: this repository (default: here)")
     scope.add_argument("--worktree", metavar="PATH", help="with --list: objectives that touch this worktree")
     status.add_argument("--delivered", action="store_true",
                         help="with --list: prove each open objective's delivery (reads Orca and GitHub)")
@@ -371,6 +376,12 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
                        eligible_only=getattr(args, "eligible_only", False))
     if args.command == "doctor":
         return _doctor(project)
+    if args.command == "status" and getattr(args, "full_status", False):
+        from .status_batch import DEFAULT_TIMEOUT, full_status
+        from .listing import MAX_ROWS
+        return full_status(Path(args.repository) if args.repository else project, cursor=args.cursor,
+                           page_size=args.page_size if args.page_size is not None else MAX_ROWS,
+                           timeout=args.timeout if args.timeout is not None else DEFAULT_TIMEOUT)
     if args.command == "status" and getattr(args, "list_objectives", False):
         from .listing import objective_list
         return objective_list(project, repository=args.repository, worktree=args.worktree,
@@ -464,6 +475,8 @@ def _print_observation_status(report: dict) -> None:
 
 
 def _exit_code(args: argparse.Namespace, result: dict) -> int:
+    if args.command == "status" and getattr(args, "full_status", False):
+        return 0 if result["status"] in ("observed", "page") else 1
     if args.command in ("policy", "tool"):
         return 1 if result["status"] == "blocked" else 0
     if "projection" in result:
@@ -480,8 +493,14 @@ def main(argv: list[str] | None = None) -> int:
         command_parser.error("--eligible-only requires models --json without a subcommand")
     if args.command == "status" and args.list_objectives and (args.objective or args.run):
         command_parser.error("--list reads every objective; it takes --repository or --worktree, not --objective or --run")
-    if args.command == "status" and not args.list_objectives and (args.repository or args.worktree):
-        command_parser.error("--repository and --worktree select the scope of --list")
+    if args.command == "status" and args.full_status:
+        if not args.json or args.list_objectives or args.objective or args.run or args.worktree:
+            command_parser.error("--all requires --json and takes --repository, not --list, --objective, --run or --worktree")
+    if args.command == "status" and not args.full_status and any(
+            value is not None for value in (args.cursor, args.page_size, args.timeout)):
+        command_parser.error("--cursor, --page-size and --timeout require --all --json")
+    if args.command == "status" and not (args.list_objectives or args.full_status) and (args.repository or args.worktree):
+        command_parser.error("--repository and --worktree select the scope of --list; --all also accepts --repository")
     if args.command == "status" and args.delivered and not args.list_objectives:
         command_parser.error("--delivered adds delivery proofs to --list")
     if args.command == "update":
