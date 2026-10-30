@@ -16,7 +16,7 @@ The user controls one personal pool of exact routes. Each supported route is ena
 
 Type: B,H · Scenarios: [A05](../coordination.md#a05), [A32](../interface.md#a32), [A46](#a46), [A76](#a76), [A420](../delivery.md#a420)
 
-Read one personal `pod/v2` YAML authority for route states, Preferred, Pin, maximum active workers and the automatic-refresh setting. Project `.pod/config.yaml` keeps `schema: pod/v1` and may hold only restrictive Governor policy; the personal file may also carry personal Governor policy and R120's optional host `authorization_verifier` command. It also owns R163–R164's `decision_policy`, `tool_permissions`, `pending_decisions` and kernel-maintained `decision_generation`; project config cannot set them. Objective constraints retain provenance without becoming another preference file.
+Read one personal `pod/v2` YAML authority for route states, Preferred, Pin, maximum active workers, automatic refresh and R174 owner-configurable soft limits. Project `.pod/config.yaml` keeps `schema: pod/v1` and may hold only restrictive Governor policy; the personal file may also carry personal Governor policy and R120's optional host `authorization_verifier` command. It also owns R163–R164's `decision_policy`, `tool_permissions`, `pending_decisions` and kernel-maintained `decision_generation`; project config cannot set them. Objective constraints retain provenance without becoming another preference file.
 
 ### R12 — Parse bounded YAML safely
 
@@ -112,7 +112,7 @@ no Preferred, no Pin, `max_active: 2` and `refresh: automatic`; `pod config edit
 same default. Later software or registry updates never extend that authorization. "All routes"
 is a workspace view, not a mode. A missing file, invalid or incomplete structure, an unsupported
 route key and an invalid Preferred or Pin have no eligible pool and never default to all routes.
-An absent `refresh` reads as `automatic`; a file that is not valid allows no automatic network
+The optional `limits` object uses R174 defaults when absent and cannot appear in project configuration. Validated limits are exposed independently of routing diagnostics so a route error does not silently replace a known ceiling. Unsafe or malformed limits hold mutation without rewriting the file. An absent `refresh` reads as `automatic`; a file that is not valid allows no automatic network
 access.
 
 A write locks briefly, re-reads the targeted values, preserves unrelated changes, validates the

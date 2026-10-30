@@ -682,6 +682,9 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
 
     if state is None or not isinstance(state.get("checkpoint"), dict):
         return fail("objective_unknown", "No readable objective of that name is recorded in this repository.")
+    if isinstance(state.get("capacity_continued_by"), dict):
+        return fail("objective_continued", "A healthy capacity successor continues this objective; the predecessor remains required immutable history.",
+                    "Read the successor with pod status --objective " + state["capacity_continued_by"]["successor"] + ".")
     if isinstance(state.get("continued_by"), dict):
         return fail("objective_continued", "A successor continues this objective; historical retirement does not apply to it separately.",
                     "Read the successor with pod status --objective " + state["continued_by"]["objective"] + ".")

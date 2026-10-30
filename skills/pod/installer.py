@@ -43,7 +43,7 @@ def superseded_schemas(value: object) -> list[str]:
     # Schema-family notice only: typed history placeholders carry no admission schema.
     # Full validity still requires the verified context reader, never this installer scan.
     history = value.get("history")
-    history_refs = isinstance(history, dict) and history.get("schema") == "pod-history-refs/v1"
+    history_refs = isinstance(history, dict) and history.get("schema") in ("pod-history-refs/v1", "pod-history-refs/v2")
     if value.get("schema") != STATE_SCHEMAS["context"]:
         found.add(str(value.get("schema"))[:64])
     checkpoint = value.get("checkpoint")

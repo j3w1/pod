@@ -37,7 +37,7 @@ REFRESH_SETTINGS = ("automatic", "manual")
 DEFAULT_WORKER_CAPACITY = 2
 PERSONAL_FIELDS = {"schema", "routes", "preferred", "pinned", "workers", "refresh", "waste_governor",
                    "authorization_verifier", "decision_policy", "decision_generation",
-                   "tool_permissions", "pending_decisions"}
+                   "tool_permissions", "pending_decisions", "limits"}
 # The 0.6.x personal shape, read only to explain and convert it.
 V1_IDS = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5",
           "gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
@@ -157,6 +157,9 @@ def _parse(data: bytes | None, *, project: bool = False, diagnostic: dict | None
         return None
     value = _decode(data)
     if diagnostic is not None and isinstance(value, dict) and not project:
+        if value.get("schema") == SCHEMA or value.get("schema") == V1_SCHEMA and "limits" not in value:
+            from .limits import parse_limits
+            diagnostic["limits"] = parse_limits(value.get("limits", {})).as_dict()
         if value.get("schema") == V1_SCHEMA:
             diagnostic["pinned"] = _diagnostic(value.get("pinned_model"), "pin")
         else:
@@ -324,6 +327,9 @@ def validate(value: Any, *, project: bool = False) -> dict:
         raise PodError("invalid_config", "refresh must be automatic or manual")
     if "waste_governor" in doc:
         _validate_waste_governor(doc["waste_governor"])
+    if "limits" in doc:
+        from .limits import parse_limits
+        parse_limits(doc["limits"])
     if "authorization_verifier" in doc:
         command = doc["authorization_verifier"]
         if (not isinstance(command, list) or not 1 <= len(command) <= 16
@@ -447,6 +453,7 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
         status = "valid" if document else "setup_required" if older else "invalid"
     saved = dict(document["routes"]) if document else {}
     governor, provenance = _governor_policy(project, document or older)
+    from .limits import parse_limits
     return {"path": str(path.resolve(strict=False)), "revision": revision, "file_stamp": file_stamp,
             "schema": (document or older or {}).get("schema"), "status": status,
             "routes": saved, "eligible": [key for key in route_keys() if saved.get(key) == "enabled"],
@@ -454,6 +461,9 @@ def load(project: Path | None = None, *, personal: Path | None = None) -> dict:
             "pinned": document.get("pinned") if document else None,
             "max_active": document["workers"]["max_active"] if document else 0,
             "refresh": document.get("refresh", "automatic") if document else "manual",
+            "limits": parse_limits(document.get("limits", {}) if document else diagnostic.get("limits", {})).as_dict(),
+            "limits_status": ("validated" if document or "limits" in diagnostic else
+                              "default" if status == "missing" else "unavailable"),
             "errors": errors,
             "setup": {"from_schema": V1_SCHEMA, "action": SETUP_ACTION} if older else None,
             "pin_diagnostic": None if document else diagnostic.get("pinned"),

@@ -33,7 +33,9 @@ CONTINUES = {"objective", "record", "at"}
 # this state, and the digest of the decision that made the claim, until the claim completes; the successor accepts no
 # other write meanwhile.
 CLAIMING = "claiming"
-MAX_CHAIN = 8
+from .limits import DEFAULT_LIMITS, HARD_LIMITS, current as current_limits
+
+MAX_CHAIN = DEFAULT_LIMITS.successor_chain
 MAX_LISTED = 64
 ACTION = "Read the successor objective with pod status --objective {}; this record accepts no writes."
 
@@ -81,6 +83,8 @@ def refuse_continued(state: dict | None, *, claim: str | None = None, reserved: 
     record's write backstop, so the claim itself can write, and an owner handoff or runtime rebind, which move
     authority so that a new coordinator can finish the claim.
     """
+    from .capacity import refuse_ended
+    refuse_ended(state)
     link = state.get("continued_by") if isinstance(state, dict) else None
     if isinstance(link, dict):
         raise PodError("objective_continued",
@@ -227,7 +231,7 @@ def chain_state(project: Path, state: dict) -> dict:
     """Follow successors, at most eight, to where the work now stands; never writes."""
     seen = set()
     current, name = state, None
-    for _ in range(MAX_CHAIN):
+    for _ in range(current_limits().successor_chain):
         link = current.get("continued_by")
         if not isinstance(link, dict):
             break
@@ -246,7 +250,7 @@ def chain_state(project: Path, state: dict) -> dict:
         current = successor
     else:
         if isinstance(current.get("continued_by"), dict):
-            return {"state": "unknown", "objective": name, "reason": "successor chain exceeds eight objectives"}
+            return {"state": "unknown", "objective": name, "reason": "successor chain exceeds its configured bound"}
     closed = bool(((current.get("checkpoint") or {}).get("closure")))
     if not closed and name is not None:
         # A successor closed by evidence is a closed chain end (R146).
@@ -259,6 +263,13 @@ def chain_state(project: Path, state: dict) -> dict:
 def links(project: Path, raw: dict) -> dict:
     """Public succession fields of one record, for status and the objective list."""
     out = {}
+    if isinstance(raw.get("capacity_continued_by"), dict):
+        out.update(continued_by=raw["capacity_continued_by"]["successor"],
+                   succession_state="capacity_successor", continuation_kind="healthy_capacity")
+    if isinstance(raw.get("capacity_continuity"), dict):
+        plan = raw["capacity_continuity"]["plan"]
+        out.update(continues=plan["predecessor"], logical_root=plan["root"],
+                   continuation_kind="healthy_capacity")
     link = raw.get("continued_by")
     if isinstance(link, dict) and isinstance(link.get("objective"), str):
         out["continued_by"] = link["objective"]
@@ -298,7 +309,7 @@ def _current_carried(project: Path, holder: str, row: dict) -> dict:
     from .governor import _read_journal, _record_path
     entry = {"record": row["record_id"], "kind": row["action"]["kind"]}
     seen = {holder}
-    for _ in range(MAX_CHAIN):
+    for _ in range(current_limits().successor_chain):
         if row["outcome"] not in ("pending", "UNKNOWN"):
             break
         record = _read(project, holder)
@@ -325,11 +336,15 @@ def _current_carried(project: Path, holder: str, row: dict) -> dict:
     else:
         if row["outcome"] in ("pending", "UNKNOWN") and isinstance(((_read(project, holder) or {})
                                                                     .get("continued_by")), dict):
-            return {**entry, "outcome": None, "reason": "successor chain exceeds eight objectives"}
+            return {**entry, "outcome": None, "reason": "successor chain exceeds its configured bound"}
     return {**entry, "outcome": row["outcome"], "held_by": holder}
 
 
 def status_block(project: Path, state: dict) -> dict | None:
+    from .capacity import status_block as capacity_status
+    capacity = capacity_status(state)
+    if capacity is not None:
+        return capacity
     link = state.get("continued_by")
     back = state.get("continues")
     if not isinstance(link, dict) and not isinstance(back, dict):
@@ -923,13 +938,14 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
     `records` are the context records the claim still writes, as each will stand; the successor's journal is built
     with every carried row and marker, exactly as the claim copies it. The limits never change.
     """
-    from .governor import MAX_JOURNAL
+    from .governor import journal_limit
     from .ledger import CONTEXT_LIMIT, _path
     from .history import prepare_context
     from .util import encoded, protect_decision_record
     journal, _ = _carried_journal(project, objective, predecessor, prior, record_ids, at=at)
     protect_decision_record(journal)
-    planned = [("successor's Governor journal", {**journal, "revision": journal["revision"] + 1}, MAX_JOURNAL)]
+    from .history import compact_journal
+    planned = [("successor's Governor journal", compact_journal({**journal, "revision": journal["revision"] + 1})[0], journal_limit())]
     for name, value in records.items():
         candidate = {**value, "revision": value["revision"] + 2}
         from .relay import stamp_decision
@@ -947,7 +963,8 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
             size = exc.detail["proposed_bytes"]
         else:
             size = len(encoded(physical, compact=True))
-        planned.append((name, physical, CONTEXT_LIMIT, size))
+        from .history import context_limit
+        planned.append((name, physical, context_limit(), size))
     for entry in planned:
         name, value, limit = entry[:3]
         size = entry[3] if len(entry) == 4 else len(encoded(value, compact=True))

@@ -72,3 +72,19 @@ The bundled fallback `skills/pod/observations.json` comes from one real refresh.
 Machine decision policy and remembered sensitive tool permissions are chosen by answering Pod, using `pod policy` and the tool decision flow; installation does not answer for the person. They live alongside route preferences in the existing personal config. A skipped first setup retains Careful. Existing session authentication, tool access and host policy remain external to Pod.
 
 New decision records carry `decision_channels: 5`. Once marker 5 is actually written, the records require Pod 0.21.18 or newer; preceding readers refuse them without rewriting. Merely writing or compacting an older supported record with the newer version does not impose that floor: ordinary lossless maintenance without new decision evidence preserves older readability, including nested history. It cannot remove an existing marker or its floor. The new personal fields `decision_policy`, `decision_generation`, `tool_permissions` and `pending_decisions` also require a compatible config reader. Removing those keys does not downgrade records already written. Preserve authority history and use a compatible reader; the installer performs no record migration or rollback conversion. Older supported records remain readable without rewriting.
+
+## Record-capacity compatibility
+
+The optional personal `limits` object is described in R174 of `docs/spec/orca.md`.
+Installation preserves the preference file; it does not raise a live owner's chosen
+limits or migrate public objectives. Existing sources that protect failed current
+reviews retain their inline rule through their normal own applicability declaration.
+After qualified installation, original custodians perform their real next normal
+items in place and verify source, proof, native ownership and finite counters.
+
+Version-two immutable history and healthy capacity lineage need a compatible reader.
+Earlier readers must refuse unsupported representations without rewriting them.
+A healthy public successor keeps the original logical work and native Run but has
+its own public state and genuinely current authority; it is not an actor restart,
+loss claim or proof of installation. Unsupported peer consumers remain unavailable
+until their normal compatibility contract admits the exact representation.

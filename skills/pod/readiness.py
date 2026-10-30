@@ -209,7 +209,7 @@ def label(root: Path, state: dict) -> str:
 
     Without a native read no open admission is proven settled.
     """
-    if isinstance(state.get("continued_by"), dict):
+    if isinstance(state.get("continued_by"), dict) or isinstance(state.get("capacity_continued_by"), dict):
         return "continued"
     if isinstance(state.get("historical_retirement"), dict):
         return "retired"
@@ -399,7 +399,24 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
     """
     out = {}
     identity = None
-    if isinstance(state.get("continued_by"), dict):
+    if isinstance(state.get("capacity_continued_by"), dict):
+        link = state["capacity_continued_by"]
+        from .capacity import tail_state
+        try:
+            tail = tail_state(project, state)
+        except PodError:
+            tail = "unknown"
+        block = {"contract": CONTRACT, "state": "continued", "acts_next": "successor",
+                 "coordinator_needed": tail not in ("closed", "retired"), "coordinator": coordinator(state), "finalization": None,
+                 "reason": {"successor": link["successor"], "kind": "healthy_capacity", "tail_state": tail},
+                 "summary": "This public objective continues in " + link["successor"]
+                            + "; the same coordinator remains needed there. This predecessor is not closed."}
+    elif isinstance(state.get("capacity_rollover_pending"), dict) or state.get("capacity_continuity", {}).get("phase") == "preparing":
+        block = {"contract": CONTRACT, "state": "unavailable", "acts_next": "coordinator",
+                 "coordinator_needed": True, "coordinator": coordinator(state), "finalization": None,
+                 "reason": {"code": "capacity_continuity_pending"},
+                 "summary": "Finish the recorded capacity-continuity resume before ordinary work."}
+    elif isinstance(state.get("continued_by"), dict):
         from .succession import chain_state
         link = state["continued_by"]
         chain = chain_state(project, state)

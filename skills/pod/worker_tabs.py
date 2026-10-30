@@ -6,6 +6,8 @@ readback and records; the projection is also the new-write closure precondition.
 
 from __future__ import annotations
 
+from .capacity import same_work
+
 import shlex
 
 from .contracts import bound
@@ -45,8 +47,8 @@ def _keep(state: dict, objective: str, dispatch: str, handle: str) -> dict | Non
         value = row.get("value")
         if (row.get("kind") == "keep_worker_tab" and row.get("provenance") == "user_direct"
                 and row.get("active", True) and isinstance(value, dict)
-                and (value.get("objective"), value.get("dispatch"), value.get("terminal"))
-                == (objective, dispatch, handle)):
+                and same_work(state, value.get("objective"))
+                and (value.get("dispatch"), value.get("terminal")) == (dispatch, handle)):
             instruction = row if value.get("keep") is True else None
     return instruction
 
@@ -122,7 +124,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
 
     # These exclusions precede even unreadable facts and an owner's keep.
     if (not settled or handle == state.get("owner") or facts.get("native_role") in ("coordinator", "setup")
-            or admission.get("objective") not in (None, objective)
+            or admission.get("objective") is not None and not same_work(state, admission.get("objective"))
             or resource.get("worktreeId") not in (None, binding.get("worktreeId"))
             or terminal.get("worktreeId") not in (None, binding.get("worktreeId"))
             or resource.get("terminalHandle") not in (None, handle)

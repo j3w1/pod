@@ -2149,15 +2149,17 @@ class StandingCapacityTests(StandingCase):
 
     def test_activation_reserves_last_slot_so_revoke_always_fits(self):
         self.assertEqual(len(read(self.project, "objective")["standing_authorization"]["decisions"]), 31)
-        self.refusal("standing_authorization_full", self.activate)
-        revoked = self.maximum_decision(self, "revoke")
-        self.assertEqual((revoked["decision"]["id"], revoked["standing_authorization"]["state"]), ("Y32", "revoked"))
-        self.refusal("standing_authorization_full", self.activate)
+        with patch.object(standing, "HARD_DECISION_HISTORY", 32):
+            self.refusal("standing_authorization_full", self.activate)
+            revoked = self.maximum_decision(self, "revoke")
+            self.assertEqual((revoked["decision"]["id"], revoked["standing_authorization"]["state"]), ("Y32", "revoked"))
+            self.refusal("standing_authorization_full", self.activate)
 
     def test_full_maximum_size_verified_answers_fit_and_next_refuses_without_write(self):
         self.assertEqual(self.operation("show")["standing_authorization"]["responder_decisions"]["total"], standing.MAX_ANSWERS)
         self.control(changes={"single_use": "one-past-answer-cap"})
-        self.refusal("responder_answers_full", self.operation, "answer", answer={**ANSWER, "question": self.QUESTION})
+        with patch.object(standing, "HARD_ANSWER_HISTORY", standing.MAX_ANSWERS):
+            self.refusal("responder_answers_full", self.operation, "answer", answer={**ANSWER, "question": self.QUESTION})
         context = read(self.project, "objective")
         self.assertEqual([row["id"] for row in context["standing_authorization"]["answers"]],
                          [f"A{index}" for index in range(1, standing.MAX_ANSWERS + 1)])
@@ -2182,7 +2184,10 @@ class StandingCapacityTests(StandingCase):
         self.maximum_decision(self, "revoke")
         path = _path(self.project, "objective")
         before = self.saved()
-        result = capacity(path, read(self.project, "objective"))
+        self.assertFalse(capacity(path, read(self.project, "objective"))["warning"])
+        from pod.limits import Limits, using_limits
+        with using_limits(Limits(context_bytes=2 * path.stat().st_size)):
+            result = capacity(path, read(self.project, "objective"))
         self.assertTrue(result["warning"])
         self.assertEqual(result["largest_sections"][0]["section"], "standing_authorization")
         self.assertIn("standing_authorization section is bounded and needs no maintenance", result["next_action"])

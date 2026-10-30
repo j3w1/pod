@@ -268,16 +268,17 @@ def _journal_bytes(root: Path) -> bytes | None:
         os.lstat(path)
     except FileNotFoundError:
         return None
-    from .governor import MAX_JOURNAL
+    from .limits import HARD_LIMITS
+    read_limit = HARD_LIMITS["context_bytes"]
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as file:
             if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
                 raise PodError("journal_unreadable", "The Governor journal is not a regular file")
-            data = file.read(MAX_JOURNAL + 1)
+            data = file.read(read_limit + 1)
     except OSError as exc:
         raise PodError("journal_unreadable", "The Governor journal cannot be read") from exc
-    if len(data) > MAX_JOURNAL:
+    if len(data) > read_limit:
         raise PodError("journal_unreadable", "The Governor journal exceeds its bound")
     return data
 

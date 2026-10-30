@@ -27,6 +27,7 @@ import yaml
 from .config import GOVERNED_KINDS, effective, validate_effects
 from .contracts import TABLE, UNIT, PURPOSES, AUTHORIZATION_SCOPES, bound, fields, required, input_record
 from .errors import PodError
+from .limits import HARD_MAP_HISTORY, HARD_LIMITS, current as current_limits
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
 from .util import (MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact,
@@ -60,6 +61,10 @@ MAX_HISTORY = 16
 MAX_WORKFLOWS = 32
 _UNIT = UNIT
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
+
+
+def journal_limit():
+    return 2 * current_limits().record_bytes
 _WORKFLOW = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml\Z")
 _GIT_ID = gitio.OBJECT_ID
 NEXT_ACTIONS = {
@@ -164,7 +169,8 @@ def _validate_unit(name: str, unit: object) -> None:
 def _read_journal(path: Path) -> dict:
     if not path.exists():
         return _empty_journal()
-    value = bounded_json(path, limit=MAX_JOURNAL)
+    from .history import load_journal_history
+    value = load_journal_history(path, bounded_json(path, limit=HARD_LIMITS["context_bytes"]))
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise PodError("state_unsupported",
                        f"Governor journal is not {SCHEMA}; archive or remove it before governed actions")
@@ -177,7 +183,7 @@ def _read_journal(path: Path) -> dict:
         validate_order(value["decision_order"])
         if value.get("decision_channels") != 5:
             raise _malformed("decision chronology marker")
-    if (not isinstance(value["actions"], list) or len(value["actions"]) > MAX_ACTIONS
+    if (not isinstance(value["actions"], list) or len(value["actions"]) > HARD_MAP_HISTORY
             or not isinstance(value["units"], dict) or len(value["units"]) > MAX_UNITS
             or not isinstance(value["counters"], dict)):
         raise _malformed("inventory")
@@ -208,6 +214,8 @@ def _write_journal(path: Path, journal: dict) -> None:
     refuse_closed(path.parent)  # Backstop: a journal closed by evidence is never written again (R145).
     from .util import protect_decision_record, encoded
     from .relay import current_decision, _contains_binding, validate_order
+    from .history import compact_journal, publish_journal
+    limit = journal_limit()
     capability = current_decision()
     applies = (capability is not None and capability.kind in ("authorization", "governor_exception")
                and _contains_binding(journal, capability.binding))
@@ -221,7 +229,7 @@ def _write_journal(path: Path, journal: dict) -> None:
     protect_decision_record(journal)
     journal["revision"] += 1
     if applies:
-        if len(encoded(journal, compact=True)) > MAX_JOURNAL:
+        if len(encoded(compact_journal(journal)[0], compact=True)) > limit:
             raise PodError("record_too_large", "Complete Governor decision exceeds capacity; shorten its decision evidence")
         from .config import load, _edit_lock, personal_path
         current_state = _governor_decision_state(capability.project, capability.objective,
@@ -232,31 +240,16 @@ def _write_journal(path: Path, journal: dict) -> None:
             current_state["policy_revision"] = snapshot["policy_revision"]
             capability.consume(current_state=current_state, snapshot=snapshot, result=journal, keys=capability.keys,
                                prior=[{"keys": [row["key"]], "decided_at": row["decided_at"]} for row in prior])
-            atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
+            publish_journal(path, journal, limit=limit)
         return
-    atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
+    publish_journal(path, journal, limit=limit)
 
 
 def _compact(journal: dict) -> None:
-    """Bounded retention: settled rows of superseded candidates go first; nothing unresolved does."""
-    if len(journal["actions"]) < MAX_ACTIONS:
-        return
-    current = {unit["candidate"]["id"] for unit in journal["units"].values() if unit.get("candidate")}
-    referenced = {row.get("derived_from") for row in journal["actions"]
-                  if row["outcome"] in ("pending", "UNKNOWN")}
-    kept = []
-    dropped = 0
-    for row in journal["actions"]:
-        settled = row["outcome"] in ("PASS", "FAILED", "CANCELED")
-        stale = row.get("candidate_id") is not None and row["candidate_id"] not in current
-        if (settled and stale and row["record_id"] not in referenced
-                and len(journal["actions"]) - dropped >= MAX_ACTIONS):
-            dropped += 1
-            continue
-        kept.append(row)
-    journal["actions"] = kept
-    if len(journal["actions"]) >= MAX_ACTIONS:
-        raise PodError("governor_full", "Governor journal is full; start a new objective record")
+    """Bound live effects without evicting any recorded decision or outcome."""
+    live = sum(row["outcome"] in ("pending", "UNKNOWN") for row in journal["actions"])
+    if live >= MAX_ACTIONS or len(journal["actions"]) >= HARD_MAP_HISTORY:
+        raise PodError("governor_full", "Governor live or hard history capacity is full; preserve every effect and record")
 
 
 # --------------------------------------------------------------------------- validation
@@ -2236,9 +2229,9 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
                        "policy_revision": record["policy_revision"], "prepared_at": moment,
                        "supersedes": previous["id"] if previous else None}
             existing["candidate"] = binding
-            existing["history"] = (existing["history"] + [identity])[-MAX_HISTORY:]
-            keep = set(existing["history"][-2:])
-            existing["preflight"] = {cid: receipts for cid, receipts in existing["preflight"].items() if cid in keep}
+            existing["history"] = existing["history"] + [identity]
+            if len(existing["history"]) > HARD_MAP_HISTORY:
+                raise PodError("governor_full", "Candidate history reached its hard safety ceiling; preserve all history")
             # A carried row is never cancelled; it settles by its own readback (R118).
             superseded = [row["record_id"] for row in journal["actions"]
                           if row["action"]["unit"] == unit and row["decision"] == "ALLOW"

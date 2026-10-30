@@ -183,12 +183,14 @@ def body_data(value: object) -> dict[str, str]:
         except UnicodeError:
             raise refuse("utf8_required") from None
         total += len(raw)
-        if len(raw) > 512 * 1024 or total > MAX_RECORD:
+        from .limits import current as current_limits
+        if len(raw) > 512 * 1024 or total > current_limits().record_bytes:
             raise refuse("body_data_too_large")
         if hashlib.sha256(raw).hexdigest() != key:
             raise refuse("body_data_digest_mismatch")
         bodies[key] = body
-    if len(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_RECORD:
+    from .limits import current as current_limits
+    if len(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > current_limits().record_bytes:
         raise refuse("body_data_too_large")
     return bodies
 

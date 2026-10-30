@@ -16,8 +16,14 @@ from .util import bounded_text, digest, encoded, exact, normalize_timestamp, own
 SCHEMA = "pod-standing-authorization/v1"
 STATUS_SCHEMA = "pod-standing-authorization-status/v1"
 DEFAULT_SCOPE = STANDING_SCOPES[:-1]
+from .limits import HARD_MAP_HISTORY
+
+# One current decision is live. Complete accepted decisions/answers are retained
+# under an independent finite safety ceiling rather than consuming live slots.
 MAX_DECISIONS = 32
 MAX_ANSWERS = 16
+HARD_DECISION_HISTORY = HARD_MAP_HISTORY
+HARD_ANSWER_HISTORY = HARD_MAP_HISTORY
 MAX_DECISION_BYTES = TABLE["standing decision"]["stored_max_bytes"]
 MAX_ANSWER_BYTES = TABLE["responder answer"]["stored_max_bytes"]
 _STORED_DECISION = {"id", "operation", "utc", "seq", "binding", "exclusions", "relay_verification", "decision_effect"}
@@ -175,6 +181,9 @@ def observe(context: dict, source: dict, body: str) -> None:
 
 
 def suspension_reason(context: dict) -> str | None:
+    capacity = context.get("capacity_continuity")
+    if capacity is not None and len(context.get("standing_authorization", {}).get("decisions", [])) <= capacity["standing_floor"]:
+        return "capacity_successor_authority_unverified"
     source = (context.get("checkpoint") or {}).get("objective_source")
     if source is not None and context.get("standing_authorization", {}).get("observed", {}).get("source") != digest(source):
         return "scope_unobserved"
@@ -313,8 +322,8 @@ def _generic_operate(project, objective, owner, action, decision, *, now=None):
         _row_fit(row)
         _fresh(context, row)
         capability.order_at = decision_time(row)
-        if (len(record["decisions"]) >= MAX_DECISIONS
-                or action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1):
+        if (len(record["decisions"]) >= HARD_DECISION_HISTORY
+                or action == "activate" and len(record["decisions"]) >= HARD_DECISION_HISTORY - 1):
             raise PodError("standing_authorization_full", "Standing decision history is full; nothing is evicted")
         if action == "activate" and source is not None:
             checked, live = issue_recheck_live(project, source)
@@ -386,7 +395,7 @@ def validate_record(value: object) -> None:
                        {"schema", "decisions", "answers", "not_before", "observed_scope_digest"}, name="standing record")
         if record["schema"] != SCHEMA or not isinstance(record["decisions"], list) or not isinstance(record["answers"], list):
             raise ValueError("record")
-        if len(record["decisions"]) > MAX_DECISIONS or len(record["answers"]) > MAX_ANSWERS:
+        if len(record["decisions"]) > HARD_DECISION_HISTORY or len(record["answers"]) > HARD_ANSWER_HISTORY:
             raise ValueError("capacity")
         for key in ("closed_at", "reopened_at", "not_before"):
             if key in record:
@@ -645,7 +654,7 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             if verdict is None:
                 verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
                                   {key: answer[key] for key in ("question", "text")})
-            if len(record["answers"]) >= MAX_ANSWERS:
+            if len(record["answers"]) >= HARD_ANSWER_HISTORY:
                 raise PodError("responder_answers_full", "Responder answer history is full")
             row = _answer_row(answer, verdict, index=len(record["answers"]) + 1, utc=_timestamp(moment),
                               under=record["decisions"][-1]["id"])
@@ -672,7 +681,7 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                         from .relay import check_use
                         check_use(project, verdict, refuse=True)
                     raise
-            if action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1:
+            if action == "activate" and len(record["decisions"]) >= HARD_DECISION_HISTORY - 1:
                 raise PodError("standing_authorization_full", "Standing owner-decision history is full")
             _raise_barrier(record, decision_time(row))
             if created and action == "activate" and decision["channel"] == "relayed":

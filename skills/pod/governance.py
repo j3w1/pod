@@ -441,24 +441,30 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
             "current": current, "texts": texts}
 
 
-MAX_GOVERNANCE_HISTORY = 64
+from .limits import DEFAULT_LIMITS, HARD_LIMITS, current as current_limits
+
+MAX_GOVERNANCE_HISTORY = DEFAULT_LIMITS.governance_history
 
 
 def _history_limit() -> int:
-    from . import ledger
-    return ledger.MAX_GOVERNANCE_HISTORY
+    return current_limits().governance_history
 
 
-def _require_history_capacity(history: dict) -> None:
+def _require_history_capacity(history: dict, *, writing=False) -> None:
     counts = {"candidate": len(history["candidates"]),
               "owner decision": sum(row.get("provenance") != "derived" for row in history["decisions"])}
-    full = [kind for kind, count in counts.items() if count > _history_limit()]
+    # Accepted snapshots are settled provenance. The newest snapshot is the live
+    # policy/candidate; complete hydrated history retains a separate safety bound.
+    safety = HARD_LIMITS["governance_history"]
+    full = [kind for kind, count in counts.items() if count > safety]
+    if writing:
+        full.extend(kind for kind, count in counts.items() if min(count, 1) > _history_limit())
     if full:
         raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
                        {"detail": "governance_history_full",
                         "next_action": "preserve the objective and report its " + " and ".join(full)
                                        + " history capacity; retained evidence cannot be evicted or replaced",
-                        "referent": {"limit": _history_limit(), "counts": counts}})
+                        "referent": {"limit": safety, "counts": counts}})
 
 
 def _governance_history(prior: dict | None) -> dict:
@@ -538,7 +544,7 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
             history["decisions"].append({"seq": map_state["seq"], **decision})
     if derived_adoption is not None:
         history["decisions"].append({"seq": map_state["seq"], **derived_adoption})
-    _require_history_capacity(history)
+    _require_history_capacity(history, writing=True)
     map_state["governance_history"] = history
 
 

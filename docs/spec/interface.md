@@ -759,7 +759,7 @@ Optional checkpoint-only `issue_revision_data` contains exactly
 The key is lowercase SHA-256 and must match the complete raw UTF-8 body before
 parsing, and a genuine kernel-selected retained source binding. Each body retains
 the existing 512 KiB source cap; aggregate DATA and the complete CLI input retain
-the 128 KiB ceiling, including JSON escaping and map overhead. Duplicate,
+R174's configured request ceiling (default 512 KiB), including JSON escaping and map overhead. Duplicate,
 unreferenced, malformed, mismatched and oversized DATA refuse before effects.
 No caller ID, definition, association, trust, approval or read time is accepted.
 Bodies remain transient; they never enter a verifier request or stored context.

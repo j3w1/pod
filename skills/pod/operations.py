@@ -1372,9 +1372,14 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
     if "packet_id" in frozen_packet and frozen_packet["packet_id"] != validated["packet_id"]:
         raise PodError("invalid_packet", "Frozen packet identity changed")
     body = validated["body"]
-    if body["objective"] != objective:
-        raise PodError("packet_mismatch", "Packet objective differs from admission")
     existing_state = read(project, objective)
+    if body["objective"] != objective:
+        from .capacity import same_work
+        inherited = [row for row in (existing_state or {}).get("admissions", {}).values()
+                     if row.get("task_id") == task and row.get("packet_id") == validated["packet_id"]
+                     and row.get("objective") == body["objective"]]
+        if not inherited or not same_work(existing_state, body["objective"]):
+            raise PodError("packet_mismatch", "Packet objective differs from admission; only its exact inherited attempt may recover")
     from .handoff import refuse_nonowner
     refuse_nonowner(project, objective, existing_state, owner, port=native_port)
     from .ledger import _run_references

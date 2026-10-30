@@ -5,7 +5,10 @@ or start continuity. Callers must obtain their configuration through the existin
 validated personal-config and decision boundaries.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from types import MappingProxyType
 
 from .errors import PodError
@@ -45,6 +48,12 @@ class Limits:
 
 
 DEFAULT_LIMITS = Limits()
+HARD_RECEIPTS = 1024
+HARD_MAP_HISTORY = 8192
+HARD_LOGICAL_BYTES = 16 * HARD_LIMITS["context_bytes"]
+_CURRENT = ContextVar("pod_limits_snapshot", default=None)
+_CONFIG_PATH = ContextVar("pod_limits_config_path", default=None)
+_CONFIG_ERROR = ContextVar("pod_limits_config_error", default=None)
 
 
 def parse_limits(value: object) -> Limits:
@@ -59,3 +68,60 @@ def parse_limits(value: object) -> Limits:
     ):
         raise PodError("invalid_limits", "limits must map only the supported limit names")
     return Limits(**{**DEFAULT_LIMITS.as_dict(), **value})
+
+
+def current() -> Limits:
+    """One operation's validated snapshot, or source defaults for pure callers."""
+    return _CURRENT.get() or DEFAULT_LIMITS
+
+
+@contextmanager
+def using_limits(limits: Limits):
+    if not isinstance(limits, Limits):
+        raise PodError("invalid_limits", "A limits snapshot must be validated")
+    token = _CURRENT.set(limits)
+    try:
+        yield limits
+    finally:
+        _CURRENT.reset(token)
+
+
+@contextmanager
+def configured(project=None, *, strict=True):
+    """Freeze the existing personal authority for a whole supported operation.
+
+    Nested helpers share it rather than mixing multiple configuration reads.
+    Diagnostic callers can still report an invalid file; mutating helpers refuse
+    malformed limits instead of silently substituting more permissive defaults.
+    """
+    if _CURRENT.get() is not None:
+        if strict and _CONFIG_ERROR.get() is not None:
+            raise PodError(_CONFIG_ERROR.get(), "Personal limits are unavailable; preserve and correct the configuration")
+        yield current()
+        return
+    from .config import load
+    snapshot = load(project)
+    if strict and snapshot["limits_status"] == "unavailable":
+        error = snapshot["errors"][0] if snapshot["errors"] else {"code": "invalid_limits"}
+        raise PodError(error["code"], "Personal limits are unavailable; preserve and correct the configuration")
+    token = _CONFIG_PATH.set(Path(snapshot["path"]) if snapshot["limits_status"] == "validated" else None)
+    error_token = _CONFIG_ERROR.set(snapshot["errors"][0]["code"] if snapshot["limits_status"] == "unavailable" and snapshot["errors"] else None)
+    try:
+        with using_limits(parse_limits(snapshot["limits"])) as limits:
+            yield limits
+    finally:
+        _CONFIG_ERROR.reset(error_token)
+        _CONFIG_PATH.reset(token)
+
+
+def require_current():
+    """A limits change during an operation cannot silently alter its publication."""
+    path = _CONFIG_PATH.get()
+    if path is None:
+        return
+    from .config import _read_bytes, _decode, SCHEMA, V1_SCHEMA
+    raw = _read_bytes(path)
+    document = _decode(raw) if raw is not None else None
+    if (not isinstance(document, dict) or document.get("schema") not in (SCHEMA, V1_SCHEMA)
+            or parse_limits(document.get("limits", {})) != current()):
+        raise PodError("limits_changed", "Personal limits changed during this operation; read current configuration before retrying")

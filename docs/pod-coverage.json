@@ -1676,7 +1676,7 @@
         "tests.test_assurance_history.AssuranceHistoryTests.test_advisory_overflow_refuses_without_evicting_required_finding",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_32_plus_one_required_finding_preserves_every_prior_record",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_63_plus_one_required_finding_preserves_every_prior_record",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_configured_live_overflow_refuses_atomically_with_an_actual_next_action",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_exact_replay_of_32_old_findings_spends_no_new_slots",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_persisted_history_refuses_33_records_from_the_same_attempt",
@@ -2731,7 +2731,7 @@
         "tests.test_issue41.AdditionalFindingTests.test_findings_and_correction_id_bounds_refuse_without_eviction",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_32_plus_one_required_finding_preserves_every_prior_record",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_63_plus_one_required_finding_preserves_every_prior_record",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_configured_live_overflow_refuses_atomically_with_an_actual_next_action",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_interrupted_report_publication_retries_without_losing_or_duplicating_findings",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_genuine_previous_reader_keeps_32_record_meaning_unchanged",
@@ -8414,7 +8414,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_history_reviews.ReviewEligibilityTests.test_settled_reviews_of_every_outcome_move_at_trigger_exactly",
+        "tests.test_history_reviews.ReviewEligibilityTests.test_settled_reviews_of_every_outcome_move_before_byte_pressure",
         "tests.test_history_reviews.ReviewEligibilityTests.test_unresolved_reviews_stay_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_unsettled_reviews_stay_inline",
         "tests.test_history_reviews.ReviewEligibilityTests.test_unreadable_lineage_keeps_every_unsuccessful_review_inline",
@@ -8909,7 +8909,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_current_consumed_reviews_of_every_outcome_move_at_the_unchanged_trigger",
+        "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_current_consumed_reviews_of_every_outcome_move_before_byte_pressure",
         "tests.test_history_current_reviews.CurrentReviewEligibilityTests.test_accepted_sequence_and_closed_consumed_reviews_can_move"
       ],
       "status": "NOT_RUN"
@@ -9176,6 +9176,188 @@
         "tests.test_review_rounds.ReviewRoundsTests.test_lead_answer_never_bypasses_current_machine_policy",
         "tests.test_review_rounds.ReviewRoundsTests.test_lead_continue_does_not_authorize_a_requirement_revision",
         "tests.test_review_rounds.ReviewRoundsTests.test_unsourced_agent_cannot_simplify_by_withdrawing_a_correction"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A602",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_limits.LimitsTests.test_requested_defaults_distinguish_bytes_and_logical_counts",
+        "tests.test_limits.LimitsTests.test_each_hard_boundary_accepts_below_equal_and_refuses_above"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A603",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_limits_integration.ConfiguredLimitsTests.test_absent_key_preserves_existing_configuration_and_selects_defaults",
+        "tests.test_limits_integration.ConfiguredLimitsTests.test_configured_snapshot_survives_unrelated_preference_edit",
+        "tests.test_limits_integration.ConfiguredLimitsTests.test_changed_limits_refuse_publication_without_creating_a_record"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A604",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_limits_integration.ContextLimitsTests.test_reduced_soft_limit_keeps_old_context_readable_but_blocks_large_write",
+        "tests.test_limits_integration.ConfiguredLimitsTests.test_request_and_write_boundaries_use_the_same_snapshot"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A605",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_bulk_settled_reviews_keep_every_outcome_and_protected_sibling",
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_missing_and_corrupt_settled_chunks_fail_closed",
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_bulk_history_cannot_replace_a_live_admission"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A606",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_settled_findings_do_not_spend_new_live_reservations",
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_unresolved_and_unadopted_findings_keep_live_capacity",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_actual_review_history_and_unused_allowance_survive_public_identity_change"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A607",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_journal_placement_preserves_failed_unknown_pending_rows_and_counters"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A608",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_new_public_id_preserves_map_source_owner_run_and_does_not_close_parent",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_ordinary_checkpoint_automatically_selects_a_public_successor_at_pressure"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A609",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_interruption_after_reservation_resumes_without_a_second_child",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_interruption_after_child_prepare_and_parent_fence_are_recoverable",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_repeated_metadata_does_not_make_a_chain_of_children"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A610",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_original_admission_and_packet_report_consume_through_verified_descendant",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_corrupted_retained_parent_holds_descendant_before_mutation",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_old_public_id_refuses_writes_instead_of_silently_following"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A611",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_actual_review_history_and_unused_allowance_survive_public_identity_change",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_recorded_source_protection_survives_and_cannot_be_dropped_by_successor",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_copied_standing_authority_is_suspended_until_a_fresh_real_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A612",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_wrong_owner_or_native_generation_holds_before_any_reservation",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_source_failure_remains_a_real_pre_reservation_hold",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_preflight_capacity_failure_does_not_publish_a_reservation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A613",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_status_uses_public_identity_and_keeps_predecessor_duty_visible",
+        "tests.test_capacity_continuity.HealthyCapacityTests.test_unsupported_preceding_reader_refuses_without_writing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A614",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_limits_integration.ContextLimitsTests.test_default_accepts_existing_context_above_the_previous_half_megabyte",
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_governance_above_old_64_is_complete_and_outside_live_record",
+        "tests.test_settled_limits_history.SettledHistoryLimitsTests.test_existing_unknown_or_explicit_source_keeps_failed_current_review_inline"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A615",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_limits_integration.ClosureContextLimitsTests.test_tiny_close_request_can_materialize_over_half_megabyte_without_losing_history"
       ],
       "status": "NOT_RUN"
     }

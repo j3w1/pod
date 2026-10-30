@@ -33,8 +33,9 @@ def _location(selector: object) -> str | None:
 
 
 def _name(raw: dict) -> str | None:
+    from .capacity import public_name
     checkpoint = raw.get("checkpoint")
-    name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
+    name = public_name(raw, checkpoint.get("objective") if isinstance(checkpoint, dict) else None)
     if isinstance(name, str) and name:
         return name
     admissions = raw.get("admissions")
@@ -73,7 +74,7 @@ def _facts(raw: dict) -> dict:
 
 
 def _phase(raw: dict) -> str:
-    if isinstance(raw.get("continued_by"), dict):
+    if isinstance(raw.get("continued_by"), dict) or isinstance(raw.get("capacity_continued_by"), dict):
         return "continued"
     if isinstance(raw.get("historical_retirement"), dict):
         return "retired"  # Released by the owner; never closed or completed (R112).

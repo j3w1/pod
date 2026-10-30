@@ -3,6 +3,8 @@ from copy import deepcopy
 import shutil
 import tempfile
 import unittest
+import hashlib
+import yaml
 from unittest.mock import patch
 
 from pod.contracts import bound
@@ -152,14 +154,25 @@ class AssuranceCapacityTests(unittest.TestCase):
     def test_retained_63_plus_one_required_finding_preserves_every_prior_record(self):
         self.assert_added(63)
 
-    def test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action(self):
+    def test_retained_64_plus_one_preserves_every_record_under_new_default(self):
+        self.assert_added(64)
+
+    def test_configured_live_overflow_refuses_atomically_with_an_actual_next_action(self):
         admission, packet = self.restore(64)
         before = self.files()
+        # The two resolved required findings remain complete history, leaving
+        # 62 still-open advisory records. New live work must fit the chosen cap.
+        config_path = self.case.root / "config/pod/config.yaml"
+        config_bytes = config_path.read_bytes()
+        self.addCleanup(config_path.write_bytes, config_bytes)
+        document = yaml.safe_load(config_bytes)
+        document["limits"] = {"findings": 62}
+        config_path.write_text(yaml.safe_dump(document, sort_keys=False))
         with self.assertRaises(PodError) as caught:
             self.report_required(admission, packet)
         self.assertEqual(caught.exception.code, "obligation_invalid")
         self.assertEqual(caught.exception.detail["detail"], "finding_limit")
-        self.assertEqual(caught.exception.detail["referent"]["limit"], 64)
+        self.assertEqual(caught.exception.detail["referent"]["limit"], 62)
         action = caught.exception.detail["next_action"]
         self.assertEqual(action["seq"], _read(self.path)["checkpoint"]["seq"] + 1)
         self.assertEqual(action["renew"], [{"id": "A", "as": "<fresh-id>", "state": "waiting",
@@ -175,6 +188,12 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.case.write()
         self.case.write(revision_authority={"provenance": "user_direct", "instruction": "Continue the capacity case",
             "question": "review-allowance-3", "allowance": {"choice": "continue", "rounds": 1}})
+        config_path = self.case.root / "config/pod/config.yaml"
+        config_bytes = config_path.read_bytes()
+        self.addCleanup(config_path.write_bytes, config_bytes)
+        document = yaml.safe_load(config_bytes)
+        document["limits"] = {"findings": 92}
+        config_path.write_text(yaml.safe_dump(document, sort_keys=False))
         packet = self.case.packet(["A"], role="review")
         before = self.files()
         workers = deepcopy(self.case.port.workers)
@@ -183,7 +202,7 @@ class AssuranceCapacityTests(unittest.TestCase):
         detail = caught.exception.detail
         self.assertEqual(detail["detail"], "finding_limit")
         self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
-                         {"retained": 63, "proposed": 95, "reserved": 32, "limit": 64})
+                         {"retained": 61, "proposed": 93, "reserved": 32, "limit": 92})
         action = detail["next_action"]
         self.assertEqual(action, {"seq": _read(self.path)["checkpoint"]["seq"] + 1,
             "renew": [{"id": "A", "as": "<fresh-id>", "state": "waiting",
@@ -203,8 +222,8 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "obligation_invalid")
         self.assertEqual(caught.exception.detail["detail"], "malformed")
         self.assertEqual(self.files(), before)
-        self.assertEqual((MAX_FINDINGS, MAX_REPORT_FINDINGS), (64, 32))
-        self.assertEqual(bound("obligation", "findings", "max_items"), 64)
+        self.assertEqual((MAX_FINDINGS, MAX_REPORT_FINDINGS), (128, 32))
+        self.assertEqual(bound("obligation", "findings", "max_items"), 1024)
         self.assertEqual(bound("report request", "triage", "max_items"), 32)
 
     def test_exact_replay_of_32_old_findings_spends_no_new_slots(self):
@@ -236,7 +255,13 @@ class AssuranceCapacityTests(unittest.TestCase):
         with patch("pod.history.atomic_json", side_effect=OSError("synthetic context publication failure")):
             with self.assertRaises(OSError):
                 self.report_required(admission, packet)
-        self.assertEqual(self.files(), before)
+        interrupted = self.files()
+        self.assertEqual({key: interrupted[key] for key in before}, before)
+        # Chunks precede the atomic context replacement. An interruption may
+        # leave verified immutable orphans, never a changed old record or proof.
+        for key in set(interrupted) - set(before):
+            self.assertIn("history/sha256", key.as_posix())
+            self.assertEqual(hashlib.sha256(interrupted[key]).hexdigest(), key.stem)
         self.report_required(admission, packet)
         after = self.files()
         self.case.report(admission, packet)

@@ -243,7 +243,9 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "decision_order", "question_channels", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "decision_order", "question_channels", "pod_ticks", "standing_authorization", "capacity_continuity", "capacity_rollover_pending", "capacity_continued_by"}, _CONTEXT_FIELDS, name="context")
+    from .capacity import validate as validate_capacity
+    validate_capacity(state)
     if "question_channels" in state and (type(state["question_channels"]) is not int or state["question_channels"] != 1):
         raise PodError("state_unsupported", "Question representation is unsupported")
     if "standing_authorization" in state:
@@ -275,6 +277,13 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported", "Admissions are malformed")
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict):
+        if "history_policy" in checkpoint_value:
+            policy = checkpoint_value["history_policy"]
+            if (not isinstance(policy, dict) or set(policy) != {"keep_failed_current_candidate_reviews", "source"}
+                    or type(policy["keep_failed_current_candidate_reviews"]) is not bool
+                    or not isinstance(policy["source"], str) or not 1 <= len(policy["source"]) <= 512
+                    or "\x00" in policy["source"]):
+                raise PodError("state_unsupported", "Stored history policy is malformed")
         if checkpoint_value.get("obligations") is not None:
             from .obligations import row_bounds
             from .lineage import Lineage
@@ -1322,7 +1331,7 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
              if key not in MAP_STORED - MAP_INPUT and key != "continuity"}
     if previous:
         carried = ("criteria", "plan_revision", "candidate", "assignments", "questions",
-                   "verification_gaps", "next_safe_action", "worktree", "objective_source", "verification", "display")
+                   "verification_gaps", "next_safe_action", "worktree", "objective_source", "verification", "display", "history_policy")
         value = {**{key: previous[key] for key in carried if key in previous}, **value}
         value.setdefault("native_refs", [])
         value.setdefault("policy_revision", effective(project)["revision"])
@@ -1376,6 +1385,18 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     if "display" in value:
         from .display import validate_record
         validate_record(value["display"])
+    if "history_policy" not in value and not previous:
+        value["history_policy"] = {"keep_failed_current_candidate_reviews": False,
+                                   "source": "R174 storage defaults at intake"}
+    if "history_policy" in value:
+        policy = exact(value["history_policy"], {"keep_failed_current_candidate_reviews", "source"},
+                       {"keep_failed_current_candidate_reviews", "source"}, name="history policy")
+        if type(policy["keep_failed_current_candidate_reviews"]) is not bool:
+            raise PodError("invalid_history_policy", "History protection must be a boolean")
+        bounded_text(policy["source"], name="history policy source", limit=512)
+        if ((previous or {}).get("history_policy", {}).get("keep_failed_current_candidate_reviews") is True
+                and policy["keep_failed_current_candidate_reviews"] is False):
+            raise PodError("history_policy_locked", "A recorded source protection is not relaxed by ordinary metadata or capacity continuity")
     proposed = {key: value[key] for key in MAP_INPUT if key in value}
     core = {key: item for key, item in value.items() if key not in MAP_INPUT}
     dispositions = proposed.pop("dispositions", [])
@@ -1712,7 +1733,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
             data_size = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         except (TypeError, ValueError, UnicodeError, RecursionError):
             raise issue_refuse("malformed_body_data") from None
-        if data_size > MAX_RECORD:
+        from .limits import current as current_limits
+        if data_size > current_limits().record_bytes:
             raise issue_refuse("data_input_too_large")
     if requested(value.get("revision_authority")) and "dispositions" in value:
         raise issue_refuse("combined_operation")
@@ -1887,7 +1909,8 @@ def retry_parent(state: dict, *, objective: str, owner: str, run_id: str,
     """Resolve an owned admission, never a caller-supplied native Dispatch."""
     prior = state["admissions"].get(retry_of) if isinstance(retry_of, str) else None
     binding = prior.get("native_binding") if isinstance(prior, dict) else None
-    if (not prior or prior["owner"] != owner or prior["objective"] != objective
+    from .capacity import same_work
+    if (not prior or prior["owner"] != owner or not same_work(state, objective) or not same_work(state, prior["objective"])
             or prior["run_id"] != run_id or prior["task_id"] != task_id
             or prior["state"] not in ("bound", "closed") or not binding_valid(binding)
             or binding["runId"] != run_id or binding["taskId"] != task_id):
@@ -2177,7 +2200,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             raise PodError("admission_conflict", "Retry identity does not name its exact native parent")
         existing = state["admissions"].get(admission_id)
         if existing is not None:
-            if (existing["objective"] != objective or existing["run_id"] != run_id
+            from .capacity import same_work
+            if (not same_work(state, existing["objective"]) or existing["run_id"] != run_id
                     or existing["task_id"] != task_id or existing["packet_id"] != packet_id
                     or existing["plan_revision"] != plan_revision or existing["worktree"] != worktree
                     or existing.get("retry_of") != retry_of or existing.get("retry_after") != retry_after):

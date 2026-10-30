@@ -705,7 +705,10 @@ def _op_contract(request: dict) -> dict:
         raise PodError("invalid_contract", "record must name an available input contract",
                        {"accepted": sorted(TABLE), "next_action": "read pod internal contract with record all"})
     names = TABLE if name == "all" else (name,)
-    return {"records": {key: describe(key) for key in sorted(names)}}
+    from .limits import current as current_limits, HARD_LIMITS, HARD_LOGICAL_BYTES
+    return {"records": {key: describe(key) for key in sorted(names)},
+            "limits": {"soft": current_limits().as_dict(), "hard": dict(HARD_LIMITS),
+                       "hydrated_history_hard_bytes": HARD_LOGICAL_BYTES}}
 
 
 def _op_display(request: dict) -> dict:
@@ -790,6 +793,47 @@ def _finalization_refusal(operation: str, exc: PodError) -> bool:
 
 
 def run(operation: str, request: dict) -> dict:
+    from .limits import configured
+    project = Path(request["project"]) if isinstance(request, dict) and isinstance(request.get("project"), str) else None
+    with configured(project, strict=operation not in ("contract", "map", "project-context", "governor-status")):
+        return _capacity_run(operation, request, project)
+
+
+def _capacity_run(operation, request, project):
+    from copy import deepcopy
+    from .capacity import selected, maybe, resume
+    objective = request.get("objective") if isinstance(request, dict) else None
+    if operation == "capacity-continuity":
+        exact(request, {"project", "objective", "owner", "action"}, {"project", "objective", "owner", "action"}, name="capacity continuity")
+        if request["action"] != "resume":
+            raise PodError("invalid_capacity_action", "Capacity continuity accepts only its recorded resume")
+        return resume(project, objective, request["owner"])
+    if project is None or not isinstance(objective, str):
+        return _run(operation, request)
+    with selected(project, objective) as root:
+        result = _run(operation, request)
+    if root != objective:
+        result = {**result, "public_objective": objective, "logical_root": root}
+    if operation in ("checkpoint", "report"):
+        try:
+            # Report requests derive the actual owner from the recorded context.
+            owner = request.get("owner")
+            if owner is None:
+                from .capacity import _read
+                owner = (_read(project, objective) or {}).get("owner")
+            from .util import encoded
+            continuation = maybe(project, objective, owner, request_bytes=len(encoded(request, compact=True)))
+        except PodError as exc:
+            # The ordinary write already succeeded. Preserve its receipt and
+            # expose the true continuity hold rather than implying no write.
+            continuation = {"status": "held", "code": exc.code, "detail": exc.detail,
+                            "next_action": str(exc)}
+        if continuation["status"] != "not_due":
+            result = {**result, "capacity_continuity": continuation}
+    return result
+
+
+def _run(operation: str, request: dict) -> dict:
     handler = _OPERATIONS.get(operation)
     if handler is None:
         raise PodError("unknown_operation", "Unsupported private helper operation")
@@ -832,7 +876,7 @@ def run(operation: str, request: dict) -> dict:
 
 
 _CHECKPOINT_ACK_FIELDS = ("schema", "criteria", "candidate", "plan_revision", "policy_revision",
-                          "objective_source", "worktree", "verification", "display", "pod_version",
+                          "objective_source", "worktree", "verification", "display", "history_policy", "pod_version",
                           "bundle_digest", "native_refs", "next_safe_action", "delivery")
 
 
@@ -946,6 +990,9 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
         if "next_safe_action" in checkpoint:
             acknowledgement["next_safe_action"] = checkpoint["next_safe_action"]
     acknowledgement["objective"] = request["objective"]
+    for key in ("public_objective", "logical_root", "capacity_continuity"):
+        if key in result:
+            acknowledgement[key] = result[key]
     if operation in ("checkpoint", "report"):
         for key in ("route_settlements", "route_settlements_truncated", "route_settlement_authority"):
             if key in result:
@@ -977,12 +1024,16 @@ def acknowledge(operation: str, request: dict, result: dict) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pod.internal")
-    parser.add_argument("operation", choices=tuple(_OPERATIONS))
+    parser.add_argument("operation", choices=(*_OPERATIONS, "capacity-continuity"))
     parser.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        value = bounded_stdin_json() if args.input == Path("-") else bounded_json(args.input)
-        result = acknowledge(args.operation, value, run(args.operation, value))
+        from .limits import configured
+        with configured(strict=args.operation not in ("contract", "map", "project-context", "governor-status")):
+            from .limits import current as current_limits
+            value = (bounded_stdin_json() if args.input == Path("-") else
+                     bounded_json(args.input, limit=current_limits().record_bytes, purpose="request"))
+            result = acknowledge(args.operation, value, run(args.operation, value))
         print(json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True))
         return 0
     except PodError as exc:

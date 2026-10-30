@@ -281,7 +281,7 @@ freezes served `definitions` and governance alongside the same verification cont
 REUSE is explicit and definition-bound, using ordinary `proof_scope` when present, otherwise editing boundary; assurance uses only reviewed scope. Explicit empty coordinator-subgoal scopes still require a readable delta. One named REUSE write carries unaffected bindings and later candidate movement rechecks the delta.
 
 Each obligation retains kernel-owned `receipts`, including omitted or invalidated
-proof, within the existing 16-receipt bound. A detailed receipt's `reference` names
+proof, under R150's independent live and retained-history bounds. A detailed receipt's `reference` names
 one immutable observation within its obligation; a fresh observation needs a fresh
 reference. Review receipts use the immutable attempt identity. Changing an observed
 receipt's definition, candidate or content refuses `receipt_conflict`; full history

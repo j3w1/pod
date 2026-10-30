@@ -41,9 +41,11 @@ MAX_OBLIGATIONS = bound("map", "obligations", "max_items")
 MAX_PROPOSALS = bound("map", "proposals", "max_items")
 MAX_SERVES = bound("packet", "serves", "max_items")
 MAX_EVIDENCE = bound("obligation", "evidence", "max_items")
-MAX_RECEIPTS = bound("obligation", "receipts", "max_items")
+MAX_RECEIPTS = 64  # Live unconsumed receipt capacity; settled history has a separate ceiling.
 MAX_LIVE = bound("map", "obligations", "max_live")
-MAX_FINDINGS = bound("obligation", "findings", "max_items")
+from .limits import DEFAULT_LIMITS, HARD_LIMITS, HARD_RECEIPTS, current as current_limits
+
+MAX_FINDINGS = DEFAULT_LIMITS.findings
 MAX_REPORT_FINDINGS = bound("report request", "triage", "max_items")
 MAX_ACCEPTANCES = bound("map", "acceptances", "max_items")
 MAX_CITED_LINES = bound("policy citation", "lines", "max_lines")
@@ -422,8 +424,8 @@ def _structure(raw: Any) -> dict:
     evidence = ob.get("evidence", [])
     if not isinstance(evidence, list) or len(evidence) > MAX_EVIDENCE:
         raise refuse("obligation_invalid", "malformed", "evidence is a bounded list", obligation=ob["id"])
-    if "receipts" in ob and (not isinstance(ob["receipts"], list) or len(ob["receipts"]) > MAX_RECEIPTS):
-        raise refuse("obligation_invalid", "malformed", "receipts is a bounded stored history", obligation=ob["id"], limit=MAX_RECEIPTS)
+    if "receipts" in ob and (not isinstance(ob["receipts"], list) or len(ob["receipts"]) > HARD_RECEIPTS):
+        raise refuse("obligation_invalid", "malformed", "receipts is a bounded stored history", obligation=ob["id"], limit=HARD_RECEIPTS)
     if "acceptances" in ob:
         ob["acceptances"] = _acceptance_records(ob["acceptances"], obligation=ob["id"])
     if "pod_mapping" in ob:
@@ -932,7 +934,7 @@ def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: fr
 def row_bounds(rows: Any, *, request: bool = False, request_entries: int | None = None) -> None:
     if not isinstance(rows, list):
         raise refuse("obligation_invalid", "malformed", "obligations are a bounded list", record="obligation map")
-    live = sum(not isinstance(row, dict) or row.get("state") not in FROZEN for row in rows)
+    live = sum(not isinstance(row, dict) or row.get("state") not in TERMINAL for row in rows)
     total = len(rows)
     name = "request_entries" if request else "hydrated_total"
     if total > MAX_OBLIGATIONS or live > MAX_LIVE:

@@ -2,15 +2,23 @@
 
 On resume read native state first, retaining uncertainty and next safe action. Continue accepted work within scope/authority; restore relevant lost guidance. After a relaunch or model switch, repeat the display readback from the worker-tab guidance and follow its next action, so tab and worktree names are re-applied.
 
+For capacity under the current mechanism, distinguish the configured request ceiling from the materialized context and from live counts. Settings live only in the existing personal `limits` object; neither a task-local override nor a new goal grants authority. Preserve an oversized request and make a compatible bounded construction, or use an actually authorized configuration change within its hard safety ceiling. Never delete source/proof/history or renew valid proof solely to fit.
+
+Eligible ordinary checkpoints/reports may return `capacity_continuity` with a new public `successor` and verified `logical_root`. Select that exact public objective on the next helper request. The same conversation and native Run remain; old packets, Tasks, Dispatches, failures and finite counters keep their identities. The predecessor is continued, not closed, and accepts no further ordinary write. Do not use the lost-owner claim or run-use to manufacture healthy continuity. Copied yolo history is not current successor consent; obtain its genuinely applicable normal authority before a governed effect.
+
+A partial capacity transition names `capacity-continuity` resume. Use `pod internal capacity-continuity --input FILE` with the exact `project`, recorded predecessor `objective`, recorded coordinator `owner` and `action: resume`. It resumes only its saved plan after current native/source guards; it starts no actor or native work. Source changes, unknown starts, unresolved decisions, contradictory lineage, exhausted chain capacity or irreducible live data remain exact holds. Preserve the original accepted-write receipt separately from a later continuity hold; no blind business replay or watcher follows.
+
+A narrower source that keeps failed current reviews inline uses a normal own checkpoint's `history_policy` with `keep_failed_current_candidate_reviews: true` and its actual `source` reference. Existing undeclared records conservatively keep that protection. A current source applicability declaration is data, never permission to change another source; ordinary metadata and successors cannot loosen a recorded true protection.
+
 For `record_too_large` or a record-capacity hold, the coordinator or project lead can request lossless physical compaction without an owner decision:
 
-1. Run `pod internal record-compaction --input FILE` with `{"project": "<project-path>", "objective": "<objective>"}` to detect the available reduction. Detection writes nothing and reads supported records up to 8 MiB. If it returns `unchanged`, follow its remaining capacity action; a request cannot force a reduction that does not fit.
+1. Run `pod internal record-compaction --input FILE` with `{"project": "<project-path>", "objective": "<objective>"}` to detect the available reduction. Detection writes nothing and reads supported records up to 16 MiB. If it returns `unchanged`, follow its remaining capacity action; a request cannot force a reduction that does not fit.
 2. When compaction is available, copy detection's `next_action.request` as the next input. Its nested `request` uses `schema: "pod-compaction-request/v1"`; keep the returned `repository`, `objective` and exact `facts` (`record`, `revision`, `input_sha256`, `logical_sha256`). Supply a nonempty `reason` of at most 1024 characters. For the coordinator form, keep `requested_by: "coordinator"` and `owner` exactly as detected: it names the recorded coordinator, not owner consent. For the lead form, set `requested_by: "project_lead"`, remove `owner`, and add `relay: {"reference": "<lead-request-reference>"}` with a nonempty reference of at most 512 characters. The lead form works whether or not the coordinator is live.
 3. Submit that input with the same command. Pod locks, rereads and replans against those exact facts, preserving hydration, logical counts, protected admissions and candidates. If scope or facts differ, detect again. An identical successful request can replay; `unchanged` publishes nothing. Continued, evidence-closed records and records ended by historical retirement still refuse. This request may compact an ordinary coordinator-closed record without reopening work.
 
 These are declared, unauthenticated requests. The coordinator's recorded identity is only a consistency check; neither form authenticates the requester or calls Orca or a provider. The maintenance receipt grants no ordinary-work authority. Older readers that do not support this request form refuse its receipts with `history_invalid`; use an updated reader.
 
-For records above 8 MiB, use this preservation instruction:
+For records above 16 MiB, use this preservation instruction:
 
 Project lead: preserve this record and arrange supported recovery; bounded compaction cannot read it.
 

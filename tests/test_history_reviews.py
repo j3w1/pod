@@ -69,11 +69,13 @@ class ReviewEligibilityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.state = review_state()
 
-    def test_settled_reviews_of_every_outcome_move_at_trigger_exactly(self):
+    def test_settled_reviews_of_every_outcome_move_before_byte_pressure(self):
         self.assertEqual(size(self.state), COMPACT_AT)
         below = deepcopy(self.state)
         below["source_rejections"]["synthetic-padding"] = below["source_rejections"]["synthetic-padding"][:-1]
-        self.assertEqual(compact(below), (below, {}))
+        placed, parts = compact(below)
+        self.assertTrue(parts)
+        self.assertEqual(hydrate(placed, parts.__getitem__), below)
         record, chunks = compact(self.state)
         self.assertTrue(all(is_reference(row) for row in record["admissions"].values()))
         restored = hydrate(record, chunks.__getitem__)

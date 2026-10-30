@@ -99,7 +99,7 @@ def parser() -> argparse.ArgumentParser:
 NOT_READ = {"status": "not_read", "sources": {}}
 PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
                    "max_active", "refresh", "errors", "setup", "pin_diagnostic",
-                   "preferred_diagnostic", "policy_revision")
+                   "preferred_diagnostic", "policy_revision", "limits", "limits_status")
 
 
 def _edit(path: Path) -> dict:
@@ -498,7 +498,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     try:
         from .github import repository_reads
-        with repository_reads():  # One command; the long-running workspace above reads Git afresh.
+        from .limits import configured
+        with repository_reads(), configured(Path.cwd(), strict=False):
             result = execute(args, Path.cwd())
     except PodError as exc:
         result = {"schema": "pod-cli/v5", "status": "blocked",

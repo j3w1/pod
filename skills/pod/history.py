@@ -19,16 +19,30 @@ import secrets
 
 from .errors import PodError
 from .util import MAX_RECORD, encoded, digest, atomic_json
+from .limits import HARD_LIMITS, HARD_LOGICAL_BYTES, HARD_MAP_HISTORY, current as current_limits
 
 CONTEXT_LIMIT = 4 * MAX_RECORD
 WARN_AT = CONTEXT_LIMIT // 2
 COMPACT_AT = 5 * CONTEXT_LIMIT // 8
-MAINTENANCE_LIMIT = 16 * CONTEXT_LIMIT
+MAINTENANCE_LIMIT = HARD_LIMITS["context_bytes"]
 CHUNK_LIMIT = MAX_RECORD
 PART_BYTES = 48 * 1024
 MARKER = "$pod_history"
 FORMAT = {"schema": "pod-history-refs/v1"}
+FORMAT_V2 = {"schema": "pod-history-refs/v2"}
 HEX = re.compile(r"[a-f0-9]{64}\Z")
+
+
+def context_limit():
+    return current_limits().context_bytes
+
+
+def warning_at():
+    return context_limit() // 2
+
+
+def compact_at():
+    return 5 * context_limit() // 8
 
 
 def _bytes(value):
@@ -110,7 +124,8 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
     Any freshly observed outstanding/native or Governor dependency vetoes a move.
     """
     from .util import route_hold
-    candidate = (state.get("checkpoint") or {}).get("candidate")
+    checkpoint = state.get("checkpoint") or {}
+    candidate = checkpoint.get("candidate")
     report = row.get("report") or {}
     if (key in protected or row.get("state") not in ("closed", "bound")
             or not row.get("candidate")
@@ -121,6 +136,9 @@ def admission_movable(state, key, row, protected=frozenset()) -> bool:
             or any(not failure.get("cleared_at") for failure in row.get("failures", []))):
         return False
     role = row.get("role")
+    if (role == "review" and row.get("candidate") == candidate and report.get("outcome") != "succeeded"
+            and checkpoint.get("history_policy", {}).get("keep_failed_current_candidate_reviews", True)):
+        return False
     if row.get("candidate") == candidate and (role != "review" or not _review_consumed(state, key, row)):
         return False
     if role == "implement":
@@ -140,12 +158,29 @@ def _positions(state):
     """Whitelisted slots only: never expand a marker in arbitrary user evidence."""
     if not isinstance(state, dict):
         return
+    constraints = state.get("constraints")
+    for index in range(len(constraints) if isinstance(constraints, list) else 0):
+        yield constraints, index
+    standing = state.get("standing_authorization")
+    if isinstance(standing, dict):
+        for field in ("decisions", "answers"):
+            entries = standing.get(field)
+            for index in range(len(entries) if isinstance(entries, list) else 0):
+                yield entries, index
+    ticks = state.get("pod_ticks")
+    requests = ticks.get("requests") if isinstance(ticks, dict) else None
+    if isinstance(requests, dict):
+        for key in requests:
+            yield requests, key
     admissions = state.get("admissions")
     if isinstance(admissions, dict):
         for key in admissions:
             yield admissions, key
     checkpoint = state.get("checkpoint")
     if isinstance(checkpoint, dict):
+        questions = checkpoint.get("questions")
+        for index in range(len(questions) if isinstance(questions, list) else 0):
+            yield questions, index
         obligations = checkpoint.get("obligations")
         for index, ob in enumerate(obligations if isinstance(obligations, list) else []):
             yield obligations, index
@@ -160,6 +195,8 @@ def _positions(state):
                     yield findings, index
         history = checkpoint.get("governance_history")
         for field in ("candidates", "decisions"):
+            if isinstance(history, dict) and field in history:
+                yield history, field
             entries = history.get(field) if isinstance(history, dict) else None
             if isinstance(entries, list):
                 for index in range(len(entries)):
@@ -173,42 +210,59 @@ def _positions(state):
 
 
 def compact(logical_state, *, protected_admissions=(), force=False,
-            archive_retirement=False, trigger_bytes=COMPACT_AT, current_bytes=0,
-            protect_receipts=False, protected_candidates=(), maintenance=(), require_fit=True):
+            archive_retirement=False, trigger_bytes=None, current_bytes=0,
+            protect_receipts=False, protected_candidates=(), maintenance=(), require_fit=True,
+            bulk_history=False):
     """Return (physical record, {file_digest: exact_file_bytes}); never mutate input.
 
     Once triggered, move every eligible slot (hysteresis without a second arbitrary
     target). The logical admission/receipt/governance count contracts never change.
     Retirement-only fallback may move the immutable entry, never unsettled data.
     """
+    trigger_bytes = compact_at() if trigger_bytes is None else trigger_bytes
     if "history" in logical_state:
         _fail("history_invalid", "compact requires hydrated logical state")
     record = deepcopy(logical_state)
-    if not force and not maintenance and len(_bytes(record)) < trigger_bytes:
-        return record, {}
+    # Settlement is the eligibility trigger. A byte watermark is useful status
+    # data, but does not keep already-settled work in the live record.
     chunks = {}
+    extended = False
+    placement_counts = {}
 
-    def reference(value):
+    def reference(value, *, mandatory=False):
         proposed = {}
         ref = _reference(value, proposed)
-        if len(_bytes(ref)) >= len(_bytes(value)):
+        if not mandatory and len(_bytes(ref)) >= len(_bytes(value)):
             return deepcopy(value)
         chunks.update(proposed)
         return ref
 
     protected = frozenset(protected_admissions)
     movable = set()
+    archived = {}
     for key, row in logical_state.get("admissions", {}).items():
         if admission_movable(logical_state, key, row, protected):
             movable.add(key)
-            record["admissions"][key] = reference(row)
+            if bulk_history:
+                archived[key] = row
+                record["admissions"].pop(key)
+            else:
+                record["admissions"][key] = reference(row)
+    if archived:
+        record["settled_admissions"] = reference(archived, mandatory=True)
+        placement_counts["admissions"] = len(archived)
+        extended = True
     checkpoint = logical_state.get("checkpoint") or {}
     current = checkpoint.get("candidate")
     target = record.get("checkpoint") or {}
     logical_rows = {row["id"]: row for row in checkpoint.get("obligations", [])
                     if isinstance(row, dict) and isinstance(row.get("id"), str)}
     for index, (old_ob, new_ob) in enumerate(zip(checkpoint.get("obligations", []), target.get("obligations", []))):
-        if old_ob.get("state") in ("withdrawn", "renewed"):
+        serving_held = any(key in protected and old_ob.get("id") in row.get("serves", [])
+                           for key, row in logical_state.get("admissions", {}).items())
+        satisfied_settled = (old_ob.get("state") == "satisfied" and not protect_receipts
+                             and current not in protected_candidates and not serving_held)
+        if old_ob.get("state") in ("withdrawn", "renewed") or satisfied_settled:
             target["obligations"][index] = reference(old_ob)
             continue
         if old_ob.get("kind") == "assurance" and old_ob.get("findings") and type(checkpoint.get("seq")) is int:
@@ -218,8 +272,10 @@ def compact(logical_state, *, protected_admissions=(), force=False,
             except PodError:
                 pass  # Unvalidated observations cannot authorize a new history position.
             else:
+                from .assurance import live_finding_count
                 for finding_index, finding in enumerate(old_ob["findings"]):
-                    new_ob["findings"][finding_index] = reference(finding)
+                    if live_finding_count([finding], {"map_state": checkpoint}) == 0:
+                        new_ob["findings"][finding_index] = reference(finding)
         selected = {json.dumps(item, sort_keys=True) for item in old_ob.get("evidence", [])}
         satisfied = old_ob.get("state") == "satisfied"
         for index, receipt in enumerate(old_ob.get("receipts", [])):
@@ -228,10 +284,6 @@ def compact(logical_state, *, protected_admissions=(), force=False,
             copy = json.dumps(evidence, sort_keys=True) in selected
             if protect_receipts or candidate in protected_candidates or not candidate:
                 continue
-            # Current/selected proof stays inline, except a satisfied row's receipt copy:
-            # the row itself keeps that evidence and reuse inline for every reader.
-            if not satisfied and (candidate == current or copy):
-                continue
             consumed = "reported_seq" in receipt or "accepted_seq" in receipt
             if old_ob.get("kind") == "assurance" and satisfied and copy:
                 attempt = evidence.get("attempt")
@@ -239,26 +291,52 @@ def compact(logical_state, *, protected_admissions=(), force=False,
                             and attempt not in protected
                             and receipt.get("reuse") in (None, old_ob.get("reuse")))
             elif old_ob.get("kind") == "assurance":
-                eligible = (candidate != current and receipt.get("reuse") is None
-                            and evidence.get("attempt") in movable and consumed)
+                eligible = evidence.get("attempt") in movable and consumed
             else:
-                # Failed or unknown tests stay inline.
-                eligible = evidence.get("status") == "PASS" and "accepted_seq" in receipt
+                # Outcome is preserved verbatim; only a kernel acceptance settles
+                # the retained copy. Unknown/unaccepted work remains inline.
+                eligible = "accepted_seq" in receipt
             if eligible:
                 new_ob["receipts"][index] = reference(receipt)
     old_history = checkpoint.get("governance_history") or {}
     for field in ("candidates", "decisions"):
         entries = old_history.get(field, [])
-        for index, value in enumerate(entries[:-1]):
-            if field == "candidates" and value == current:
-                continue
-            target["governance_history"][field][index] = reference(value)
+        if entries:
+            placed = reference(entries, mandatory=len(entries) >= current_limits().governance_history)
+            target["governance_history"][field] = placed
+            extended = extended or is_reference(placed)
+            if is_reference(placed):
+                placement_counts["governance_" + field] = len(entries)
     for index, value in enumerate(checkpoint.get("revision_decisions", [])[:-1]):
         target["revision_decisions"][index] = reference(value)
+    # These are consumed immutable decisions or explicitly inactive constraints,
+    # not active policy/owner questions. Full hydration precedes their validators.
+    for index, value in enumerate(logical_state.get("constraints", [])):
+        if value.get("active") is False:
+            record["constraints"][index] = reference(value)
+            extended = extended or is_reference(record["constraints"][index])
+    for index, value in enumerate(checkpoint.get("questions", [])):
+        if (isinstance(value, dict) and (value.get("resolved") is True or value.get("state") in
+                ("answered", "resolved", "canceled", "expired", "consumed") or value.get("status") == "answered")):
+            target["questions"][index] = reference(value)
+            extended = extended or is_reference(target["questions"][index])
+    standing = logical_state.get("standing_authorization")
+    if isinstance(standing, dict):
+        for field in ("decisions", "answers"):
+            entries = standing[field][:-1] if field == "decisions" else standing[field]
+            for index, value in enumerate(entries):
+                record["standing_authorization"][field][index] = reference(value)
+                extended = extended or is_reference(record["standing_authorization"][field][index])
+    for key, value in logical_state.get("pod_ticks", {}).get("requests", {}).items():
+        if value.get("phase") == "completed":
+            record["pod_ticks"]["requests"][key] = reference(value)
+            extended = extended or is_reference(record["pod_ticks"]["requests"][key])
     if archive_retirement and "historical_retirement" in record:
         record["historical_retirement"] = reference(logical_state["historical_retirement"])
     if chunks:
-        record["history"] = dict(FORMAT)
+        record["history"] = dict(FORMAT_V2 if extended else FORMAT)
+        if placement_counts:
+            record["history"]["placement_counts"] = placement_counts
     if maintenance:
         record.setdefault("history", dict(FORMAT))["maintenance"] = _reference(list(maintenance), chunks)
         if any("decision_binding" in row.get("authority", {}) for row in maintenance):
@@ -289,13 +367,14 @@ def largest_sections(value):
 
 def _require_size(record, *, current_bytes):
     proposed = len(_bytes(record))
-    if proposed > CONTEXT_LIMIT:
+    limit = context_limit()
+    if proposed > limit:
         sections = largest_sections(record)
         raise PodError("record_too_large", f"Record size {current_bytes} -> {proposed} bytes exceeds limit "
-                       f"{CONTEXT_LIMIT}; largest sections: "
+                       f"{limit}; largest sections: "
                        + ", ".join(f"{row['section']}={row['bytes']}" for row in sections),
                        {"current_bytes": current_bytes, "proposed_bytes": proposed,
-                        "limit_bytes": CONTEXT_LIMIT, "largest_sections": sections,
+                        "limit_bytes": limit, "largest_sections": sections,
                         "next_action": "On waiting rows, unselect stale selected evidence with evidence: [] so their "
                                        "retained receipts can move to immutable history. Mechanically renew large "
                                        "rows through the checkpoint renew route so terminal rows can archive. "
@@ -312,7 +391,7 @@ def _expand(reference, loader, cache):
     ref = reference[MARKER]
     if (not isinstance(ref, dict) or set(ref) != {"sha256", "parts", "bytes"}
             or not isinstance(ref["sha256"], str) or not HEX.fullmatch(ref["sha256"])
-            or type(ref["bytes"]) is not int or ref["bytes"] < 1
+            or type(ref["bytes"]) is not int or not 1 <= ref["bytes"] <= HARD_LOGICAL_BYTES
             or not isinstance(ref["parts"], list) or not ref["parts"]
             or len(ref["parts"]) != (ref["bytes"] + PART_BYTES - 1) // PART_BYTES
             or any(not isinstance(part, str) or not HEX.fullmatch(part) for part in ref["parts"])):
@@ -411,25 +490,66 @@ def _maintenance_valid(receipts):
 
 def _hydrate(record, loader):
     state, cache, maintenance = deepcopy(record), {}, []
+    expanded_bytes = len(_bytes(record))
     if not isinstance(state, dict):
         return state, maintenance
     metadata = state.pop("history", None)
     if metadata is not None:
-        if (not isinstance(metadata, dict) or set(metadata) - {"schema", "maintenance", "decision_channels"}
-                or metadata.get("schema") != FORMAT["schema"]
+        if (not isinstance(metadata, dict) or set(metadata) - {"schema", "maintenance", "decision_channels", "placement_counts"}
+                or metadata.get("schema") not in (FORMAT["schema"], FORMAT_V2["schema"])
                 or "decision_channels" in metadata and metadata["decision_channels"] != 5):
             _fail("history_invalid", "Unsupported history reference format")
+        counts = metadata.get("placement_counts", {})
+        if (not isinstance(counts, dict) or set(counts) - {"admissions", "governance_candidates", "governance_decisions"}
+                or any(type(count) is not int or not 0 <= count <= HARD_MAP_HISTORY for count in counts.values())
+                or counts and metadata["schema"] != FORMAT_V2["schema"]):
+            _fail("history_invalid", "Malformed placement counts")
         if "maintenance" in metadata:
             maintenance = _maintenance_valid(_expand(metadata["maintenance"], loader, cache))
     elif "history" in record:
         _fail("history_invalid", "Unsupported history reference format")
+    if metadata is not None and metadata["schema"] == FORMAT["schema"]:
+        standing = state.get("standing_authorization") or {}
+        extra = [*state.get("constraints", []), *(state.get("checkpoint") or {}).get("questions", []),
+                 *standing.get("decisions", []), *standing.get("answers", []),
+                 *state.get("pod_ticks", {}).get("requests", {}).values()]
+        if any(is_reference(item) for item in extra):
+            _fail("history_invalid", "Settled decision positions need the version-two representation")
+    archived = state.pop("settled_admissions", None)
+    if archived is None and (metadata or {}).get("placement_counts", {}).get("admissions") is not None:
+        _fail("history_integrity", "Bulk placement count has no recorded reference")
+    if archived is not None:
+        if metadata is None or metadata["schema"] != FORMAT_V2["schema"]:
+            _fail("history_invalid", "Bulk settled history needs the version-two representation")
+        declared = (archived.get(MARKER) or {}).get("bytes") if isinstance(archived, dict) and isinstance(archived.get(MARKER), dict) else None
+        if type(declared) is not int or not 1 <= declared <= HARD_LOGICAL_BYTES - expanded_bytes:
+            _fail("history_invalid", "Bulk history exceeds its finite safety ceiling")
+        expanded_bytes += declared
+        archived = _expand(archived, loader, cache)
+        if (not isinstance(archived, dict) or not isinstance(state.get("admissions"), dict)
+                or set(archived) & set(state["admissions"])
+                or any(not isinstance(row, dict) or is_reference(row) for row in archived.values())):
+            _fail("history_integrity", "Bulk history cannot graft or replace a live admission")
+        state["admissions"] = {**archived, **state["admissions"]}
+        if metadata.get("placement_counts", {}).get("admissions") != len(archived):
+            _fail("history_integrity", "Bulk placement count differs from verified history")
+    governance = (state.get("checkpoint") or {}).get("governance_history") or {}
+    if (metadata is not None and metadata["schema"] == FORMAT["schema"]
+            and any(is_reference(governance.get(field)) for field in ("candidates", "decisions"))):
+        _fail("history_invalid", "Whole governance history needs the version-two representation")
     for parent, key in _positions(state):
         value = parent[key]
         if not isinstance(value, dict) or MARKER not in value:
             continue
         if metadata is None:
             _fail("history_invalid", "References require the physical-format discriminator")
+        declared = (value.get(MARKER) or {}).get("bytes") if isinstance(value.get(MARKER), dict) else None
+        if type(declared) is not int or not 1 <= declared <= HARD_LOGICAL_BYTES - expanded_bytes:
+            _fail("history_invalid", "Hydrated history exceeds its finite safety ceiling")
+        expanded_bytes += declared
         expanded = _expand(value, loader, cache)
+        if isinstance(expanded, list) and any(is_reference(item) for item in expanded):
+            _fail("history_integrity", "Whole history lists cannot contain nested references")
         if (isinstance(expanded, dict) and any(is_reference(item)
                 for field in ("receipts", "findings") for item in expanded.get(field, []))):
             _fail("history_integrity", "Whole history rows cannot contain nested references")
@@ -437,12 +557,82 @@ def _hydrate(record, loader):
     # Do not recursively expand pointers returned by a chunk, including inside typed rows.
     if any(is_reference(parent[key]) for parent, key in _positions(state)):
         _fail("history_integrity", "Recursive history references are forbidden")
+    for field in ("candidates", "decisions"):
+        declared = (metadata or {}).get("placement_counts", {}).get("governance_" + field)
+        if declared is not None:
+            original = ((record.get("checkpoint") or {}).get("governance_history") or {}).get(field)
+            if not is_reference(original) or declared != len(((state.get("checkpoint") or {}).get("governance_history") or {}).get(field, [])):
+                _fail("history_integrity", "Governance placement count differs from verified history")
     return state, maintenance
 
 
 def hydrate(record, loader):
     """Verify all references, restoring exact logical positions, values and order."""
     return _hydrate(record, loader)[0]
+
+
+def load_journal_history(path, physical):
+    """Read a journal's settled rows from the same existing immutable chunk store."""
+    if not isinstance(physical, dict) or "history" not in physical:
+        return physical
+    record = deepcopy(physical)
+    metadata = record.pop("history")
+    if metadata != FORMAT_V2:
+        _fail("history_invalid", "Unsupported Governor history representation")
+    store = ChunkStore(path.parent)
+    cache = {}
+    expanded_bytes = len(_bytes(physical))
+    with store.directory() as directory:
+        loader = lambda address: store._load(directory, address)
+        def expand(value):
+            nonlocal expanded_bytes
+            declared = (value.get(MARKER) or {}).get("bytes") if isinstance(value.get(MARKER), dict) else None
+            if type(declared) is not int or not 1 <= declared <= HARD_LOGICAL_BYTES - expanded_bytes:
+                _fail("history_invalid", "Hydrated journal exceeds its finite safety ceiling")
+            expanded_bytes += declared
+            return _expand(value, loader, cache)
+        for index, row in enumerate(record.get("actions", [])):
+            if is_reference(row):
+                record["actions"][index] = expand(row)
+        for unit in record.get("units", {}).values():
+            if is_reference(unit.get("history")):
+                unit["history"] = expand(unit["history"])
+            for key, receipts in unit.get("preflight", {}).items():
+                if is_reference(receipts):
+                    unit["preflight"][key] = expand(receipts)
+    return record
+
+
+def compact_journal(journal):
+    """Lossless physical placement; pending/UNKNOWN effects and counters stay live."""
+    record = deepcopy(journal)
+    chunks = {}
+    def reference(value):
+        ref = _reference(value, chunks)
+        return ref
+    for index, row in enumerate(journal["actions"]):
+        if row["outcome"] in ("PASS", "FAILED", "CANCELED"):
+            record["actions"][index] = reference(row)
+    for name, unit in journal["units"].items():
+        current = (unit.get("candidate") or {}).get("id")
+        if len(unit.get("history", [])) > 1:
+            record["units"][name]["history"] = reference(unit["history"])
+        for key, receipts in unit.get("preflight", {}).items():
+            if key != current:
+                record["units"][name]["preflight"][key] = reference(receipts)
+    if chunks:
+        record["history"] = dict(FORMAT_V2)
+    return record, chunks
+
+
+def publish_journal(path, journal, *, limit):
+    from .limits import require_current
+    require_current()
+    record, chunks = compact_journal(journal)
+    if len(_bytes(record)) > limit:
+        _fail("record_too_large", "Live Governor record exceeds its configured byte bound")
+    ChunkStore(path.parent).put(chunks)
+    atomic_json(path, record, limit=limit, compact=True)
 
 
 class ChunkStore:
@@ -571,7 +761,9 @@ def _context_bytes(path, limit):
         os.close(fd)
 
 
-def _load(path, *, limit=CONTEXT_LIMIT, validate=True):
+def _load(path, *, limit=None, validate=True):
+    # A smaller prospective soft limit cannot make retained history unreadable.
+    limit = HARD_LIMITS["context_bytes"] if limit is None else min(limit, HARD_LIMITS["context_bytes"])
     raw = _context_bytes(path, limit)
     try:
         physical = json.loads(raw.decode("utf-8"))
@@ -644,7 +836,7 @@ def protections(path, state, *, native=None, protected=(), journal=None):
 
 
 def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(), force=False, maintenance=None, journal=None,
-                    require_fit=True):
+                    require_fit=True, bulk_history=False):
     """Pure physical planner, including R118's all-context capacity preflight."""
     current = path.stat().st_size if path.exists() else 0
     receipts = maintenance
@@ -653,22 +845,36 @@ def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(
     keep, hold_receipts = protections(path, state, native=native, protected=protected, journal=journal)
     kwargs = {"protected_admissions": keep, "protect_receipts": hold_receipts is None,
               "protected_candidates": hold_receipts or (), "maintenance": receipts,
-              "force": force or purpose == "retirement", "current_bytes": current, "require_fit": require_fit}
+              "force": force or purpose == "retirement", "current_bytes": current, "require_fit": require_fit,
+              "bulk_history": bulk_history}
     try:
         return compact(state, **kwargs)
     except PodError as exc:
-        if purpose != "retirement" or exc.code != "record_too_large":
+        if exc.code != "record_too_large":
             raise
+    if not bulk_history:
+        # One pure alternate layout, with identical protections and logical data,
+        # before a live ceiling can reject an otherwise reducible publication.
+        kwargs["bulk_history"] = True
+        try:
+            return compact(state, **kwargs)
+        except PodError as exc:
+            if exc.code != "record_too_large" or purpose != "retirement":
+                raise
+    elif purpose != "retirement":
+        return compact(state, **kwargs)
     return compact(state, archive_retirement=True, **kwargs)
 
 
 def publish_context(path, record, chunks):
     """Publish chunks without replacement before the atomic context replacement."""
     from .evidence_closure import refuse_closed
+    from .limits import require_current
+    require_current()
     refuse_closed(path.parent)  # Backstop: a record closed by evidence is never written again (R145).
     _require_size(record, current_bytes=path.stat().st_size if path.exists() else 0)
     ChunkStore(path.parent).put(chunks)
-    atomic_json(path, record, limit=CONTEXT_LIMIT, compact=True)
+    atomic_json(path, record, limit=context_limit(), compact=True)
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(fd)
@@ -686,6 +892,15 @@ def _moved(record):
     counts["retirement"] = int(is_reference(record.get("historical_retirement")))
     counts["obligations"] = sum(is_reference(row) for row in checkpoint.get("obligations", []))
     counts["findings"] = sum(is_reference(item) for row in checkpoint.get("obligations", []) for item in row.get("findings", []))
+    counts["constraints"] = sum(is_reference(item) for item in record.get("constraints", []))
+    counts["questions"] = sum(is_reference(item) for item in checkpoint.get("questions", []))
+    standing = record.get("standing_authorization") or {}
+    counts["standing_decisions"] = sum(is_reference(item) for item in standing.get("decisions", []))
+    counts["responder_answers"] = sum(is_reference(item) for item in standing.get("answers", []))
+    counts["pod_tick_receipts"] = sum(is_reference(item) for item in record.get("pod_ticks", {}).get("requests", {}).values())
+    placements = (record.get("history") or {}).get("placement_counts", {})
+    counts["admissions"] += placements.get("admissions", 0)
+    counts["governance"] += sum(placements.get("governance_" + field, 0) for field in ("candidates", "decisions"))
     return counts
 
 
@@ -701,8 +916,8 @@ def capacity(path, state):
     """Additive observation only: never changes readiness, phase or existing actions."""
     _, receipts, raw = _load(path)
     logical = len(_bytes(state))
-    result = {"physical_bytes": len(raw), "logical_bytes": logical, "limit_bytes": CONTEXT_LIMIT,
-              "warning_bytes": WARN_AT, "compaction_bytes": COMPACT_AT, "warning": len(raw) >= WARN_AT,
+    result = {"physical_bytes": len(raw), "logical_bytes": logical, "limit_bytes": context_limit(),
+              "warning_bytes": warning_at(), "compaction_bytes": compact_at(), "warning": len(raw) >= warning_at(),
               "largest_sections": largest_sections(state), "maintenance": receipts}
     if result["warning"]:
         try:
@@ -713,7 +928,7 @@ def capacity(path, state):
                 raise
             useful = False
         result["reclaimable_bytes"] = len(raw) - len(_bytes(planned)) if useful else 0
-        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; project lead "
+        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {compact_at()} bytes; project lead "
                                  "or coordinator: run internal record-compaction detection, then submit its exact scoped "
                                  "maintenance request for explicit bounded maintenance now. The project lead handles capacity "
                                  "before closure." if useful else
@@ -721,7 +936,7 @@ def capacity(path, state):
         if useful and any(row["section"] == "standing_authorization" for row in result["largest_sections"][:3]):
             result["next_action"] += " The standing_authorization section is bounded and needs no maintenance."
     else:
-        result["next_action"] = f"Continue through the existing objective operations; settled history compacts once the record reaches {COMPACT_AT} bytes."
+        result["next_action"] = f"Continue through the existing objective operations; settled history compacts once the record reaches {compact_at()} bytes."
     return result
 
 
@@ -798,7 +1013,7 @@ def record_compaction(project, objective, *, request=None, decision=None):
         if useful:
             _require_size(record, current_bytes=len(raw))
         result = {"status": "compaction_available" if useful else "unchanged", "facts": facts, "current_bytes": len(raw),
-                  "proposed_bytes": len(_bytes(record)), "limit_bytes": CONTEXT_LIMIT, "moved": _moved(record), "written": False,
+                  "proposed_bytes": len(_bytes(record)), "limit_bytes": context_limit(), "moved": _moved(record), "written": False,
                   "reclaimable_bytes": max(0, len(raw) - len(_bytes(record)))}
         if not useful:
             result["largest_sections"] = largest_sections(state)

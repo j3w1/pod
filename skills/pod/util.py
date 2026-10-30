@@ -16,7 +16,9 @@ import unicodedata
 from .errors import FieldRefusal, PodError
 from .contracts import bound, fields, required, input_record
 
-MAX_RECORD = 128 * 1024
+from .limits import DEFAULT_LIMITS, HARD_LIMITS, current as current_limits, require_current as require_current_limits
+
+MAX_RECORD = DEFAULT_LIMITS.record_bytes
 DECISION_EVIDENCE = {"actor", "decided_at", "recorded_at", "decision_binding", "decision_verification"}
 DECISION_FIELDS = {"provenance", "instruction", "channel", "relay"} | DECISION_EVIDENCE
 CHANNEL_FIELDS = {"channel", "relay"} | DECISION_EVIDENCE
@@ -344,7 +346,8 @@ def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
-def bounded_json(path: Path, *, limit: int = MAX_RECORD) -> Any:
+def bounded_json(path: Path, *, limit: int | None = None, purpose: str = "record") -> Any:
+    limit = HARD_LIMITS["record_bytes"] if limit is None else limit
     cursor = path.parent
     while cursor != cursor.parent:
         if cursor.is_symlink():
@@ -353,24 +356,29 @@ def bounded_json(path: Path, *, limit: int = MAX_RECORD) -> Any:
     if path.is_symlink() or not path.is_file():
         raise PodError("unsafe_record", "Record must be a regular, non-symlink file")
     if path.stat().st_size > limit:
-        raise PodError("record_too_large", "Record exceeds its size limit")
+        raise PodError("record_too_large", "Record exceeds its size limit",
+                       {"dimension": purpose, "current_bytes": path.stat().st_size, "limit_bytes": limit,
+                        "next_action": "preserve the exact record; use a bounded normal request or an authorized valid soft-limit configuration"})
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError) as exc:
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
 
 
-def bounded_stdin_json(*, limit: int = MAX_RECORD) -> Any:
+def bounded_stdin_json(*, limit: int | None = None) -> Any:
     """Read one private JSON request from a pipe without treating it as a path."""
+    limit = current_limits().record_bytes if limit is None else limit
     try:
         raw = sys.stdin.buffer.read(limit + 1)
     except OSError as exc:
         raise PodError("invalid_record", "Cannot read bounded JSON input") from exc
     if len(raw) > limit:
-        raise PodError("record_too_large", "Record exceeds its size limit")
+        raise PodError("record_too_large", "Record exceeds its size limit",
+                       {"dimension": "request", "observed_bytes_at_least": len(raw), "limit_bytes": limit,
+                        "next_action": "use a bounded normal request or an authorized valid soft-limit configuration"})
     try:
         return json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError) as exc:
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise PodError("invalid_record", "Cannot decode bounded JSON record") from exc
 
 
@@ -380,7 +388,9 @@ def encoded(value: Any, *, compact: bool = False) -> bytes:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, **options).encode() + b"\n"
 
 
-def atomic_json(path: Path, value: Any, *, limit: int = MAX_RECORD, compact: bool = False) -> None:
+def atomic_json(path: Path, value: Any, *, limit: int | None = None, compact: bool = False) -> None:
+    require_current_limits()
+    limit = current_limits().record_bytes if limit is None else limit
     options = {"separators": (",", ":")} if compact else {"indent": 2}
     data = encoded(value, compact=compact)
     if len(data) > limit:

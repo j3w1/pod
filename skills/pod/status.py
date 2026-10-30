@@ -16,7 +16,7 @@ from .term import clean
 from .util import route_summary, route_hold, route_next_action, route_settlement_projection
 
 PREFERENCE_KEYS = ("path", "schema", "status", "revision", "eligible", "preferred", "pinned",
-                   "max_active", "refresh", "errors", "setup")
+                   "max_active", "refresh", "errors", "setup", "limits", "limits_status")
 # Objective status reads preferences only; observations stay with `pod models`.
 NOT_READ = {"status": "not_read", "sources": {}}
 QUESTION_LIMIT = 64
@@ -317,6 +317,7 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
 
 def status(project: Path, run: str | None, *, objective: str | None = None, current_run_fn=current_run,
            worker_rows_fn=worker_rows) -> dict:
+    from .capacity import public_name, verify as verify_capacity
     preferences = load_config(project)
     running = running_identity()
     result = {"schema": "pod-cli/v5", "status": "selection_required", "run": run,
@@ -425,10 +426,11 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             result["recorded_questions"] = recorded_questions(None, reason=exc.code)
             result.update(decision_status(preferences, None, objective=True))
         if exc.code == "record_too_large":
-            from .history import CONTEXT_LIMIT, WARN_AT, COMPACT_AT
+            from .history import context_limit, warning_at, compact_at
             result["record_capacity"] = {"status": "unavailable", "physical_bytes": (exc.detail or {}).get("current_bytes"),
-                                         "logical_bytes": None, "limit_bytes": CONTEXT_LIMIT,
-                                         "warning_bytes": WARN_AT, "compaction_bytes": COMPACT_AT, "warning": True,
+                                         "logical_bytes": None, "limit_bytes": context_limit(),
+                                         "hard_read_limit_bytes": (exc.detail or {}).get("limit_bytes"),
+                                         "warning_bytes": warning_at(), "compaction_bytes": compact_at(), "warning": True,
                                          "next_action": result["next_safe_action"]}
         return result
     result["run"] = run
@@ -477,7 +479,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                                   "ui_visibility": "unverified", "ui_focus": "unverified",
                                   "state": row["state"], "runtime": row["runtime"]})
     result.update({"status": "unavailable" if native_error else "observed",
-                   "objective": checkpoint.get("objective") if checkpoint else None,
+                   "objective": public_name(state, checkpoint.get("objective") if checkpoint else None),
                    "source": checkpoint.get("objective_source", "direct_objective") if checkpoint else None,
                    "selected_worktree": checkpoint.get("worktree") if checkpoint else None,
                    "constraints": state["constraints"] if state else [],
@@ -513,7 +515,13 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                    "next_safe_action": (" ".join(route_next_action(row) for row in route_holds[:64]) if mismatch else
                                         checkpoint.get("next_safe_action", "inspect native Run")
                                         if checkpoint else "inspect native Run")})
-    objective = checkpoint.get("objective") if checkpoint else None
+    objective = public_name(state, checkpoint.get("objective") if checkpoint else None)
+    if state and state.get("capacity_continuity"):
+        try:
+            result["logical_root"] = verify_capacity(project, objective, state)
+        except PodError as exc:
+            result.update(status="unavailable", blocker=exc.code, next_safe_action=str(exc))
+            return result
     view = None
     if isinstance(objective, str) and checkpoint.get("obligations") is not None:
         try:
@@ -627,7 +635,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             # A continued record is read, never written: its successor holds the remaining work.
             result.update(blocker="objective_continued", next_safe_action=ACTION.format(block["continued_by"]),
                           next_action=ACTION.format(block["continued_by"]))
-        elif block is not None and block.get("continues") and (not _claim_recorded(project, state)
+        elif block is not None and block.get("continuation_kind") != "healthy_capacity" and block.get("continues") and (not _claim_recorded(project, state)
                                                                or reserved_for(state) is not None):
             result["succession"]["state"] = "claim_incomplete"
             # Completing the claim needs coordinator authority. A window block appears only to a reader that is not

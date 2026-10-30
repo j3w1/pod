@@ -14,6 +14,7 @@ import re
 
 from .errors import FieldRefusal, PodError
 from .installer import STATE_SCHEMAS
+from .limits import HARD_LIMITS, HARD_MAP_HISTORY, HARD_RECEIPTS
 
 IDENTIFIER = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z"
 UNIT = re.compile(IDENTIFIER)
@@ -75,7 +76,7 @@ _PATH = {"type": "text", "max_length": 512, "nonempty": True,
 _GIT = {"type": "text", "form": "resolvable Git commit object id (40 or 64 lower-case hex)"}
 _DIGEST = {"type": "text", "pattern": r"[0-9a-f]{64}\Z", "max_length": 64}
 _MAP_FIELDS = {
-    "seq": {"type": "integer", "minimum": 1}, "obligations": {**items(512, record("obligation")), "max_live": 128},
+    "seq": {"type": "integer", "minimum": 1}, "obligations": {**items(HARD_MAP_HISTORY, record("obligation")), "max_live": 128},
     "proposals": items(64, record("proposal")), "governance": record("governance"),
     "governance_refresh": {"type": "boolean"}, "revision_authority": record("revision authority"),
     "reopen": {"type": "boolean"}, "close": {"type": "boolean"}, "rebind": {"type": "list"},
@@ -88,6 +89,9 @@ _MAP_FIELDS = {
 }
 
 TABLE = {
+    "capacity continuity": definition({"project": text(4096), "objective": text(4096),
+                                      "owner": text(256), "action": choice(("resume",))},
+                                     ("project", "objective", "owner", "action")),
     "route settlement": definition({
         "admission": _DIGEST, "basis": choice(("redone", "lead_decision")),
         "replacement": _DIGEST, "decision": choice(("accept", "discard")),
@@ -149,6 +153,7 @@ TABLE = {
         "issue_revision_data": record("issue revision data"),
         "native_refs": items(32, {"type": "object", "form": "runId and runtime text"}),
         "worktree": record("worktree_binding"), "verification": record("verification"), "display": record("display"),
+        "history_policy": record("history policy"),
     }, ("schema", "criteria", "plan_revision", "candidate", "policy_revision", "native_refs", "assignments",
         "questions", "verification_gaps", "next_safe_action")),
     "display": definition({"task": text(48), "continued": items(32, text(256)),
@@ -166,8 +171,8 @@ TABLE = {
         "state": choice(STATES), "executor": {"type": "text", "form": "coordinator or serving admission"},
         "wait": record("wait"), "external": record("external"), "withdrawal": record("withdrawal"),
         "evidence": items(16, {"type": "object", "form": "attempt reference, short evidence or detailed evidence"}),
-        "adopts": ident(), "reuse": _ANY, "findings": items(64, _ANY), "finding": _ANY,
-        "definition": _ANY, "receipts": {**items(64, _ANY), "stored_only": True}, "proof_scope": items(64, _PATH),
+        "adopts": ident(), "reuse": _ANY, "findings": items(HARD_LIMITS["findings"], _ANY), "finding": _ANY,
+        "definition": _ANY, "receipts": {**items(HARD_RECEIPTS, _ANY), "stored_only": True}, "proof_scope": items(64, _PATH),
         "renews": {**ident(), "stored_only": True},
         "renewal": {"type": "object", "stored_only": True, "form": "by: successor id, seq: renewal sequence, definition: copied identity, was_satisfied: prior state fact"},
         "acceptances": {**items(16, record("acceptance")), "stored_only": True},
@@ -185,6 +190,8 @@ TABLE = {
                               "decision": {"type": "integer", "minimum": 1, "stored_only": True},
                               "instruction": _ANY, "channel": choice(("session", "relayed")), "relay": {"type": "object"}},
                              ("by", "reason")),
+    "history policy": definition({"keep_failed_current_candidate_reviews": {"type": "boolean"},
+                                  "source": text(512)}, ("keep_failed_current_candidate_reviews", "source")),
     "evidence": definition({"schema": choice(("pod-evidence/v1",)),
                             **{key: _ANY for key in ("criterion", "candidate", "sources", "policy_revision", "dependencies", "environment", "check", "command", "result", "reference", "reviewer_attempt")},
                             "definition": _DIGEST, "timestamp": {"type": "text", "form": "timezone-aware ISO timestamp"},

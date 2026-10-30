@@ -16,6 +16,8 @@ from tests.records_support import start_before_review_guard, report_before_goal_
 
 def current_reviews():
     state = review_state()
+    state["checkpoint"]["history_policy"] = {"keep_failed_current_candidate_reviews": False,
+                                               "source": "synthetic applicable current storage policy"}
     current = state["checkpoint"]["candidate"]
     for row in state["admissions"].values():
         row["candidate"] = row["report"]["observation"]["candidate"] = current
@@ -39,11 +41,13 @@ class CurrentReviewEligibilityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.state = current_reviews()
 
-    def test_current_consumed_reviews_of_every_outcome_move_at_the_unchanged_trigger(self):
+    def test_current_consumed_reviews_of_every_outcome_move_before_byte_pressure(self):
         self.assertEqual(size(self.state), COMPACT_AT)
         below = deepcopy(self.state)
         below["source_rejections"]["synthetic-padding"] = below["source_rejections"]["synthetic-padding"][:-1]
-        self.assertEqual(compact(below), (below, {}))
+        placed, parts = compact(below)
+        self.assertTrue(parts)
+        self.assertEqual(hydrate(placed, parts.__getitem__), below)
         record, chunks = compact(self.state)
         self.assertTrue(all(is_reference(row) for row in record["admissions"].values()))
         self.assertEqual({row["report"]["outcome"] for row in self.state["admissions"].values()}, set(OUTCOMES))
