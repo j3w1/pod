@@ -20,9 +20,10 @@ from .errors import PodError
 from . import listing
 from .github import repository_context, repository_reads
 from .ledger import state_root
-from .orca import MAX_OUTPUT, _DEADLINE, current_run, read_deadline
+from .orca import DEADLINE_SPENT, MAX_OUTPUT, _DEADLINE, current_run, read_deadline
 from .status import StatusInputs, status
 from .util import digest
+from .window import Budget
 
 DEFAULT_TIMEOUT = 10.0
 MAX_TIMEOUT = 30.0  # The existing Git read bound; native reads retain their own 10 s cap.
@@ -30,26 +31,24 @@ CURSOR_BYTES = 256
 PAGE_METADATA_RESERVE = 256
 
 
-class ReadBudget:
-    """One remaining whole-call budget, including discovery and publication checks."""
+class ReadBudget(Budget):
+    """The existing reader budget, intersected with the original outer deadline.
+
+    Inherit check(need=...) and the canonical deadline code: window and handoff
+    readers reserve time and catch that protocol before a verifier can start.
+    """
 
     def __init__(self, seconds: float):
         self._parent = _DEADLINE.get()
-        self._end = time.monotonic() + seconds
+        super().__init__(seconds)
 
     def remaining(self) -> float:
-        left = self._end - time.monotonic()
+        left = super().remaining()
         return min(left, self._parent.remaining()) if self._parent is not None else left
 
-    def check(self) -> None:
-        if self.remaining() <= 0:
-            raise PodError("status_deadline", "The original full-status read budget is spent")
 
-    def limit(self, seconds: float) -> float:
-        left = self.remaining()
-        if left <= 0:
-            raise PodError("status_deadline", "The original full-status read budget is spent")
-        return min(seconds, left)
+def _public_code(code: str) -> str:
+    return "status_deadline" if code == DEADLINE_SPENT else code
 
 
 def _bytes(value: dict) -> int:
@@ -180,6 +179,7 @@ def _scope(context: dict) -> dict:
 
 
 def _failure(entry: dict, code: str, reason: str, *, report=None, error_type=None) -> dict:
+    code = _public_code(code)
     reason = reason.encode("utf-8", errors="replace").decode("utf-8")[:512]
     code = code if isinstance(code, str) and code.isascii() and len(code) <= 128 else "status_unavailable"
     return {"record": entry["record"], "objective": entry["objective"], "revision": entry["revision"],
@@ -226,8 +226,7 @@ def _page_bytes(result: dict, payload_bytes: int) -> int:
             + 2 * max(0, len(result["records"]) - 1) + PAGE_METADATA_RESERVE)
 
 
-def full_status(project: Path, *, cursor: str | None = None, page_size: int = listing.MAX_ROWS,
-                timeout: float = DEFAULT_TIMEOUT) -> dict:
+def _full_status(project: Path, *, cursor: str | None, page_size: int, timeout: float) -> dict:
     """Return one bounded full-status page, or explicit incomplete/changed facts.
 
     A complete cohort is not a usable-admission verdict. Clients must consume
@@ -257,8 +256,8 @@ def full_status(project: Path, *, cursor: str | None = None, page_size: int = li
         result = {"schema": "pod-status-batch/v1", "status": "incomplete", "complete": False,
                   "scope": scope, "cohort": {"id": cohort, "total": inventory["total"],
                                              "enumeration_complete": inventory["complete"],
-                                             "membership_complete": all(row["objective"] is not None
-                                                                        for row in inventory["records"]),
+                                             "membership_complete": inventory["complete"] and
+                                             all(row["objective"] is not None for row in inventory["records"]),
                                              "scanned": inventory["scanned"], "scan_limit": listing.MAX_SCAN},
                   "records": [], "page": {}, "reason": inventory["reason"],
                   "deadline_seconds": timeout, "output_limit_bytes": MAX_OUTPUT}
@@ -293,12 +292,21 @@ def full_status(project: Path, *, cursor: str | None = None, page_size: int = li
                     or inputs.identity() != fresh_inputs.identity() or native != fresh_native):
                 failure = "status_cohort_changed"
         except PodError as exc:
-            failure = exc.code
+            failure = _public_code(exc.code)
+        result["page"]["valid"] = failure is None and inventory["complete"]
         if failure is not None:
             result["reason"] = failure
             result["page"]["next_cursor"] = None
-            result["records"] = [_failure(row, failure, "The page's final currency/deadline fence failed",
-                                          report=row["report"]) for row in result["records"]]
+            invalidated = []
+            for row in result["records"]:
+                invalid = _failure(row, failure, "The page's final currency/deadline fence failed",
+                                   report=row["report"])
+                if row["failure"] is not None:
+                    invalid["failure"] = row["failure"]
+                invalid["page_failure"] = {"code": failure,
+                                           "reason": "The page's final currency/deadline fence failed"}
+                invalidated.append(invalid)
+            result["records"] = invalidated
         elif inventory["complete"]:
             failed = any(row["outcome"] == "failure" for row in result["records"])
             whole = offset == 0 and result["page"]["end"]
@@ -313,3 +321,14 @@ def full_status(project: Path, *, cursor: str | None = None, page_size: int = li
             if _bytes(result) > MAX_OUTPUT:
                 raise PodError("status_output_limit", "The typed page exceeds the existing output limit")
         return result
+
+
+def full_status(project: Path, *, cursor: str | None = None, page_size: int = listing.MAX_ROWS,
+                timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Public deadline spelling belongs here; inner readers use their existing protocol."""
+    try:
+        return _full_status(project, cursor=cursor, page_size=page_size, timeout=timeout)
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise PodError("status_deadline", str(exc), exc.detail) from None
+        raise

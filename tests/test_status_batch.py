@@ -36,12 +36,13 @@ class BatchCase(KernelCase):
                                worker_rows_fn=lambda _run: deepcopy(self.listed), **kwargs)
 
     @contextmanager
-    def ports(self, reader=None, binding=None):
+    def ports(self, reader=None, binding=None, native_reader=None):
         with patch.object(batch, "status", side_effect=reader or self.singular), \
              patch.object(batch, "_binding", side_effect=binding or (lambda: deepcopy(BINDING))), \
              patch("pod.orca.read_command", side_effect=PodError("orca_unavailable", "fixture unavailable")), \
              patch.object(OrcaPort, "read_native", autospec=True,
-                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
+                          side_effect=native_reader or
+                          (lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs))):
             yield
 
     def many(self, count):
@@ -66,6 +67,22 @@ class BatchCase(KernelCase):
 
 
 class BatchEquivalenceTests(BatchCase):
+    def test_nonowner_terminal_retains_the_full_singular_window_report(self):
+        self.many(2)
+
+        def caller_native(_port, owner, **kwargs):
+            return {**self.port.read_native(owner, **kwargs), "caller": os.environ["ORCA_TERMINAL_HANDLE"]}
+
+        with patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "fixture-nonowner"}), \
+             self.ports(native_reader=caller_native):
+            expected = {name: self.singular(self.project, None, objective=name)
+                        for name in ("item-000", "item-001")}
+            result = batch.full_status(self.project)
+        self.assertTrue(all(row["report"] is not None for row in result["records"]),
+                        [row["failure"] for row in result["records"]])
+        self.assertEqual({row["objective"]: row["report"] for row in result["records"]}, expected)
+        self.assertTrue(all(row["failure"] is None for row in result["records"]))
+
     def test_every_full_report_equals_singular_including_closed_and_shared_run(self):
         self.intake()
         self.write([self.criterion("satisfied", evidence=[self.proof("O1")])], objective="closed",
@@ -168,6 +185,7 @@ class BatchInventoryTests(BatchCase):
             limited = batch.full_status(self.project)
         self.assertFalse(limited["complete"])
         self.assertFalse(limited["cohort"]["enumeration_complete"])
+        self.assertFalse(limited["cohort"]["membership_complete"])
         self.assertIsNone(limited["cohort"]["total"])
         self.assertEqual((limited["status"], limited["reason"]), ("incomplete", "scan_limit"))
 
@@ -247,6 +265,26 @@ class BatchPagingTests(BatchCase):
 
 
 class BatchCurrencyTests(BatchCase):
+    def test_page_invalidation_keeps_the_record_failure_reason(self):
+        self.intake()
+        path = objective_root(self.project, "objective") / "context.json"
+        value = json.loads(path.read_text())
+        value["checkpoint"]["schema"] = "pod-checkpoint/v9"
+        path.write_text(json.dumps(value))
+
+        def changed(*args, **kwargs):
+            report = self.singular(*args, **kwargs)
+            (path.parent / "governor.json").write_text("{}")
+            return report
+
+        with self.ports(reader=changed):
+            result = batch.full_status(self.project)
+        row = result["records"][0]
+        self.assertEqual(row["failure"]["code"], "state_unsupported")
+        self.assertEqual(row["page_failure"]["code"], "status_cohort_changed")
+        self.assertEqual(row["report"]["blocker"], "state_unsupported")
+        self.assertFalse(result["page"]["valid"])
+
     def test_record_changed_during_projection_invalidates_the_page(self):
         self.intake()
         path = objective_root(self.project, "objective") / "context.json"
@@ -310,6 +348,15 @@ class BatchCurrencyTests(BatchCase):
 
 
 class BatchFailureTests(BatchCase):
+    def test_budget_uses_the_existing_reserved_time_protocol(self):
+        from pod.orca import DEADLINE_SPENT
+        with patch.object(batch.time, "monotonic", return_value=0.0):
+            budget = batch.ReadBudget(10)
+            budget.check(need=9)
+            with self.assertRaises(PodError) as caught:
+                budget.check(need=10)
+        self.assertEqual(caught.exception.code, DEADLINE_SPENT)
+
     def test_late_full_json_is_not_a_timely_success(self):
         self.intake()
         clock = [0.0]
