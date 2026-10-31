@@ -364,17 +364,23 @@ class ChunkStore:
                     raw = file.read(CLEANUP_HINT_BYTES + 1)
             value = json.loads(raw)
             if (len(raw) > CLEANUP_HINT_BYTES or not isinstance(value, dict)
-                    or set(value) != {"queued_bytes", "roots", "untracked"}
+                    or set(value) - {"queued_bytes", "roots", "untracked", "next_attempt_bytes"}
+                    or not {"queued_bytes", "roots", "untracked"} <= set(value)
                     or type(value["queued_bytes"]) is not int or value["queued_bytes"] < 0
                     or not isinstance(value["roots"], list) or len(value["roots"]) > 64
                     or any(not isinstance(v, str) or not HEX.fullmatch(v) for v in value["roots"])
-                    or type(value["untracked"]) is not bool): raise ValueError
+                    or type(value["untracked"]) is not bool
+                    or type(value.get("next_attempt_bytes", 0)) is not int
+                    or value.get("next_attempt_bytes", 0) < 0): raise ValueError
+            value.setdefault("next_attempt_bytes", 0 if value["untracked"] else CLEANUP_TRIGGER_BYTES)
             return {"pending": True, **value}
         except FileNotFoundError:
-            return {"pending": False, "queued_bytes": 0, "roots": [], "untracked": False}
+            return {"pending": False, "queued_bytes": 0, "roots": [], "untracked": False,
+                    "next_attempt_bytes": CLEANUP_TRIGGER_BYTES}
         except (OSError, PodError, ValueError, TypeError):
             pending = path.exists()
-            return {"pending": pending, "queued_bytes": None if pending else 0, "roots": [], "untracked": pending}
+            return {"pending": pending, "queued_bytes": None if pending else 0, "roots": [], "untracked": pending,
+                    "next_attempt_bytes": 0 if pending else CLEANUP_TRIGGER_BYTES}
 
     def request_collection(self, *, queued_bytes=None, replaced=()):
         # This is a bounded recovery hint, not evidence or a second authority.
@@ -383,15 +389,34 @@ class ChunkStore:
             info = self.cleanup_info()
             roots = list(dict.fromkeys([*info["roots"], *replaced]))
             value = {"queued_bytes": (info["queued_bytes"] or 0) + (queued_bytes or 0),
-                     "roots": roots[-64:], "untracked": info["untracked"] or queued_bytes is None or len(roots) > 64}
-            atomic_json(self.root.parent.parent / ".history-gc", value, limit=CLEANUP_HINT_BYTES, compact=True)
+                     "roots": roots[-64:], "untracked": info["untracked"] or queued_bytes is None,
+                     "next_attempt_bytes": info["next_attempt_bytes"] if queued_bytes is not None else 0}
+            self._save_cleanup(value)
         except (OSError, PodError):
             return
 
+    def _save_cleanup(self, value):
+        try:
+            atomic_json(self.root.parent.parent / ".history-gc", value, limit=CLEANUP_HINT_BYTES, compact=True)
+        except (OSError, PodError):
+            return  # Reclamation metadata never rolls back a successful semantic write.
+
     def maybe_collect(self):
         info = self.cleanup_info()
-        if info["pending"] and (info["untracked"] or info["queued_bytes"] >= CLEANUP_TRIGGER_BYTES):
+        if info["pending"] and (info["queued_bytes"] or 0) >= info["next_attempt_bytes"]:
             return self.collect(seconds=5)
+
+    def _defer_collection(self):
+        """Retry a failed full pass after another bounded batch of placements, or explicitly."""
+        try:
+            with self.directory_path(self.root.parent.parent) as directory:
+                fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                info = self.cleanup_info()
+                if not info["pending"]: return
+                self._save_cleanup({"queued_bytes": info["queued_bytes"] or 0, "roots": info["roots"],
+                    "untracked": info["untracked"], "next_attempt_bytes": (info["queued_bytes"] or 0) + CLEANUP_TRIGGER_BYTES})
+        except (OSError, PodError):
+            return
 
     def collect(self, *, seconds=300):
         """Mark both current authorities, then sweep only unreachable owned chunks.
@@ -423,6 +448,7 @@ class ChunkStore:
         except (OSError, PodError, ValueError, TypeError, KeyError, RecursionError) as exc:
             # Commit success is independent of best-effort post-commit cleanup.
             # Missing/corrupt required data preserves the hint and every chunk.
+            self._defer_collection()
             return {"status": "deferred", "pending": True, "reason": getattr(exc, "code", "cleanup_interrupted")}
         finally:
             _DEADLINE.reset(token)
@@ -544,7 +570,8 @@ class ChunkStore:
 
     def put(self, chunks):
         if not chunks:
-            return
+            return 0
+        written = 0
         with self.directory(create=True) as directory:
             for address, data in chunks.items():
                 name = self._name(address)
@@ -568,12 +595,14 @@ class ChunkStore:
                         os.fsync(file.fileno())
                     try:
                         os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                        written += len(data)
                     except FileExistsError:
                         if self._load(directory, address) != data:
                             _fail("history_integrity", "Concurrent immutable chunk differs")
                 finally:
                     os.unlink(temporary, dir_fd=directory)
             os.fsync(directory)
+        return written
 
 
 def _context_bytes(path, limit):
@@ -677,7 +706,7 @@ def _attribution(path, state, *, project=None):
         from .github import repository_context
         from .ledger import record_name
         observed = repository_context(project)
-        if observed["repository"] is not None and record_name(project, observed, objective) == path.parent.name:
+        if observed["repo_key"] is not None and record_name(project, observed, objective) == path.parent.name:
             location = checkpoint.get("worktree")
             if location is not None:
                 checked = worktree_binding(plain(location))
@@ -704,12 +733,12 @@ def _attribution(path, state, *, project=None):
         checked = [worktree_binding(plain(row)) for row in locations]
     except PodError:
         return {"status": "unknown", "reason": "recorded_location_malformed", "objective": objective}
-    identities = {(row["repository"], row["repo_key"]) for row in checked if row["repository"] is not None}
+    identities = {(row["repository"], row["repo_key"]) for row in checked if row["repo_key"] is not None}
     if project is not None:
         from .github import repository_context
         from .ledger import record_name
         observed = repository_context(project)
-        if observed["repository"] is not None and record_name(project, observed, objective) == path.parent.name:
+        if observed["repo_key"] is not None and record_name(project, observed, objective) == path.parent.name:
             identities.add((observed["repository"], observed["repo_key"])); sources.append("repository_objective_record_key")
     if len(identities) != 1:
         return {"status": "unknown", "reason": "recorded_repository_conflict" if identities else "repository_unavailable", "objective": objective}
@@ -791,7 +820,8 @@ def load_admission_facts(path, *, include_admissions=True):
         raise PodError("invalid_record", "Cannot decode admission attribution") from exc
     if not isinstance(physical, dict):
         _fail("history_invalid", "Admission attribution is not an object")
-    if physical.get("schema") == SCHEMA:
+    current = physical.get("schema") == SCHEMA
+    if current:
         state = _revision_state(path, physical, raw)
         attribution = _public_attribution(_attribution_data(path, state.storage["attribution"], physical["root"]))
     else:
@@ -803,33 +833,34 @@ def load_admission_facts(path, *, include_admissions=True):
     if state.get("schema") != STATE_SCHEMAS["context"]:
         _fail("state_unsupported", "Admission attribution uses an unsupported context")
     checkpoint = state.get("checkpoint")
-    if not isinstance(checkpoint, dict) or checkpoint.get("schema") != STATE_SCHEMAS["checkpoint"]:
+    if (not isinstance(checkpoint, dict) or checkpoint.get("schema") != STATE_SCHEMAS["checkpoint"]
+            and (current or checkpoint.get("schema") != "pod-checkpoint/v2")):
         _fail("state_unsupported", "Admission attribution has no supported checkpoint")
     objective = checkpoint.get("objective")
     if not isinstance(objective, str) or not objective:
         _fail("history_invalid", "Admission attribution has no objective")
     location = checkpoint.get("worktree")
-    if attribution is None:
+    if attribution is None and location is not None:
         location = worktree_binding(plain(location))
-        if (location.get("repository") is None
-                or digest({"repository": location["repo_key"], "objective": objective}) != path.parent.name):
-            _fail("history_invalid", "Admission attribution differs from its repository/objective record key")
-        attribution = {"status": "proved", "repository": location["repository"], "repo_key": location["repo_key"],
-                       "objective": objective, "basis": {"record_key": path.parent.name, "sources": ["checkpoint.worktree"]}}
-    if (not isinstance(attribution, dict) or attribution.get("status") != "proved"
-            or not isinstance(attribution.get("repository"), str) or attribution["repository"].count("/") != 1
+        if digest({"repository": location["repo_key"], "objective": objective}) == path.parent.name:
+            attribution = {"status": "proved", "repository": location["repository"], "repo_key": location["repo_key"],
+                           "objective": objective, "basis": {"record_key": path.parent.name, "sources": ["checkpoint.worktree"]}}
+    if current and (not isinstance(attribution, dict) or attribution.get("status") != "proved"
+            or (attribution.get("repository") is not None and
+                (not isinstance(attribution["repository"], str) or attribution["repository"].count("/") != 1))
             or not isinstance(attribution.get("repo_key"), str) or not HEX.fullmatch(attribution["repo_key"])
             or attribution.get("objective") != objective
             or not isinstance(attribution.get("basis"), dict) or attribution["basis"].get("record_key") != path.parent.name):
         _fail("attribution_unavailable", "Recorded facts do not prove repository attribution; retain a scoped unknown")
-    if location is not None:
+    if location is not None and attribution is not None:
         location = worktree_binding(plain(location))
         if (location["repository"], location["repo_key"]) != (attribution["repository"], attribution["repo_key"]):
             _fail("history_integrity", "Current placement contradicts recorded attribution")
     revision = state.get("revision")
-    if type(revision) is not int or revision < 0 or physical.get("revision") != revision:
+    if (current or revision is not None) and (type(revision) is not int or revision < 0 or physical.get("revision") != revision):
         _fail("history_integrity", "Admission attribution revision differs")
-    result = {"schema": "pod-admission-facts/v1", "generation": {"revision": revision, "sha256": _sha(raw)},
+    result = {"schema": "pod-admission-facts/v1", "generation": {"revision": revision if revision is not None else 0, "sha256": _sha(raw)},
+              "source_revision": revision,
               "attribution_complete": True, "attribution": attribution, "complete": False, "admissions": None,
               "context": {"schema": state["schema"], "revision": revision, "owner": state.get("owner"),
                           "checkpoint": {key: plain(checkpoint.get(key)) for key in
@@ -856,14 +887,15 @@ def load_admission_facts(path, *, include_admissions=True):
               "worktree", "native_binding", "serves", "boundary", "candidate", "request_uuid")
     for key, value in admissions.items():
         if is_reference(value): value = _expand(value, ChunkStore(path.parent).load, {})
-        if not isinstance(value, dict) or value.get("admission_id") != key or value.get("schema") != STATE_SCHEMAS["admission"]:
+        if not isinstance(value, dict):
             _fail("history_invalid", "Current admission identity is unavailable")
-        if any(field not in value for field in fields):
+        if current and (value.get("admission_id") != key or value.get("schema") != STATE_SCHEMAS["admission"]
+                        or any(field not in value for field in fields)):
             _fail("history_invalid", "Current admission facts are incomplete")
-        rows[key] = {field: plain(value[field]) for field in fields}
-        recovery = value.get("recovery")
+        rows[key] = {field: plain(value[field]) for field in fields if field in value}
+        recovery = value.get("recovery", {})
         if not isinstance(recovery, dict):
-            _fail("history_invalid", "Current admission placement facts are unavailable")
+            _fail("admission_placement_invalid", "Current admission placement facts are unavailable")
         placement = recovery.get("placement_binding")
         rows[key]["placement_binding"] = plain(placement) if placement is not None else None
         if "abandoned_accounting" in value:
@@ -872,7 +904,7 @@ def load_admission_facts(path, *, include_admissions=True):
                 _fail("history_invalid", "Current abandonment marker is malformed")
             rows[key]["abandoned_accounting"] = {field: plain(accounting[field])
                 for field in ("classification", "execution") if field in accounting}
-    result.update(admissions=rows, complete=location is not None)
+    result.update(admissions=rows, complete=True)
     if location is None:
         result["errors"] = [{"code": "objective_placement_unknown"}]
     return result
@@ -885,13 +917,24 @@ def prepare_context(path, state, *, maintenance=None, project=None):
 
 def publish_context(path, record, chunks):
     """Publish once, then reclaim unreachable chunks after readers drain."""
+    from .evidence_closure import refuse_closed
+    refuse_closed(path.parent)
     store = ChunkStore(path.parent)
     with store.pin(create=True, collect=True):
         previous = json.loads(_context_bytes(path, MAINTENANCE_LIMIT)) if path.exists() else {}
         replaced = [previous[key]["ref"]["sha256"] for key in ("root", "facts", "attribution", "maintenance")
                     if isinstance(previous.get(key), dict) and "ref" in previous[key]]
         store.request_collection(queued_bytes=sum(map(len, chunks.values())) + len(_bytes(record)), replaced=replaced)
-        _publish_context(path, record, chunks)
+        added = _publish_context(path, record, chunks)
+        # Planning can reproduce identical immutable pages from restated values.
+        # They consume no new disk and must not repeatedly trigger full cleanup.
+        credit = max(0, sum(map(len, chunks.values())) - added)
+        if credit:
+            info = store.cleanup_info()
+            if info["queued_bytes"] is not None:
+                store._save_cleanup({"queued_bytes": max(0, info["queued_bytes"] - credit),
+                                     "roots": info["roots"], "untracked": info["untracked"],
+                                     "next_attempt_bytes": info["next_attempt_bytes"]})
         state = getattr(record, "source_state", None)
         if hasattr(state, "origin"):
             # A multi-phase writer may publish this same object again. Advance
@@ -918,7 +961,7 @@ def _publish_context(path, record, chunks):
     _require_size(record, current_bytes=path.stat().st_size if path.exists() else 0)
     preflight_landing(path, sum(map(len, chunks.values())) + len(_bytes(record)))
     try:
-        ChunkStore(path.parent).put(chunks)
+        added = ChunkStore(path.parent).put(chunks)
         atomic_json(path, record, limit=CONTEXT_LIMIT, compact=True)
     except OSError as exc:
         if exc.errno in (errno.ENOSPC, errno.EDQUOT):
@@ -933,6 +976,7 @@ def _publish_context(path, record, chunks):
                        {"next_action": "read the authoritative record before retrying; do not repeat an external effect"}) from exc
     finally:
         os.close(fd)
+    return added
 
 
 class _Publication(dict):

@@ -164,7 +164,6 @@ class Reader:
         else:
             yield from page["entries"]
 
-    @_storage_read
     def value(self, value, parent=None):
         if not isinstance(value, dict) or len(value) != 1:
             raise PodError("history_integrity", "Malformed revision value descriptor")
@@ -173,13 +172,12 @@ class Reader:
             mark_persisted(result)
             return result
         if "value" in value:
-            from .history import _expand
             ref = value["value"]
             if (not isinstance(ref, dict) or not isinstance(ref.get("$pod_history"), dict)
                     or type(ref["$pod_history"].get("bytes")) is not int
                     or ref["$pod_history"]["bytes"] > self.memory_limit):
                 raise PodError("history_memory", "History scalar exceeds available parse memory headroom")
-            return tracked(_expand(ref, self.read_bytes, {}), parent)
+            return self.scalar(ref, parent)
         reference = value.get("ref")
         if not isinstance(reference, dict) or reference.get("kind") not in ("dict", "list"):
             raise PodError("history_integrity", "Malformed revision container descriptor")
@@ -187,6 +185,11 @@ class Reader:
         result = cls(reader=self, reference=reference, parent=parent)
         result.persisted = True
         return result
+
+    @_storage_read
+    def scalar(self, reference, parent=None):
+        from .history import _expand
+        return tracked(_expand(reference, self.read_bytes, {}), parent)
 
 
 class _Revision:

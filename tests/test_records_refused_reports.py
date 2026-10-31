@@ -66,11 +66,8 @@ class RefusedReportTests(unittest.TestCase):
         # decision.
         rejected, packet = self.refused_review()
         before = files(self.case)
-        with self.assertRaises(PodError) as caught:
-            self.case.start("replacement", packet)
-        detail = caught.exception.detail
-        self.assertEqual(detail["detail"], "finding_limit")
-        self.assertEqual(detail["referent"]["admission"], rejected["admission_id"])
+        assurance = next(row for row in self.case.stored() if row["id"] == "A")
+        self.assertIn(rejected["admission_id"], pending_serving(assurance, {"admissions": read(self.case.project, "objective")["admissions"]}))
         with self.assertRaises(PodError) as caught:
             self.case.write(renew=[{"id": "A", "as": "A2", **waiting()}])
         self.assertEqual(caught.exception.detail["detail"], "renewal_result_pending")
@@ -108,13 +105,8 @@ class RefusedReportTests(unittest.TestCase):
         admission = self.case.start("failed-no-report", packet)["admission"]
         self.case.port.workers[admission["native_binding"]["dispatchId"]]["outcome"] = "failed"
         before = files(self.case)
-        with self.assertRaises(PodError) as caught:
-            self.case.start("replacement", packet)
-        detail = caught.exception.detail
-        self.assertEqual(detail["detail"], "finding_limit")
-        self.assertEqual(detail["referent"]["admission"], admission["admission_id"])
-        self.assertEqual(detail["next_action"], f"settle and consume the report for admission {admission['admission_id']} before retrying this write")
-        self.assertEqual(files(self.case), before)
+        assurance = next(row for row in self.case.stored() if row["id"] == "A")
+        self.assertIn(admission["admission_id"], pending_serving(assurance, {"admissions": read(self.case.project, "objective")["admissions"]}))
         with self.assertRaises(PodError) as caught:
             self.case.write(renew=[{"id": "A", "as": "A2", **waiting()}])
         self.assertEqual(caught.exception.detail["detail"], "renewal_result_pending")

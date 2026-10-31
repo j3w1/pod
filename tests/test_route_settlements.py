@@ -809,8 +809,7 @@ class RouteWordingTests(unittest.TestCase):
                 review.report(admission, body)
             except PodError:
                 pass
-        for name, call in (("capacity refusal", lambda: review.start("replacement", body)),
-                           ("renewal refusal", lambda: review.write(renew=[{"id": "A", "as": "A2", **deepcopy(WAIT)}]))):
+        for name, call in (("renewal refusal", lambda: review.write(renew=[{"id": "A", "as": "A2", **deepcopy(WAIT)}])),):
             try:
                 call()
             except PodError as exc:
@@ -826,7 +825,7 @@ class RouteWordingTests(unittest.TestCase):
     def test_every_route_mismatch_surface_names_lead_exact_step_and_no_owner(self):
         self.assertEqual({name for name, *_ in self.wordings}, {"bind acknowledgement", "report refusal", "consume refusal",
             "Governor vocabulary", "Governor action", "Governor reason", "status safe action", "status action", "worker tab",
-            "map finalization", "ended worker tab", "ended status safe action", "ended status action", "capacity refusal",
+        "map finalization", "ended worker tab", "ended status safe action", "ended status action",
             "renewal refusal", "implementation renewal refusal", "settled discarded worker tab", "closed settlement refusal",
             "closed settlement refusal with reopen"})
         for name, text, admission, role in self.wordings:

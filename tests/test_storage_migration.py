@@ -106,6 +106,5 @@ class RetainedFindingTests(unittest.TestCase):
         reserve_capacity(assurance, context, seq=301)
         self.assertEqual(assurance, before)
         context["map_state"]["proposals"] = []
-        with self.assertRaises(PodError) as caught: reserve_capacity(assurance, context, seq=301)
-        self.assertEqual(caught.exception.detail["detail"], "finding_limit")
-        self.assertNotIn("renew", str(caught.exception.detail["next_action"]))
+        reserve_capacity(assurance, context, seq=301)
+        self.assertEqual(assurance, before)

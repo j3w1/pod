@@ -694,8 +694,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     try:
                         name = _membership(project, context, record, raw, known)
                     except PodError as exc:
-                        if exc.code == "record_attribution_unknown" and _phase(raw) == "closed" and raw.get("admissions") == {}:
+                        if exc.code == "record_attribution_unknown" and _phase(raw) == "closed":
                             _admissions(raw, directory)  # Supported, structurally closed, and no hidden admission references.
+                            if raw.get("admissions") != {}:
+                                raise
                             journal, journal_id = _journal(directory / "governor.json")
                             if not any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN") for row in journal["actions"]):
                                 attribution_gaps.append((record, directory, identity, journal_id))

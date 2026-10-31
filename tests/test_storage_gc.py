@@ -185,6 +185,29 @@ class ReclamationTests(unittest.TestCase):
         self.assertGreater(len(info["roots"]), 0)
         self.assertEqual(self.store.collect()["status"], "collected")
 
+    def test_identical_replanned_pages_do_not_spend_the_cleanup_queue(self):
+        _write(self.path, deepcopy(self.state))
+        self.store.collect()
+        with patch("pod.history.CLEANUP_TRIGGER_BYTES", 64 * 1024), \
+             patch.object(ChunkStore, "_collect", side_effect=AssertionError("duplicate pages triggered a sweep")):
+            for _ in range(3):
+                _write(self.path, plain(load_context(self.path)))
+        self.assertLess(self.store.cleanup_info()["queued_bytes"], 64 * 1024)
+
+    def test_failed_automatic_sweep_does_not_scan_again_until_another_batch(self):
+        _write(self.path, deepcopy(self.state))
+        self.store.collect()
+        from pod.history import CLEANUP_TRIGGER_BYTES
+        self.store.request_collection(queued_bytes=CLEANUP_TRIGGER_BYTES)
+        with patch.object(ChunkStore, "_collect", side_effect=PodError("history_deadline", "injected cleanup budget")) as sweep:
+            self.assertEqual(self.store.maybe_collect()["reason"], "history_deadline")
+            value = load_context(self.path)
+            _write(self.path, value)
+            value.reader.close()
+            self.assertEqual(sweep.call_count, 1)
+            self.assertEqual(self.store.collect()["reason"], "history_deadline")
+            self.assertEqual(sweep.call_count, 2)
+
     def test_threshold_cleanup_runs_after_the_semantic_record_lock_is_released(self):
         import fcntl
         from pod.ledger import _lock
