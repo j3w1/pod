@@ -32,11 +32,11 @@ Type: H · Scenarios: [A73](#a73)
 
 Follow registered host paths/worktree mechanisms/native profiles/admin boundaries. Canonical pod registration/relocation uses owner-managed mechanism. Coding must not change global policy, weaken protections/gates or perform unauthorized deployment/provider/publication actions.
 
-### R52 — Use Python 3.13+ on Linux, one
+### R52 — Use the latest stable Python on Linux, one
 
 Type: I · Scenarios: [A75](#a75), [A135](#a135)
 
-Use Python 3.13+ on Linux, one bundle-as-package and standard-library facilities where practical. Run unit, incident, PTY/subprocess, installed-bundle, source-audit and hosted checks as specified, with independent review and separate live evidence.
+Use the latest stable CPython on Linux, one interpreter per qualification run, one bundle-as-package and standard-library facilities where practical. Run unit, incident, PTY/subprocess, installed-bundle, source-audit and hosted checks as specified, with independent review and separate live evidence.
 
 ### R53 — Keep contributor documents contextual and README approachable
 

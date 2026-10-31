@@ -37,20 +37,20 @@ def run(skill:Path,args:list[str],*,home:Path,cwd:Path,
 
 
 class CopiedBundleTests(unittest.TestCase):
-    def test_old_interpreter_fails_before_package_or_yaml_import(self):
+    def test_prerelease_interpreter_fails_before_package_or_yaml_import(self):
         with fixture() as root:
             skill=copy_bundle(root/'installed')
             probe=subprocess.run([sys.executable,'-I','-c',
                 "import importlib.util,json,sys\n"
                 "spec=importlib.util.spec_from_file_location('launcher',sys.argv[1])\n"
                 "module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\n"
-                "failure=module.preflight(version_info=(3,12,0),bundle=sys.argv[2])\n"
+                "failure=module.preflight(version_info=(9,9,0,'beta',1),bundle=sys.argv[2])\n"
                 "print(json.dumps({'failure':failure,'imported':'pod' in sys.modules}))\n",
                 str(skill/'scripts'/'pod.py'),str(skill)],capture_output=True,text=True,timeout=30)
             self.assertEqual(probe.returncode,0,probe.stderr)
             observed=json.loads(probe.stdout)
-            self.assertEqual(observed['failure']['code'],'python_too_old')
-            self.assertIn('3.12.0',observed['failure']['message'])
+            self.assertEqual(observed['failure']['code'],'python_not_stable')
+            self.assertIn('9.9.0-beta',observed['failure']['message'])
             self.assertFalse(observed['imported'])
 
     def test_missing_pyyaml_is_clean_json_and_points_to_one_shot_installer(self):

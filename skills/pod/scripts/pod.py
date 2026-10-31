@@ -12,7 +12,6 @@ import json
 import os
 import sys
 
-MIN_PYTHON = (3, 13)
 REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
 
 
@@ -59,12 +58,12 @@ def preflight(version_info=None, find_spec=None, bundle=None):
     missing one produces guidance rather than a traceback.
     """
     version = sys.version_info if version_info is None else version_info
-    if tuple(version[:2]) < MIN_PYTHON:
-        running = ".".join(str(part) for part in version[:3])
-        return {"code": "python_too_old",
-                "message": ("Python %d.%d or newer is required; this is %s at %s. Re-run with a "
-                            "newer interpreter, for example: python3.13 %s"
-                            % (MIN_PYTHON[0], MIN_PYTHON[1], running, sys.executable, os.path.realpath(__file__)))}
+    if len(version) > 3 and version[3] != "final":
+        running = ".".join(str(part) for part in version[:3]) + "-" + str(version[3])
+        return {"code": "python_not_stable",
+                "message": ("A stable CPython is required; this is the prerelease %s at %s. Re-run with the "
+                            "latest stable interpreter: python3 %s"
+                            % (running, sys.executable, os.path.realpath(__file__)))}
     root = bundle_dir() if bundle is None else bundle
     try:
         names = _inventory(root)

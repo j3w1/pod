@@ -5,7 +5,8 @@ Pod's one-shot installer downloads the current `main` source, validates the `ski
 ## Prerequisites
 
 - Linux and a non-root user.
-- Python 3.13 or newer with `venv`, `ensurepip`, and curses. On Debian-derived systems, the matching `python3.13-venv` package may be needed. A user-managed Python such as `uv python install 3.13` also works when it is the `python3` found on PATH.
+- The latest stable CPython as `python3` on PATH, with `venv`, `ensurepip`, and curses. The installer uses that `python3` and refuses a prerelease or a missing module; it never falls back to another interpreter. On Debian-derived systems the matching `venv` package may be needed. Provision the interpreter through the host's approved runtime provisioning, not through the installer.
+- PyYAML is installed from a prebuilt wheel. Only when pip finds no wheel for the running interpreter (a new CPython often precedes its wheels), and only for the exact pinned `PyYAML==6.0.3`, the installer builds PyPI's source archive `pyyaml-6.0.3.tar.gz`, accepted solely by its pinned SHA-256; a hash mismatch or a failed build refuses. That build downloads its build tools from PyPI.
 - Node and `npx`, plus curl or wget.
 - Network access to `raw.githubusercontent.com` for the bootstrap script, `codeload.github.com` for source, PyPI for the pinned PyYAML wheel, and npm for `skills@1.7.0`.
 - Orca and an authenticated Codex or Claude Code session for live delegation. Installation itself does not require them to be running.
@@ -68,6 +69,8 @@ The supported models live in the `pod-catalog/v3` registry `skills/pod/catalog.j
 The bundled fallback `skills/pod/observations.json` comes from one real refresh. To regenerate it, run one `pod models refresh` into a disposable `POD_CACHE_HOME`, copy that run's `current.json` unchanged, and keep it under the 64 KB bundle text limit. Observations never prove native access, billing or effective model settings.
 
 ## Decision records and rollback
+
+An admission carrying `abandoned_accounting` requires a reader that supports fenced abandoned-assignment accounting. Preceding readers refuse that explicit field without changing the record; they must not reinterpret it as a started worker or a reusable terminal. Admissions without the field retain their existing representation and readability. Preserve the evidence and use a compatible reader rather than deleting the field for rollback.
 
 Machine decision policy and remembered sensitive tool permissions are chosen by answering Pod, using `pod policy` and the tool decision flow; installation does not answer for the person. They live alongside route preferences in the existing personal config. A skipped first setup retains Careful. Existing session authentication, tool access and host policy remain external to Pod.
 

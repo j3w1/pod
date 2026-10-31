@@ -977,6 +977,7 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
                    and not route_discarded(admission, pending=ctx.get("pending_route_settlements", ()))
                    and (key in _outstanding(ctx) or admission.get("state") != "deferred"
                         and (admission.get("report") is None and admission.get("disposition") is None
+                             and "abandoned_accounting" not in admission
                              or admission.get("role") == "implement" and admission.get("disposition") is None))]
         if pending:
             admission = _admissions(ctx)[pending[0]]
@@ -2426,6 +2427,10 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
             raise refuse("obligation_unaccounted", "disposition_invalid", "discarding a result needs a reason",
                          admission=key)
         return {"kind": "discarded", "reason": record["reason"], "seq": seq}
+    if "abandoned_accounting" in row:
+        raise refuse("obligation_unaccounted", "disposition_invalid",
+                     "abandoned accounting has no accepted output; only discarded with a reason is supported",
+                     admission=key)
     candidate = _text(record["integrated_into"], "integrated_into", code="obligation_unaccounted",
                       detail="disposition_invalid", limit=bound("disposition", "integrated_into"))
     result = row.get("result") or {}

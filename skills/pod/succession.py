@@ -391,7 +391,7 @@ def _predecessor_checks(project: Path, predecessor: str, prior: dict, facts: dic
     settled admissions. `previous` is a read of the predecessor's coordinator terminal this call already made.
     """
     from .handoff import unfinished
-    from .ledger import _native_assignment_settled, _run_references, map_of
+    from .ledger import _native_assignment_claim_free as _native_assignment_settled, _run_references, map_of
     from .orca import run_show, terminal_identity, worker_rows
     from .obligations import TERMINAL
 

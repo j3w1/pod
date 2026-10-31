@@ -21,7 +21,7 @@ executable dependencies are not, and Pod promises no support elsewhere. Do not c
 ordinary Python to prevent incidental use on another system, and do not spend effort
 maintaining it there.
 
-Use Python 3.13+ and standard-library facilities where practical. `skills/pod` is one
+Use the latest stable CPython, one interpreter per qualification run, and standard-library facilities where practical. `skills/pod` is one
 directory serving two roles at once: the importable `pod` package and the agent skill that
 the one-shot installer from `main` places through the skills CLI. The installer also places
 a user-local global `pod` launcher. This is Pod's only distribution; there are no packages,

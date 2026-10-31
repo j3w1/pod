@@ -620,7 +620,7 @@ def work_activity(admissions: dict, dispatches: dict, *, port) -> tuple[tuple | 
     then every Dispatch of the Runs' complete worker lists and of each bound admission, with its exact recorded
     identity. `dispatches` names the worker Dispatches (value None); bound admissions are added to it. Returns the
     first unproven fact as (condition, message, next action), or None, and how many Dispatches read settled."""
-    from .ledger import _native_assignment_settled
+    from .ledger import _native_assignment_claim_free as _native_assignment_settled
     from .operations import _receipt_from_request_show
     activity, settled = None, 0
     for key, row in admissions.items():

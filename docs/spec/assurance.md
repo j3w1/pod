@@ -92,7 +92,7 @@ Each obligation retains at most 64 immutable receipts (`MAX_RECEIPTS`), while a 
 
 ## Verification
 
-Python 3.13+ on Linux, one bundle-as-package and standard-library facilities
+The latest stable CPython on Linux, one interpreter per qualification run, one bundle-as-package and standard-library facilities
 where practical. Focused tests run during development; the complete unit and
 incident suite, explicit incident discovery, compile/whitespace, catalog check,
 skill validation, source audit, PTY/subprocess and disposable installed-bundle
@@ -131,11 +131,11 @@ The same chronology predicate validates evidence and explains invalidation: both
 
 ### R172 — Project hosted suite shares from same-run planned worker time
 
-Type: B,I · Scenarios: [A590](#a590), [A591](#a591), [A592](#a592), [A593](#a593)
+Type: B,I · Scenarios: [A590](#a590), [A591](#a591), [A592](#a592), [A593](#a593), [A604](#a604)
 
 Hosted suite timing lines record each share's wall seconds and its largest worker estimate from the original checkout plan. Refresh retains those measurements with their plan and commit identity; it never rebuilds the denominator from observed test durations or a refreshed manifest. Each lane projects share wall time as its current largest planned worker multiplied by the maximum measured share ratio, floored at one. A earlier manifest without calibration uses one; earlier timing logs refresh durations while retaining any existing calibration. Verified earlier plan reconstruction is identified separately from direct telemetry.
 
-Refresh validates complete same-run lane shares and timing chunks, consistent identities and metadata, finite timings, passing-test accounting and unique listed test IDs before updating anything. Identical chunk replay is idempotent; conflicting duplicates, missing shares or parts, mixed telemetry, skipped or incomplete execution and unsuccessful worker completion refuse. Earlier logs without worker completion telemetry retain their older evidence limits.
+Hosted CI resolves the latest stable CPython once per run and runs every share, once, on that exact version. Timing lines record the interpreter version, and a refresh requires the whole run to have used one; no interpreter is preferred for calibration and earlier logs without a version keep their own evidence. Refresh validates complete same-run lane shares and timing chunks, consistent identities and metadata, finite timings, passing-test accounting and unique listed test IDs before updating anything. Identical chunk replay is idempotent; conflicting duplicates, missing shares or parts, mixed telemetry, skipped or incomplete execution and unsuccessful worker completion refuse. Earlier logs without worker completion telemetry retain their older evidence limits.
 
 Raw worker estimates above the target remain a hard finding. Calibrated projections above target also require another shard below the parallel cap. At that cap, calibrated-only excess is an explicit warning with projected seconds and residual; it cannot suggest an unauthorized seventh shard. The existing hosted wall failure and owner authority over budgets, targets, timing overrides and the cap remain unchanged. Shard changes update the manifest and hosted matrix together. Detailed contributor procedures live in `docs/validation.md`.
 
@@ -143,3 +143,4 @@ Raw worker estimates above the target remain a hard finding. Calibrated projecti
 - <a id="a591"></a>**A591** — Refresh refuses incomplete, inconsistent, nonfinite or unsuccessful timing input and duplicate listed test IDs before changing the manifest. Identical chunk replay is harmless; conflicting replay refuses. Incomplete or malformed calibration objects refuse manifest validation.
 - <a id="a592"></a>**A592** — Earlier manifests project with ratio one, and complete earlier logs retain existing calibration while refreshing durations. A complete older shard topology can refresh after shard counts increase. Earlier calibration identifies a verified original plan rather than inferring one from observed timings.
 - <a id="a593"></a>**A593** — The parallel shard remedy stays within the existing cap and matches hosted matrix rows. At the cap, calibrated-only excess warns with numbers and owner authority, raw worker overload still fails, and the hosted wall-time failure stays effective. Candidate hosted evidence reports each parallel share below target or its numerical residual.
+- <a id="a604"></a>**A604** — Hosted CI resolves one latest stable CPython per run and passes the exact version to every job and shard, each test runs once, and a failing resolution fails the required `linux` job. Timing identity records that version for every share and a refresh refuses a run that used more than one; earlier logs keep their own version evidence.

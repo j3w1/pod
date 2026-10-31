@@ -9046,6 +9046,172 @@
         "tests.test_suite_lanes.ManifestTests.test_the_checked_in_manifest_is_valid_and_owner_capped"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A594",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_exact_accounting_frees_only_logical_slot_and_keeps_unknown_resources_and_history",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_internal_original_admission_contract_reaches_accounting_and_rejects_changed_packet",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_reused_terminal_null_launch_keeps_prior_effective_route_with_provenance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A595",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_abandoned_attempt_without_observed_start_evidence_is_refused_and_ordinary_failure_binds",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_any_immutable_observed_start_blocks_accounting_even_with_unobserved_latest_read",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_observed_or_missing_original_receipt_and_request_conflict_refuse",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_missing_or_conflicting_fence_remains_unresolved",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_native_identity_conflicts_keep_existing_guards",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_actual_worktree_must_join_original_placement_before_accounting"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A596",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_normal_binding_and_report_cannot_promote_accounting_to_started_output",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_accounting_cannot_integrate_or_reuse_unobserved_terminal"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A597",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_pending_request_is_accounted_without_replay",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_interruption_after_readback_archive_recovers_once_without_start_or_proof_loss",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_accounting_input_for_a_new_task_never_reserves_or_starts",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_missing_authority_and_conflicting_stored_request_cannot_account",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_later_observed_native_start_cannot_keep_freeing_the_accounted_slot"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A598",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedPrecedingReaderTests.test_genuine_02121_reads_unchanged_records_and_refuses_new_accounting_without_writes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A599",
+      "required_evidence": [
+        "live_native"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A600",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_never_started_attempt_is_never_recorded_as_started_exited_or_successful",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_exited_process_settles_and_releases_the_slot",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_released_resource_metadata_never_clears_a_live_or_unverifiable_process",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_attempt_that_becomes_abandoned_keeps_its_claim_before_any_accounting",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_pending_effect_target_is_a_claim_across_worktrees_and_an_unrelated_one_is_not",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_the_seventeenth_held_effect_is_held_like_the_first",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_long_held_target_is_compared_in_full_never_truncated",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_repository_ref_is_independent_across_repositories_but_a_shared_target_is_not",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_live_process_settles_but_the_hold_remains",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_abandoned_attempt_without_observed_start_evidence_is_refused_and_ordinary_failure_binds",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_wrong_identity_or_another_attempts_result_is_refused",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_stale_runtime_is_refused",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_repeated_recovery_is_idempotent_and_takes_no_extra_slot",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_independent_scope_is_usable_while_the_same_scope_stays_held",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_retained_reused_resource_is_not_treated_as_released",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_relevant_external_effect_still_blocks_after_the_agent_exits",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_setup_not_applicable_and_reused_terminal_are_not_pending_effects",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_an_unverifiable_process_is_unknown_execution_and_stays_held",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_a_live_worker_keeps_its_worktree_held_and_leaves_an_independent_one_usable",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_positive_exit_settles_releases_and_frees_the_repository",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_observed_start_is_distinguished_from_unknown_by_its_own_facts",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_an_unresolved_external_effect_stays_protected_after_exit",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_repeated_recovery_never_duplicates_execution_and_a_later_live_read_holds_again"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A601",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedReadinessTests.test_settled_non_success_with_no_live_claim_is_non_material_and_reported_as_history",
+        "tests.test_abandoned_accounting.AbandonedReadinessTests.test_live_or_unknown_process_claim_is_material",
+        "tests.test_abandoned_accounting.AbandonedReadinessTests.test_without_the_exact_native_read_nothing_is_history",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_held_abandoned_reviewer_on_the_exact_candidate_still_blocks_validation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A602",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unresolved_start_later_proved_observed_is_accounted_as_observed_not_unknown",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_admission_abandoned_after_an_observed_start_is_accounted_without_a_report"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A603",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedRoleTests.test_review_role_releases_its_reservation_only_when_the_claim_clears_and_finalizes_without_a_report",
+        "tests.test_abandoned_accounting.AbandonedRoleTests.test_implement_role_still_takes_the_ordinary_discard_before_replacement"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A604",
+      "required_evidence": [
+        "unit",
+        "hosted_ci"
+      ],
+      "offline_test": [
+        "tests.test_suite_lanes.ManifestTests.test_the_hosted_workflow_resolves_one_stable_python_once_and_runs_every_job_on_it",
+        "tests.test_suite_lanes.ManifestTests.test_timing_evidence_records_the_interpreter_and_one_run_uses_one_interpreter",
+        "tests.test_suite_lanes.RefreshTests.test_a_refresh_run_must_have_one_interpreter_and_earlier_unnamed_logs_still_refresh",
+        "tests.test_installer.InstallerTests.test_preflight_refusals_half_pipe_and_no_profile_mutation",
+        "tests.test_bundle_install.CopiedBundleTests.test_prerelease_interpreter_fails_before_package_or_yaml_import",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_a_prebuilt_wheel_keeps_the_wheel_only_path_unchanged",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_without_a_wheel_it_builds_exactly_the_hash_pinned_archive",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_a_wrong_hash_or_a_failed_build_refuses_with_a_clear_message",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_a_network_failure_or_another_pin_never_tries_a_source_build",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_ci_validates_the_skill_and_publishes_nothing"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

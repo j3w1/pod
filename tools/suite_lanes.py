@@ -23,6 +23,7 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
 import re
 import signal
 import subprocess
@@ -724,7 +725,7 @@ def timing_lines(*, lane: str, shard: int, of: int, workers: int, digest: str, r
     lines = []
     for part in range(parts):
         body = {"schema": TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "workers": workers,
-                "cpus": os.cpu_count(), "sha": os.environ.get("GITHUB_SHA", ""),
+                "cpus": os.cpu_count(), "python": platform.python_version(), "sha": os.environ.get("GITHUB_SHA", ""),
                 "run_id": os.environ.get("GITHUB_RUN_ID", ""), "plan": digest,
                 "part": part + 1, "parts": parts, "planned": len(results), "ran": ran, "skips": skips,
                 "fixture_errors": fixture_errors, "clean": clean, "wall": round(wall, 1),
@@ -912,6 +913,7 @@ def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:
                 or body["shard"] > body["of"] or body["part"] > body["parts"]
                 or not isinstance(body.get("plan"), str) or not body["plan"]
                 or not isinstance(body.get("sha"), str)
+                or not isinstance(body.get("python", ""), str)
                 or not isinstance(body.get("run_id", ""), str)
                 or body.get("run_id", "") != "" and not body["run_id"].isascii()
                 or body.get("run_id", "") != "" and not body["run_id"].isdecimal()
@@ -936,15 +938,15 @@ def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:
             raise Finding("REFRESH planned worker measurement needs a finite positive denominator, finite ratio "
                           "and clean worker completion")
         calibrated.add(has_planned)
-        identities.add((body["plan"], body["sha"], body.get("run_id", "")))
+        identities.add((body["plan"], body["sha"], body.get("run_id", ""), body.get("python", "")))
         key = (body["lane"], body["shard"], body["of"])
         parts = legs.setdefault(key, {})
         if body["part"] in parts and parts[body["part"]] != body:
             raise Finding("REFRESH conflicting duplicate timing part")
         parts[body["part"]] = body
     if len(identities) != 1:
-        raise Finding("REFRESH legs disagree on the plan digest, SHA or run identity: "
-                      "refresh from a single run of one commit")
+        raise Finding("REFRESH legs disagree on the plan digest, SHA, run identity or interpreter: "
+                      "refresh from a single run of one commit on one interpreter")
     if len(calibrated) != 1:
         raise Finding("REFRESH mixed planned-worker telemetry: use one complete run")
     seen = set()

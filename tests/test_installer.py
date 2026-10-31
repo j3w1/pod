@@ -569,14 +569,19 @@ class InstallerTests(unittest.TestCase):
         failed = run_install({**self.env, "PATH": str(self.root / "bin")})
         self.assertEqual(failed.returncode, 1)
         self.assertFalse(self.receipt.exists())
-        for candidate in ("python3", "python3.14", "python3.13"):
-            path = self.root / "bin" / candidate
-            if path.is_symlink(): path.unlink()
-            path.write_text("#!/bin/sh\nexit 1\n")
-            path.chmod(0o755)
+        path = self.root / "bin" / "python3"
+        if path.is_symlink(): path.unlink()
+        path.write_text("#!/bin/sh\nexit 1\n")
+        path.chmod(0o755)
         failed = run_install({**self.env, "PATH": str(self.root / "bin")})
         self.assertEqual(failed.returncode, 1)
-        self.assertIn("Python 3.13+", failed.stderr)
+        self.assertIn("stable python3", failed.stderr)
+        # No named minor is tried instead: an older interpreter on PATH is never a fallback.
+        older = self.root / "bin" / "python3.9"
+        older.symlink_to(shutil.which("python3"))
+        failed = run_install({**self.env, "PATH": str(self.root / "bin")})
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("stable python3", failed.stderr)
 
     def test_truncated_pipe_prefixes_cannot_report_success_or_install(self):
         script=(ROOT/'install.sh').read_bytes()
