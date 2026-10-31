@@ -204,6 +204,32 @@ class WakeTests(unittest.TestCase):
                 self.assertEqual(event["truncated"], [])
         self.assertEqual(seen["worker_done"]["kind"], "completion")
 
+    def test_payloads_that_are_not_objects_reach_the_coordinator_in_every_replay(self):
+        rows = {"msg_array": (json.dumps(["release", {"preserve": "uncommitted draft"}]),
+                              ["release", {"preserve": "uncommitted draft"}]),
+                "msg_scalar": ("42", 42), "msg_text": (json.dumps("stop now"), "stop now"),
+                "msg_opaque": ("not json {", "not json {"), "msg_null": ("null", "null"),
+                "msg_native": (["a", 1], ["a", 1]), "msg_number": (7, 7)}
+        for id_, (raw, _) in rows.items():
+            self.mail.pending.append({"id": id_, "type": "status", "subject": id_, "payload": raw})
+        self.mail.pending.append({"id": "msg_none", "type": "status", "subject": "none", "payload": None})
+        self.mail.pending.append({"id": "msg_empty", "type": "status", "subject": "empty", "payload": ""})
+        for result in (self.arm(), self.arm()):
+            seen = {event["id"]: event for event in result["events"]}
+            for id_, (_, expected) in rows.items():
+                self.assertEqual((seen[id_]["payload"], seen[id_]["truncated"]), (expected, []), id_)
+            self.assertEqual([seen[i]["payload"] for i in ("msg_none", "msg_empty")], [None, None])
+        self.assertTrue(result["replayed"])
+
+    def test_a_non_object_payload_over_the_bound_is_flagged_not_dropped(self):
+        self.mail.pending.append({"id": "msg_list", "type": "status", "subject": "List",
+                                  "payload": json.dumps(["y" * (wake.PAYLOAD_LIMIT + 1)])})
+        self.mail.pending.append({"id": "msg_text", "type": "status", "subject": "Text",
+                                  "payload": "z" * (wake.PAYLOAD_LIMIT + 1)})
+        result = self.arm()
+        self.assertEqual([(e["payload"], e["truncated"]) for e in result["events"]], [(None, ["payload"])] * 2)
+        self.assertIn("check --run " + RUN + " --all", result["next_action"])
+
     def test_content_over_the_bounds_is_flagged_and_never_silently_dropped(self):
         self.mail.pending.append({"id": "msg_big", "type": "status", "subject": "Large",
                                   "body": "x" * (wake.BODY_LIMIT + 1),

@@ -26,13 +26,21 @@ QUESTION_TYPES = ("escalation", "question", "ask")
 QUIET_TYPES = ("heartbeat",)
 
 
-def _payload(message: dict) -> dict:
+def _decoded(message: dict) -> object:
+    """The payload as Orca delivered it, decoded when it is JSON text; a value that is not JSON stays as text."""
     value = message.get("payload")
-    if isinstance(value, str):
+    if isinstance(value, str) and value:
         try:
-            value = json.loads(value)
+            decoded = json.loads(value)
         except ValueError:
-            value = None
+            return value
+        return value if decoded is None else decoded
+    return value
+
+
+def _payload(message: dict) -> dict:
+    """The payload as an object, for classification only; content keeps whatever shape arrived."""
+    value = _decoded(message)
     return value if isinstance(value, dict) else {}
 
 
@@ -45,10 +53,8 @@ def _content(message: dict) -> dict:
     body = message.get("body")
     body = body if isinstance(body, str) else None
     cut = body is not None and len(body) > BODY_LIMIT
-    raw = message.get("payload")
-    payload = _payload(message) if raw not in (None, "") else None
-    if payload is None and raw not in (None, ""):
-        payload = raw if isinstance(raw, (str, int, float, bool, list)) else None
+    payload = _decoded(message)
+    payload = None if payload == "" else payload
     oversized = payload is not None and len(json.dumps(payload, ensure_ascii=False, default=str)) > PAYLOAD_LIMIT
     return {"body": body[:BODY_LIMIT] if cut else body, "payload": None if oversized else payload,
             "truncated": [name for name, flag in (("body", cut), ("payload", oversized)) if flag],
