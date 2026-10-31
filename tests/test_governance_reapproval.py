@@ -191,7 +191,7 @@ class ExemptedAdoptionOnlyTests(KernelCase):
                 error = self.refused("governance_unavailable", "governance_unavailable", self.write, value,
                                      governance_refresh=True, governance=governance)
                 self.assertEqual(error.detail["referent"]["reason"], "adoption_only")
-                self.assertIn("then record the new candidate and its proof", error.detail["next_action"])
+                self.assertIn("then record the new candidate, rows and proof", error.detail["next_action"])
                 self.assertEqual(record.read_bytes(), before)
         # A policy-valid revision_authority keeps the one-write behaviour.
         self.assertEqual(self.write(self.stored(), governance_refresh=True, governance=governance,
@@ -211,6 +211,99 @@ class ExemptedAdoptionOnlyTests(KernelCase):
         rows[0].pop("executor")
         rows[0].update(state="satisfied", evidence=[self.proof("O1")])
         self.assertEqual(self.write(rows)["checkpoint"]["obligations"][0]["state"], "satisfied")
+
+
+class ResultBaseAdoptionOnlyTests(KernelCase):
+    """A worker started on a later target state while every recorded candidate stays on the bound base; moving
+    the target there with changed governance adopts only through that start point (R119 adoption-only)."""
+
+    external = {"party": "third_party", "need": "acceptance", "unblocks_when": "accepted"}
+
+    def setUp(self):
+        super().setUp()
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        self.intake(self.sub("S"),
+                    self.sub("R", state="blocked_external", boundary={"paths": ["src"], "surfaces": []},
+                             external=dict(self.external)),
+                    {"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+                     "check": "review src", "scope": {"paths": ["src"], "surfaces": []}, "question": "is src correct?",
+                     "candidate": self.base, "existing_evidence": "unit", "insufficiency": "review needed",
+                     "state": "blocked_external", "external": dict(self.external)})
+        self.later = governance_commit(self, "AGENTS.md", "Changed target policy.\n", "later target state")
+        frozen = self.packet(["S"], boundary={"paths": ["src"], "surfaces": []})
+        self.start("writer", frozen)
+        git(self.project, "update-ref", TARGET, self.later)
+        self.record = objective_root(self.project, "objective") / "context.json"
+
+    def send(self, changes=None, *, form="full", **extra):
+        fields = {"governance_refresh": True, "governance": {"base_ref": TARGET, "base": self.later}, **extra}
+        if form == "full":
+            rows = self.stored()
+            for key, change in (changes or {}).items():
+                row = next(item for item in rows if item["id"] == key)
+                if "state" in change:
+                    for field in ("external", "wait", "executor", "withdrawal"):
+                        row.pop(field, None)
+                row.update(change)
+            fields["obligations"] = rows
+        else:
+            fields.update(update=changes or {}, seq=read(self.project, "objective")["checkpoint"]["seq"] + 1)
+        core = {key: fields.pop(key) for key in ("candidate", "criteria", "verification") if key in fields}
+        return checkpoint(self.project, "objective", owner="owner", value=self.core(**core, **fields),
+                          native={"runtime": "runtime", "delegation": "available"})
+
+    def refused(self, *args, **kwargs):
+        before = self.record.read_bytes()
+        error = super().refused("governance_unavailable", "governance_unavailable", self.send, *args, **kwargs)
+        self.assertEqual(error.detail["referent"]["reason"], "adoption_only")
+        self.assertEqual(self.record.read_bytes(), before)
+
+    def test_an_assurance_row_candidate_cannot_change(self):
+        for form in ("full", "update"):
+            with self.subTest(form=form):
+                self.refused({"A": {"candidate": self.later}}, form=form)
+
+    def test_a_remaining_row_cannot_change_or_take_proof(self):
+        for name, change in (("state", {"R": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}),
+                             ("referent", {"R": {"external": {**self.external, "need": "other"}}}),
+                             ("proof", {"R": {"state": "satisfied", "evidence": [self.proof("R")]}})):
+            for form in ("full", "update"):
+                with self.subTest(name, form=form):
+                    self.refused(change, form=form)
+
+    def test_rows_cannot_be_added(self):
+        rows = [*self.stored(), self.sub("NEW")]
+        before = self.record.read_bytes()
+        error = super().refused("governance_unavailable", "governance_unavailable", self.write, rows,
+                                governance_refresh=True, governance={"base_ref": TARGET, "base": self.later})
+        self.assertEqual((error.detail["referent"]["reason"], self.record.read_bytes()), ("adoption_only", before))
+
+    def test_checkpoint_core_cannot_change(self):
+        rebased = governance_commit(self, "src/new.py", "work on the later state\n", "new candidate")
+        for name, extra in (("candidate", {"candidate": rebased}), ("criteria", {"criteria": ["PoD#1", "PoD#2"]}),
+                            ("verification", {"verification": {"dependencies": ["other==1"], "environment": "other"}})):
+            with self.subTest(name):
+                self.refused(**extra)
+
+    def test_map_inputs_and_dispositions_are_refused(self):
+        admission = next(iter(read(self.project, "objective")["admissions"]))
+        for name, extra in (("reuse", {"reuse": {"from": self.base, "ids": ["R"]}}), ("rebind", {"rebind": ["R"]}),
+                            ("acceptances", {"acceptances": []}), ("close", {"close": True}),
+                            ("proposals", {"proposals": []}), ("route settlements", {"route_settlements": []}),
+                            ("renew", {"renew": []}),
+                            ("disposition", {"dispositions": [{"admission": admission, "discarded": True,
+                                                               "reason": "not needed"}]})):
+            with self.subTest(name):
+                self.refused(**extra)
+
+    def test_the_adoption_only_write_and_the_authorized_one_write_route(self):
+        adopted = self.send()["checkpoint"]
+        self.assertEqual((adopted["governance"]["base"], adopted["candidate"]), (self.later, self.base))
+
+    def test_a_policy_valid_authority_changes_the_row_in_the_same_write(self):
+        state = self.send({"A": {"candidate": self.later}},
+                          revision_authority={**LOCAL, "instruction": "Adopt and rebase the review"})["checkpoint"]
+        self.assertEqual(next(row for row in state["obligations"] if row["id"] == "A")["candidate"], self.later)
 
 
 class DeliveryBookkeepingRowTests(KernelCase):

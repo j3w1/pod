@@ -1607,24 +1607,58 @@ def _bookkeeping_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
     return True
 
 
-def _proof_unchanged(prior_map: dict, map_state: dict) -> bool:
-    """R119 adoption-only: no row newly satisfied and no evidence, receipt or reuse changed or added."""
+# R119 adoption-only: a write may change only its governance binding and narration. These are the map fields
+# a refresh rebinds or every write updates, the input fields a refresh needs, and the narrative core fields.
+_ADOPTION_BINDING = {"seq", "revision", "governance", "governance_sources", "governance_history", "observations",
+                     "quiescence", "coordinator_slot"}
+_ADOPTION_INPUT = {"seq", "obligations", "update", "governance", "governance_refresh", "revision_authority"}
+_ADOPTION_NARRATION = {"schema", "policy_revision", "native_refs", "next_safe_action", "display", "questions",
+                       "blocker", "remaining_gates"}
+
+
+def _rebound_row(row: dict) -> dict:
+    """A row without the policy-citation base that a governance refresh moves to the adopted base."""
+    source = row.get("source")
+    return {**row, "source": {key: item for key, item in source.items() if key != "base"}} \
+        if isinstance(source, dict) else row
+
+
+def _adoption_only_input(prior_map: dict, proposed: dict, core: dict, previous: dict, dispositions: list) -> bool:
+    """Before the kernel: nothing but the refresh itself; every core field and row as recorded."""
+    from .obligations import expand_update, restatable_rows
+    if dispositions or set(proposed) - _ADOPTION_INPUT:
+        return False
+    if any(core.get(key) != previous.get(key) for key in set(core) - _ADOPTION_NARRATION):
+        return False
+    try:
+        rows = expand_update(prior_map, proposed).get("obligations", prior_map["obligations"])
+    except PodError:
+        return False
     prior = {row["id"]: row for row in prior_map["obligations"]}
-    for row in map_state["obligations"]:
-        old = prior.get(row["id"], {})
-        if (row["state"] == "satisfied" and old.get("state") != "satisfied"
-                or any(row.get(key) != old.get(key) for key in ("evidence", "receipts", "reuse"))):
-            return False
-    return True
+    restated = {row["id"]: row for row in restatable_rows(prior_map, include_terminal=True)}
+    return (isinstance(rows, list) and len(rows) == len(prior)
+            and all(isinstance(row, dict) and row.get("id") in prior
+                    and _rebound_row(row) in (_rebound_row(prior[row["id"]]), _rebound_row(restated[row["id"]]))
+                    for row in rows))
+
+
+def _adoption_only_result(prior_map: dict, map_state: dict) -> bool:
+    """After the kernel: the stored map equals the prior one except its governance binding."""
+    from .obligations import MAP_STORED
+    keys = MAP_STORED - _ADOPTION_BINDING - {"obligations"}
+    return (all(prior_map.get(key) == map_state.get(key) for key in keys)
+            and [_rebound_row(row) for row in map_state["obligations"]]
+            == [_rebound_row(row) for row in prior_map["obligations"]])
 
 
 def _adoption_only_refusal() -> PodError:
-    action = ("write the governance refresh alone first, keeping the recorded candidate and satisfying no row; "
-              "then record the new candidate and its proof in the next checkpoint under the adopted governance. "
+    action = ("write the governance refresh alone first, changing nothing else (the recorded candidate, criteria and "
+              "every row as recorded); then record the new candidate, rows and proof in the next checkpoint under "
+              "the adopted governance. "
               "A revision_authority the decision policy accepts for scope changes allows both in one write")
     return PodError("governance_unavailable",
                     "This refresh adopts the target only through its first-parent history, without a revision "
-                    f"authority, so it cannot also change the candidate or record new proof. Next: {action}",
+                    f"authority, so it can change nothing but the governance binding. Next: {action}",
                     {"detail": "governance_unavailable", "next_action": action,
                      "referent": {"reason": "adoption_only"}})
 
@@ -1752,7 +1786,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         # R119: an adoption that rests on the first-parent exemption without a policy-valid revision_authority is
         # adoption-only; a changed candidate and new proof wait for the next write under normal currency.
         adoption_only = bool(exempted) and not user_direct_revision(proposed.get("revision_authority"))
-        if adoption_only and (core["candidate"] != previous.get("candidate") or {"rebind", "reuse"} & set(proposed)):
+        if adoption_only and (has_delivery or not _adoption_only_input(prior_map, proposed, core, previous, dispositions)):
             raise _adoption_only_refusal()
         ctx = kernel_context(project, objective, state, authority.get("native"),
                              candidate=core["candidate"], criteria=core["criteria"],
@@ -1838,7 +1872,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if withdrawal_refusal is not None and not _settled_rows_unchanged(prior_map, map_state):
             # R201 keeps the baseline only while the closure relies on no new or changed proof.
             raise withdrawal_refusal
-        if adoption_only and not _proof_unchanged(prior_map, map_state):
+        if adoption_only and not _adoption_only_result(prior_map, map_state):
             raise _adoption_only_refusal()
         if bookkeeping and not _bookkeeping_rows_unchanged(prior_map, map_state):
             # R202 keeps the delivered baseline only for bookkeeping; anything else gets today's refusal.

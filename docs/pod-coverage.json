@@ -9872,7 +9872,14 @@
       "offline_test": [
         "tests.test_governance_reapproval.ExemptedAdoptionOnlyTests.test_an_exempted_adoption_without_authority_changes_no_candidate_and_records_no_proof",
         "tests.test_governance_reapproval.ExemptedAdoptionOnlyTests.test_the_adoption_only_write_is_accepted_and_the_candidate_follows",
-        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_without_revision_authority_in_two_steps"
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_without_revision_authority_in_two_steps",
+        "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_an_assurance_row_candidate_cannot_change",
+        "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_a_remaining_row_cannot_change_or_take_proof",
+        "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_rows_cannot_be_added",
+        "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_checkpoint_core_cannot_change",
+        "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_map_inputs_and_dispositions_are_refused",
+        "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_the_adoption_only_write_and_the_authorized_one_write_route",
+        "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_a_policy_valid_authority_changes_the_row_in_the_same_write"
       ],
       "status": "NOT_RUN"
     }
