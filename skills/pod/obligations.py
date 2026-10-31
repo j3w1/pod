@@ -2426,6 +2426,10 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
             raise refuse("obligation_unaccounted", "disposition_invalid", "discarding a result needs a reason",
                          admission=key)
         return {"kind": "discarded", "reason": record["reason"], "seq": seq}
+    if "abandoned_accounting" in row:
+        raise refuse("obligation_unaccounted", "disposition_invalid",
+                     "abandoned accounting has no accepted output; only discarded with a reason is supported",
+                     admission=key)
     candidate = _text(record["integrated_into"], "integrated_into", code="obligation_unaccounted",
                       detail="disposition_invalid", limit=bound("disposition", "integrated_into"))
     result = row.get("result") or {}

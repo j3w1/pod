@@ -125,7 +125,7 @@ _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "r
                      "native_binding", "recovery", "error", "failures", "created_at", "updated_at",
                      "serves", "role", "boundary", "map_revision", "candidate", "result",
                      "changed_paths", "boundary_exceeded", "disposition", "report", "binding",
-                     "admitted_seq", "display", "retry_of", "retry_after"}
+                     "admitted_seq", "display", "retry_of", "retry_after", "abandoned_accounting"}
 
 
 def _consumed_report(row: dict, runtimes: set[str]) -> dict | None:
@@ -159,7 +159,7 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
-    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq", "display", "retry_of", "retry_after"}, name="admission")
+    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq", "display", "retry_of", "retry_after", "abandoned_accounting"}, name="admission")
     if value["admission_id"] != key:
         raise PodError("state_unsupported", "Admission identity or schema is unsupported")
     if "admitted_seq" in value and (type(value["admitted_seq"]) is not int or value["admitted_seq"] < 1):
@@ -206,6 +206,9 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
     if "display" in value:
         from .display import validate_facts
         validate_facts(value["display"])
+    if "abandoned_accounting" in value:
+        from .abandoned import validate
+        validate(value)
     _consumed_report(value, runtimes or set())
     validate_route_settlements(value)
 
@@ -1865,7 +1868,7 @@ def retry_parent(state: dict, *, objective: str, owner: str, run_id: str,
     binding = prior.get("native_binding") if isinstance(prior, dict) else None
     if (not prior or prior["owner"] != owner or prior["objective"] != objective
             or prior["run_id"] != run_id or prior["task_id"] != task_id
-            or prior["state"] not in ("bound", "closed") or not binding_valid(binding)
+            or prior["state"] not in ("bound", "closed") or "abandoned_accounting" in prior or not binding_valid(binding)
             or binding["runId"] != run_id or binding["taskId"] != task_id):
         raise PodError("retry_parent_unverified", "Retry needs an owned bound admission on this objective, Run and Task. Next: inspect the original admission and exact native Dispatch")
     from .orca import _argument
@@ -2037,6 +2040,7 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
     if reuse_of is not None:
         prior = state["admissions"].get(reuse_of)
         if (prior is None or prior["state"] not in ("bound", "closed")
+                or "abandoned_accounting" in prior
                 or not binding_valid(prior.get("native_binding"))
                 or not prior["native_binding"]["terminalHandle"]):
             raise PodError("reuse_unavailable", "Terminal reuse needs a settled, known prior attempt. Next: read the prior exact native attempt and retain uncertainty until settlement")
@@ -2385,6 +2389,8 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
         row = state["admissions"].get(admission_id)
         if state["owner"] != owner or row is None:
             raise PodError("unknown_admission", "No owned admission identity")
+        if "abandoned_accounting" in row:
+            raise PodError("report_attempt_unverified", "Abandoned accounting is not worker output; record only an ordinary discarded implementation disposition")
         if route_discarded(row):
             raise PodError("route_settled_discarded", "Project lead: this admission was terminally discarded through route_settlements; use a fresh admission for further proof",
                            {"admission": admission_id})

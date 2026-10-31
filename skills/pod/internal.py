@@ -167,6 +167,8 @@ def _op_packet(request: dict) -> dict:
 
 
 def _prepare_report(request, state, admission, shown, *, closing):
+    if "abandoned_accounting" in admission:
+        raise PodError("report_attempt_unverified", "Abandoned accounting is not worker output; use the ordinary discarded implementation disposition")
     from .operations import _binding_from_show, _reuse_effective_evidence, _placement_evidence
     binding = admission["native_binding"]
     fresh = _binding_from_show(shown, admission, binding["dispatchId"])
@@ -610,6 +612,7 @@ def _op_admission(request: dict) -> dict:
                          worktree=request.get("worktree", "current"),
                          reuse_of=request.get("reuse_of"), retry_of=request.get("retry_of"),
                          retry_after=request.get("retry_after"),
+                         abandoned_reason=request.get("abandoned_reason"),
                          accompanying=request.get("map"))
     from .display import admission_output
     row = result["admission"]
