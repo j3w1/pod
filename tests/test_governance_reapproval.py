@@ -28,7 +28,7 @@ def shape(name):
 
 
 class RebasedCandidateGovernanceTests(KernelCase):
-    """A candidate rebased onto a target that moved only by other objectives' merges (pes-242 shape)."""
+    """A candidate rebased onto a target that moved only by other objectives' merges."""
 
     commit = governance_commit
 
@@ -156,7 +156,7 @@ class RebasedCandidateGovernanceTests(KernelCase):
 
 
 class ClosedWorkerTabTests(unittest.TestCase):
-    """A retained, Orca-owned tab the owner closed by hand (pes-267 shape)."""
+    """A retained, Orca-owned tab the owner closed by hand."""
 
     def setUp(self):
         fixture = shape("closed-tab-readback.json")

@@ -215,7 +215,7 @@ class VerifiedDeliveryTests(KernelCase):
         self.assertEqual(read(self.project, "objective"), before)
 
     def test_bookkeeping_after_a_delivery_inside_the_base_keeps_it_and_new_work_names_the_refresh(self):
-        # pes-264 shape: an unchanged-source checkpoint already adopted a target holding the delivery; other
+        # After a delivery already inside the bound base: an unchanged-source checkpoint already adopted a target holding the delivery; other
         # objectives' later merges then changed governance.
         shape = json.loads((Path(__file__).parent / "fixtures" / "governance-reapproval"
                             / "governance-shapes.json").read_text())["after_delivery"]
