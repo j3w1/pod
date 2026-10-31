@@ -450,15 +450,9 @@ def _history_limit() -> int:
 
 
 def _require_history_capacity(history: dict) -> None:
-    counts = {"candidate": len(history["candidates"]),
-              "owner decision": sum(row.get("provenance") != "derived" for row in history["decisions"])}
-    full = [kind for kind, count in counts.items() if count > _history_limit()]
-    if full:
-        raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
-                       {"detail": "governance_history_full",
-                        "next_action": "preserve the objective and report its " + " and ".join(full)
-                                       + " history capacity; retained evidence cannot be evicted or replaced",
-                        "referent": {"limit": _history_limit(), "counts": counts}})
+    # Retained decisions/candidates have no lifetime quota. Per-operation read,
+    # parse and memory budgets are enforced by the revision-page boundary.
+    return None
 
 
 def _governance_history(prior: dict | None) -> dict:

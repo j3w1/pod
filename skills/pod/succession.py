@@ -600,15 +600,6 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
     started = _started(project, objective, state)
     if started:
         return fail("successor_started", "Claim before the successor starts work: " + started + ".")
-    from .ledger import CONTINUITY_HISTORY
-    if len(((state.get("checkpoint") or {}).get("continuity") or {}).get("history") or []) >= CONTINUITY_HISTORY:
-        # An interruption after the predecessor's link is finished by the successor's coordinator, after an owner
-        # handoff or runtime rebind if it is gone; each adds a continuity entry, so the claim links only while one
-        # is free (R98, R105, R118).
-        return fail("successor_continuity_full",
-                    f"The successor's {CONTINUITY_HISTORY}-entry continuity history is full: an interrupted claim could "
-                    "not be finished after an owner handoff or runtime rebind.",
-                    "Claim the predecessor from a fresh successor objective, recorded and not yet started.")
     failed, unfinished_rows, unreported = _predecessor_checks(project, predecessor, prior, facts, fail, port=port)
     if failed is not None:
         return failed
@@ -925,11 +916,15 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
     """
     from .governor import MAX_JOURNAL
     from .ledger import CONTEXT_LIMIT, _path
-    from .history import prepare_context
+    from .history import prepare_context, prepare_document, preflight_landing
     from .util import encoded, protect_decision_record
     journal, _ = _carried_journal(project, objective, predecessor, prior, record_ids, at=at)
     protect_decision_record(journal)
-    planned = [("successor's Governor journal", {**journal, "revision": journal["revision"] + 1}, MAX_JOURNAL)]
+    from .governor import _record_path
+    journal_path = _record_path(project, objective)
+    journal_record, journal_chunks = prepare_document(journal_path, {**journal, "revision": journal["revision"] + 1})
+    preflight_landing(journal_path, sum(map(len, journal_chunks.values())))
+    planned = [("successor's Governor journal", journal_record, MAX_JOURNAL)]
     for name, value in records.items():
         candidate = {**value, "revision": value["revision"] + 2}
         from .relay import stamp_decision
@@ -937,8 +932,7 @@ def _require_fit(project: Path, objective: str, predecessor: str, prior: dict, r
         protect_decision_record(candidate)
         path = _path(project, predecessor if name.startswith("predecessor") else objective)
         try:
-            physical, _ = prepare_context(path, candidate,
-                                          journal=None if name.startswith("predecessor") else journal)
+            physical, _ = prepare_context(path, candidate)
         except PodError as exc:
             if exc.code != "record_too_large":
                 raise

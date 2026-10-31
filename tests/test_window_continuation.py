@@ -802,7 +802,7 @@ class DiscoveryTests(WindowCase):
         path = objective_root(self.project, "synthetic-capacity") / "context.json"
         _write(path, synthetic_state())  # The production writer creates real immutable history chunks.
         logical = history.load_context(path)
-        self.assertIn("history", json.loads(path.read_text()))
+        self.assertEqual(json.loads(path.read_text())["schema"], "pod-history-record/v1")
         self.lose()
         clock, starts, load = {"now": 0.0}, [], history.ChunkStore._load
         context_bytes, directory, open_file = history._context_bytes, history.ChunkStore.directory, os.open

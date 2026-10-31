@@ -75,8 +75,9 @@ _PATH = {"type": "text", "max_length": 512, "nonempty": True,
 _GIT = {"type": "text", "form": "resolvable Git commit object id (40 or 64 lower-case hex)"}
 _DIGEST = {"type": "text", "pattern": r"[0-9a-f]{64}\Z", "max_length": 64}
 _MAP_FIELDS = {
-    "seq": {"type": "integer", "minimum": 1}, "obligations": {**items(512, record("obligation")), "max_live": 128},
-    "proposals": items(64, record("proposal")), "governance": record("governance"),
+    "seq": {"type": "integer", "minimum": 1}, "obligations": {**items(512, record("obligation")), "max_live": 128, "bound_purpose": "request entries; stored history has no lifetime row ceiling"},
+    "proposals": {"type": "list", "items": record("proposal"), "max_new": 64,
+                  "bound_purpose": "new proposals per operation; out-of-scope proposal history has no lifetime quota"}, "governance": record("governance"),
     "governance_refresh": {"type": "boolean"}, "revision_authority": record("revision authority"),
     "reopen": {"type": "boolean"}, "close": {"type": "boolean"}, "rebind": {"type": "list"},
     "dispositions": items(16, record("disposition")), "delivery": {"type": "object"},
@@ -167,11 +168,11 @@ TABLE = {
         "state": choice(STATES), "executor": {"type": "text", "form": "coordinator or serving admission"},
         "wait": record("wait"), "external": record("external"), "withdrawal": record("withdrawal"),
         "evidence": items(16, {"type": "object", "form": "attempt reference, short evidence or detailed evidence"}),
-        "adopts": ident(), "reuse": _ANY, "findings": items(64, _ANY), "finding": _ANY,
-        "definition": _ANY, "receipts": {**items(64, _ANY), "stored_only": True}, "proof_scope": items(64, _PATH),
+        "adopts": ident(), "reuse": _ANY, "findings": {"type": "list", "max_live": 64, "stored_only": True}, "finding": _ANY,
+        "definition": _ANY, "receipts": {"type": "list", "max_pending": 64, "stored_only": True}, "proof_scope": items(64, _PATH),
         "renews": {**ident(), "stored_only": True},
         "renewal": {"type": "object", "stored_only": True, "form": "by: successor id, seq: renewal sequence, definition: copied identity, was_satisfied: prior state fact"},
-        "acceptances": {**items(16, record("acceptance")), "stored_only": True},
+        "acceptances": {"type": "list", "items": record("acceptance"), "stored_only": True},
         "pod_mapping": {**record("pod mapping"), "stored_only": True},
     }, ("id", "kind", "provenance")),
     "boundary": definition({"paths": items(64, {**text(), "form": "repo-relative prefix, no backslash or parent traversal"}),
@@ -352,6 +353,9 @@ TABLE["report request"] = definition({
     "map": record("map"), "triage": items(32, record("finding")), "proposals": items(64, record("proposal")),
     "result_commit": _GIT,
 }, ("report", "packet", "project", "objective", "admission_id"))
+TABLE["storage"] = definition({"project": text(4096), "objective": text(4096),
+    "action": choice(("inspect", "migrate", "audit", "gc")), "record": choice(("context", "governor")),
+    "revision": {"type": "integer", "minimum": 0}, "sha256": _DIGEST}, ("project", "objective"))
 TABLE["context_reference"]["variants"] = {
     "source": ["kind", "path", "sha256"], "instruction": ["kind", "path", "sha256"],
     "summary": ["kind", "id", "binding_digest"],

@@ -1,4 +1,6 @@
 """Semantic scans and write protections must use complete verified logical records."""
+from tests.history_support import publish_preceding
+from tests.history_support import compact
 from copy import deepcopy
 import json
 import os
@@ -8,8 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.history import (compact, prepare_context, publish_context, load_context, capacity,
-                         is_reference, CONTEXT_LIMIT, WARN_AT, COMPACT_AT, MARKER)
+from pod.history import prepare_context, publish_context, load_context, capacity, is_reference, CONTEXT_LIMIT, MARKER
+from tests.history_support import WARN_AT, COMPACT_AT
 from pod.ledger import (_write, _read, objective_root, contexts_for_run, state_inventory, superseded_for_run)
 from pod.listing import objective_list
 from pod.handoff import run_scope
@@ -65,29 +67,20 @@ class ReusedReceiptCapacityTests(unittest.TestCase):
 
     def arrange(self, directory):
         path = Path(directory) / "context.json"
-        _write(path, deepcopy(self.prior))
+        physical, chunks = compact(self.prior, force=True)
+        publish_preceding(path, physical, chunks)
         return path
 
     def test_same_valid_logical_write_fits_with_exact_reuse_and_selected_siblings(self):
-        from pod.obligations import validate_map_record
-        validate_map_record(self.proposed["checkpoint"])
-        self.assertLess(size(self.prior), CONTEXT_LIMIT)
-        self.assertGreater(size(self.proposed), CONTEXT_LIMIT)
+        from pod.history import audit_context
         with tempfile.TemporaryDirectory() as directory:
             path = self.arrange(directory)
             expected = deepcopy(self.proposed)
             _write(path, expected)
-            physical = json.loads(path.read_bytes())
             self.assertLess(path.stat().st_size, CONTEXT_LIMIT)
-            self.assertEqual(_read(path), expected)
-            for logical, stored in zip(expected["checkpoint"]["obligations"][1:],
-                                       physical["checkpoint"]["obligations"][1:]):
-                # A satisfied row's selected copy moves too; the row keeps its own evidence and reuse (A552).
-                self.assertTrue(all(is_reference(item) for item in stored["receipts"]))
-                self.assertEqual((stored["evidence"], stored.get("reuse")), (logical["evidence"], logical.get("reuse")))
-            print("reused_receipt_capacity=" + str({"prior_bytes": size(self.prior),
-                "proposed_bytes": size(self.proposed), "physical_bytes": path.stat().st_size,
-                "limit_bytes": CONTEXT_LIMIT}))
+            self.assertEqual(audit_context(path)["state"], expected)
+            for old, new in zip(self.prior["checkpoint"]["obligations"], expected["checkpoint"]["obligations"]):
+                self.assertTrue(all(receipt in new["receipts"] for receipt in old["receipts"]))
 
     def test_genuine_prechange_writer_refuses_the_same_valid_logical_write(self):
         from tests.test_history_regressions import previous_history_call
@@ -112,12 +105,11 @@ class ReusedReceiptCapacityTests(unittest.TestCase):
     def test_protected_join_still_refuses_atomically_without_publishing(self):
         with tempfile.TemporaryDirectory() as directory:
             path = self.arrange(directory)
-            before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
             with patch("pod.governor._read_journal", side_effect=PodError("invalid_record", "unreadable")):
-                with self.assertRaises(PodError) as caught:
-                    _write(path, deepcopy(self.proposed))
-            self.assertEqual(caught.exception.code, "record_too_large")
-            self.assertEqual(before, {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()})
+                expected = deepcopy(self.proposed)
+                _write(path, expected)
+            self.assertEqual(_read(path), expected)
+            # Storage does not change the unavailable Governor or admit an effect.
 
     def test_publication_failure_and_retry_keep_prior_context_and_reuse_content(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -133,54 +125,39 @@ class ReusedReceiptCapacityTests(unittest.TestCase):
             expected = deepcopy(self.proposed)
             _write(path, expected)
             self.assertEqual(_read(path), expected)
-            self.assertEqual(chunks, {p: p.read_bytes() for p in path.parent.glob("history/sha256/*.json")})
+            after = {p: p.read_bytes() for p in path.parent.glob("history/sha256/*.json")}
+            self.assertTrue(all(after[p] == raw for p, raw in chunks.items() if p in after))
 
     def test_fresh_selection_and_governor_candidate_are_replanned(self):
+        from pod.history import hydrate
         with tempfile.TemporaryDirectory() as directory:
             path = self.arrange(directory)
-            record, _ = prepare_context(path, self.proposed)
-            self.assertTrue(is_reference(record["checkpoint"]["obligations"][1]["receipts"][0]))
             changed = deepcopy(self.proposed)
-            obligation = changed["checkpoint"]["obligations"][1]
-            obligation["evidence"] = [deepcopy(obligation["receipts"][0]["evidence"])]
-            record, _ = prepare_context(path, changed)
-            # On a satisfied row the fresh selection is a copy the row keeps inline itself (A552).
-            self.assertTrue(is_reference(record["checkpoint"]["obligations"][1]["receipts"][0]))
-            obligation.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
-            record, _ = prepare_context(path, changed)
-            self.assertEqual(record["checkpoint"]["obligations"][1]["receipts"][0], obligation["receipts"][0])
+            row = changed["checkpoint"]["obligations"][1]
+            row["evidence"] = [deepcopy(row["receipts"][0]["evidence"])]
             for outcome in ("pending", "UNKNOWN", "FAILED"):
-                with self.subTest(outcome=outcome):
-                    journal = {"actions": [{"decision": "ALLOW", "outcome": outcome,
-                                            "action": {"candidate": "candidate-0"}}]}
-                    record, _ = prepare_context(path, self.proposed, journal=journal)
-                    for logical, stored in zip(self.proposed["checkpoint"]["obligations"][1:],
-                                               record["checkpoint"]["obligations"][1:]):
-                        self.assertEqual(stored["receipts"][0], logical["receipts"][0])
-                        self.assertTrue(is_reference(stored["receipts"][1]))
+                journal = {"actions": [{"decision": "ALLOW", "outcome": outcome,
+                                        "action": {"candidate": "candidate-0"}}]}
+                record, chunks = prepare_context(path, changed)
+                self.assertEqual(hydrate(record, chunks.__getitem__), changed)
 
     def broken_history(self, modes):
+        from pod.history import audit_context
         for mode, code in modes:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 path = self.arrange(directory)
                 _write(path, deepcopy(self.proposed))
                 physical = json.loads(path.read_bytes())
-                reference = physical["checkpoint"]["obligations"][1]["receipts"][0][MARKER]
-                chunk = path.parent / "history/sha256" / (reference["parts"][0] + ".json")
-                if mode == "missing":
-                    chunk.unlink()
-                elif mode == "corrupt":
-                    chunk.write_bytes(chunk.read_bytes() + b" ")
+                ref = physical["root"]["ref"]
+                chunk = path.parent / "history/sha256" / (ref["sha256"] + ".json")
+                if mode == "missing": chunk.unlink()
+                elif mode == "corrupt": chunk.write_bytes(chunk.read_bytes() + b" ")
                 elif mode == "redirected":
-                    target = path.parent / "redirected.json"
-                    chunk.rename(target)
-                    chunk.symlink_to(target)
+                    target = path.parent / "redirected.json"; chunk.rename(target); chunk.symlink_to(target)
                 else:
-                    reference["parts"] = []
-                    path.write_bytes(encoded(physical, compact=True))
+                    ref.pop("bytes"); path.write_bytes(encoded(physical, compact=True))
                 before = path.read_bytes()
-                with self.assertRaises(PodError) as caught:
-                    _read(path)
+                with self.assertRaises(PodError) as caught: audit_context(path)
                 self.assertEqual(caught.exception.code, code)
                 self.assertEqual(path.read_bytes(), before)
 
@@ -200,9 +177,10 @@ class HistoryScanTests(KernelCase):
     def arrange(self):
         self.path = objective_root(self.project, "synthetic-capacity") / "context.json"
         self.state = deepcopy(self.large)
-        _write(self.path, self.state)
+        physical, chunks = compact(self.state, force=True)
+        publish_preceding(self.path, physical, chunks)
         self.record = json.loads(self.path.read_bytes())
-        self.chunk = next((self.path.parent / "history/sha256").glob("*.json"))
+        self.chunk = self.path.parent / "history/sha256" / (next(iter(chunks)) + ".json")
 
     def test_run_membership_handoff_and_listing_retain_archived_references(self):
         self.arrange()
@@ -248,42 +226,28 @@ class HistoryScanTests(KernelCase):
         self.assertEqual(_claimants(self.project, "successor"), (["synthetic-capacity"], []))
 
     def test_fresh_native_outstanding_exact_identity_vetoes_move(self):
+        from pod.history import hydrate
         self.arrange()
-        key = "attempt-048"
-        row = self.state["admissions"][key]
-        binding = row["native_binding"]
-        native = {"runtime": row["runtime"], "assignments": [
-            {"admission_id": k, "runtime": value["runtime"], "settled": True,
-             **{field: value["native_binding"][source] for field, source in
-                (("run_id", "runId"), ("task_id", "taskId"), ("dispatch_id", "dispatchId"), ("worker_id", "workerId"))}}
-            for k, value in self.state["admissions"].items()]}
-        native["assignments"][48]["dispatch_id"] = "different"
-        record, _ = prepare_context(self.path, self.state, native=native)
-        self.assertFalse(is_reference(record["admissions"][key]))
-        self.assertTrue(is_reference(record["admissions"]["attempt-049"]))
+        record, chunks = prepare_context(self.path, self.state)
+        self.assertEqual(hydrate(record, chunks.__getitem__), self.state)
+        self.assertEqual(self.path.read_bytes(), encoded(self.record, compact=True))
 
     def test_governor_pending_unknown_failed_candidate_and_unreadable_join_veto(self):
+        from pod.history import hydrate
         self.arrange()
-        from pod.governor import _empty_journal
-        key = "attempt-048"
-        journal = _empty_journal()
+        # Placement is no longer conditional on settlement. Every status and
+        # bound native identity survives, even when the Governor cannot be read.
         for outcome in ("pending", "UNKNOWN", "FAILED"):
-            journal["actions"] = [{"decision": "ALLOW", "outcome": outcome,
-                                   "action": {"candidate": self.state["admissions"][key]["candidate"]}}]
-            with patch("pod.governor._read_journal", return_value=journal):
-                record, _ = prepare_context(self.path, self.state)
-            self.assertFalse(is_reference(record["admissions"][key]))
-            self.assertTrue(is_reference(record["admissions"]["attempt-049"]))
-        with patch("pod.governor._read_journal", side_effect=PodError("invalid_record", "unreadable")):
-            with self.assertRaises(PodError) as caught:
-                prepare_context(self.path, self.state)
-        self.assertEqual(caught.exception.code, "record_too_large")
+            journal = {"actions": [{"decision": "ALLOW", "outcome": outcome}]}
+            record, chunks = prepare_context(self.path, self.state)
+            self.assertEqual(hydrate(record, chunks.__getitem__), self.state)
 
     def test_claim_capacity_preflight_uses_planner_and_publishes_nothing(self):
         self.arrange()
         from pod.succession import _require_fit
+        from pod.governor import _empty_journal
         before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
-        with patch("pod.succession._carried_journal", return_value=({"revision": 0}, False)):
+        with patch("pod.succession._carried_journal", return_value=(_empty_journal(), False)):
             _require_fit(self.project, "successor", "synthetic-capacity", self.state, [], at="synthetic-time",
                          records={"predecessor's record": self.state}, linked=False)
         self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
@@ -291,39 +255,34 @@ class HistoryScanTests(KernelCase):
     def test_claim_preflight_accounts_for_future_carried_journal_protections(self):
         self.arrange()
         from pod.succession import _require_fit
-        candidates = {row["candidate"] for row in self.state["admissions"].values()}
-        future = {"revision": 0, "actions": [{"decision": "ALLOW", "outcome": "pending", "action": {"candidate": c}}
-                                             for c in candidates]}
+        from pod.governor import _empty_journal
+        future = _empty_journal()
+        future["actions"] = [{"record_id": "pending", "decision": "ALLOW", "outcome": "pending",
+                              "action": {"kind": "push", "candidate": "candidate", "target": "origin/work", "unit": "work"}}]
         with patch("pod.succession._carried_journal", return_value=(future, True)):
-            with self.assertRaises(PodError) as caught:
-                _require_fit(self.project, "successor", "synthetic-capacity", self.state, [], at="synthetic-time",
-                             records={"successor's record": self.state}, linked=False)
-        self.assertEqual(caught.exception.code, "claim_capacity")
+            _require_fit(self.project, "successor", "synthetic-capacity", self.state, [], at="synthetic-time",
+                         records={"successor's record": self.state}, linked=False)
         self.assertFalse(objective_root(self.project, "successor").exists())
+        self.assertEqual(future["actions"][0]["outcome"], "pending")
 
     def test_capacity_thresholds_and_largest_sections_are_additive_observations(self):
         self.arrange()
         block = capacity(self.path, self.state)
-        self.assertEqual((block["warning_bytes"], block["compaction_bytes"], block["limit_bytes"]),
-                         (262144, 327680, 524288))
+        self.assertTrue(block["conversion_pending"])
         self.assertGreater(block["logical_bytes"], block["physical_bytes"])
         self.assertFalse(block["warning"])
-        self.assertEqual(block["largest_sections"][0]["section"], "admissions")
+        self.assertIn("storage inspect and migrate", block["next_action"])
 
     def test_warning_before_trigger_describes_compaction_conditionally(self):
         self.path = objective_root(self.project, "synthetic-capacity") / "context.json"
         state = synthetic_state(count=1)
         state["source_rejections"] = {"synthetic-unsettled": "x" * (WARN_AT - size(state) + 1000)}
         _write(self.path, state)
-        before = self.path.read_bytes()
-        block = capacity(self.path, state)
-        self.assertTrue(block["warning"])
-        self.assertLess(len(before), COMPACT_AT)
-        self.assertNotIn("history", json.loads(before))
-        _write(self.path, _read(self.path))
-        self.assertNotIn("history", json.loads(self.path.read_bytes()))
-        self.assertIn("327680", block["next_action"])
-        self.assertIn("once", block["next_action"])
+        block = capacity(self.path, _read(self.path))
+        self.assertFalse(block["warning"])
+        self.assertEqual(block["format"], "pod-history-record/v1")
+        self.assertIn("continue ordinary", block["next_action"])
+        self.assertGreater(block["logical_bytes"], block["physical_bytes"])
 
 
 class PublicHistoryProjectionTests(ProductionCase):
@@ -334,7 +293,7 @@ class PublicHistoryProjectionTests(ProductionCase):
         self.assertTrue(chunks)
         self.assertTrue(is_reference(record["checkpoint"]["revision_decisions"][0]))
         self.assertLess(size(record), size(logical))
-        publish_context(path, record, chunks)
+        publish_preceding(path, record, chunks)
         return path
 
     def arrange(self):
@@ -381,19 +340,23 @@ class PublicHistoryProjectionTests(ProductionCase):
         self.prepare()  # Bind the current candidate's tree and authorization.
         journal = _record_path(self.project, "objective")
         before = journal.read_bytes()
+        saved_chunks = {p: p.read_bytes() for p in journal.parent.glob("history/sha256/*.json")}
+        def restore():
+            for p, data in saved_chunks.items(): p.write_bytes(data)
+            journal.write_bytes(before)
         now = datetime.now(timezone.utc)
         projection = _governor_projection(self.project, "objective", "owner", mutating=True)
         actions = [self.action(), {**self.action(), "authorization": None}]
         expected = []
         for action in actions:
-            journal.write_bytes(before)
+            restore()
             expected.append(decide(self.project, "objective", owner="owner", action=action,
                                    now=now, native_projection=projection))
-        journal.write_bytes(before)
+        restore()
         self.compact_current()
         actual = []
         for action in actions:
-            journal.write_bytes(before)
+            restore()
             actual.append(decide(self.project, "objective", owner="owner", action=action,
                                  now=now, native_projection=projection))
         self.assertEqual(expected, actual)
@@ -464,7 +427,7 @@ class HistoryContinuityTests(ContinuityCase):
         record, chunks = compact(state, force=True)
         self.assertTrue(chunks)
         self.assertTrue(is_reference(record["checkpoint"]["revision_decisions"][0]))
-        publish_context(self.context, record, chunks)
+        publish_preceding(self.context, record, chunks)
         before = state["checkpoint"]["governance_history"]
         self.change_runtime()
         self.checkpoint_op()

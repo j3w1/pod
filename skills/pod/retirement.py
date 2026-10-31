@@ -1095,7 +1095,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                     protect_decision_record(probe)
                     probe["revision"] += 1
                     _validate_context(probe)
-                    prepare_context(paths[name], probe, purpose="retirement")
+                    prepare_context(paths[name], probe)
         for index, row in enumerate(requested):
             name, path = row["objective"], paths[row["objective"]]
             try:
@@ -1106,9 +1106,8 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                      "locations": [], "retained": [], "unrecorded_locations": None,
                                      "records": []},
                            "message": f"The objective's record is unreadable or unsupported ({exc.code}).",
-                           "next_action": ("Project lead or coordinator: run internal record-compaction detection for this exact project "
-                                           "and objective and submit its exact scoped maintenance request before retirement; it "
-                                           "preserves all logical facts and needs no owner decision." if exc.code == "record_too_large"
+                           "next_action": ("Use internal storage inspect and migrate for this exact project and objective "
+                                           "with its source revision and SHA256 before retirement; conversion preserves all logical facts." if exc.code == "record_too_large"
                                            else "Historical retirement needs a readable current record.")}
             else:
                 # Each objective reads the host afresh: an earlier objective's inventory is never its proof.

@@ -39,8 +39,9 @@ class LifecycleMatrix:
     def durable(self):
         """Include every objective, Governor record and machine use receipt."""
         root = state_root(self.project)
-        return {str(path.relative_to(root)): path.read_bytes()
-                for path in root.rglob("*.json")}
+        from tests.common import authority_files
+        return {str(path.relative_to(root)): raw for path, raw in authority_files(root).items()
+                if path.suffix == ".json"}
 
     def resources(self):
         return deepcopy((self.port.starts, self.port.workers,

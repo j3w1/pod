@@ -973,17 +973,20 @@ class NativeTextTests(AbsentCase):
         from pod.cleanup import _worktrees
         from pod.gitio import read as git_read
         self.placed()
+        own_root = objective_root(self.project, "objective")
         subprocess.run(["git", "-C", str(self.project), "worktree", "add", "-q", "-b", "odd",
                         os.fsencode(str(self.root)) + b"/task-\xff"], check=True, capture_output=True)
         self.assertIsNone(git_read(self.project, ["worktree", "list", "--porcelain", "-z"]))
         with self.assertRaises(PodError) as caught:
             _worktrees(self.project)
         self.assertEqual(caught.exception.code, "cleanup_unavailable")
-        before = self.snapshot()
+        with patch("tests.test_owner_handoff.objective_root", return_value=own_root):
+            before = self.snapshot()
         with self.assertRaises(PodError) as caught:
             self.retire(objectives=self.request(self.gone))
         self.assertEqual(caught.exception.code, "git_contract")  # Final audit L6: a local read, never remote.
-        self.assertEqual(before, self.snapshot())
+        with patch("tests.test_owner_handoff.objective_root", return_value=own_root):
+            self.assertEqual(before, self.snapshot())
         from pod.github import _local_git
         for failure in (OSError("no git"), subprocess.TimeoutExpired(["git"], 20)):
             with self.subTest(failure=failure), patch("pod.github.subprocess.run", side_effect=failure), \

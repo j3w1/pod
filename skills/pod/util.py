@@ -335,6 +335,8 @@ def native_home(name: str, *, default: Path | None = None,
 
 
 def digest(value: Any) -> str:
+    from .history_tree import plain
+    value = plain(value)
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
@@ -370,6 +372,8 @@ def bounded_stdin_json(*, limit: int = MAX_RECORD) -> Any:
 
 def encoded(value: Any, *, compact: bool = False) -> bytes:
     """The exact bytes `atomic_json` writes for a value."""
+    from .history_tree import plain
+    value = plain(value)
     options = {"separators": (",", ":")} if compact else {"indent": 2}
     return json.dumps(value, sort_keys=True, ensure_ascii=False, **options).encode() + b"\n"
 

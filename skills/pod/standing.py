@@ -313,9 +313,6 @@ def _generic_operate(project, objective, owner, action, decision, *, now=None):
         _row_fit(row)
         _fresh(context, row)
         capability.order_at = decision_time(row)
-        if (len(record["decisions"]) >= MAX_DECISIONS
-                or action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1):
-            raise PodError("standing_authorization_full", "Standing decision history is full; nothing is evicted")
         if action == "activate" and source is not None:
             checked, live = issue_recheck_live(project, source)
             if checked["status"] != "current" or live is None:
@@ -386,8 +383,6 @@ def validate_record(value: object) -> None:
                        {"schema", "decisions", "answers", "not_before", "observed_scope_digest"}, name="standing record")
         if record["schema"] != SCHEMA or not isinstance(record["decisions"], list) or not isinstance(record["answers"], list):
             raise ValueError("record")
-        if len(record["decisions"]) > MAX_DECISIONS or len(record["answers"]) > MAX_ANSWERS:
-            raise ValueError("capacity")
         for key in ("closed_at", "reopened_at", "not_before"):
             if key in record:
                 normalize_timestamp(record[key], field=key, code="state_unsupported")
@@ -642,8 +637,6 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             if verdict is None:
                 verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
                                   {key: answer[key] for key in ("question", "text")})
-            if len(record["answers"]) >= MAX_ANSWERS:
-                raise PodError("responder_answers_full", "Responder answer history is full")
             row = _answer_row(answer, verdict, index=len(record["answers"]) + 1, utc=_timestamp(moment),
                               under=record["decisions"][-1]["id"])
             _row_fit(row, answer=True)
@@ -669,8 +662,6 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                         from .relay import check_use
                         check_use(project, verdict, refuse=True)
                     raise
-            if action == "activate" and len(record["decisions"]) >= MAX_DECISIONS - 1:
-                raise PodError("standing_authorization_full", "Standing owner-decision history is full")
             _raise_barrier(record, decision_time(row))
             if created and action == "activate" and decision["channel"] == "relayed":
                 # The never-record exception covers only this first activation: the

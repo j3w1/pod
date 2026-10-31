@@ -141,14 +141,23 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
     from .obligations import MAX_RECEIPTS, _exact, _text, _path, refuse
     from .records import _sha256
     history = ob.get("receipts")
-    if not isinstance(history, list) or len(history) > MAX_RECEIPTS:
+    if not isinstance(history, list):
         raise refuse("obligation_invalid", "malformed", "receipt history is a bounded recorded list", obligation=ob["id"])
     identity = "attempt" if ob["kind"] == "assurance" else "reference"
     receipts = {}
+    selected = {row.get(identity) for row in ob.get("evidence", []) if isinstance(row, dict)}
     unverifiable = []
     for raw in history:
         receipt = _exact(raw, {"evidence", "accepted_seq", "reported_seq", "reuse"}, {"evidence"}, "receipt", obligation=ob["id"])
-        evidence = _persisted_evidence(ob, receipt["evidence"], ctx)
+        from .history_tree import from_revision, RevisionDict
+        retained = from_revision(raw) and isinstance(receipt["evidence"], dict) and receipt["evidence"].get(identity) not in selected
+        evidence = receipt["evidence"] if retained else _persisted_evidence(ob, receipt["evidence"], ctx)
+        if not retained and ob["kind"] == "assurance":
+            from .obligations import _admissions
+            from .ledger import _consumed_report
+            admission = _admissions(ctx).get(evidence["attempt"])
+            if isinstance(admission, RevisionDict):
+                _consumed_report(admission, set(ctx.get("report_runtimes", [])))
         key = evidence[identity]
         if key in receipts:
             raise refuse("obligation_invalid", "receipt_conflict", "receipt identities are unique", obligation=ob["id"])
@@ -220,7 +229,7 @@ def validate_findings(ob: dict, rows: dict, *, seq: int, lineage=None) -> None:
     from .lineage import Lineage
     lineage = lineage if lineage is not None else Lineage(rows)
     findings = ob.get("findings", [])
-    if not isinstance(findings, list) or len(findings) > MAX_FINDINGS:
+    if not isinstance(findings, list):
         raise refuse("obligation_invalid", "malformed", "finding history is a bounded list", obligation=ob["id"])
     seen = set()
     attempts = {}
@@ -275,9 +284,8 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
                     *, reported_attempt: str | None = None, seq: int) -> list[dict]:
     """Keep immutable receipt identities even when a caller omits the selected evidence.
 
-    History is inside the existing obligation record, bounded by MAX_RECEIPTS, and is
-    never evicted or accepted from the caller. Full history refuses another receipt;
-    it cannot silently make a forgotten receipt new again.
+    History is never evicted or accepted from the caller. Retention does not consume
+    admission slots; the durable landing path is checked at serialized admission.
     """
     from .obligations import MAX_RECEIPTS, _admissions, _exact, _text, refuse
     identity = "attempt" if ob["kind"] == "assurance" else "reference"
@@ -328,11 +336,6 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
         evidence = {**base, "governance": stamp}
         receipts[key] = {**(previous or {}), "evidence": evidence}
         stamped.append(evidence)
-    reserved = len(pending_serving(ob, ctx)) if ob["kind"] == "assurance" else 0
-    retained = len((prior or {}).get("receipts", []))
-    if len(receipts) > MAX_RECEIPTS or len(receipts) > retained and len(receipts) + reserved > MAX_RECEIPTS:
-        raise capacity_refusal(ob, ctx, seq=seq, field="receipts",
-                               retained=retained, proposed=len(receipts) + reserved, prior=prior, reserved=reserved)
     ob["receipts"] = list(receipts.values())
     return stamped
 
@@ -349,12 +352,19 @@ def pending_serving(ob: dict, ctx: dict) -> list[str]:
             and (key in outstanding or row.get("report") is None and "abandoned_accounting" not in row)]
 
 
+def live_finding_count(findings: list, ctx: dict) -> int:
+    """Only unresolved required corrections occupy current-work slots."""
+    return sum(item.get("triage") == "required_correction"
+               and not (type(item.get("resolved_seq")) is int and item["resolved_seq"] > 0)
+               for item in findings)
+
+
 def reserve_capacity(ob: dict, ctx: dict, *, seq: int):
     """Admit only when every pending result, including this one, fits in full."""
     from .obligations import MAX_RECEIPTS, MAX_FINDINGS, MAX_REPORT_FINDINGS
     attempts = len(pending_serving(ob, ctx)) + 1
     for field, per_attempt, limit in (("receipts", 1, MAX_RECEIPTS), ("findings", MAX_REPORT_FINDINGS, MAX_FINDINGS)):
-        retained = len(ob.get(field, []))
+        retained = 0 if field == "receipts" else live_finding_count(ob.get(field, []), ctx)
         reserved = per_attempt * attempts
         if retained + reserved > limit:
             raise capacity_refusal(ob, ctx, seq=seq, field=field, retained=retained,
@@ -362,33 +372,19 @@ def reserve_capacity(ob: dict, ctx: dict, *, seq: int):
 
 
 def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int, proposed: int, prior=None, reserved=0):
-    """The same accepted-state renewal route for admission, report and checkpoint."""
+    """Current work must settle; immutable retention never requests renewal for space."""
     from .obligations import MAX_RECEIPTS, MAX_FINDINGS, refuse
     from .util import route_hold, route_next_action
     pending = pending_serving(ob, ctx)
     route_held = next((ctx["admissions"][key] for key in pending if route_hold(ctx["admissions"][key])), None)
-    replacement = {"id": ob["id"], "as": "<fresh-id>"}
-    rows = (ctx.get("accepted_map") or ctx.get("map_state") or {}).get("obligations", [])
-    basis = next((row for row in rows if row["id"] == ob["id"]), prior if prior is not None else ob)
-    if basis.get("state") in ("waiting", "blocked_external"):
-        state_field = "wait" if basis["state"] == "waiting" else "external"
-        replacement.update(state=basis["state"], **{state_field: deepcopy(basis[state_field])})
-    else:
-        held = next((row["id"] for row in rows if row["id"] != ob["id"]
-                     and row.get("state") == "active" and row.get("executor") == "coordinator"), None)
-        if held:
-            replacement.update(state="waiting", wait={"class": "sequenced", "referent": held})
-        else:
-            replacement.update(state="active", executor="coordinator")
     return refuse("obligation_invalid", "receipt_limit" if field == "receipts" else "finding_limit",
-                  "retained history and reserved serving capacity exceed the bound",
-                  obligation=ob["id"], retained=retained, proposed=proposed,
-                  reserved=reserved,
+                  "current work and pending report capacity exceed the current-work bound",
+                  obligation=ob["id"], retained=retained, proposed=proposed, reserved=reserved,
                   limit=MAX_RECEIPTS if field == "receipts" else MAX_FINDINGS,
                   **({"admission": route_held["admission_id"] if route_held is not None else pending[0]} if pending else {}),
                   next_action=(route_next_action(route_held) if route_held is not None else
                                f"settle and consume the report for admission {pending[0]} before retrying this write"
-                               if pending else {"seq": seq, "renew": [replacement]}))
+                               if pending else "resolve required corrections, retain all findings, then retry on the same assurance"))
 
 
 def binding_current(binding: Any, ctx: dict) -> bool:
@@ -823,9 +819,11 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
                          next_action="preserve every recorded finding; a completed review attempt at its finding "
                                      "bound cannot be extended or its stored findings regrouped")
         reserved = MAX_REPORT_FINDINGS * len(pending_serving(assurance, ctx))
-        if len(stored) + len(records) + reserved > MAX_FINDINGS:
+        live = live_finding_count(stored, {**ctx, "map_state": state})
+        incoming = sum(item["triage"] == "required_correction" for item in records)
+        if live + incoming + reserved > MAX_FINDINGS:
             raise capacity_refusal(assurance, {**ctx, "map_state": state}, seq=state["seq"] + 1, field="findings",
-                                   retained=len(stored), proposed=len(stored) + len(records) + reserved, reserved=reserved,
+                                   retained=live, proposed=live + incoming + reserved, reserved=reserved,
                                    prior=next(row for row in state["obligations"] if row["id"] == assurance_id))
         assurance["findings"] = list(stored) + records
         written.add(assurance_id)

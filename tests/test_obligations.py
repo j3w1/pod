@@ -742,7 +742,9 @@ class ProofIntegrityTests(unittest.TestCase):
             s["evidence"] = [proof("S", reference=f"log-{index}")]
             state = accept_write(state, write(state, rows), ctx())
         s["evidence"] = [proof("S", reference="one-too-many")]
-        refused(self, "obligation_invalid", "receipt_limit", accept_write, state, write(state, rows), ctx())
+        grown = accept_write(state, write(state, rows), ctx())
+        self.assertEqual(len(by_id(grown, "S")["receipts"]), 65)
+        self.assertEqual(by_id(grown, "S")["receipts"][:-1], by_id(state, "S")["receipts"])
         self.assertEqual(len(by_id(state, "S")["receipts"]), MAX_RECEIPTS)
 
 

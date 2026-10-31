@@ -148,7 +148,8 @@ class ClaimTests(SuccessionCase):
 
 def _raw(case, objective):
     path = objective_root(case.project, objective) / "context.json"
-    return path, json.loads(path.read_text())
+    from tests.common import logical_json
+    return path, logical_json(path)
 
 
 def _admission_state(state):

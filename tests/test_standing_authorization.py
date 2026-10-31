@@ -2139,31 +2139,41 @@ class StandingCapacityTests(StandingCase):
         cls.prepared.case.write(cls.prepared.case.stored(), questions=[cls.QUESTION])
         for index in range(1, standing.MAX_ANSWERS + 1):
             cls.maximum_answer(cls.prepared, index)
-        cls.context_bytes = _path(cls.prepared.project, "objective").read_bytes()
+        from tests.common import logical_json
+        cls.context_bytes = json.dumps(logical_json(_path(cls.prepared.project, "objective"))).encode()
+        from pod.ledger import state_root
+        cls.use_directory = state_root(cls.prepared.project) / ".relay-authorizations"
+        cls.use_receipts = {path.name: path.read_bytes() for path in cls.use_directory.glob("*.json")}
 
     def setUp(self):
         # Reuse the real disposable context; no synthetic history bypasses activation.
         self.__dict__.update({key: value for key, value in self.prepared.__dict__.items()
                               if key not in ("_cleanups", "_outcome", "_testMethodName", "_testMethodDoc")})
         _path(self.project, "objective").write_bytes(self.context_bytes)
+        for path in self.use_directory.glob("*.json"):
+            if path.name not in self.use_receipts:
+                path.unlink()
+        for name, raw in self.use_receipts.items():
+            (self.use_directory / name).write_bytes(raw)
 
-    def test_activation_reserves_last_slot_so_revoke_always_fits(self):
+    def test_standing_decisions_continue_past_the_previous_history_cap(self):
         self.assertEqual(len(read(self.project, "objective")["standing_authorization"]["decisions"]), 31)
-        self.refusal("standing_authorization_full", self.activate)
+        self.maximum_decision(self)
         revoked = self.maximum_decision(self, "revoke")
-        self.assertEqual((revoked["decision"]["id"], revoked["standing_authorization"]["state"]), ("Y32", "revoked"))
-        self.refusal("standing_authorization_full", self.activate)
+        self.assertEqual((revoked["decision"]["id"], revoked["standing_authorization"]["state"]), ("Y33", "revoked"))
+        self.maximum_decision(self)
+        self.assertEqual(len(read(self.project, "objective")["standing_authorization"]["decisions"]), 34)
 
-    def test_full_maximum_size_verified_answers_fit_and_next_refuses_without_write(self):
+    def test_maximum_size_verified_answers_continue_without_eviction(self):
         self.assertEqual(self.operation("show")["standing_authorization"]["responder_decisions"]["total"], standing.MAX_ANSWERS)
-        self.control(changes={"single_use": "one-past-answer-cap"})
-        self.refusal("responder_answers_full", self.operation, "answer", answer={**ANSWER, "question": self.QUESTION})
+        self.control(changes={"single_use": "one-past-old-answer-cap"})
+        self.operation("answer", answer={**ANSWER, "question": self.QUESTION})
         context = read(self.project, "objective")
         self.assertEqual([row["id"] for row in context["standing_authorization"]["answers"]],
-                         [f"A{index}" for index in range(1, standing.MAX_ANSWERS + 1)])
+                         [f"A{index}" for index in range(1, standing.MAX_ANSWERS + 2)])
 
     def test_worst_case_record_leaves_headroom_for_checkpoint_and_closure_report(self):
-        from pod.history import CONTEXT_LIMIT
+        from pod.history import (CONTEXT_LIMIT)
         self.maximum_decision(self, "revoke")
         context = read(self.project, "objective")
         record = context["standing_authorization"]
@@ -2178,14 +2188,15 @@ class StandingCapacityTests(StandingCase):
         self.assertLess(_path(self.project, "objective").stat().st_size, CONTEXT_LIMIT)
 
     def test_e7_capacity_warning_names_bounded_standing_section(self):
-        from pod.history import capacity
+        from pod.history import (capacity)
         self.maximum_decision(self, "revoke")
         path = _path(self.project, "objective")
         before = self.saved()
         result = capacity(path, read(self.project, "objective"))
-        self.assertTrue(result["warning"])
-        self.assertEqual(result["largest_sections"][0]["section"], "standing_authorization")
-        self.assertIn("standing_authorization section is bounded and needs no maintenance", result["next_action"])
+        self.assertFalse(result["warning"])
+        self.assertEqual(result["format"], "pod-history-record/v1")
+        self.assertGreater(result["logical_bytes"], result["physical_bytes"])
+        self.assertTrue(result["full_audit_available"])
         self.assertEqual(self.saved(), before)
 
     def test_e5_stale_and_future_relays_refuse_before_full_history_cap(self):
@@ -2202,17 +2213,20 @@ class StandingCapacityTests(StandingCase):
                     self.assertEqual(self.receipts(), receipts)
 
     def test_n2_maximum_history_and_64_effects_close_with_ordinary_objective_headroom(self):
-        from pod.history import CONTEXT_LIMIT
+        from pod.history import (CONTEXT_LIMIT)
         self.maximum_decision(self, "revoke")
         # A completed production Governor row supplies the real effect shape.
-        journal = self.journal()
+        from pod.history_tree import plain
+        journal = plain(self.journal())
         source = self.context_bytes
-        context = read(self.project, "objective")
+        from pod.history_tree import plain
+        context = plain(read(self.project, "objective"))
         _path(self.project, "objective").write_bytes(source)
         self.case.op("governor-execute", action=self.proposed())
         sample = deepcopy(self.journal()["actions"][-1])
         _write(_path(self.project, "objective"), context)
         journal["actions"] = [{**deepcopy(sample), "record_id": f"effect-{index:02d}"} for index in range(64)]
+        journal["revision"] = self.journal()["revision"]
         _write_journal(_record_path(self.project, "objective"), journal)
         # 64 KB of current objective context is independent of the standing history.
         questions = [{"id": f"Q{index}", "text": f"Question {index}: " + "q" * 1010} for index in range(64)]
@@ -2342,6 +2356,13 @@ class StandingCompatibilityTests(StandingCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
+    def preceding_context(self):
+        """An explicit logical-format control, leaving the current authority untouched."""
+        from tests.common import logical_json
+        control = self.case.root / "preceding-context.json"
+        control.write_text(json.dumps(logical_json(_path(self.project, "objective"))))
+        return control
+
     def test_ordinary_payload_vocabulary_does_not_select_new_discriminator(self):
         from pod.util import protect_decision_record
         for payload in ({"standing": "value", "channel": "session"},
@@ -2364,7 +2385,7 @@ assert __version__ == "0.18.0"
 project, path = map(Path, sys.argv[1:])
 state = _read(path)
 print(json.dumps(report_projection(state["checkpoint"], closed_snapshot_context(project, "objective", state))))
-''', self.project, _path(self.project, "objective"))
+''', self.project, self.preceding_context())
         self.assertEqual(report, earlier)
         self.assertEqual(self.public_status()["report"]["standing_authorization"]["state"], "none")
         self.assertEqual(closed["standing_authorization"]["mode"], "normal")
@@ -2389,7 +2410,7 @@ from pod.ledger import _read
 assert __version__ == "0.18.0"
 state = _read(Path(sys.argv[1]))
 print(json.dumps({"read": "ok", "standing": "standing_authorization" in state}))
-''', _path(self.project, "objective")), {"read": "ok", "standing": False})
+''', self.preceding_context()), {"read": "ok", "standing": False})
             self.assertEqual(self.saved(), before)
 
     def test_genuine_0180_refuses_standing_context_and_journal_preserving_bytes(self):

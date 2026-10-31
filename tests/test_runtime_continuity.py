@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from contextlib import ExitStack, contextmanager
 import fcntl
 import json
@@ -287,8 +289,8 @@ class AmbiguousContinuityTests(ContinuityCase):
         self.port.unavailable = {dispatch}
         self.assert_ambiguous(f"admission {first['admission_id']}: worker read unavailable")
         self.port.unavailable = set()
-        update_admission_raw = self.context.read_text()
-        state = json.loads(update_admission_raw)
+        from tests.common import logical_json
+        state = logical_json(self.context)
         state["admissions"][first["admission_id"]].update(state="unresolved", native_binding=None)
         self.context.write_text(json.dumps(state))
         self.assert_ambiguous(f"admission {first['admission_id']}: unresolved attempt")
@@ -595,16 +597,17 @@ class ContinuityBoundaryTests(ContinuityCase):
         self.assertEqual([entry["to_runtime"] for entry in self.history()], ["runtime-2"])
         self.assertEqual(writes, [True])
 
-    def test_rebind_past_the_history_bound_refuses_without_a_write(self):
+    def test_rebind_past_eight_entries_retains_history_and_authority(self):
         self.started()
         for index in range(CONTINUITY_HISTORY):
             self.change_runtime(f"runtime-{index + 2}")
             self.checkpoint_op()
-        self.assertEqual(len(self.history()), CONTINUITY_HISTORY)
+        before = deepcopy(self.history())
         self.change_runtime("runtime-overflow")
-        before = self.snapshot()
-        self.refused("runtime_continuity_full", self.checkpoint_op)
-        self.assertEqual(self.snapshot(), before)
+        self.checkpoint_op()
+        self.assertEqual(self.history()[:-1], before)
+        self.assertEqual(len(self.history()), CONTINUITY_HISTORY + 1)
+        self.assertEqual(self.history()[-1]["to_runtime"], "runtime-overflow")
 
 
 if __name__ == "__main__":

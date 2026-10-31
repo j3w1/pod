@@ -361,9 +361,6 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     if len(facts["ambiguity"]) > CONTINUITY_AMBIGUITY:
         return fail("ambiguity_full", "Too many unreadable identities to bind an exact confirmation.")
     history = (checkpoint.get("continuity") or {}).get("history", [])
-    if pending is None and len(history) >= 8:
-        return fail("history_full", "The eight-entry continuity history is full.",
-                    action="Continue in a successor objective; do not run orca orchestration run-use by hand.")
     question = (f"May Pod make this terminal the coordinator of objective {objective}? "
                 "Orca reports the previous coordinator's handle stale or gone; the objective's owner will change and its work will be preserved.")
     result.update(status="handoff_available", condition=branch, question=question,
@@ -454,7 +451,7 @@ def _preflight_decision(path, state, value, verified, pending, capability):
         protect_decision_record(candidate)
         candidate["revision"] += 2
         _validate_context(candidate)
-        prepare_context(path, candidate, protected=set(candidate["admissions"]))
+        prepare_context(path, candidate)
 
 
 def owner_handoff(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:
@@ -536,7 +533,7 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
                     abort(pending, verdict["condition"], state)
                 raise refusal(verdict)
         if verdict["status"] != "handoff_available":
-            raise refusal(verdict, "runtime_continuity_full" if verdict["condition"] == "history_full" else "owner_handoff_refused")
+            raise refusal(verdict, "owner_handoff_refused")
         if generic and capability is None:
             recorded = ((pending or {}).get("resolution") if (pending or {}).get("state") == "aborted" else (pending or {}).get("decision"))
             if not isinstance(recorded, dict) or "decision_binding" not in recorded or not same_decision_input(requested_value, recorded):
@@ -548,8 +545,6 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
             raise refusal({**verdict, "message": "The pending handoff requires its original exact confirmation."}, "handoff_decision_mismatch")
         record = state["checkpoint"].get("continuity") or {"binding": None, "history": []}
         if pending is None:
-            if len(record["history"]) >= CONTINUITY_HISTORY:
-                raise PodError("runtime_continuity_full", "Handoff history is full; continue in a successor objective", {"limit": CONTINUITY_HISTORY})
             pending = {"provenance": "owner_handoff", "state": "pending", "from_runtime": value["recorded_runtime"],
                        "to_runtime": value["current_runtime"], "at": capability.commit_clock() if capability else datetime.now(timezone.utc).isoformat(),
                        "verified": verdict["verified"], "decision": dict(value), "abort_reason": None, "completion": None}

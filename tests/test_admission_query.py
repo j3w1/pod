@@ -1,5 +1,5 @@
 """R185: production admission reads, selective evidence and conservative gaps."""
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from io import StringIO
 import json
 import os
@@ -10,6 +10,8 @@ from pod import admission, cli, governor, history
 from pod.ledger import objective_root, record_name, state_root
 from pod.github import repository_context
 from tests.kernel_support import KernelCase, git
+from tests.common import logical_json
+from tests.history_support import _reference
 
 
 class AdmissionQueryCase(KernelCase):
@@ -30,13 +32,26 @@ class AdmissionQueryCase(KernelCase):
 
     def raw(self, name="objective"):
         path = objective_root(self.project, name) / "context.json"
-        return path, json.loads(path.read_text())
+        return path, logical_json(path)
 
     def save(self, path, raw):
         path.write_text(json.dumps(raw))
 
     def query(self, **kwargs):
         return admission.query(self.project, **kwargs)
+
+    @contextmanager
+    def current_chunks_only(self):
+        """Current index pages are required; unrelated retained payloads remain forbidden."""
+        root = objective_root(self.project, "objective")
+        original = history.ChunkStore.load
+        reads = []
+        def load(store, address):
+            self.assertEqual(store.root.parent.parent, root, "unrelated history payload")
+            reads.append(address)
+            return original(store, address)
+        with patch.object(history.ChunkStore, "load", load):
+            yield reads
 
 
 class AdmissionQueryTests(AdmissionQueryCase):
@@ -47,15 +62,15 @@ class AdmissionQueryTests(AdmissionQueryCase):
         path, raw = self.raw("old")
         # Unrelated retained proof is not an exclusion authority for claims.
         raw["history"] = history.FORMAT
-        raw["checkpoint"]["obligations"][0]["receipts"] = [history._reference({"old": "x" * 1000}, {})]
+        raw["checkpoint"]["obligations"][0]["receipts"] = [_reference({"old": "x" * 1000}, {})]
         self.save(path, raw)
         with patch("pod.history.load_context", side_effect=AssertionError("full read")), \
              patch("pod.admission._primary", wraps=admission._primary) as reads, \
-             patch("pod.history.ChunkStore.load", side_effect=AssertionError("unrelated history")) as chunks:
+             self.current_chunks_only() as chunks:
             result = self.query()
         self.assertTrue(result["complete"])
         self.assertEqual(reads.call_count, 4)  # primary plus concurrency recheck, each record
-        self.assertEqual(chunks.call_count, 0)
+        self.assertGreater(len(chunks), 0)
         self.assertEqual([row["objective"] for row in result["claims"]], ["objective"])
 
     def test_closed_record_keeps_hidden_native_writer_conflict(self):
@@ -126,9 +141,10 @@ class AdmissionQueryTests(AdmissionQueryCase):
         real = admission._primary
         def changed(p):
             value, identity = real(p)
-            if changed.called:
-                value["checkpoint"]["worktree"]["branch"] = "changed"
-                identity = "changed"
+            if not changed.called:
+                updated = logical_json(p)
+                updated["checkpoint"]["worktree"]["branch"] = "changed"
+                self.save(p, updated)
             changed.called = True
             return value, identity
         changed.called = False
@@ -215,7 +231,7 @@ class AdmissionQueryTests(AdmissionQueryCase):
         row = {"schema": "pod-admission/v4", "admission_id": "a", "state": "closed", "role": "implement",
                "native_binding": binding, "runtime": "runtime"}
         chunks = {}
-        raw["admissions"]["a"] = history._reference(row, chunks)
+        raw["admissions"]["a"] = _reference(row, chunks)
         raw["history"] = history.FORMAT
         history.ChunkStore(path.parent).put(chunks)
         self.save(path, raw)
@@ -336,7 +352,7 @@ class AttributionReadTests(AdmissionQueryCase):
                                          "repo_key": repository_context(other)["repo_key"]}
         chunks = {}
         raw["history"] = history.FORMAT
-        raw["admissions"]["unused"] = history._reference({"unused": "retained" * 100}, chunks)
+        raw["admissions"]["unused"] = _reference({"unused": "retained" * 100}, chunks)
         destination = objective_root(other, name) / "context.json"
         destination.parent.mkdir()
         destination.write_text(json.dumps(raw))
@@ -357,14 +373,14 @@ class AttributionReadTests(AdmissionQueryCase):
              patch("pod.admission._terminals", side_effect=self._real_terminals), \
              patch("pod.admission._read", side_effect=native_read) as native_reads, \
              patch("pod.history._context_bytes", wraps=history._context_bytes) as files, \
-             patch("pod.history.ChunkStore.load", side_effect=AssertionError("foreign chunk")) as chunks, \
+             self.current_chunks_only() as chunks, \
              patch("pod.governor._read_journal", wraps=governor._read_journal) as journals:
             result = self.query()
         self.assertTrue(result["complete"], result["unknowns"])
-        self.assertEqual(files.call_count, 3)  # two primaries, one relevant recheck
-        self.assertEqual(chunks.call_count, 0)
+        self.assertEqual(files.call_count, 4)  # two attribution reads, relevant claims and recheck
+        self.assertGreater(len(chunks), 0)
         self.assertEqual(native_reads.call_count, 2)
-        self.assertEqual(journals.call_count, 2)
+        self.assertEqual(journals.call_count, 0)  # Current effects use their projection, not a full journal.
 
     def test_wrong_record_key_is_unknown_instead_of_foreign(self):
         self.intake(worktree=self.place)
@@ -422,9 +438,9 @@ class AttributionReadTests(AdmissionQueryCase):
             directory.mkdir()
             raw = {"schema": "pod-context/v4", "checkpoint": {"schema": "pod-checkpoint/v3",
                    "objective": name, "worktree": {**self.place, "path": str(other), "repo_key": context["repo_key"]}},
-                   "admissions": {"old": history._reference({"old": "report"}, {})}}
+                   "admissions": {"old": _reference({"old": "report"}, {})}}
             self.save(directory / "context.json", raw)
-        with patch("pod.history.ChunkStore.load", side_effect=AssertionError("foreign chunks")):
+        with self.current_chunks_only():
             result = self.query()
         self.assertTrue(result["complete"], result["unknowns"])
         self.assertEqual(result["status"], "observed")
@@ -568,7 +584,7 @@ class ReviewCorrectionTests(AdmissionQueryCase):
         foreign.mkdir()
         self.save(foreign / "context.json", raw)
         self.journal(declared=["deploy:prod"], directory=foreign)
-        with patch("pod.history.ChunkStore.load", side_effect=AssertionError("foreign history")):
+        with self.current_chunks_only():
             result = self.query(effects=["deploy:prod"])
         self.assertEqual(result["status"], "blocked", result["unknowns"])
         self.assertEqual(next(row["record"] for row in result["claims"] if "effects" in row), foreign.name)

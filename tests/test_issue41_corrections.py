@@ -1,4 +1,5 @@
 """Audit corrections through production entries; only native/provider ports are fake."""
+from tests.common import logical_json
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -592,7 +593,7 @@ class OfflineOmissionTests(ProductionCase):
                 calls = len(case.remote.calls)
                 case.op("governor-execute", action=action)
                 self.assertEqual(len(case.remote.calls), calls)
-                journal = json.loads((objective_root(case.project, "objective") / "governor.json").read_text())
+                journal = logical_json(objective_root(case.project, "objective") / "governor.json")
                 reserved = next(row for row in journal["actions"] if row["record_id"] == decided["record_id"])
                 managed = next(row for row in journal["actions"] if row["record_id"] == executed["record_id"])
                 self.assertTrue(reserved["decision_reserved"])

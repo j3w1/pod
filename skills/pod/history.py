@@ -1,11 +1,13 @@
 """Verified immutable history: physical placement, never lifecycle or policy state.
 
-Every consumer receives the complete logical context. Only typed positions can
-reference history; all chunks are verified before logical validation or projection.
+Typed immutable pages preserve the logical context. Decision readers open only
+relevant descendants; explicit audits verify the complete retained evidence.
 """
 from __future__ import annotations
 
 import base64
+import fcntl
+from functools import wraps
 from copy import deepcopy
 import hashlib
 import json
@@ -16,19 +18,20 @@ import stat
 from contextlib import ExitStack, contextmanager
 import errno
 import secrets
+import time
 
 from .errors import PodError
 from .util import MAX_RECORD, encoded, digest, atomic_json
 
 CONTEXT_LIMIT = 4 * MAX_RECORD
-WARN_AT = CONTEXT_LIMIT // 2
-COMPACT_AT = 5 * CONTEXT_LIMIT // 8
 MAINTENANCE_LIMIT = 16 * CONTEXT_LIMIT
 CHUNK_LIMIT = MAX_RECORD
 PART_BYTES = 48 * 1024
 MARKER = "$pod_history"
 FORMAT = {"schema": "pod-history-refs/v1"}
 HEX = re.compile(r"[a-f0-9]{64}\Z")
+CLEANUP_TRIGGER_BYTES = 256 * 1024
+CLEANUP_HINT_BYTES = 16 * 1024
 
 
 def _bytes(value):
@@ -52,88 +55,6 @@ def _check_read_deadline():
 
 def is_reference(value) -> bool:
     return isinstance(value, dict) and set(value) == {MARKER}
-
-
-def _review_consumed(state, key, row):
-    serves = row.get("serves")
-    if not isinstance(serves, list) or len(serves) != 1:
-        return False
-    return any(ob.get("id") == serves[0] and ob.get("kind") == "assurance"
-               and any(item.get("evidence", {}).get("attempt") == key
-                       and ("reported_seq" in item or "accepted_seq" in item)
-                       for item in ob.get("receipts", []))
-               for ob in (state.get("checkpoint") or {}).get("obligations", []))
-
-
-def _review_settled(state, key, row):
-    """Any-outcome review: its served assurance holds its findings, each required one resolved."""
-    serves = row.get("serves")
-    obligations = (state.get("checkpoint") or {}).get("obligations", [])
-    if (not isinstance(serves, list) or len(serves) != 1 or not isinstance(obligations, list)
-            or not any(isinstance(ob, dict) and ob.get("id") == serves[0] and ob.get("kind") == "assurance"
-                       for ob in obligations)):
-        return False
-    from .lineage import Lineage
-    try:
-        lineage = Lineage(obligations)
-        findings = lineage.findings(serves[0])
-        for finding in findings:
-            if finding.get("attempt") != key or finding.get("triage") != "required_correction":
-                continue
-            # A frozen finding keeps its bytes; the effective correction decides resolution.
-            child = lineage.rows.get(lineage.effective(finding.get("correction")))
-            owner_withdrawn = (isinstance(child, dict) and child.get("state") == "withdrawn"
-                               and (child.get("withdrawal") or {}).get("by") == "user_direct")
-            if not owner_withdrawn and not isinstance(finding.get("resolved_seq"), int):
-                return False
-    except (PodError, AttributeError, KeyError, TypeError):
-        return False  # An unreadable lineage cannot prove the corrections settled.
-    return True
-
-
-def _proposals_settled(state, key):
-    """A reconciled investigation leaves no unadopted proposal from its report."""
-    proposals = (state.get("checkpoint") or {}).get("proposals", [])
-    return isinstance(proposals, list) and not any(
-        not isinstance(row, dict) or row.get("origin_ref") == key[:64] and row.get("status") != "adopted"
-        for row in proposals)
-
-
-OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
-
-
-def admission_movable(state, key, row, protected=frozenset()) -> bool:
-    """Conservative, role-aware predicate for consumed results.
-
-    A consumed report proves prior native settlement; archiving does not
-    change the admission's bound state or current native outstanding predicate.
-    Any freshly observed outstanding/native or Governor dependency vetoes a move.
-    """
-    from .util import route_hold
-    candidate = (state.get("checkpoint") or {}).get("candidate")
-    report = row.get("report") or {}
-    if (key in protected or row.get("state") not in ("closed", "bound")
-            or not row.get("candidate")
-            or report.get("status") not in ("validated_observation", "reconciliation_required")
-            or report.get("outcome") not in OUTCOMES
-            or row.get("route_decision", {}).get("effective_unknown") is True
-            or route_hold(row)
-            or any(not failure.get("cleared_at") for failure in row.get("failures", []))):
-        return False
-    role = row.get("role")
-    if row.get("candidate") == candidate and (role != "review" or not _review_consumed(state, key, row)):
-        return False
-    if role == "implement":
-        return row.get("disposition") is not None
-    if role == "investigate":
-        if report.get("status") == "reconciliation_required":
-            return _proposals_settled(state, key)
-        return report.get("outcome") == "succeeded"
-    if role != "review" or report.get("status") != "validated_observation":
-        return False
-    if report.get("outcome") == "succeeded":
-        return _review_consumed(state, key, row)
-    return _review_settled(state, key, row)
 
 
 def _positions(state):
@@ -172,114 +93,15 @@ def _positions(state):
         yield state, "historical_retirement"
 
 
-def compact(logical_state, *, protected_admissions=(), force=False,
-            archive_retirement=False, trigger_bytes=COMPACT_AT, current_bytes=0,
-            protect_receipts=False, protected_candidates=(), maintenance=(), require_fit=True):
-    """Return (physical record, {file_digest: exact_file_bytes}); never mutate input.
-
-    Once triggered, move every eligible slot (hysteresis without a second arbitrary
-    target). The logical admission/receipt/governance count contracts never change.
-    Retirement-only fallback may move the immutable entry, never unsettled data.
-    """
-    if "history" in logical_state:
-        _fail("history_invalid", "compact requires hydrated logical state")
-    record = deepcopy(logical_state)
-    if not force and not maintenance and len(_bytes(record)) < trigger_bytes:
-        return record, {}
-    chunks = {}
-
-    def reference(value):
-        proposed = {}
-        ref = _reference(value, proposed)
-        if len(_bytes(ref)) >= len(_bytes(value)):
-            return deepcopy(value)
-        chunks.update(proposed)
-        return ref
-
-    protected = frozenset(protected_admissions)
-    movable = set()
-    for key, row in logical_state.get("admissions", {}).items():
-        if admission_movable(logical_state, key, row, protected):
-            movable.add(key)
-            record["admissions"][key] = reference(row)
-    checkpoint = logical_state.get("checkpoint") or {}
-    current = checkpoint.get("candidate")
-    target = record.get("checkpoint") or {}
-    logical_rows = {row["id"]: row for row in checkpoint.get("obligations", [])
-                    if isinstance(row, dict) and isinstance(row.get("id"), str)}
-    for index, (old_ob, new_ob) in enumerate(zip(checkpoint.get("obligations", []), target.get("obligations", []))):
-        if old_ob.get("state") in ("withdrawn", "renewed"):
-            target["obligations"][index] = reference(old_ob)
-            continue
-        if old_ob.get("kind") == "assurance" and old_ob.get("findings") and type(checkpoint.get("seq")) is int:
-            from .assurance import validate_findings
-            try:
-                validate_findings(old_ob, logical_rows, seq=checkpoint["seq"])
-            except PodError:
-                pass  # Unvalidated observations cannot authorize a new history position.
-            else:
-                for finding_index, finding in enumerate(old_ob["findings"]):
-                    new_ob["findings"][finding_index] = reference(finding)
-        selected = {json.dumps(item, sort_keys=True) for item in old_ob.get("evidence", [])}
-        satisfied = old_ob.get("state") == "satisfied"
-        for index, receipt in enumerate(old_ob.get("receipts", [])):
-            evidence = receipt.get("evidence") or {}
-            candidate = evidence.get("candidate")
-            copy = json.dumps(evidence, sort_keys=True) in selected
-            if protect_receipts or candidate in protected_candidates or not candidate:
-                continue
-            # Current/selected proof stays inline, except a satisfied row's receipt copy:
-            # the row itself keeps that evidence and reuse inline for every reader.
-            if not satisfied and (candidate == current or copy):
-                continue
-            consumed = "reported_seq" in receipt or "accepted_seq" in receipt
-            if old_ob.get("kind") == "assurance" and satisfied and copy:
-                attempt = evidence.get("attempt")
-                eligible = (consumed and isinstance(attempt, str) and attempt in logical_state.get("admissions", {})
-                            and attempt not in protected
-                            and receipt.get("reuse") in (None, old_ob.get("reuse")))
-            elif old_ob.get("kind") == "assurance":
-                eligible = (candidate != current and receipt.get("reuse") is None
-                            and evidence.get("attempt") in movable and consumed)
-            else:
-                # Failed or unknown tests stay inline.
-                eligible = evidence.get("status") == "PASS" and "accepted_seq" in receipt
-            if eligible:
-                new_ob["receipts"][index] = reference(receipt)
-    old_history = checkpoint.get("governance_history") or {}
-    for field in ("candidates", "decisions"):
-        entries = old_history.get(field, [])
-        for index, value in enumerate(entries[:-1]):
-            if field == "candidates" and value == current:
-                continue
-            target["governance_history"][field][index] = reference(value)
-    for index, value in enumerate(checkpoint.get("revision_decisions", [])[:-1]):
-        target["revision_decisions"][index] = reference(value)
-    if archive_retirement and "historical_retirement" in record:
-        record["historical_retirement"] = reference(logical_state["historical_retirement"])
-    if chunks:
-        record["history"] = dict(FORMAT)
-    if maintenance:
-        record.setdefault("history", dict(FORMAT))["maintenance"] = _reference(list(maintenance), chunks)
-        if any("decision_binding" in row.get("authority", {}) for row in maintenance):
-            record["history"]["decision_channels"] = 5
-    if not maintenance and len(_bytes(record)) >= len(_bytes(logical_state)):
-        record, chunks = deepcopy(logical_state), {}
-    if require_fit:
-        _require_size(record, current_bytes=current_bytes)
-    return record, chunks
-
-
 def _reference(value, chunks):
     payload = _bytes(value)
     parts = []
     for offset in range(0, len(payload), PART_BYTES):
-        chunk = _bytes({"schema": "pod-history-chunk/v1",
-                        "data": base64.b64encode(payload[offset:offset + PART_BYTES]).decode("ascii")})
-        address = _sha(chunk)
-        chunks[address] = chunk
+        part = payload[offset:offset + PART_BYTES]
+        address = _sha(part)
+        chunks[address] = part
         parts.append(address)
-    return {MARKER: {"sha256": _sha(payload), "parts": parts, "bytes": len(payload)}}
+    return {MARKER: {"sha256": _sha(payload), "parts": parts, "bytes": len(payload), "encoding": "json"}}
 
 
 def largest_sections(value):
@@ -296,29 +118,31 @@ def _require_size(record, *, current_bytes):
                        + ", ".join(f"{row['section']}={row['bytes']}" for row in sections),
                        {"current_bytes": current_bytes, "proposed_bytes": proposed,
                         "limit_bytes": CONTEXT_LIMIT, "largest_sections": sections,
-                        "next_action": "On waiting rows, unselect stale selected evidence with evidence: [] so their "
-                                       "retained receipts can move to immutable history. Mechanically renew large "
-                                       "rows through the checkpoint renew route so terminal rows can archive. "
-                                       "Consume or triage reports, record implementation dispositions and settle "
-                                       "governed effects through their supported paths. If the record is still over "
-                                       "limit, project lead or coordinator: run internal record-compaction detection "
-                                       "for this exact project and objective, then submit its exact scoped maintenance "
-                                       "request; no owner decision is required."})
+                        "next_action": "run pod internal storage with action inspect for this project and objective, "
+                                       "then action migrate with its exact revision and sha256; immutable revisions "
+                                       "support growth without changing requirements or selected proof"})
 
 
-def _expand(reference, loader, cache):
+def _reference_value(reference):
     if not is_reference(reference):
         _fail("history_invalid", "Malformed history digest reference")
     ref = reference[MARKER]
-    if (not isinstance(ref, dict) or set(ref) != {"sha256", "parts", "bytes"}
+    if (not isinstance(ref, dict) or (set(ref) != {"sha256", "parts", "bytes"} and
+            not (set(ref) == {"sha256", "parts", "bytes", "encoding"} and ref["encoding"] == "json"))
             or not isinstance(ref["sha256"], str) or not HEX.fullmatch(ref["sha256"])
             or type(ref["bytes"]) is not int or ref["bytes"] < 1
             or not isinstance(ref["parts"], list) or not ref["parts"]
             or len(ref["parts"]) != (ref["bytes"] + PART_BYTES - 1) // PART_BYTES
             or any(not isinstance(part, str) or not HEX.fullmatch(part) for part in ref["parts"])):
         _fail("history_invalid", "Malformed history digest reference")
+    return ref
+
+
+def _expand(reference, loader, cache):
+    ref = _reference_value(reference)
     pieces = []
     for index, address in enumerate(ref["parts"]):
+        _check_read_deadline()
         if address not in cache:
             try:
                 raw = loader(address)
@@ -328,14 +152,17 @@ def _expand(reference, loader, cache):
                 raise PodError("history_unavailable", "History storage is unreadable") from exc
             if not isinstance(raw, bytes) or len(raw) > CHUNK_LIMIT or _sha(raw) != address:
                 _fail("history_integrity", "History chunk size or digest differs")
-            try:
-                chunk = json.loads(raw.decode("utf-8"))
-                if (not isinstance(chunk, dict) or set(chunk) != {"schema", "data"}
-                        or chunk["schema"] != "pod-history-chunk/v1" or _bytes(chunk) != raw):
-                    raise ValueError("shape/canonical bytes")
-                cache[address] = base64.b64decode(chunk["data"], validate=True)
-            except (UnicodeError, ValueError, TypeError):
-                _fail("history_integrity", "History chunk cannot be decoded exactly")
+            if ref.get("encoding") == "json":
+                cache[address] = raw
+            else:
+                try:
+                    chunk = json.loads(raw.decode("utf-8"))
+                    if (not isinstance(chunk, dict) or set(chunk) != {"schema", "data"}
+                            or chunk["schema"] != "pod-history-chunk/v1" or _bytes(chunk) != raw):
+                        raise ValueError("shape/canonical bytes")
+                    cache[address] = base64.b64decode(chunk["data"], validate=True)
+                except (UnicodeError, ValueError, TypeError):
+                    _fail("history_integrity", "History chunk cannot be decoded exactly")
         part = cache[address]
         if len(part) != min(PART_BYTES, ref["bytes"] - index * PART_BYTES):
             _fail("history_integrity", "History chunk sequence length differs")
@@ -442,7 +269,49 @@ def _hydrate(record, loader):
 
 def hydrate(record, loader):
     """Verify all references, restoring exact logical positions, values and order."""
+    if isinstance(record, dict) and record.get("schema") == STORAGE_SCHEMA:
+        from .history_tree import Reader, plain
+        class InputStore:
+            def load(self, address): return loader(address)
+        return plain(Reader(InputStore()).value(record["root"]))
     return _hydrate(record, loader)[0]
+
+
+class _ReadPin:
+    """A shared lock on the stable objective directory, without creating a file.
+
+    Publications may proceed while a reader holds old immutable references. Only
+    reclamation needs the exclusive lock, so reads do not block semantic writes.
+    """
+    def __init__(self, store, *, create=False, collect=False):
+        self.store, self.fd = store, None
+        self.collect_on_close = collect
+        self.scope = store.directory_path(store.root.parent.parent, create=create)
+        self.fd = self.scope.__enter__()
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            self.scope.__exit__(None, None, None); self.fd = None
+            raise PodError("history_busy", "Immutable storage is being reclaimed; retry a fresh read") from exc
+
+    def __enter__(self): return self
+    def __exit__(self, *exc): self.close()
+
+    def close(self):
+        if self.fd is None: return
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        self.scope.__exit__(None, None, None)
+        self.fd = None
+        if self.collect_on_close:
+            self.store.maybe_collect()
+
+
+def _pinned_read(function):
+    @wraps(function)
+    def call(path, *args, **kwargs):
+        with ChunkStore(path.parent).pin():
+            return function(path, *args, **kwargs)
+    return call
 
 
 class ChunkStore:
@@ -451,11 +320,11 @@ class ChunkStore:
         self.root = Path(objective_directory) / "history" / "sha256"
 
     @contextmanager
-    def directory(self, *, create=False):
+    def directory_path(self, path, *, create=False):
         _check_read_deadline()
         fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
         try:
-            for name in self.root.absolute().parts[1:]:
+            for name in Path(path).absolute().parts[1:]:
                 _check_read_deadline()
                 if create:
                     try:
@@ -471,10 +340,208 @@ class ChunkStore:
         except FileNotFoundError as exc:
             raise PodError("history_missing", "Referenced immutable history storage is missing") from exc
         except OSError as exc:
+            if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+                raise PodError("storage_full", "Immutable history publication has insufficient disk space; read back and retry") from exc
             code = "history_unsafe" if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR) else "history_unavailable"
             raise PodError(code, "History storage cannot be safely accessed") from exc
         finally:
             os.close(fd)
+
+    def directory(self, *, create=False):
+        return self.directory_path(self.root, create=create)
+
+    def pin(self, *, create=False, collect=False):
+        return _ReadPin(self, create=create, collect=collect)
+
+    def cleanup_info(self):
+        """Bounded housekeeping observation; it is never evidence or a GC mark root."""
+        path = self.root.parent.parent / ".history-gc"
+        try:
+            with self.directory_path(path.parent) as directory:
+                fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                with os.fdopen(fd, "rb") as file:
+                    if not stat.S_ISREG(os.fstat(file.fileno()).st_mode): raise ValueError
+                    raw = file.read(CLEANUP_HINT_BYTES + 1)
+            value = json.loads(raw)
+            if (len(raw) > CLEANUP_HINT_BYTES or not isinstance(value, dict)
+                    or set(value) - {"queued_bytes", "roots", "untracked", "next_attempt_bytes"}
+                    or not {"queued_bytes", "roots", "untracked"} <= set(value)
+                    or type(value["queued_bytes"]) is not int or value["queued_bytes"] < 0
+                    or not isinstance(value["roots"], list) or len(value["roots"]) > 64
+                    or any(not isinstance(v, str) or not HEX.fullmatch(v) for v in value["roots"])
+                    or type(value["untracked"]) is not bool
+                    or type(value.get("next_attempt_bytes", 0)) is not int
+                    or value.get("next_attempt_bytes", 0) < 0): raise ValueError
+            value.setdefault("next_attempt_bytes", 0 if value["untracked"] else CLEANUP_TRIGGER_BYTES)
+            return {"pending": True, **value}
+        except FileNotFoundError:
+            return {"pending": False, "queued_bytes": 0, "roots": [], "untracked": False,
+                    "next_attempt_bytes": CLEANUP_TRIGGER_BYTES}
+        except (OSError, PodError, ValueError, TypeError):
+            pending = path.exists()
+            return {"pending": pending, "queued_bytes": None if pending else 0, "roots": [], "untracked": pending,
+                    "next_attempt_bytes": 0 if pending else CLEANUP_TRIGGER_BYTES}
+
+    def request_collection(self, *, queued_bytes=None, replaced=()):
+        # This is a bounded recovery hint, not evidence or a second authority.
+        # A failed hint cannot roll back an already durable publication.
+        try:
+            info = self.cleanup_info()
+            roots = list(dict.fromkeys([*info["roots"], *replaced]))
+            value = {"queued_bytes": (info["queued_bytes"] or 0) + (queued_bytes or 0),
+                     "roots": roots[-64:], "untracked": info["untracked"] or queued_bytes is None,
+                     "next_attempt_bytes": info["next_attempt_bytes"] if queued_bytes is not None else 0}
+            self._save_cleanup(value)
+        except (OSError, PodError):
+            return
+
+    def _save_cleanup(self, value):
+        try:
+            atomic_json(self.root.parent.parent / ".history-gc", value, limit=CLEANUP_HINT_BYTES, compact=True)
+        except (OSError, PodError):
+            return  # Reclamation metadata never rolls back a successful semantic write.
+
+    def maybe_collect(self):
+        info = self.cleanup_info()
+        if info["pending"] and (info["queued_bytes"] or 0) >= info["next_attempt_bytes"]:
+            return self.collect(seconds=5)
+
+    def _defer_collection(self):
+        """Retry a failed full pass after another bounded batch of placements, or explicitly."""
+        try:
+            with self.directory_path(self.root.parent.parent) as directory:
+                fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                info = self.cleanup_info()
+                if not info["pending"]: return
+                self._save_cleanup({"queued_bytes": info["queued_bytes"] or 0, "roots": info["roots"],
+                    "untracked": info["untracked"], "next_attempt_bytes": (info["queued_bytes"] or 0) + CLEANUP_TRIGGER_BYTES})
+        except (OSError, PodError):
+            return
+
+    def collect(self, *, seconds=300):
+        """Mark both current authorities, then sweep only unreachable owned chunks.
+
+        Live readers and publishers hold shared directory pins. If any remains,
+        leave the hint for the writer's release or the next write. Read-only
+        pin release never performs cleanup. A crash leaves the hint for the next publication. No primary changes.
+        """
+        if not (self.root.parent.parent / ".history-gc").exists():
+            return {"status": "unchanged", "pending": False, "removed_bytes": 0}
+        # Never scan inside a semantic writer's record lock. The objective pin
+        # below serializes reclamation with readers and publishers instead.
+        try:
+            with self.directory_path(self.root.parent.parent) as directory:
+                try: fd = os.open(".lock", os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                except FileNotFoundError: fd = None
+                if fd is not None:
+                    try:
+                        if not stat.S_ISREG(os.fstat(fd).st_mode): raise ValueError
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    finally: os.close(fd)
+        except (OSError, PodError, ValueError):
+            return {"status": "deferred", "pending": True, "reason": "writer_active"}
+        from .orca import _DEADLINE
+        token = _DEADLINE.set(None)  # A separate cleanup pass has its own storage budget.
+        try:
+            return self._collect(seconds=seconds)
+        except (OSError, PodError, ValueError, TypeError, KeyError, RecursionError) as exc:
+            # Commit success is independent of best-effort post-commit cleanup.
+            # Missing/corrupt required data preserves the hint and every chunk.
+            self._defer_collection()
+            return {"status": "deferred", "pending": True, "reason": getattr(exc, "code", "cleanup_interrupted")}
+        finally:
+            _DEADLINE.reset(token)
+
+    def _collect(self, *, seconds=300):
+        from .history_tree import Reader
+        from .installer import STATE_SCHEMAS
+        from .governor import SCHEMA as GOVERNOR_SCHEMA
+        objective = self.root.parent.parent
+        deadline = time.monotonic() + seconds
+        def check():
+            if time.monotonic() > deadline:
+                _fail("history_deadline", "Cleanup exceeded its separate operation deadline; retry storage gc")
+        with self.directory_path(objective) as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {"status": "deferred", "pending": True, "reason": "readers_active"}
+            # A prior publication may have reported an unconfirmed directory
+            # sync. Make the current roots durable before reclaiming any older
+            # bytes, including when this sweep resumes an earlier pending hint.
+            os.fsync(lock)
+            with self.directory() as directory:
+                store = self
+                class PinnedStore:
+                    def load(self, address): return store._load(directory, address)
+                reader = Reader(PinnedStore(), pin=False, seconds=seconds)
+                marked = set()
+                def mark(address):
+                    check()
+                    if address in marked: return False
+                    reader.read_bytes(address)
+                    marked.add(address)
+                    return True
+                def fragment(ref):
+                    value = _reference_value(ref)
+                    for address in value["parts"]: mark(address)
+                def page(ref):
+                    check()
+                    address = ref["sha256"]
+                    if address in marked: return
+                    value = reader.page(ref); marked.add(address)
+                    if value["level"]:
+                        for child in value["entries"]: page(child)
+                    else:
+                        for row in value["entries"]:
+                            descriptor(row[1] if value["kind"] == "dict" else row)
+                def descriptor(ref):
+                    if not isinstance(ref, dict) or len(ref) != 1:
+                        _fail("history_invalid", "GC cannot prove a value descriptor")
+                    if "ref" in ref: page(ref["ref"])
+                    elif "value" in ref: fragment(ref["value"])
+                    elif "inline" not in ref:
+                        _fail("history_invalid", "GC cannot prove a value descriptor")
+                for name in ("context.json", "governor.json"):
+                    path = objective / name
+                    if not path.exists(): continue
+                    physical = json.loads(_context_bytes(path, MAINTENANCE_LIMIT))
+                    if not isinstance(physical, dict):
+                        _fail("history_invalid", "GC cannot prove an authority object")
+                    if physical.get("schema") == STORAGE_SCHEMA:
+                        if (set(physical) != _REVISION_FIELDS or physical["kind"] != name.removesuffix(".json")):
+                            _fail("history_invalid", "GC cannot prove the current root")
+                        descriptor(physical["root"])
+                        for field in ("attribution", "facts", "maintenance"):
+                            if physical[field] not in (None, []): descriptor(physical[field])
+                    elif name == "context.json" and physical.get("schema") == STATE_SCHEMAS["context"]:
+                        # Preceding typed slots remain roots while the other file
+                        # switches format. User content is never searched for refs.
+                        meta = physical.get("history")
+                        if meta is not None and (not isinstance(meta, dict) or meta.get("schema") != FORMAT["schema"]
+                                or set(meta) - {"schema", "maintenance", "decision_channels"}):
+                            _fail("history_invalid", "GC cannot prove a preceding format")
+                        for parent, key in _positions(physical):
+                            if is_reference(parent[key]): fragment(parent[key])
+                        maintenance = (physical.get("history") or {}).get("maintenance")
+                        if maintenance is not None: fragment(maintenance)
+                    elif name != "governor.json" or physical.get("schema") != GOVERNOR_SCHEMA:
+                        _fail("history_invalid", "GC cannot prove an unsupported authority")
+                # Complete marking precedes every unlink. Pins also cover the
+                # put-before-switch window, so an in-flight proposal is not swept.
+                removed_bytes = removed_files = 0
+                for name in os.listdir(directory):
+                    check()
+                    reader.check()
+                    if name.endswith(".json") and HEX.fullmatch(name[:-5]) and name[:-5] not in marked:
+                        removed_bytes += os.stat(name, dir_fd=directory, follow_symlinks=False).st_size
+                        os.unlink(name, dir_fd=directory)
+                        removed_files += 1
+                os.fsync(directory)
+            os.unlink(".history-gc", dir_fd=lock)
+            os.fsync(lock)
+            return {"status": "collected", "pending": False, "removed_bytes": removed_bytes, "removed_files": removed_files}
 
     def _name(self, address):
         if not isinstance(address, str) or not HEX.fullmatch(address):
@@ -503,7 +570,8 @@ class ChunkStore:
 
     def put(self, chunks):
         if not chunks:
-            return
+            return 0
+        written = 0
         with self.directory(create=True) as directory:
             for address, data in chunks.items():
                 name = self._name(address)
@@ -527,12 +595,14 @@ class ChunkStore:
                         os.fsync(file.fileno())
                     try:
                         os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                        written += len(data)
                     except FileExistsError:
                         if self._load(directory, address) != data:
                             _fail("history_integrity", "Concurrent immutable chunk differs")
                 finally:
                     os.unlink(temporary, dir_fd=directory)
             os.fsync(directory)
+        return written
 
 
 def _context_bytes(path, limit):
@@ -556,14 +626,13 @@ def _context_bytes(path, limit):
         if len(data) > limit or info.st_size > limit:
             maintenance = limit >= MAINTENANCE_LIMIT
             raise PodError("record_too_large", "Context exceeds its bounded read limit; "
-                           + ("bounded compaction cannot read it" if maintenance else
-                              "use internal record-compaction detection for a project-lead or coordinator request"),
+                           + ("bounded storage conversion cannot read it" if maintenance else
+                              "use internal storage inspect and migrate for explicit conversion"),
                            {"current_bytes": max(info.st_size, len(data)), "limit_bytes": limit,
                             "next_action": ("Project lead: preserve this record and arrange supported recovery; "
-                                            "bounded compaction cannot read it." if maintenance else
-                                            "Project lead or coordinator: run internal record-compaction detection for "
-                                            "this exact project and objective, then submit its exact scoped maintenance "
-                                            "request; no owner decision is required.")})
+                                            "bounded storage conversion cannot read it." if maintenance else
+                                            "Use internal storage inspect for this exact project and objective, then migrate "
+                                            "with its source revision and SHA256; no owner decision is required.")})
         return data
     except OSError as exc:
         raise PodError("unsafe_record", "Context cannot be safely opened") from exc
@@ -571,19 +640,157 @@ def _context_bytes(path, limit):
         os.close(fd)
 
 
-def _load(path, *, limit=CONTEXT_LIMIT, validate=True):
+from .installer import STORAGE_SCHEMA
+_REVISION_FIELDS = {"schema", "kind", "revision", "root", "maintenance", "source", "attribution", "facts"}
+
+
+def _maintenance_data(path, value):
+    from .history_tree import Reader
+    if value == []: return []
+    values = Reader(ChunkStore(path.parent)).value(value)
+    if not isinstance(values, list):
+        _fail("history_invalid", "Maintenance revision is not a list")
+    return values
+
+
+def _revision_state(path, physical, raw):
+    from .history_tree import SCHEMA, open_root
+    if physical.get("schema") != SCHEMA:
+        _fail("history_invalid", "Unsupported immutable publication format")
+    if (set(physical) != _REVISION_FIELDS or physical["kind"] not in ("context", "governor")
+            or type(physical["revision"]) is not int or physical["revision"] < 0
+            or not isinstance(physical["maintenance"], (dict, list))
+            or not isinstance(physical["attribution"], (dict, type(None)))):
+        _fail("history_invalid", "Malformed revision envelope")
+    source = physical["source"]
+    if (not isinstance(source, dict) or set(source) != {"revision", "sha256"}
+            or type(source["revision"]) is not int or source["revision"] < 0
+            or not isinstance(source["sha256"], str) or not HEX.fullmatch(source["sha256"])):
+        _fail("history_invalid", "Malformed migration source")
+    if isinstance(physical["maintenance"], list) and physical["maintenance"]:
+        _fail("history_invalid", "Nonempty maintenance history requires a verified revision reference")
+    state = open_root(physical["root"], ChunkStore(path.parent))
+    if state.get("revision") != physical["revision"]:
+        _fail("history_integrity", "Logical revision differs from its envelope")
+    state.origin = _sha(raw)
+    state.storage = {key: physical[key] for key in ("kind", "maintenance", "source", "attribution", "facts")}
+    state.storage["root"] = physical["root"]
+    return state
+
+
+@_pinned_read
+def load_document(path, *, kind="governor", limit=CONTEXT_LIMIT):
+    """Read a separate existing durable record through the same immutable store."""
+    raw = _context_bytes(path, limit)
+    try:
+        physical = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise PodError("invalid_record", "Cannot decode bounded durable record") from exc
+    if isinstance(physical, dict) and physical.get("schema") == STORAGE_SCHEMA:
+        state = _revision_state(path, physical, raw)
+        if state.storage["kind"] != kind:
+            _fail("history_invalid", "Durable record kind differs")
+        return state
+    return physical
+
+
+def _attribution(path, state, *, project=None):
+    """One-time normalization uses existing frozen facts, never inferred ownership."""
+    from .records import worktree_binding
+    from .history_tree import plain
+    checkpoint = state.get("checkpoint") or {}
+    objective = checkpoint.get("objective")
+    if not isinstance(objective, str) or not objective:
+        return {"status": "unknown", "reason": "objective_unavailable"}
+    if project is not None:
+        from .github import repository_context
+        from .ledger import record_name
+        observed = repository_context(project)
+        if observed["repo_key"] is not None and record_name(project, observed, objective) == path.parent.name:
+            location = checkpoint.get("worktree")
+            if location is not None:
+                checked = worktree_binding(plain(location))
+                if (checked["repository"], checked["repo_key"]) != (observed["repository"], observed["repo_key"]):
+                    return {"status": "unknown", "reason": "recorded_repository_conflict", "objective": objective}
+            # Worker placement can belong to another repository. The objective's
+            # proven namespace is its attribution, not those resource locations.
+            sources = ["repository_objective_record_key"]
+            return {"status": "proved", "repository": observed["repository"], "repo_key": observed["repo_key"],
+                    "objective": objective, "basis": {"record_key": path.parent.name, "sources": sources,
+                    "sources_count": 1, "sources_sha256": digest(sources)}}
+    locations, sources = [], []
+    if checkpoint.get("worktree") is not None:
+        locations.append(checkpoint["worktree"]); sources.append("checkpoint.worktree")
+    else:
+        for key, row in state.get("admissions", {}).items():
+            recovery = row.get("recovery") or {}
+            for field, location in (("checkpoint_binding.worktree", (recovery.get("checkpoint_binding") or {}).get("worktree")),
+                                    ("placement_binding", recovery.get("placement_binding"))):
+                if location is not None:
+                    locations.append(location); sources.append("admissions/" + key + "/recovery/" + field)
+    checked = []
+    try:
+        checked = [worktree_binding(plain(row)) for row in locations]
+    except PodError:
+        return {"status": "unknown", "reason": "recorded_location_malformed", "objective": objective}
+    identities = {(row["repository"], row["repo_key"]) for row in checked if row["repo_key"] is not None}
+    if project is not None:
+        from .github import repository_context
+        from .ledger import record_name
+        observed = repository_context(project)
+        if observed["repo_key"] is not None and record_name(project, observed, objective) == path.parent.name:
+            identities.add((observed["repository"], observed["repo_key"])); sources.append("repository_objective_record_key")
+    if len(identities) != 1:
+        return {"status": "unknown", "reason": "recorded_repository_conflict" if identities else "repository_unavailable", "objective": objective}
+    repository, key = next(iter(identities))
+    return {"status": "proved", "repository": repository, "repo_key": key, "objective": objective,
+            "basis": {"record_key": path.parent.name, "sources": sources, "sources_count": len(sources), "sources_sha256": digest(sources)}}
+
+
+
+def _attribution_data(path, descriptor, root):
+    from .history_tree import open_root
+    if descriptor is None: return None
+    data = open_root(descriptor, ChunkStore(path.parent))
+    if data.get("root_sha256") != digest(root):
+        _fail("history_integrity", "Attribution differs from its atomic revision")
+    return data
+
+
+def _public_attribution(data):
+    from .history_tree import plain
+    if data is None: return None
+    result = {key: plain(data[key]) for key in ("status", "repository", "repo_key", "objective", "reason") if key in data}
+    basis = data.get("basis")
+    if isinstance(basis, dict):
+        result["basis"] = {key: plain(basis[key]) for key in ("record_key", "sources_count", "sources_sha256") if key in basis}
+    return result
+
+@_pinned_read
+def _load(path, *, limit=MAINTENANCE_LIMIT, validate=True):
     raw = _context_bytes(path, limit)
     try:
         physical = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise PodError("invalid_record", "Cannot decode bounded context JSON") from exc
+    from .history_tree import SCHEMA
+    if isinstance(physical, dict) and physical.get("schema") == SCHEMA:
+        state = _revision_state(path, physical, raw)
+        if state.storage["kind"] != "context":
+            _fail("history_invalid", "Durable record kind differs")
+        if validate:
+            from .ledger import _validate_context
+            _validate_context(state, full_history=False)
+        return state, _maintenance_data(path, physical["maintenance"]), raw
     store = ChunkStore(path.parent)
+    from .history_tree import Reader
+    budget = Reader(store)
     # Open history only if referenced, pinning ancestry for the complete verification.
     with ExitStack() as stack:
         directory = None
         def read_chunk(address):
             nonlocal directory
-            _check_read_deadline()
+            budget.check()
             if directory is None:
                 directory = stack.enter_context(store.directory())
             _check_read_deadline()
@@ -600,252 +807,432 @@ def load_context(path, *, validate=True):
     return _load(path, validate=validate)[0]
 
 
-def protections(path, state, *, native=None, protected=(), journal=None):
-    """Only recorded Governor joins and supplied fresh native evidence add vetoes."""
-    admissions = state.get("admissions", {})
-    keep = set(protected)
-    checkpoint = state.get("checkpoint") or {}
-    for ob in checkpoint.get("obligations", []):
-        if ob.get("state") in ("active", "waiting"):
-            for reference in (ob.get("executor"), (ob.get("wait") or {}).get("referent")):
-                if isinstance(reference, str) and reference in admissions:
-                    keep.add(reference)
-    keep.update((state.get("continued_by") or {}).get("unreported", []))
-    if native is not None:
-        from .ledger import _outstanding_ids
-        keep.update(_outstanding_ids(state, native))
-        for row in native.get("assignments", []):
-            # An explicit fresh live/unverified observation vetoes even an earlier closed row.
-            if isinstance(row, dict) and row.get("admission_id") in admissions and row.get("settled") is not True:
-                keep.add(row["admission_id"])
+@_pinned_read
+def load_admission_facts(path, *, include_admissions=True):
+    """Versioned current-claims input for admission; never a complete proof/audit read."""
+    from .history_tree import SCHEMA, open_root, plain
+    from .installer import STATE_SCHEMAS
+    from .records import worktree_binding
+    raw = _context_bytes(path, MAINTENANCE_LIMIT)
     try:
-        from .governor import _read_journal
-        journal = _read_journal(path.parent / "governor.json") if journal is None else journal
-        rows = [row for row in journal["actions"] if row["decision"] == "ALLOW"
-                and row["outcome"] in ("pending", "UNKNOWN", "FAILED")]
-        # A claim in progress must not hide any dependency it has yet to join.
-        if (state.get("continues") or {}).get("state") == "claiming":
-            return set(admissions), None
-        for row in rows:
-            action = row["action"]
-            identifiers = {action.get(key) for key in ("candidate", "task", "task_id", "packet", "packet_id", "dispatch")
-                           if isinstance(action.get(key), str) and action[key]}
-            if not identifiers:
-                return set(admissions), None
-            for key, admission in admissions.items():
-                binding = admission.get("native_binding") or {}
-                if identifiers & {key, admission.get("candidate"), admission.get("task_id"),
-                                  admission.get("packet_id"), binding.get("dispatchId")}:
-                    keep.add(key)
-        return keep, {row["action"]["candidate"] for row in rows}
-    except (PodError, OSError, KeyError, TypeError):
-        # Unreadable/ambiguous joins cannot authorize relocation of proof.
-        return set(admissions), None
+        physical = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise PodError("invalid_record", "Cannot decode admission attribution") from exc
+    if not isinstance(physical, dict):
+        _fail("history_invalid", "Admission attribution is not an object")
+    current = physical.get("schema") == SCHEMA
+    if current:
+        state = _revision_state(path, physical, raw)
+        attribution = _public_attribution(_attribution_data(path, state.storage["attribution"], physical["root"]))
+    else:
+        state = physical
+        metadata = physical.get("history")
+        if metadata is not None and (not isinstance(metadata, dict) or metadata.get("schema") != FORMAT["schema"]):
+            _fail("history_invalid", "Unsupported earlier admission reference format")
+        attribution = None
+    if state.get("schema") != STATE_SCHEMAS["context"]:
+        _fail("state_unsupported", "Admission attribution uses an unsupported context")
+    checkpoint = state.get("checkpoint")
+    if (not isinstance(checkpoint, dict) or checkpoint.get("schema") != STATE_SCHEMAS["checkpoint"]
+            and (current or checkpoint.get("schema") != "pod-checkpoint/v2")):
+        _fail("state_unsupported", "Admission attribution has no supported checkpoint")
+    objective = checkpoint.get("objective")
+    if not isinstance(objective, str) or not objective:
+        _fail("history_invalid", "Admission attribution has no objective")
+    location = checkpoint.get("worktree")
+    if attribution is None and location is not None:
+        location = worktree_binding(plain(location))
+        if digest({"repository": location["repo_key"], "objective": objective}) == path.parent.name:
+            attribution = {"status": "proved", "repository": location["repository"], "repo_key": location["repo_key"],
+                           "objective": objective, "basis": {"record_key": path.parent.name, "sources": ["checkpoint.worktree"]}}
+    if current and (not isinstance(attribution, dict) or attribution.get("status") != "proved"
+            or (attribution.get("repository") is not None and
+                (not isinstance(attribution["repository"], str) or attribution["repository"].count("/") != 1))
+            or not isinstance(attribution.get("repo_key"), str) or not HEX.fullmatch(attribution["repo_key"])
+            or attribution.get("objective") != objective
+            or not isinstance(attribution.get("basis"), dict) or attribution["basis"].get("record_key") != path.parent.name):
+        _fail("attribution_unavailable", "Recorded facts do not prove repository attribution; retain a scoped unknown")
+    if location is not None and attribution is not None:
+        location = worktree_binding(plain(location))
+        if (location["repository"], location["repo_key"]) != (attribution["repository"], attribution["repo_key"]):
+            _fail("history_integrity", "Current placement contradicts recorded attribution")
+    revision = state.get("revision")
+    if (current or revision is not None) and (type(revision) is not int or revision < 0 or physical.get("revision") != revision):
+        _fail("history_integrity", "Admission attribution revision differs")
+    result = {"schema": "pod-admission-facts/v1", "generation": {"revision": revision if revision is not None else 0, "sha256": _sha(raw)},
+              "source_revision": revision,
+              "attribution_complete": True, "attribution": attribution, "complete": False, "admissions": None,
+              "context": {"schema": state["schema"], "revision": revision, "owner": state.get("owner"),
+                          "checkpoint": {key: plain(checkpoint.get(key)) for key in
+                              ("schema", "objective", "objective_source", "worktree", "native_refs")}}}
+    closed = checkpoint.get("closure")
+    if closed is not None and not isinstance(closed, dict):
+        _fail("history_invalid", "Admission phase has a malformed closure")
+    result["context"]["checkpoint"]["closure"] = ({key: plain(closed.get(key)) for key in ("revision", "seq")}
+                                                   if closed else None)
+    result["phase"] = ("continued" if state.get("continued_by") else "retired"
+                       if state.get("historical_retirement") else "closed" if closed else "open")
+    if not include_admissions:
+        return result
+    for field in ("continues", "continued_by", "historical_retirement"):
+        if field in state:
+            value = state[field]
+            if is_reference(value): value = _expand(value, ChunkStore(path.parent).load, {})
+            result["context"][field] = plain(value)
+    admissions = state.get("admissions")
+    if not isinstance(admissions, dict):
+        _fail("history_invalid", "Current admission inventory is unavailable")
+    rows = {}
+    fields = ("schema", "admission_id", "objective", "owner", "state", "role", "runtime", "run_id", "task_id",
+              "worktree", "native_binding", "serves", "boundary", "candidate", "request_uuid")
+    for key, value in admissions.items():
+        if is_reference(value): value = _expand(value, ChunkStore(path.parent).load, {})
+        if not isinstance(value, dict):
+            _fail("history_invalid", "Current admission identity is unavailable")
+        if current and (value.get("admission_id") != key or value.get("schema") != STATE_SCHEMAS["admission"]
+                        or any(field not in value for field in fields)):
+            _fail("history_invalid", "Current admission facts are incomplete")
+        rows[key] = {field: plain(value[field]) for field in fields if field in value}
+        recovery = value.get("recovery", {})
+        if not isinstance(recovery, dict):
+            _fail("admission_placement_invalid", "Current admission placement facts are unavailable")
+        placement = recovery.get("placement_binding")
+        rows[key]["placement_binding"] = plain(placement) if placement is not None else None
+        if "abandoned_accounting" in value:
+            accounting = value["abandoned_accounting"]
+            if not isinstance(accounting, dict):
+                _fail("history_invalid", "Current abandonment marker is malformed")
+            rows[key]["abandoned_accounting"] = {field: plain(accounting[field])
+                for field in ("classification", "execution") if field in accounting}
+    result.update(admissions=rows, complete=location is not None)
+    if location is None:
+        result["errors"] = [{"code": "objective_placement_unknown"}]
+    return result
 
 
-def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(), force=False, maintenance=None, journal=None,
-                    require_fit=True):
-    """Pure physical planner, including R118's all-context capacity preflight."""
-    current = path.stat().st_size if path.exists() else 0
-    receipts = maintenance
-    if receipts is None:
-        receipts = _load(path)[1] if path.exists() else []
-    keep, hold_receipts = protections(path, state, native=native, protected=protected, journal=journal)
-    kwargs = {"protected_admissions": keep, "protect_receipts": hold_receipts is None,
-              "protected_candidates": hold_receipts or (), "maintenance": receipts,
-              "force": force or purpose == "retirement", "current_bytes": current, "require_fit": require_fit}
-    try:
-        return compact(state, **kwargs)
-    except PodError as exc:
-        if purpose != "retirement" or exc.code != "record_too_large":
-            raise
-    return compact(state, archive_retirement=True, **kwargs)
+def prepare_context(path, state, *, maintenance=None, project=None):
+    """Pure planner for the one context writer, including first/earlier writes."""
+    return _prepare_revisions(path, state, kind="context", maintenance=maintenance, project=project)
 
 
 def publish_context(path, record, chunks):
+    """Publish once, then reclaim unreachable chunks after readers drain."""
+    from .evidence_closure import refuse_closed
+    refuse_closed(path.parent)
+    store = ChunkStore(path.parent)
+    with store.pin(create=True, collect=True):
+        previous = json.loads(_context_bytes(path, MAINTENANCE_LIMIT)) if path.exists() else {}
+        replaced = [previous[key]["ref"]["sha256"] for key in ("root", "facts", "attribution", "maintenance")
+                    if isinstance(previous.get(key), dict) and "ref" in previous[key]]
+        store.request_collection(queued_bytes=sum(map(len, chunks.values())) + len(_bytes(record)), replaced=replaced)
+        added = _publish_context(path, record, chunks)
+        # Planning can reproduce identical immutable pages from restated values.
+        # They consume no new disk and must not repeatedly trigger full cleanup.
+        credit = max(0, sum(map(len, chunks.values())) - added)
+        if credit:
+            info = store.cleanup_info()
+            if info["queued_bytes"] is not None:
+                store._save_cleanup({"queued_bytes": max(0, info["queued_bytes"] - credit),
+                                     "roots": info["roots"], "untracked": info["untracked"],
+                                     "next_attempt_bytes": info["next_attempt_bytes"]})
+        state = getattr(record, "source_state", None)
+        if hasattr(state, "origin"):
+            # A multi-phase writer may publish this same object again. Advance
+            # its CAS token only after durability; independent snapshots retain
+            # their own old token and remain stale.
+            state.origin = _sha(_bytes(record))
+            if state.reader._lease is not None:
+                state.reader._lease.collect_on_close = True
+            state.storage = {key: record[key] for key in _REVISION_FIELDS - {"schema", "revision"}}
+
+
+def _publish_context(path, record, chunks):
     """Publish chunks without replacement before the atomic context replacement."""
     from .evidence_closure import refuse_closed
     refuse_closed(path.parent)  # Backstop: a record closed by evidence is never written again (R145).
+    expected = getattr(record, "expected", None)
+    if getattr(record, "preview", False):
+        _fail("map_stale", "A semantic write must advance the record revision; read the current record")
+    observed = _sha(_context_bytes(path, MAINTENANCE_LIMIT)) if path.exists() else _sha(b"")
+    if expected is not None and observed != expected:
+        _fail("map_stale", "Context changed before revision publication; read it again")
+    if record.get("schema") != STORAGE_SCHEMA:
+        _fail("storage_format_invalid", "Publication requires the single supported storage envelope")
     _require_size(record, current_bytes=path.stat().st_size if path.exists() else 0)
-    ChunkStore(path.parent).put(chunks)
-    atomic_json(path, record, limit=CONTEXT_LIMIT, compact=True)
+    preflight_landing(path, sum(map(len, chunks.values())) + len(_bytes(record)))
+    try:
+        added = ChunkStore(path.parent).put(chunks)
+        atomic_json(path, record, limit=CONTEXT_LIMIT, compact=True)
+    except OSError as exc:
+        if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+            raise PodError("storage_full", "Revision publication has insufficient disk space; prior context is intact",
+                           {"next_action": "free task storage and retry the same operation after readback"}) from exc
+        raise
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(fd)
+    except OSError as exc:
+        raise PodError("storage_publication_unconfirmed", "Publication needs readback after its directory sync failed",
+                       {"next_action": "read the authoritative record before retrying; do not repeat an external effect"}) from exc
     finally:
         os.close(fd)
+    return added
 
 
-def _moved(record):
-    counts = {"admissions": 0, "receipts": 0, "governance": 0, "revision_decisions": 0, "retirement": 0}
-    checkpoint = record.get("checkpoint") or {}
-    counts["admissions"] = sum(is_reference(row) for row in record.get("admissions", {}).values())
-    counts["receipts"] = sum(is_reference(row) for ob in checkpoint.get("obligations", []) for row in ob.get("receipts", []))
-    counts["governance"] = sum(is_reference(row) for entries in checkpoint.get("governance_history", {}).values() for row in entries)
-    counts["revision_decisions"] = sum(is_reference(row) for row in checkpoint.get("revision_decisions", []))
-    counts["retirement"] = int(is_reference(record.get("historical_retirement")))
-    counts["obligations"] = sum(is_reference(row) for row in checkpoint.get("obligations", []))
-    counts["findings"] = sum(is_reference(item) for row in checkpoint.get("obligations", []) for item in row.get("findings", []))
-    return counts
+class _Publication(dict):
+    """A transient compare-and-swap token, excluded from persisted JSON."""
 
 
-def _settlement_action(sections):
-    standing = any(row["section"] == "standing_authorization" for row in sections[:3])
-    return (("The standing_authorization section is bounded and needs no maintenance. " if standing else "")
-            + "Consume or triage reports, record implementation dispositions, or settle governed "
-            "effects through their supported paths; largest sections: "
-            + ", ".join(row["section"] for row in sections[:3]))
+def _prepare_revisions(path, state, *, kind="context", maintenance=None, project=None):
+    from .history_tree import SCHEMA, plan
+    exists = path.exists()
+    raw = _context_bytes(path, MAINTENANCE_LIMIT) if exists else b""
+    previous = json.loads(raw) if raw else None
+    source = getattr(getattr(getattr(state, "reader", None), "store", None), "root", None)
+    same_store = source is not None and source.absolute() == ChunkStore(path.parent).root.absolute()
+    expected = getattr(state, "origin", _sha(raw)) if same_store else _sha(raw)
+    if expected != _sha(raw):
+        _fail("map_stale", "Record changed before planning; read it again")
+    current = previous is not None and previous.get("schema") == SCHEMA
+    metadata = {key: previous[key] for key in ("kind", "maintenance", "source", "attribution", "facts")} if current else {
+        "kind": kind, "maintenance": [], "source": {"revision": previous["revision"] if previous else 0,
+        "sha256": _sha(raw)}, "attribution": None, "facts": None}
+    if metadata["kind"] != kind:
+        _fail("history_invalid", "Durable record kind differs")
+    if maintenance is None and not current and previous is not None:
+        reference = (previous.get("history") or {}).get("maintenance")
+        maintenance = _maintenance_valid(_expand(reference, ChunkStore(path.parent).load, {})) if reference else []
+    root, chunks = plan(state, store_root=ChunkStore(path.parent).root, force_root=True)
+    if maintenance is not None:
+        metadata["maintenance"] = []
+        if maintenance:
+            metadata["maintenance"], extra = plan(maintenance, force_root=True); chunks.update(extra)
+    if kind == "context":
+        old = _attribution_data(path, metadata["attribution"], previous["root"]) if current else None
+        attribution = (_attribution(path, state, project=project)
+                       if old is None or old.get("status") != "proved"
+                       else deepcopy(old))
+        attribution["root_sha256"] = digest(root)
+        metadata["attribution"], extra = plan(attribution, force_root=True); chunks.update(extra)
+    else:
+        from .governor import _effect_facts
+        facts = {**_effect_facts(state), "binding": {"revision": state["revision"], "root_sha256": digest(root)}}
+        metadata["facts"], extra = plan(facts, force_root=True); chunks.update(extra)
+    record = _Publication(schema=SCHEMA, revision=state["revision"], root=root, **metadata)
+    preflight_landing(path, sum(map(len, chunks.values())) + len(_bytes(record)))
+    record.expected = expected
+    record.source_state = state if same_store else None
+    record.preview = current and state["revision"] != previous["revision"] + 1 and root != previous["root"]
+    return record, chunks
+
+
+def prepare_document(path, state):
+    return _prepare_revisions(path, state, kind="governor")
+
+
+# Reserved for one maximum-size report, triage/corrections and atomic publication.
+# This is an operation landing reserve, independent of retained history count.
+REPORT_LANDING_BYTES = 4 * 1024 * 1024
+DISK_HEADROOM_BYTES = 8 * 1024 * 1024
+
+
+def preflight_landing(path, proposed_bytes=0, *, reports=0):
+    """Admit only with room for pending reports and a fresh atomic replacement."""
+    ancestor = path.parent
+    while not ancestor.exists(): ancestor = ancestor.parent
+    info = os.statvfs(ancestor)
+    available = info.f_bavail * info.f_frsize
+    required = proposed_bytes + reports * REPORT_LANDING_BYTES + DISK_HEADROOM_BYTES
+    if available < required:
+        raise PodError("storage_full", "The report's durable landing path has insufficient disk space",
+                       {"available_bytes": available, "required_bytes": required,
+                        "next_action": "free task storage, then retry admission; no worker was started"})
+
+
+def preflight_reports(path, state, *, reports):
+    """Prove a supported revision landing path before reserving native work.
+
+    A preceding primary file is converted by its next accepted publication.
+    Planning that operation here publishes nothing and ensures its
+    immutable pages plus pending reports fit the durable destination.
+    """
+    from .history_tree import RevisionDict, plan
+    migration_bytes = 0
+    if not isinstance(state, RevisionDict) or not hasattr(state, "storage"):
+        _, chunks = plan(state, store_root=ChunkStore(path.parent).root, force_root=True)
+        migration_bytes = sum(map(len, chunks.values())) + CONTEXT_LIMIT
+    preflight_landing(path, migration_bytes, reports=reports)
+
+
+def cleanup_inventory(state_root, *, collect=False):
+    """Inspect only owned bounded hints; never read logical records or infer authority."""
+    root = Path(state_root)
+    if not root.exists(): return []
+    result = []
+    with ChunkStore(root).directory_path(root) as directory:
+        for name in sorted(os.listdir(directory)):
+            if not HEX.fullmatch(name): continue
+            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if not stat.S_ISDIR(info.st_mode): continue
+            store = ChunkStore(root / name)
+            queued = store.cleanup_info()
+            if not queued["pending"]: continue
+            row = {"record": name, "queued_bytes": queued["queued_bytes"], "untracked": queued["untracked"]}
+            if collect:
+                row["cleanup"] = store.collect()
+                row["queued_bytes"] = store.cleanup_info()["queued_bytes"]
+            result.append(row)
+    return result
+
+
+def migrate_context(path, *, revision, sha256, project=None, kind="context"):
+    result = _migrate_context(path, revision=revision, sha256=sha256, project=project, kind=kind)
+    store = ChunkStore(path.parent)
+    result["cleanup"] = store.collect() if result["written"] else store.cleanup_info()
+    return result
+
+
+def _migrate_context(path, *, revision, sha256, project=None, kind="context"):
+    """Explicit, resumable, lossless placement change; one writable authority."""
+    from .ledger import _lock, _validate_context
+    from .history_tree import SCHEMA, Reader, plan, plain
+    from .evidence_closure import refuse_closed
+    refuse_closed(path.parent)
+    with _lock(path):
+        refuse_closed(path.parent)
+        if kind == "governor":
+            context_path = path.with_name("context.json")
+            if context_path.exists():
+                from .succession import refuse_continued
+                refuse_continued(load_context(context_path))
+        raw = _context_bytes(path, MAINTENANCE_LIMIT)
+        try:
+            physical = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError) as exc:
+            raise PodError("invalid_record", "Cannot decode migration source") from exc
+        if not isinstance(physical, dict): _fail("history_invalid", "Migration source is not an object")
+        target_schema = SCHEMA
+        if physical.get("schema") == target_schema:
+            existing = _revision_state(path, physical, raw)
+            if existing.storage["kind"] != kind:
+                _fail("history_invalid", "Migration record kind differs")
+            if kind == "context":
+                from .succession import refuse_continued
+                refuse_continued(existing)
+            if ((physical["source"]["sha256"], physical["source"]["revision"]) == (sha256, revision)
+                    or (_sha(raw), physical["revision"]) == (sha256, revision)):
+                return {"status": "replayed", "written": False, "revision": physical["revision"], "attribution": _public_attribution(_attribution_data(path, physical["attribution"], physical["root"]))}
+            _fail("storage_migration_stale", "Record already migrated from different source facts")
+        if kind == "context":
+            state, receipts, _ = _load(path, limit=MAINTENANCE_LIMIT)
+            _validate_context(state)
+            from .succession import refuse_continued
+            refuse_continued(state)
+            if "historical_retirement" in state:
+                _fail("objective_retired", "An objective under historical retirement is frozen")
+            attribution = _attribution(path, state, project=project)
+            facts = None
+        elif kind == "governor":
+            from .governor import _validate_journal, _effect_facts
+            state, receipts, attribution = _validate_journal(physical), [], None
+            facts = None
+        else:
+            _fail("history_invalid", "Unsupported durable record kind")
+        if state["revision"] != revision or _sha(raw) != sha256:
+            _fail("storage_migration_stale", "Migration source changed; detect it again")
+        root, chunks = plan(state, force_root=True)
+        public_attribution = _public_attribution(attribution)
+        if kind == "context":
+            attribution["root_sha256"] = digest(root)
+            attribution, attr_chunks = plan(attribution, force_root=True); chunks.update(attr_chunks)
+        if kind == "governor":
+            fact_value = {**_effect_facts(state), "binding": {"revision": revision, "root_sha256": digest(root)}}
+            facts, fact_chunks = plan(fact_value, force_root=True); chunks.update(fact_chunks)
+        maintenance = []
+        if receipts:
+            maintenance, receipt_chunks = plan(receipts, force_root=True); chunks.update(receipt_chunks)
+        record = _Publication(schema=target_schema, kind=kind, revision=revision, root=root,
+                              maintenance=maintenance, source={"revision": revision, "sha256": sha256},
+                              attribution=attribution, facts=facts)
+        record.expected = sha256
+        class Proposed:
+            def load(self, address): return chunks[address]
+        if plain(Reader(Proposed()).value(root)) != state:
+            _fail("history_integrity", "Migration changes logical state")
+        publish_context(path, record, chunks)
+        return {"status": "migrated", "written": True, "revision": revision, "attribution": public_attribution,
+                "physical_bytes": len(_bytes(record)), "logical_bytes": len(_bytes(state)), "chunks": len(chunks)}
+
+
+def audit_context(path, *, kind="context"):
+    """Verify every currently retained value, never reconstruct discarded snapshots."""
+    from .history_tree import plain, open_root
+    if kind == "context":
+        state, receipts, raw = _load(path)
+    else:
+        from .governor import _read_journal
+        state, receipts, raw = _read_journal(path), [], _context_bytes(path, CONTEXT_LIMIT)
+    if hasattr(state, "reader"):
+        state.reader.seconds = 300  # Explicit full audit has its own deadline.
+    logical = plain(state)
+    if hasattr(state, "storage"):
+        state.reader.check()
+        metadata = state.storage
+        maintenance = plain(_maintenance_data(path, metadata["maintenance"]))
+        if maintenance: _maintenance_valid(maintenance)
+        if kind == "context":
+            plain(_attribution_data(path, metadata["attribution"], metadata["root"]))
+        else:
+            from .governor import _effect_facts
+            expected = {**_effect_facts(state), "binding": {
+                "revision": state["revision"], "root_sha256": digest(metadata["root"])}}
+            if plain(open_root(metadata["facts"], ChunkStore(path.parent))) != expected:
+                _fail("history_integrity", "Current effects differ from their atomic projection")
+    if kind == "context":
+        from .ledger import _validate_context
+        _validate_context(logical)
+    else:
+        from .governor import _validate_journal
+        _validate_journal(logical)
+    return {"state": logical, "maintenance": plain(receipts), "physical_bytes": len(raw),
+            "logical_bytes": len(_bytes(logical)), "complete": True}
 
 
 def capacity(path, state):
     """Additive observation only: never changes readiness, phase or existing actions."""
-    _, receipts, raw = _load(path)
-    logical = len(_bytes(state))
-    result = {"physical_bytes": len(raw), "logical_bytes": logical, "limit_bytes": CONTEXT_LIMIT,
-              "warning_bytes": WARN_AT, "compaction_bytes": COMPACT_AT, "warning": len(raw) >= WARN_AT,
-              "largest_sections": largest_sections(state), "maintenance": receipts}
-    if result["warning"]:
-        try:
-            planned, _ = prepare_context(path, state, force=True, maintenance=receipts)
-            useful = len(_bytes(planned)) < len(raw)
-        except PodError as exc:
-            if exc.code != "record_too_large":
-                raise
-            useful = False
-        result["reclaimable_bytes"] = len(raw) - len(_bytes(planned)) if useful else 0
-        result["next_action"] = (f"A permitted write compacts settled history automatically once its record reaches {COMPACT_AT} bytes; project lead "
-                                 "or coordinator: run internal record-compaction detection, then submit its exact scoped "
-                                 "maintenance request for explicit bounded maintenance now. The project lead handles capacity "
-                                 "before closure." if useful else
-                                 _settlement_action(result["largest_sections"]))
-        if useful and any(row["section"] == "standing_authorization" for row in result["largest_sections"][:3]):
-            result["next_action"] += " The standing_authorization section is bounded and needs no maintenance."
-    else:
-        result["next_action"] = f"Continue through the existing objective operations; settled history compacts once the record reaches {COMPACT_AT} bytes."
-    return result
+    from .history_tree import RevisionDict, descriptor_size, SCHEMA
+    physical = json.loads(_context_bytes(path, MAINTENANCE_LIMIT))
+    if physical.get("schema") == SCHEMA:
+        maintenance = physical["maintenance"]
+        return {"format": SCHEMA, "physical_bytes": path.stat().st_size,
+                "logical_bytes": descriptor_size(physical["root"]),
+                "working_set_bytes": path.stat().st_size + getattr(state.reader, "bytes", 0),
+                "pages_read": getattr(state.reader, "nodes", 0),
+                "history_complete": False, "full_audit_available": True,
+                "warning": False, "maintenance": [] if maintenance == [] else None,
+                "maintenance_loaded": maintenance == [],
+                "cleanup": {key: value for key, value in ChunkStore(path.parent).cleanup_info().items() if key != "roots"},
+                "next_action": "continue ordinary operations; use explicit storage audit for full retained history"}
+    return {"format": physical.get("schema"), "physical_bytes": path.stat().st_size,
+            "warning": False, "conversion_pending": True, "logical_bytes": len(_bytes(state)), "full_audit_available": True,
+            "cleanup": {key: value for key, value in ChunkStore(path.parent).cleanup_info().items() if key != "roots"},
+            "next_action": "the next accepted write converts this supported physical input; use storage inspect and migrate for explicit conversion"}
 
 
 def record_compaction(project, objective, *, request=None, decision=None):
-    """Declared project-lead or coordinator maintenance, never ordinary work or native authority."""
-    from contextlib import nullcontext
-    from .github import repository_context
-    from .ledger import _path, _record_exists, _lock
-    from .succession import refuse_continued
-    from .util import bounded_text, exact, owner_decision, DECISION_FIELDS
-    bounded_text(objective, name="objective", limit=256)
-    context = repository_context(project, fresh=True)
-    repository = context["repo_key"]
-    if repository is None:
-        _fail("compaction_scope_unavailable", "Record compaction needs the objective's Git repository")
-    path = _path(project, objective)
-    if not _record_exists(path):
-        _fail("objective_unknown", "No record exists for this exact objective; nothing was created")
+    """Read-only compatibility notice; explicit conversion has one source-bound entry."""
+    from .ledger import _path
     from .evidence_closure import refuse_closed
+    from .records import storage
+    path = _path(project, objective)
     refuse_closed(path.parent)
-    if request is not None and decision is not None:
-        _fail("compaction_decision_mismatch", "Supply one scoped compaction request")
-    if request is not None:
-        try:
-            request = _compaction_request(request)
-        except (PodError, UnicodeError) as exc:
-            raise PodError("compaction_decision_mismatch", "Compaction needs an exact coordinator or project-lead request") from exc
-    if decision is not None:
-        try:
-            decision = exact(decision, DECISION_FIELDS | {"repository", "objective", "facts"},
-                             {"provenance", "instruction", "repository", "objective", "facts"}, name="compaction decision")
-            from .relay import decision_input, _raw_decision
-            if decision["provenance"] != "user_direct" and not decision_input(decision):
-                raise ValueError("provenance")
-            bounded_text(decision["instruction"], name="instruction", limit=1024)
-            if decision_input(decision):
-                _raw_decision(decision)
-            else:
-                decision = owner_decision(decision, kind="compaction")
-        except (PodError, ValueError) as exc:
-            raise PodError("compaction_decision_mismatch", "Compaction needs an exact session decision") from exc
-    submitted = request if request is not None else decision
-    with _lock(path) if submitted is not None else nullcontext():
-        state, receipts, raw = _load(path, limit=MAINTENANCE_LIMIT)
-        refuse_continued(state, reserved=False)
-        checkpoint = state.get("checkpoint") or {}
-        if checkpoint.get("objective") != objective:
-            _fail("compaction_decision_mismatch", "The record does not name the requested objective")
-        logical = digest(state)
-        binding = {"record": path.parent.name, "revision": state["revision"], "input_sha256": _sha(raw),
-                   "logical_sha256": logical}
-        facts = {"repository": repository, "objective": objective, "owner": state["owner"], **binding}
-        if submitted is not None:
-            if request is not None and request["requested_by"] == "coordinator" and request["owner"] != state["owner"]:
-                _fail("compaction_decision_mismatch", "The coordinator request does not name the recorded coordinator")
-            same_scope = submitted["repository"] == repository and submitted["objective"] == objective
-            prior = next((row for row in receipts if row["decision"] == digest(submitted)), None)
-            if same_scope and prior is not None and prior["logical_sha256"] == logical:
-                return {"status": "replayed", "facts": facts, "written": False, "reclaimable_bytes": 0}
-            if not same_scope or submitted["facts"] != binding:
-                _fail("compaction_decision_mismatch", "The request differs from the exact physical or logical record; detect again")
-        # Reserve the largest complete request authority, including six-byte JSON
-        # escapes in reason, coordinator identity and lead relay. Digests have
-        # fixed width; receipt fragment references can grow at part boundaries.
-        # The session-decision authority is smaller. A no-op needs no write capacity.
-        authority = {"schema": "pod-compaction-request/v1", "reason": "\x01" * 1024,
-                     "repository": repository, "objective": objective, "facts": binding}
-        authorities = [{**authority, "requested_by": "coordinator", "owner": "\x01" * 256},
-                       {**authority, "requested_by": "project_lead", "relay": {"reference": "\x01" * 512}}]
-        allowance = {"authority": max(authorities, key=lambda value: len(_bytes(value))),
-                     "decision": "0" * 64, "input_sha256": binding["input_sha256"], "logical_sha256": logical}
-        record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, allowance], require_fit=False)
-        useful = len(_bytes(record)) < len(raw)
-        if useful:
-            _require_size(record, current_bytes=len(raw))
-        result = {"status": "compaction_available" if useful else "unchanged", "facts": facts, "current_bytes": len(raw),
-                  "proposed_bytes": len(_bytes(record)), "limit_bytes": CONTEXT_LIMIT, "moved": _moved(record), "written": False,
-                  "reclaimable_bytes": max(0, len(raw) - len(_bytes(record)))}
-        if not useful:
-            result["largest_sections"] = largest_sections(state)
-            result["next_action"] = (_settlement_action(result["largest_sections"]) if len(raw) >= WARN_AT else
-                                     "Continue through the existing objective operations; no settled history currently "
-                                     "reduces this record after the maintenance receipt allowance.")
-            return result
-        if submitted is None:
-            result["question"] = (f"Does the project lead or coordinator request lossless compaction for objective {objective}, "
-                                  "preserving all recorded work and decisions and keeping unsettled items in its record?")
-            result["next_action"] = {"operation": "record-compaction", "request": {"project": str(project), "objective": objective,
-                "request": {"schema": "pod-compaction-request/v1", "requested_by": "coordinator",
-                            "reason": "<reason for lossless compaction>", "owner": state["owner"],
-                            "repository": repository, "objective": objective, "facts": binding}}}
-            return result
-        capability = None
-        if decision is not None and decision_input(decision):
-            from .relay import Decision
-            capability = Decision(project, objective, kind="compaction", effect={"repository": repository, "objective": objective, "facts": binding},
-                                  state={"logical": logical, "physical": _sha(raw)}, decision=decision,
-                                  resources={"record": binding["record"], "revision": str(binding["revision"])})
-            with capability.scope():
-                decision = owner_decision(decision, kind="compaction")
-        receipt = {"authority": request if request is not None else
-                   {key: decision[key] for key in DECISION_FIELDS if key in decision},
-                   "decision": digest(submitted), "input_sha256": binding["input_sha256"], "logical_sha256": logical}
-        if capability is not None:
-            capability.finalize(receipt)
-        record, chunks = prepare_context(path, state, force=True, maintenance=[*receipts, receipt], require_fit=False)
-        if len(_bytes(record)) >= len(raw):
-            return {**result, "status": "unchanged", "proposed_bytes": len(_bytes(record)), "written": False,
-                    "reclaimable_bytes": 0}
-        _publish_compaction_decision(path, state, raw, record, chunks, capability, receipts)
-        return {**result, "status": "compacted", "proposed_bytes": len(_bytes(record)), "written": True,
-                "reclaimable_bytes": len(raw) - len(_bytes(record))}
-
-
-def _publish_compaction_decision(path, state, raw, record, chunks, capability, receipts):
-    """Preflight the exact physical record, then consume and publish under authority."""
-    _require_size(record, current_bytes=len(raw))
-    if capability is None:
-        publish_context(path, record, chunks)
-        return
-    from . import config
-    with config._edit_lock(config.personal_path(capability.project)):
-        current, _, physical = _load(path, limit=MAINTENANCE_LIMIT)
-        capability.consume(current_state={"logical": digest(current), "physical": _sha(physical)},
-                           snapshot=config.load(capability.project), result={"record": record, "chunks": sorted(chunks)},
-                           keys=["physical_record:" + _sha(raw)], prior=[])
-        publish_context(path, record, chunks)
+    state = load_context(path)
+    from .succession import refuse_continued
+    refuse_continued(state, reserved=False)
+    if "historical_retirement" in state:
+        _fail("objective_retired", "An objective under historical retirement is frozen")
+    if request is not None or decision is not None:
+        _fail("storage_action_required", "Use internal storage inspect then migrate with its exact source revision and SHA256; this entry is read-only")
+    result = storage(project, objective)
+    return {**result, "status": "unchanged" if result["migrated"] else "conversion_available",
+            "current_bytes": result["physical_bytes"], "proposed_bytes": result["physical_bytes"], "reclaimable_bytes": 0}

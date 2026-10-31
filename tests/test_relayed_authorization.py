@@ -470,6 +470,9 @@ class RelayCompatibilityTests(RelayCase):
         context_path = objective_root(self.project, "objective") / "context.json"
         self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
         before = (journal_path.read_bytes(), context_path.read_bytes())
+        from tests.common import logical_json
+        control = self.case.root / "logical-journal.json"
+        control.write_text(json.dumps(logical_json(journal_path)))
         results = self.earlier('''import json, sys
 from pathlib import Path
 from pod import __version__
@@ -477,8 +480,8 @@ from pod.errors import PodError
 from pod.governor import _read_journal, validate_authorization
 from pod.ledger import _read
 assert __version__ == "0.17.0"
-journal, context = map(Path, sys.argv[1:])
-authorization = json.loads(journal.read_bytes())["actions"][0]["action"]["authorization"]
+journal, context, control = map(Path, sys.argv[1:])
+authorization = json.loads(control.read_bytes())["actions"][0]["action"]["authorization"]
 outcomes = []
 for operation in (lambda: _read_journal(journal), lambda: _read(context), lambda: validate_authorization(authorization)):
     try:
@@ -488,10 +491,10 @@ for operation in (lambda: _read_journal(journal), lambda: _read(context), lambda
     else:
         outcomes.append("incorrectly accepted")
 print(json.dumps(outcomes))
-''', journal_path, context_path)
+''', journal_path, context_path, control)
         self.assertEqual(results, ["state_unsupported", "state_unsupported", "invalid_authorization"])
         self.assertEqual((journal_path.read_bytes(), context_path.read_bytes()), before)
-        _validate_context(json.loads(context_path.read_bytes()))
+        _validate_context(logical_json(context_path))
         self.journal()
 
     def test_genuine_0170_session_journal_reads_unchanged(self):

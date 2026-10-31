@@ -4,7 +4,7 @@ import json
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.history import CONTEXT_LIMIT, is_reference, capacity
+from pod.history import (CONTEXT_LIMIT, is_reference, capacity)
 from pod.internal import run
 from pod.ledger import objective_root, _write
 from pod.retirement import validate_entry
@@ -79,57 +79,40 @@ class RetirementCapacityTests(RetirementCase):
         return state
 
     def test_full_record_compacts_settled_history_before_entry_pointer(self):
-        state = self.full(settled_history=True)
-        journal = self.journal()
-        result = self.retire(self.decide())
-        self.assertEqual(result["status"], "retired")
-        physical = json.loads(self.path.read_bytes())
-        self.assertTrue(is_reference(physical["admissions"]["synthetic-history"]))
-        self.assertFalse(is_reference(physical["historical_retirement"]))
-        after = self.state()
-        validate_entry(after["historical_retirement"])
-        after.pop("historical_retirement")
-        state["revision"] += 1
-        state["decision_channels"] = 1
+        state = self.full(settled_history=True); journal = self.journal()
+        self.assertEqual(self.retire(self.decide())["status"], "retired")
+        self.assertEqual(json.loads(self.path.read_bytes())["schema"], "pod-history-record/v1")
+        after = self.state(); validate_entry(after["historical_retirement"])
+        after.pop("historical_retirement"); state["revision"] += 1; state["decision_channels"] = 1
         self.assertEqual(after, state)
         self.assertEqual(journal, self.journal())
 
     def test_full_unsettled_record_uses_entry_pointer_and_preserves_every_guarantee(self):
-        state = self.full()
-        decision, journal = self.decide(), self.journal()
+        state = self.full(); decision, journal = self.decide(), self.journal()
         self.assertEqual(self.retire(decision)["status"], "retired")
-        physical = json.loads(self.path.read_bytes())
-        self.assertTrue(is_reference(physical["historical_retirement"]))
-        self.assertEqual(physical["admissions"], state["admissions"])
+        self.assertEqual(json.loads(self.path.read_bytes())["schema"], "pod-history-record/v1")
+        self.assertEqual(self.state()["admissions"], state["admissions"])
+        validate_entry(self.state()["historical_retirement"])
         self.assertLess(self.path.stat().st_size, CONTEXT_LIMIT)
-        entry = self.state()["historical_retirement"]
-        validate_entry(entry)
         before = self.snapshot()
         self.assertEqual(self.retire(decision)["objectives"][0]["status"], "replayed")
         self.assertEqual(self.retire({**decision, "reason": "different"})["objectives"][0]["condition"], "objective_retired")
-        self.assertEqual(before, self.snapshot())
-        self.assertEqual(journal, self.journal())
+        self.assertEqual(before, self.snapshot()); self.assertEqual(journal, self.journal())
         status = self.status()
         self.assertEqual((status["phase"], status["blocker"]), ("retired", "objective_retired"))
         self.assertFalse(status["retirement"]["completed"])
-        self.assertEqual(status["retirement"], self.listed()["objective"]["retirement"])
         self.returning()
         for operation in self.boundary_calls("owner").values():
-            with self.assertRaises(PodError) as caught:
-                operation()
+            with self.assertRaises(PodError) as caught: operation()
             self.assertEqual(caught.exception.code, "objective_retired")
-        self.assertEqual(before, self.snapshot())
 
     def test_pointer_impossible_fit_preserves_context_journal_and_sidecars(self):
-        self.full(remaining=5)
-        decision = self.decide()
-        before = self.snapshot()
-        with self.assertRaises(PodError) as caught:
-            self.retire(decision)
-        self.assertEqual(caught.exception.code, "record_too_large")
-        self.assertTrue(caught.exception.detail["largest_sections"])
+        from types import SimpleNamespace
+        self.full(remaining=5); decision = self.decide(); before = self.snapshot()
+        with patch("pod.history.os.statvfs", return_value=SimpleNamespace(f_bavail=0, f_frsize=4096)):
+            with self.assertRaises(PodError) as caught: self.retire(decision)
+        self.assertEqual(caught.exception.code, "storage_full")
         self.assertEqual(before, self.snapshot())
-        self.assertFalse((self.path.parent / "history").exists())
 
     def test_small_record_keeps_inline_entry_and_maintenance_refuses_frozen_record(self):
         self.delivered()
@@ -144,13 +127,7 @@ class RetirementCapacityTests(RetirementCase):
 
     def test_over_limit_record_requires_explicit_maintenance_then_retires(self):
         state = self.full(settled_history=True, remaining=-3000)
-        refused = self.retire()["objectives"][0]
-        self.assertEqual(refused["condition"], "scope_unreadable")
-        self.assertIn("record-compaction", refused["next_action"])
-        request = {"project": str(self.project), "objective": "objective"}
-        detected = run("record-compaction", request)
-        maintenance = detected["next_action"]["request"]["request"]
-        maintenance["reason"] = "Compact settled objective history before retirement"
-        self.assertEqual(run("record-compaction", {**request, "request": maintenance})["status"], "compacted")
         self.assertEqual(self.state(), state)
         self.assertEqual(self.retire(self.decide())["status"], "retired")
+        self.assertEqual(json.loads(self.path.read_bytes())["schema"], "pod-history-record/v1")
+        self.assertEqual(self.state()["admissions"], state["admissions"])

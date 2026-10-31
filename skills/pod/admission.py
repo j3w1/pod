@@ -274,7 +274,9 @@ def _admissions(raw: dict, directory: Path) -> dict:
     if projected:
         facts = history.load_admission_facts(directory / "context.json", include_admissions=True)
         current = _facts_context(facts)
-        if facts.get("complete") is not True or not isinstance(facts.get("admissions"), dict):
+        closed_empty = (facts.get("phase") == "closed" and facts.get("admissions") == {}
+                        and facts.get("errors") == [{"code": "objective_placement_unknown"}])
+        if (facts.get("complete") is not True and not closed_empty) or not isinstance(facts.get("admissions"), dict):
             raise PodError("admission_facts_incomplete", "Current claim inventory is incomplete")
         if current["_facts_generation"] != raw["_facts_generation"]:
             raise PodError("record_changed", "Attribution changed before current claims were read")
@@ -694,8 +696,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     try:
                         name = _membership(project, context, record, raw, known)
                     except PodError as exc:
-                        if exc.code == "record_attribution_unknown" and _phase(raw) == "closed" and raw.get("admissions") == {}:
+                        if exc.code == "record_attribution_unknown" and _phase(raw) == "closed":
                             _admissions(raw, directory)  # Supported, structurally closed, and no hidden admission references.
+                            if raw.get("admissions") != {}:
+                                raise
                             journal, journal_id = _journal(directory / "governor.json")
                             if not any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN") for row in journal["actions"]):
                                 attribution_gaps.append((record, directory, identity, journal_id))

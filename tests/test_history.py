@@ -1,4 +1,5 @@
 """R121 storage, immutable evidence and complete logical projection invariants."""
+from tests.history_support import _reference, compact
 from copy import deepcopy
 import hashlib
 import json
@@ -10,8 +11,8 @@ import unittest
 from pod.errors import PodError
 from pod.ledger import _empty, _outstanding_ids
 from pod.util import encoded
-from pod.history import (CHUNK_LIMIT, COMPACT_AT, CONTEXT_LIMIT, FORMAT, MARKER, PART_BYTES,
-                     ChunkStore, compact, hydrate, is_reference)
+from pod.history import CHUNK_LIMIT, CONTEXT_LIMIT, FORMAT, MARKER, PART_BYTES, ChunkStore, hydrate, is_reference
+from tests.history_support import COMPACT_AT
 
 
 
@@ -171,7 +172,7 @@ class SidecarTests(unittest.TestCase):
         self.assertEqual(report_projection(second, ctx()), report_projection(restored["checkpoint"], ctx()))
         self.assertEqual(second["closure"], restored["checkpoint"]["closure"])
 
-    def test_sixty_four_receipt_logical_limit_refuses_sixty_fifth(self):
+    def test_retained_receipts_do_not_refuse_sixty_fifth(self):
         from pod.assurance import _stamp_evidence
         from tests.test_obligations import ctx, proof
         receipts = [{"evidence": proof("O1", "c0", reference=f"proof-{i}"), "accepted_seq": 1} for i in range(64)]
@@ -183,9 +184,9 @@ class SidecarTests(unittest.TestCase):
         self.assertEqual(len(restored["receipts"]), 64)
         for prior in (ob, restored):
             new = {**deepcopy(prior), "evidence": [proof("O1", reference="sixty-fifth")]}
-            with self.assertRaises(PodError) as caught:
-                _stamp_evidence(new, prior, ctx(), "1" * 64, False, seq=20)
-            self.assertEqual(caught.exception.detail["detail"], "receipt_limit")
+            _stamp_evidence(new, prior, ctx(), "1" * 64, False, seq=20)
+            self.assertEqual(len(new["receipts"]), 65)
+            self.assertEqual(new["receipts"][:64], prior["receipts"])
 
     def test_store_roundtrip_and_write_once(self):
         before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in self.store.root.glob("*.json")}
@@ -308,7 +309,7 @@ class HistoryIntegrityTests(unittest.TestCase):
         self.assertEqual(hydrate(record, chunks.__getitem__), state)
 
     def test_recursive_pointer_and_bad_part_count_refuse(self):
-        from pod.history import _reference
+
         chunks = {}
         pointer = _reference({MARKER: {"sha256": "0" * 64, "parts": ["0" * 64], "bytes": 1}}, chunks)
         state = _empty()

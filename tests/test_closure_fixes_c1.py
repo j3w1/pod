@@ -1,3 +1,4 @@
+from tests.common import logical_json
 """Reopen chronology and source retries through the accepted closure boundaries."""
 
 from copy import deepcopy
@@ -129,7 +130,7 @@ class ReopenTimingTests(TickCase):
     def test_legacy_closure_without_a_time_does_not_reclose_a_reopened_source(self):
         self.ready(); self.write(close=True)
         path = objective_root(self.project, "objective") / "context.json"
-        raw = json.loads(path.read_text()); raw["checkpoint"]["closure"].pop("at")
+        raw = logical_json(path); raw["checkpoint"]["closure"].pop("at")
         path.write_text(json.dumps(raw))
         self.reopen(BEFORE)
         before = self.saved()
@@ -166,7 +167,7 @@ class ReopenTimingTests(TickCase):
     def broken_chain(self, kind):
         self.ready(); self.issue.close_result = "refused"; self.write(close=True)
         path = objective_root(self.project, "objective") / "context.json"
-        raw = json.loads(path.read_text())
+        raw = logical_json(path)
         raw["continues"] = {"objective": "prior-1", "record": "fixture-prior", "at": BEFORE}
         path.write_text(json.dumps(raw))
         if kind == "unreadable":

@@ -2,6 +2,7 @@
 
 Earlier-row controls remove the new binding explicitly; they are not released-writer or live evidence.
 """
+from tests.common import logical_json
 
 from copy import deepcopy
 import json
@@ -170,7 +171,7 @@ class MergeParentTests(KernelCase):
     def synthetic_context(self, change):
         """A corrupt earlier-delivery control, never a supported state-editing recovery route."""
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_bytes())
+        state = logical_json(path)
         change(state["checkpoint"])
         path.write_text(json.dumps(state))
 
@@ -281,10 +282,13 @@ class MergeParentTests(KernelCase):
         self.second_candidate()
         second = self.admit()
         result = self.land("second")
-        original = _read_journal(_record_path(self.project, "objective"))
+        from pod.history_tree import plain
+        original = plain(_read_journal(_record_path(self.project, "objective")))
         for key, value in (("commit", self.delivered), ("tree", git(self.project, "rev-parse", self.delivered + "^{tree}"))):
             with self.subTest(changed=key):
-                _write_journal(_record_path(self.project, "objective"), deepcopy(original))
+                replacement = deepcopy(original)
+                replacement["revision"] = _read_journal(_record_path(self.project, "objective"))["revision"]
+                _write_journal(_record_path(self.project, "objective"), replacement)
                 self.synthetic_journal(lambda journal: journal["units"]["second"]["candidate"].update({key: value}))
                 if key == "tree":
                     self.synthetic_journal(lambda journal: journal["actions"][-1]["action"]["authorization"].update(tree=value))
@@ -294,9 +298,11 @@ class MergeParentTests(KernelCase):
         self.second_candidate()
         second = self.admit()
         result = self.land("second")
-        original = _read_journal(_record_path(self.project, "objective"))
+        from pod.history_tree import plain
+        original = plain(_read_journal(_record_path(self.project, "objective")))
         self.synthetic_journal(lambda journal: journal["actions"][-1]["action"]["authorization"].update(tree="a" * 40))
         self.pass_refuses(second, result, "authorization_invalid")
+        original["revision"] = _read_journal(_record_path(self.project, "objective"))["revision"]
         _write_journal(_record_path(self.project, "objective"), original)
         wrong_tree = self.result_on(self.delivered, tree=self.delivered + "^{tree}")
         self.pass_refuses(second, wrong_tree, "tree_mismatch")
@@ -397,12 +403,15 @@ class MergeParentTests(KernelCase):
 
     def test_historical_delivery_must_name_another_allowed_merge_pass_in_this_journal(self):
         second, result = self.earlier()
-        original = _read_journal(_record_path(self.project, "objective"))
+        from pod.history_tree import plain
+        original = plain(_read_journal(_record_path(self.project, "objective")))
         for changes in ({"decision": "DEFER"}, {"outcome": "UNKNOWN"},
                         {"action": {**original["actions"][0]["action"], "kind": "release"}},
                         {"record_id": "unrelated-record"}):
             with self.subTest(changes=changes):
-                _write_journal(_record_path(self.project, "objective"), deepcopy(original))
+                replacement = deepcopy(original)
+                replacement["revision"] = _read_journal(_record_path(self.project, "objective"))["revision"]
+                _write_journal(_record_path(self.project, "objective"), replacement)
                 self.synthetic_journal(lambda journal: journal["actions"][0].update(changes))
                 self.pass_refuses(second, result, "result_not_exact")
 
@@ -417,9 +426,11 @@ class MergeParentTests(KernelCase):
 
     def test_historical_recovery_keeps_authorization_and_result_tree_checks(self):
         second, result = self.earlier()
-        original = _read_journal(_record_path(self.project, "objective"))
+        from pod.history_tree import plain
+        original = plain(_read_journal(_record_path(self.project, "objective")))
         self.synthetic_journal(lambda journal: journal["actions"][-1]["action"]["authorization"].update(tree="a" * 40))
         self.pass_refuses(second, result, "authorization_invalid")
+        original["revision"] = _read_journal(_record_path(self.project, "objective"))["revision"]
         _write_journal(_record_path(self.project, "objective"), original)
         result = self.result_on(self.delivered, tree=self.delivered + "^{tree}")
         self.pass_refuses(second, result, "tree_mismatch")

@@ -1,4 +1,5 @@
 """Public status projects existing checkpoint questions without new state or authority."""
+from tests.common import logical_json
 
 import json
 from unittest.mock import patch
@@ -139,7 +140,7 @@ class RecordedQuestionStatusTests(KernelCase):
     def test_missing_legacy_questions_are_unavailable_not_empty(self):
         self.intake()
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_bytes())
+        state = logical_json(path)
         # Synthetic earlier missing-field control; the status reader must not invent emptiness.
         state["checkpoint"].pop("questions")
         path.write_text(json.dumps(state))
@@ -172,7 +173,7 @@ class RecordedQuestionStatusTests(KernelCase):
     def test_oversized_fact_and_missing_sequence_are_partial_without_invention(self):
         self.intake(questions=[{"id": "question", "text": "Choose", "choices": ["x" * 4096], "resolved": False}])
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_bytes())
+        state = logical_json(path)
         # A synthetic earlier map-less checkpoint, which has no map revision.
         state["checkpoint"].pop("obligations")
         state["checkpoint"].pop("revision")

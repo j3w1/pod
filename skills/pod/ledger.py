@@ -15,7 +15,7 @@ from typing import Callable, Iterator
 from .contracts import bound, fields, required, input_record, policy_mismatch
 from .errors import PodError
 from .relay import decision_boundary, decision_commit_time
-from .history import load_context, prepare_context, publish_context
+from .history import CONTEXT_LIMIT, load_context, prepare_context, publish_context
 from . import gitio
 from .installer import STATE_SCHEMAS, superseded_objectives, superseded_schemas
 from .util import (MAX_RECORD, bounded_text, digest, exact, explicit_home, native_home,
@@ -26,8 +26,6 @@ ADMISSION_STATES = ("reserved", "bound", "unresolved", "closed", "deferred")
 CONTEXT_SCHEMA = STATE_SCHEMAS["context"]
 CHECKPOINT_SCHEMA = STATE_SCHEMAS["checkpoint"]
 ADMISSION_SCHEMA = STATE_SCHEMAS["admission"]
-# An obligation map lives in the checkpoint; the context record keeps its own bound.
-CONTEXT_LIMIT = 4 * MAX_RECORD
 _BINDING_FIELDS = {"runId", "taskId", "dispatchId", "workerId", "worktreeId", "terminalHandle"}
 _CONTEXT_FIELDS = {"schema", "revision", "owner", "admissions", "checkpoint",
                    "interventions", "source_rejections", "constraints"}
@@ -92,6 +90,8 @@ def _lock(path: Path) -> Iterator[None]:
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+        from .history import ChunkStore
+        ChunkStore(path.parent).maybe_collect()  # A separate pass, after releasing the record lock.
 
 
 def _empty() -> dict:
@@ -128,21 +128,26 @@ _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "r
                      "admitted_seq", "display", "retry_of", "retry_after", "abandoned_accounting"}
 
 
-def _consumed_report(row: dict, runtimes: set[str]) -> dict | None:
+def _consumed_report(row: dict, runtimes: set[str], *, detail=True) -> dict | None:
     """Validate the immutable observation that already joined a settled Dispatch."""
     if row["report"] is None:
         return None
     from .records import report_record, _sha256
     fields = {"outcome", "status", "attempt", "observation", "observation_digest", "result_commit", "consumed_at"}
     value = exact(row["report"], fields, fields, name="consumed report")
-    observation = report_record(value["observation"])
     bounded_text(value["consumed_at"], name="consumed_at")
     if value["result_commit"] is not None:
         bounded_text(value["result_commit"], name="result_commit")
     if (not binding_valid(row["native_binding"]) or not _sha256(value["observation_digest"])
             or value["status"] not in ("validated_observation", "reconciliation_required")
-            or value["outcome"] != observation["outcome"] or value["attempt"] != observation["attempt"]
-            or observation["attempt"] != row["native_binding"]["dispatchId"]
+            or value["outcome"] not in ("succeeded", "failed", "partial", "blocked", "uncertain")
+            or value["attempt"] != row["native_binding"]["dispatchId"]
+            or not isinstance(value["observation"], dict)):
+        raise PodError("state_unsupported", "Consumed report header no longer joins its recorded assignment")
+    if not detail:
+        return value
+    observation = report_record(value["observation"])
+    if (value["outcome"] != observation["outcome"] or value["attempt"] != observation["attempt"]
             or observation["assignment"] != row["packet_id"] or observation["candidate"] != row["candidate"]):
         raise PodError("state_unsupported", "Consumed report no longer joins its recorded assignment")
     if value["status"] == "validated_observation":
@@ -155,7 +160,7 @@ def _consumed_report(row: dict, runtimes: set[str]) -> dict | None:
     return value
 
 
-def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = None) -> None:
+def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = None, report_detail=True) -> None:
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
@@ -209,7 +214,7 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
     if "abandoned_accounting" in value:
         from .abandoned import validate
         validate(value)
-    _consumed_report(value, runtimes or set())
+    _consumed_report(value, runtimes or set(), detail=report_detail)
     validate_route_settlements(value)
 
 
@@ -240,7 +245,7 @@ def _validate_route_references(state: dict) -> None:
                     raise PodError("state_unsupported", "Route settlement correction reference is malformed")
 
 
-def _validate_context(value: object) -> dict:
+def _validate_context(value: object, *, full_history=True) -> dict:
     superseded = superseded_schemas(value)
     if superseded:
         raise PodError("state_unsupported",
@@ -311,7 +316,8 @@ def _validate_context(value: object) -> dict:
     for key, row in state["admissions"].items():
         if not isinstance(key, str) or not key:
             raise PodError("state_unsupported", "Admission key is malformed")
-        _validate_admission(key, row, runtimes=runtimes)
+        from .history_tree import from_revision
+        _validate_admission(key, row, runtimes=runtimes, report_detail=full_history or not from_revision(row))
     _validate_route_references(state)
     if (not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict)
             or not isinstance(state["constraints"], list) or len(state["constraints"]) > 64):
@@ -344,7 +350,7 @@ def read(project: Path, objective: str) -> dict | None:
     return _read(path) if _record_exists(path) else None
 
 
-def _write(path: Path, value: dict, *, native: dict | None = None, protected=(), before_publish=None) -> None:
+def _write(path: Path, value: dict, *, native: dict | None = None, protected=(), before_publish=None, project=None) -> None:
     from .succession import refuse_continued
     # Backstop: only its own transition writes a continued record or a historical retirement. A successor an
     # incomplete claim reserves is refused at each work entry point instead, so the claim itself can write it.
@@ -356,8 +362,8 @@ def _write(path: Path, value: dict, *, native: dict | None = None, protected=(),
     stamp_decision(value)
     protect_decision_record(value)
     value["revision"] += 1
-    _validate_context(value)
-    record, chunks = prepare_context(path, value, native=native, protected=protected)
+    _validate_context(value, full_history=False)
+    record, chunks = prepare_context(path, value, project=project)
     if before_publish is not None:
         before_publish()
     from .relay import publish_decision
@@ -371,7 +377,7 @@ def _write_succession(path: Path, value: dict) -> None:
     stamp_decision(value)
     protect_decision_record(value)
     value["revision"] += 1
-    _validate_context(value)
+    _validate_context(value, full_history=False)
     record, chunks = prepare_context(path, value)
     publish_decision(path, value, lambda: publish_context(path, record, chunks))
 
@@ -383,8 +389,8 @@ def _write_retirement(path: Path, value: dict) -> None:
     stamp_decision(value)
     protect_decision_record(value)
     value["revision"] += 1
-    _validate_context(value)
-    record, chunks = prepare_context(path, value, purpose="retirement")
+    _validate_context(value, full_history=False)
+    record, chunks = prepare_context(path, value)
     publish_decision(path, value, lambda: publish_context(path, record, chunks))
 
 
@@ -515,8 +521,8 @@ def _validate_continuity(value: object) -> None:
                                 or type(binding["generation"]) is not int or binding["generation"] < 0):
         raise PodError("state_unsupported", "Recorded runtime continuity binding is malformed")
     history = value["history"]
-    if not isinstance(history, list) or len(history) > CONTINUITY_HISTORY:
-        raise PodError("state_unsupported", "Runtime continuity history is malformed or over its bound")
+    if not isinstance(history, list):
+        raise PodError("state_unsupported", "Runtime continuity history is malformed")
     if sum(isinstance(row, dict) and row.get("provenance") == "owner_handoff"
            and row.get("state") != "done" for row in history) > 1:
         raise PodError("state_unsupported", "More than one unfinished owner handoff")
@@ -668,11 +674,7 @@ def _apply_continuity(state: dict, verdict: dict, *, provenance: str, decision: 
     """Change only the recorded runtime and, where none was recorded, the generation."""
     checkpoint_value = state["checkpoint"]
     record = checkpoint_value.get("continuity") or {"binding": None, "history": []}
-    if len(record["history"]) >= CONTINUITY_HISTORY:
-        raise PodError("runtime_continuity_full",
-                       f"Runtime continuity history holds {CONTINUITY_HISTORY} entries; nothing was written. "
-                       "Settle this objective's workers through Orca and continue in a new objective",
-                       {"limit": CONTINUITY_HISTORY})
+
     target = verdict["current_runtime"]
     for ref in checkpoint_value.get("native_refs", []):
         ref["runtime"] = target
@@ -1116,6 +1118,8 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     return {"admissions": state.get("admissions", {}),
+            "report_runtimes": sorted({entry[field] for entry in (checkpoint_value.get("continuity") or {}).get("history", [])
+                                        for field in ("from_runtime", "to_runtime")}),
             "closure_at": decision_commit_time(),
             "pod_mapping_source": checkpoint_value.get("objective_source"),
             "pod_mapping_facts": state.get("pod_ticks", {}).get("facts"),
@@ -1821,7 +1825,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         if map_state.get("closure"):
             _end_tool_questions(state)
         _write(path, state, native=authority.get("native"),
-               before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None)
+               before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None,
+               project=project)
         if isinstance(proposed, dict) and proposed.get("close") is True:
             _record_continuity_event(authority.get("continuity"))
         result = dict(state)
@@ -2322,6 +2327,10 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}
+        from .history import preflight_reports
+        pending = sum(item.get("state") not in ("closed", "deferred") and item.get("report") is None
+                      for item in state["admissions"].values())
+        preflight_reports(path, state, reports=pending)
         from .pod_ticks import bind_criterion_scopes
         bind_criterion_scopes(state, checkpoint_value)
         _write(path, state, native=native)

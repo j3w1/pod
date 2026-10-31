@@ -39,20 +39,11 @@ class ReceiptBoundaryTests(unittest.TestCase):
         cls.before = cls.files()
         proposed = deepcopy(cls.map)
         proposed["update"]["A"]["evidence"] = [{"attempt": cls.admission["admission_id"]}]
-        try:
-            case.write(**proposed)
-        except PodError as exc:
-            cls.checkpoint_refusal = exc
-        else:
-            raise AssertionError("65th checkpoint receipt was accepted")
-        cls.checkpoint_atomic = cls.files() == cls.before
-        try:
-            case.report(cls.admission, cls.frozen, map=cls.map)
-        except PodError as exc:
-            cls.refusal = exc
-        else:
-            raise AssertionError("65th report receipt was accepted")
-        cls.unchanged = cls.files() == cls.before
+        case.write(**proposed)
+        cls.checkpoint_receipts = deepcopy(next(row for row in case.stored() if row["id"] == "A")["receipts"])
+        cls.map["seq"] = _read(cls.path)["checkpoint"]["seq"] + 1
+        case.report(cls.admission, cls.frozen, map=cls.map)
+        cls.report_receipts = deepcopy(next(row for row in case.stored() if row["id"] == "A")["receipts"])
         # Preceding overcommitment still refuses without discarding the review.
         before = cls.files()
         try:
@@ -63,31 +54,21 @@ class ReceiptBoundaryTests(unittest.TestCase):
         else:
             raise AssertionError("preceding review was discarded")
         cls.discard_atomic = cls.files() == before
-        # Failed consumption adds no receipt; it releases the pending result,
-        # permitting mechanical renewal without claiming passing proof.
-        case.report(cls.admission, cls.frozen, outcome="failed", map=cls.map)
+        # Renewal remains an explicit semantic transition; storage growth did
+        # not require it and the accepted report already has a durable receipt.
         case.write(renew=renew)
         cls.renewed = _read(cls.path)
-        print("records_receipts=" + json.dumps({"retained": 64, "proposed": 65, "limit": 64, "replay_count": cls.replay_count,
-            "before_context_bytes": len(cls.before["context.json"]), "before_chunk_bytes": sum(len(value) for key, value in cls.before.items() if key.startswith("history/")),
-            "report_refusal_unchanged": cls.unchanged, "checkpoint_refusal_unchanged": cls.checkpoint_atomic,
-            "after_renewal_context_bytes": cls.path.stat().st_size, "after_renewal_chunk_bytes": sum(len(value) for key, value in cls.files().items() if key.startswith("history/")),
-            "renewed_old_receipts": len(next(row for row in cls.renewed["checkpoint"]["obligations"] if row["id"] == "A")["receipts"]),
-            "replacement_receipts": len(next(row for row in cls.renewed["checkpoint"]["obligations"] if row["id"] == "A2")["receipts"])}))
 
     @classmethod
     def files(cls):
         return {str(path.relative_to(cls.path.parent)): path.read_bytes() for path in cls.path.parent.rglob("*") if path.is_file() and path.name != ".lock"}
 
-    def test_65th_report_refuses_atomically_with_exact_renewal_request(self):
-        detail = self.refusal.detail
-        self.assertEqual(detail["detail"], "receipt_limit")
-        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "limit")}, {"retained": 64, "proposed": 65, "limit": 64})
-        self.assertEqual(detail["next_action"]["renew"][0]["id"], "A")
-        self.assertTrue(self.unchanged)
-        self.assertEqual(self.checkpoint_refusal.detail["detail"], "receipt_limit")
-        self.assertTrue(self.checkpoint_atomic)
+    def test_65th_checkpoint_and_report_preserve_every_earlier_receipt(self):
         self.assertEqual(self.replay_count, 64)
+        self.assertEqual(len(self.checkpoint_receipts), 65)
+        self.assertEqual(len(self.report_receipts), 65)
+        self.assertEqual(self.checkpoint_receipts[:64], self.report_receipts[:64])
+        self.assertIn("reported_seq", self.report_receipts[-1])
 
     def test_historical_review_cannot_be_discarded(self):
         self.assertEqual(self.discard_refusal.detail["detail"], "disposition_invalid")
@@ -96,9 +77,9 @@ class ReceiptBoundaryTests(unittest.TestCase):
     def test_consumption_then_renewal_keeps_history_without_replacement_proof(self):
         row = self.renewed["admissions"][self.admission["admission_id"]]
         self.assertIsNone(row["disposition"])
-        self.assertEqual(row["report"]["outcome"], "failed")
+        self.assertEqual(row["report"]["outcome"], "succeeded")
         rows = {row["id"]: row for row in self.renewed["checkpoint"]["obligations"]}
-        self.assertEqual(len(rows["A"]["receipts"]), 64)
+        self.assertEqual(len(rows["A"]["receipts"]), 65)
         self.assertEqual(rows["A2"]["receipts"], [])
         self.assertEqual(rows["A2"]["state"], "waiting")
         before = self.files()

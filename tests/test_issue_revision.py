@@ -1,4 +1,6 @@
+from tests.history_support import publish_preceding
 """Synthetic issue-revision boundary controls; no authentic host producer is exercised."""
+from tests.history_support import compact
 
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
@@ -1150,7 +1152,7 @@ class IssueRevisionCompatibilityTests(IssueRevisionCase):
         path.write_text(json.dumps(state))
 
     def test_later_revision_and_immutable_history_retain_all_prior_verifier_and_tick_facts(self):
-        from pod.history import compact, publish_context
+        from pod.history import (publish_context)
         from pod.status import status
         self.begin(); self.revise(self.proposal())
         before = read(self.project, "objective")
@@ -1165,7 +1167,7 @@ class IssueRevisionCompatibilityTests(IssueRevisionCase):
         state = read(self.project, "objective")
         path = _path(self.project, "objective")
         record, chunks = compact(state, force=True)
-        publish_context(path, record, chunks)
+        publish_preceding(path, record, chunks)
         self.assertIn("$pod_history", path.read_text())
         self.assertEqual(read(self.project, "objective"), state)
         self.assertEqual(state["checkpoint"]["revision_decisions"][0], before["checkpoint"]["revision_decisions"][0])
@@ -1211,7 +1213,7 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         # The preceding helper rejects the new compact physical source facts
         # before it reaches the separately retained decision_channels=4 marker.
-        self.assertEqual(result.stdout.strip(), "invalid_pod_ticks")
+        self.assertEqual(result.stdout.strip(), "state_unsupported")
         self.assertEqual(read(self.project, "objective")["decision_channels"], 4)
         self.assertEqual(path.read_bytes(), before)
 

@@ -1,4 +1,5 @@
 """R150-R152: immutable row history and mechanical, fresh-proof renewal."""
+from tests.history_support import _reference, compact
 from copy import deepcopy
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from pod.errors import PodError
 from pod.obligations import (accept_write, admission_refusal, definition_id, report_projection,
                              _persisted_rows, restatable_rows, row_bounds, status_projection)
 from pod.lineage import Lineage
-from pod.history import compact, hydrate, is_reference, _reference, FORMAT
+from pod.history import (hydrate, is_reference, FORMAT)
 from pod.ledger import _empty
 from tests.test_obligations import ctx, criterion, ob, intake, proof, by_id, rows_of, packet
 from tests.test_history_regressions import previous_history_bundle, previous_history_call
@@ -199,12 +200,14 @@ class RowAndHistoryTests(unittest.TestCase):
         self.assertFalse(result["accepted"])
         self.assertTrue(result["unchanged"])
 
-    def test_live_and_total_bounds_are_separate(self):
-        row_bounds([{"state": "waiting"}] * 128 + [{"state": "withdrawn"}] * 384)
-        for rows, name in (([{"state": "waiting"}] * 129, "live_rows"), ([{"state": "withdrawn"}] * 513, "hydrated_total")):
-            with self.subTest(name=name), self.assertRaises(PodError) as caught:
-                row_bounds(rows)
-            self.assertEqual(caught.exception.detail["referent"]["bound"], name)
+    def test_live_and_retained_bounds_are_separate(self):
+        row_bounds([{"state": "waiting"}] * 128 + [{"state": "withdrawn"}] * 600)
+        with self.assertRaises(PodError) as caught:
+            row_bounds([{"state": "waiting"}] * 129)
+        self.assertEqual(caught.exception.detail["referent"]["bound"], "live_rows")
+        with self.assertRaises(PodError) as caught:
+            row_bounds([{"state": "withdrawn"}] * 513, request=True)
+        self.assertEqual(caught.exception.detail["referent"]["bound"], "request_entries")
 
     def test_request_update_and_live_overflows_report_distinct_counts(self):
         full = accept_write(None, intake(*[ob(f"S{i}") for i in range(127)]), ctx())
@@ -222,7 +225,7 @@ class RowAndHistoryTests(unittest.TestCase):
         from pod.contracts import bound
         from pod.obligations import _structure
         from pod.pod_ticks import empty, validate
-        self.assertEqual(bound("obligation", "receipts", "max_items"), 64)
+        self.assertEqual(bound("obligation", "receipts", "max_pending"), 64)
         self.assertEqual(bound("obligation", "evidence", "max_items"), 16)
         with self.assertRaises(PodError):
             _structure(criterion(evidence=[proof("O1")] * 17))
@@ -232,8 +235,8 @@ class RowAndHistoryTests(unittest.TestCase):
         ledger["criterion_scopes"] = {"O1": {"definition": "a" * 64, "proofs": proofs}}
         validate(ledger)
         proofs[f"{64:064x}"] = scope
-        with self.assertRaises(PodError):
-            validate(ledger)
+        validate(ledger)
+        self.assertEqual(len(proofs), 65)
 
     def test_512_hydrated_rows_keep_384_omitted_terminal_rows(self):
         first = accept_write(None, intake(*[ob(f"S{i}") for i in range(127)],
@@ -244,14 +247,14 @@ class RowAndHistoryTests(unittest.TestCase):
         self.assertEqual(len(full["obligations"]), 512)
         kept = accept_write(full, {"obligations": restatable_rows(full)}, ctx())
         self.assertEqual(kept["obligations"], full["obligations"])
-        for patch, bound_name in (({"W384": ob("W384", "withdrawn", withdrawal={"by": "coordinator", "reason": "terminal"})}, "hydrated_total"),
-                                  ({"S128": ob("S128")}, "hydrated_total")):
-            with self.subTest(bound_name=bound_name), self.assertRaises(PodError) as caught:
-                accept_write(full, {"seq": full["seq"] + 1, "update": patch}, ctx())
-            detail = caught.exception.detail["referent"]
-            self.assertEqual(detail["bound"], bound_name)
-            self.assertEqual(detail["request_entries"], 1)
-            self.assertEqual(detail["hydrated_total"], 513)
+        larger = accept_write(full, {"seq": full["seq"] + 1, "update": {
+            "W384": ob("W384", "withdrawn", withdrawal={"by": "coordinator", "reason": "terminal"})}}, ctx())
+        self.assertEqual(len(larger["obligations"]), 513)
+        self.assertEqual(larger["obligations"][:-1], full["obligations"])
+        with self.assertRaises(PodError) as caught:
+            accept_write(full, {"seq": full["seq"] + 1, "update": {"S128": ob("S128")}}, ctx())
+        detail = caught.exception.detail["referent"]
+        self.assertEqual((detail["bound"], detail["request_entries"], detail["hydrated_total"]), ("live_rows", 1, 513))
 
     def test_previous_reader_refuses_renewed_state_and_larger_counts_without_rewrite(self):
         first = accept_write(None, intake(ob("S")), ctx())

@@ -600,6 +600,7 @@ class RerunAttributionTableTests(EvidenceCase):
         row = next(row for row in journal["actions"] if row["action"]["kind"] == "validation_rerun")
         row["receipt"]["provider"] = self.provider(shape, submitted, bound, views[min(bound or 1, len(views)) - 1])
         row["run_event"] = "workflow_dispatch" if bound else None
+        journal["revision"] = _read_journal(self.journal)["revision"]
         _write_journal(self.journal, journal)
         return reconcile(self.project, "objective", owner="owner", record_id=row["record_id"], port=port,
                          now=NOW + timedelta(seconds=at))
@@ -622,7 +623,8 @@ class RerunAttributionTableTests(EvidenceCase):
         port = FakePort()
         ProviderEventTests.failed_dispatch(self, port)
         self.execute(action(kind="validation_rerun", target=RELEASE, candidate=self.binding["id"]), port)
-        base = self.journal.read_text()
+        from tests.common import logical_json
+        base = json.dumps(logical_json(self.journal))
         for state in RERUN_STATES:
             name, outcome, reason = state[0], state[6], state[7]
             with self.subTest(state=name):
@@ -869,7 +871,7 @@ class EarlierReaderTests(EvidenceCase):
         control["actions"] = [row for row in control["actions"] if row["action"].get("authorization") is None]
         self.assertTrue(control["actions"])
         self.assertTrue(all(row.get("exception") is None for row in control["actions"]))
-        control.pop("decision_channels")
+        control.pop("decision_channels", None)
         self.assertNotIn('"channel"', json.dumps(control))
         control_root = self.root / "channel-free-validation-control"
         control_root.mkdir()
@@ -892,7 +894,7 @@ class EarlierReaderTests(EvidenceCase):
                               capture_output=True, text=True)
         self.assertEqual(read.returncode, 0, read.stderr)
         earlier = json.loads(read.stdout)
-        self.assertEqual(earlier["journal_error"], "invalid_governor")
+        self.assertEqual(earlier["journal_error"], "state_unsupported")
         self.assertEqual(earlier["rows"], control["actions"])
         self.assertEqual({row["record_id"]: row["outcome"] for row in earlier["status"]},
                          {row["record_id"]: row["outcome"] for row in control["actions"]})

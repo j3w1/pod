@@ -138,7 +138,7 @@ def validate(value: object) -> None:
             raise PodError("state_unsupported", "PoD source block observations are malformed")
     scopes = row.get("criterion_scopes", {})
     from .obligations import MAX_OBLIGATIONS
-    if not isinstance(scopes, dict) or len(scopes) > MAX_OBLIGATIONS:
+    if not isinstance(scopes, dict):
         raise PodError("state_unsupported", "PoD criterion source identities are malformed")
     for key, scope in scopes.items():
         from .obligations import _ident, MAX_RECEIPTS
@@ -155,7 +155,7 @@ def validate(value: object) -> None:
                            for key in ACCEPTANCE_FIELDS - {"seq"})):
                 raise PodError("state_unsupported", "PoD requirement acceptance is malformed")
         proofs = scope.get("proofs", {})
-        if (not isinstance(proofs, dict) or len(proofs) > MAX_RECEIPTS
+        if (not isinstance(proofs, dict)
                 or any(not isinstance(key, str) or not _SHA.fullmatch(key) for key in proofs)):
             raise PodError("state_unsupported", "PoD proof source identities are malformed")
         for proof in proofs.values():

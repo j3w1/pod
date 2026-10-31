@@ -27,6 +27,7 @@ import yaml
 from .config import GOVERNED_KINDS, effective, validate_effects
 from .contracts import TABLE, UNIT, PURPOSES, AUTHORIZATION_SCOPES, bound, fields, required, input_record
 from .errors import PodError
+from .history import _pinned_read
 from . import gitio
 from .ledger import _intervention_locked, _lock, _path, _read, _write, objective_root
 from .util import (MAX_RECORD, atomic_json, bounded_json, bounded_text, digest, exact,
@@ -51,12 +52,9 @@ DIAGNOSTIC_FIELDS = fields("diagnostic")
 DEFAULT_UNIT = "default"
 # Mirrors the ledger's own threshold: a third correction needs a discriminating diagnosis.
 CORRECTION_THRESHOLD = 2
-# Rows are pretty-printed receipts of about a kilobyte; the journal keeps its own bound so
-# the cap on rows and the cap on bytes agree, and compaction runs before either is hit.
+# The current-effect budget bounds in-flight work, independently of retained history.
 MAX_ACTIONS = 96
-MAX_JOURNAL = 2 * MAX_RECORD
-MAX_UNITS = 32
-MAX_HISTORY = 16
+from .history import CONTEXT_LIMIT as MAX_JOURNAL, MAINTENANCE_LIMIT
 MAX_WORKFLOWS = 32
 _UNIT = UNIT
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
@@ -161,15 +159,22 @@ def _validate_unit(name: str, unit: object) -> None:
         raise _malformed("unit record " + name)
 
 
-def _read_journal(path: Path) -> dict:
-    if not path.exists():
+def _read_journal(path: Path, *, limit=MAINTENANCE_LIMIT) -> dict:
+    from .ledger import _record_exists
+    if not _record_exists(path):
         return _empty_journal()
-    value = bounded_json(path, limit=MAX_JOURNAL)
+    from .history import load_document
+    return _validate_journal(load_document(path, limit=limit))
+
+
+def _validate_journal(value) -> dict:
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise PodError("state_unsupported",
-                       f"Governor journal is not {SCHEMA}; archive or remove it before governed actions")
+                       f"Governor journal is not {SCHEMA}; preserve it and use a compatible reader")
     exact(value, {"schema", "revision", "units", "actions", "counters", "decision_channels", "decision_order"},
           {"schema", "revision", "units", "actions", "counters"}, name="governor")
+    if type(value["revision"]) is not int or value["revision"] < 0:
+        raise _malformed("revision")
     if "decision_channels" in value and (type(value["decision_channels"]) is not int or value["decision_channels"] not in (1, 2, 3, 5)):
         raise _malformed("decision channel representation")
     if "decision_order" in value:
@@ -177,8 +182,8 @@ def _read_journal(path: Path) -> dict:
         validate_order(value["decision_order"])
         if value.get("decision_channels") != 5:
             raise _malformed("decision chronology marker")
-    if (not isinstance(value["actions"], list) or len(value["actions"]) > MAX_ACTIONS
-            or not isinstance(value["units"], dict) or len(value["units"]) > MAX_UNITS
+    if (not isinstance(value["actions"], list)
+            or not isinstance(value["units"], dict)
             or not isinstance(value["counters"], dict)):
         raise _malformed("inventory")
     for row in value["actions"]:
@@ -210,7 +215,7 @@ def _write_journal(path: Path, journal: dict) -> None:
     from .relay import current_decision, _contains_binding, validate_order
     capability = current_decision()
     applies = (capability is not None and capability.kind in ("authorization", "governor_exception")
-               and _contains_binding(journal, capability.binding))
+               and _contains_binding(journal, capability.binding, changed_only=not capability.reused))
     if applies and not capability.reused:
         capability.finalize(journal)
         order = {row["key"]: row for row in journal.get("decision_order", [])}
@@ -220,9 +225,18 @@ def _write_journal(path: Path, journal: dict) -> None:
         journal["decision_order"] = validate_order([order[key] for key in sorted(order)])
     protect_decision_record(journal)
     journal["revision"] += 1
+    from .history import prepare_document, preflight_landing
+    plan_record, plan_chunks = prepare_document(path, journal)
+    planned_bytes = len(encoded(plan_record, compact=True))
+    if planned_bytes > MAX_JOURNAL:
+        from .history import largest_sections
+        raise PodError("record_too_large", "Governor primary file needs immutable revision storage",
+                       {"current_bytes": path.stat().st_size if path.exists() else 0,
+                        "proposed_bytes": planned_bytes, "limit_bytes": MAX_JOURNAL,
+                        "largest_sections": largest_sections(journal),
+                        "next_action": "run pod internal storage with record governor and action inspect, then migrate with the exact source facts"})
+    preflight_landing(path, planned_bytes + sum(map(len, plan_chunks.values())))
     if applies:
-        if len(encoded(journal, compact=True)) > MAX_JOURNAL:
-            raise PodError("record_too_large", "Complete Governor decision exceeds capacity; shorten its decision evidence")
         from .config import load, _edit_lock, personal_path
         current_state = _governor_decision_state(capability.project, capability.objective,
                                                 capability.binding["resources"]["unit"])
@@ -232,31 +246,80 @@ def _write_journal(path: Path, journal: dict) -> None:
             current_state["policy_revision"] = snapshot["policy_revision"]
             capability.consume(current_state=current_state, snapshot=snapshot, result=journal, keys=capability.keys,
                                prior=[{"keys": [row["key"]], "decided_at": row["decided_at"]} for row in prior])
-            atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
+            _publish_journal(path, journal, prepared=(plan_record, plan_chunks))
         return
-    atomic_json(path, journal, limit=MAX_JOURNAL, compact=True)
+    _publish_journal(path, journal, prepared=(plan_record, plan_chunks))
+
+
+def _publish_journal(path, journal, *, prepared=None):
+    from .history import prepare_document, publish_context
+    record, chunks = prepared if prepared is not None else prepare_document(path, journal)
+    publish_context(path, record, chunks)
 
 
 def _compact(journal: dict) -> None:
-    """Bounded retention: settled rows of superseded candidates go first; nothing unresolved does."""
-    if len(journal["actions"]) < MAX_ACTIONS:
-        return
-    current = {unit["candidate"]["id"] for unit in journal["units"].values() if unit.get("candidate")}
-    referenced = {row.get("derived_from") for row in journal["actions"]
-                  if row["outcome"] in ("pending", "UNKNOWN")}
-    kept = []
-    dropped = 0
-    for row in journal["actions"]:
-        settled = row["outcome"] in ("PASS", "FAILED", "CANCELED")
-        stale = row.get("candidate_id") is not None and row["candidate_id"] not in current
-        if (settled and stale and row["record_id"] not in referenced
-                and len(journal["actions"]) - dropped >= MAX_ACTIONS):
-            dropped += 1
-            continue
-        kept.append(row)
-    journal["actions"] = kept
-    if len(journal["actions"]) >= MAX_ACTIONS:
-        raise PodError("governor_full", "Governor journal is full; start a new objective record")
+    """Bound current in-flight effects; never evict retained governed evidence."""
+    pending = sum(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")
+                  for row in journal["actions"])
+    if pending >= MAX_ACTIONS:
+        raise PodError("governor_full", "Current effects fill the in-flight budget; reconcile them before admitting another effect")
+
+
+def _effect_facts(journal):
+    from .history_tree import plain
+    return {"units": {name: {"branch": plain(unit.get("branch"))} for name, unit in journal["units"].items()},
+            "actions": [{"record_id": row["record_id"], "action": {key: plain(row["action"].get(key))
+                         for key in ("kind", "candidate", "target", "unit", "effects")},
+                         "decision": row["decision"], "outcome": row["outcome"], "effects": plain(row.get("effects"))}
+                        for row in journal["actions"] if row["decision"] == "ALLOW"
+                        and row["outcome"] in ("pending", "UNKNOWN")]}
+
+
+def load_admission_effects(path):
+    """Complete current effects without opening retained settled action bodies."""
+    from .ledger import _record_exists
+    if not _record_exists(path):
+        import hashlib
+        return {"schema": "pod-admission-effects/v1", "generation": {"revision": 0, "sha256": hashlib.sha256(b"").hexdigest()},
+                "complete": True, "units": {}, "actions": []}
+    return _load_admission_effects(path)
+
+
+@_pinned_read
+def _load_admission_effects(path):
+    import json
+    import hashlib
+    from .ledger import _record_exists
+    from .history import _context_bytes, STORAGE_SCHEMA, ChunkStore, _REVISION_FIELDS
+    from .history_tree import open_root, plain
+    if not _record_exists(path):
+        return {"schema": "pod-admission-effects/v1", "generation": {"revision": 0, "sha256": hashlib.sha256(b"").hexdigest()},
+                "complete": True, "units": {}, "actions": []}
+    raw = _context_bytes(path, MAINTENANCE_LIMIT)
+    try:
+        physical = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise PodError("invalid_record", "Current effects cannot be decoded") from exc
+    if isinstance(physical, dict) and physical.get("schema") == STORAGE_SCHEMA:
+        if set(physical) != _REVISION_FIELDS or physical.get("kind") != "governor" or type(physical.get("revision")) is not int or physical["revision"] < 0:
+            raise _malformed("current effects envelope")
+        facts = plain(open_root(physical["facts"], ChunkStore(path.parent)))
+        binding = facts.pop("binding", None)
+        if binding != {"revision": physical["revision"], "root_sha256": digest(physical["root"])}:
+            raise _malformed("current effects generation binding")
+    else:
+        facts = _effect_facts(_validate_journal(physical))
+    if (not isinstance(facts, dict) or set(facts) != {"units", "actions"}
+            or not isinstance(facts["units"], dict) or not isinstance(facts["actions"], list)):
+        raise _malformed("current effects projection")
+    for row in facts["actions"]:
+        if (not isinstance(row, dict) or set(row) != {"record_id", "action", "decision", "outcome", "effects"}
+                or row["decision"] != "ALLOW" or row["outcome"] not in ("pending", "UNKNOWN")
+                or not isinstance(row["action"], dict) or set(row["action"]) != {"kind", "candidate", "target", "unit", "effects"}):
+            raise _malformed("current action projection")
+    return {"schema": "pod-admission-effects/v1", "generation": {
+                "revision": physical["revision"], "sha256": hashlib.sha256(raw).hexdigest()},
+            "complete": True, **facts}
 
 
 # --------------------------------------------------------------------------- validation
@@ -2231,8 +2294,6 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
         journal = _read_journal(record_path)
         existing = journal["units"].get(unit)
         if existing is None:
-            if len(journal["units"]) >= MAX_UNITS:
-                raise PodError("governor_full", "Too many delivery units; start a new objective record")
             existing = {"name": unit, "branch": None, "tasks": [], "generation": 0, "candidate": None,
                         "history": [], "preflight": {}, "published": {}, "last_decision": None}
             journal["units"][unit] = existing
@@ -2260,9 +2321,7 @@ def prepare_candidate(project: Path, objective: str, *, owner: str, unit: str, o
                        "policy_revision": record["policy_revision"], "prepared_at": moment,
                        "supersedes": previous["id"] if previous else None}
             existing["candidate"] = binding
-            existing["history"] = (existing["history"] + [identity])[-MAX_HISTORY:]
-            keep = set(existing["history"][-2:])
-            existing["preflight"] = {cid: receipts for cid, receipts in existing["preflight"].items() if cid in keep}
+            existing["history"] = existing["history"] + [identity]
             # A carried row is never cancelled; it settles by its own readback (R118).
             superseded = [row["record_id"] for row in journal["actions"]
                           if row["action"]["unit"] == unit and row["decision"] == "ALLOW"

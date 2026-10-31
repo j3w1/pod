@@ -1,8 +1,9 @@
 """Sixty actual admission/report transitions through injected native ports (R121)."""
+from tests.history_support import compact
 from copy import deepcopy
 import unittest
 
-from pod.history import CONTEXT_LIMIT, compact, hydrate
+from pod.history import (CONTEXT_LIMIT, hydrate)
 from pod.ledger import _read, _outstanding_ids, objective_root
 from pod.util import encoded
 from tests.issue41_support import ProductionCase

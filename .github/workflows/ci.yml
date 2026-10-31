@@ -53,7 +53,8 @@ jobs:
           - {lane: parallel, shard: 5, of: 6}
           - {lane: parallel, shard: 6, of: 6}
           - {lane: serial, shard: 1, of: 1}
-          - {lane: installer, shard: 1, of: 1}
+          - {lane: installer, shard: 1, of: 2}
+          - {lane: installer, shard: 2, of: 2}
     env:
       PYTHONPATH: skills
       LANE: ${{ matrix.lane }}

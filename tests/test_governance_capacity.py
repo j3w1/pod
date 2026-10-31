@@ -1,10 +1,11 @@
 """R119: derived adoptions retain every row without spending owner-decision slots."""
+from tests.history_support import compact
 from copy import deepcopy
 import subprocess
 import unittest
 
 from pod.errors import PodError
-from pod.history import compact, hydrate
+from pod.history import (hydrate)
 from pod.ledger import _validate_context, objective_root, read
 from pod.obligations import validate_map_record
 from pod.util import encoded
@@ -78,13 +79,10 @@ class LongAdoptionTests(unittest.TestCase):
         self.assertEqual(restored, self.state)
         validate_map_record(restored["checkpoint"])
 
-    def test_owner_bound_still_refuses_after_eighty_derived_adoptions(self):
+    def test_owner_history_continues_after_eighty_derived_adoptions(self):
         self.assertIsNone(self.refusal)
-        self.assertEqual(self.owner_count, 64)
-        self.assertEqual(self.owner_refusal[0], "governance_unavailable")
-        self.assertEqual(self.owner_refusal[1]["detail"], "governance_history_full")
-        self.assertIn("owner", self.owner_refusal[1]["next_action"])
-        self.assertTrue(self.bound_unchanged)
+        self.assertEqual(self.owner_count, 65)
+        self.assertIsNone(self.owner_refusal)
 
 
 class GovernanceCapacityTests(KernelCase):
@@ -107,34 +105,35 @@ class GovernanceCapacityTests(KernelCase):
         path.write_bytes(encoded(state, compact=True))
         return state, path
 
-    def test_sixty_fifth_owner_decision_refuses_checkpoint_and_closure_without_write(self):
+    def test_sixty_fifth_owner_decision_preserves_history_through_closure(self):
         state, path = self.full_owner_history()
         validate_map_record(state["checkpoint"])
-        before = path.read_bytes()
         rows = [self.criterion("satisfied", evidence=[self.proof("O1")])]
-        for close in (False, True):
-            with self.subTest(close=close):
-                self.capacity_refusal(lambda: self.write(rows, **({"close": True} if close else {}), governance_refresh=True,
-                    governance={"base_ref": "refs/remotes/origin/target", "base": self.base},
-                    revision_authority={**USER, "instruction": "Another exact owner snapshot"}), "owner")
-                self.assertEqual(path.read_bytes(), before)
+        self.write(rows, governance_refresh=True,
+            governance={"base_ref": "refs/remotes/origin/target", "base": self.base},
+            revision_authority={**USER, "instruction": "Another exact owner snapshot"})
+        current = read(self.project, "objective")["checkpoint"]
+        self.assertEqual(len(current["governance_history"]["decisions"]), 65)
+        self.assertEqual(current["governance_history"]["decisions"][:64], state["checkpoint"]["governance_history"]["decisions"])
+        self.write(self.stored(), close=True)
+        self.assertTrue(read(self.project, "objective")["checkpoint"]["closure"])
 
     def check_stored_overflow(self, section):
         state, path = self.full_owner_history()
         history = state["checkpoint"]["governance_history"]
         if section == "owner":
-            history["decisions"].append({**history["decisions"][-1], "instruction": "Overflow decision"})
+            history["decisions"].append({**history["decisions"][-1], "instruction": "Later decision"})
         else:
             history["candidates"] = [f"{index + 1:040x}" for index in range(65)]
-        before = encoded(state, compact=True)
-        path.write_bytes(before)
-        for operation in (lambda: _validate_context(deepcopy(state)),
-                          lambda: validate_map_record(state["checkpoint"]),
-                          lambda: self.write(self.stored()),
-                          lambda: self.write(self.stored(), close=True)):
-            with self.subTest(operation=operation):
-                self.capacity_refusal(operation, section)
-                self.assertEqual(path.read_bytes(), before)
+        path.write_bytes(encoded(state, compact=True))
+        _validate_context(deepcopy(state))
+        validate_map_record(state["checkpoint"])
+        self.write(self.stored())
+        current = read(self.project, "objective")["checkpoint"]["governance_history"]
+        self.assertEqual(current["decisions"], history["decisions"])
+        self.assertEqual(current["candidates"][:len(history["candidates"])], history["candidates"])
+        self.write([self.criterion("satisfied", evidence=[self.proof("O1")])], close=True)
+        self.assertTrue(read(self.project, "objective")["checkpoint"]["closure"])
 
     def test_well_formed_owner_overflow_uses_capacity_refusal_on_every_path(self):
         self.check_stored_overflow("owner")

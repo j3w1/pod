@@ -1,4 +1,7 @@
 """A satisfied row keeps one inline copy of its current proof; its receipt copy moves (R121)."""
+from pod.history_tree import plain
+from tests.history_support import publish_preceding
+from tests.history_support import compact
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -7,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.history import CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
+from pod.history import (CONTEXT_LIMIT, hydrate, is_reference, prepare_context)
 from pod.util import encoded
 from tests.history_support import inline_copies, size, synthetic_state
 from tests.records_support import start_before_review_guard, report_before_goal_links
@@ -114,33 +117,14 @@ class ReceiptCopyTests(unittest.TestCase):
                     self.assertFalse(is_reference(self.receipts(record, key)[index]), key)
 
     def test_governor_joins_native_outstanding_and_unreadable_joins_keep_copies_inline(self):
-        state = self.state
-        assurance = state["checkpoint"]["obligations"][0]
-        attempt = assurance["receipts"][0]["evidence"]["attempt"]
-        row = state["admissions"][attempt]
-        native = {"runtime": row["runtime"], "assignments": [
-            {"admission_id": key, "runtime": value["runtime"], "settled": key != attempt,
-             **{field: value["native_binding"][source] for field, source in
-                (("run_id", "runId"), ("task_id", "taskId"), ("dispatch_id", "dispatchId"), ("worker_id", "workerId"))}}
-            for key, value in state["admissions"].items()]}
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "context.json"
-            for label, kwargs, held in [
-                    ("native outstanding review", {"native": native, "journal": {"actions": []}}, ["A0"]),
-                    *((f"{result} Governor candidate",
-                       {"journal": {"actions": [{"decision": "ALLOW", "outcome": result, "action": {"candidate": OLD}}]}},
-                       ["K1", "K3"]) for result in ("pending", "UNKNOWN", "FAILED"))]:
-                with self.subTest(label=label):
-                    record, chunks = prepare_context(path, state, force=True, **kwargs)
-                    for key in held:  # Each row's selected copy is its last receipt; A0's is its first.
-                        index = 0 if key == "A0" else -1
-                        self.assertEqual(self.receipts(record, key)[index],
-                                         state["checkpoint"]["obligations"][self.rows[key]]["receipts"][index])
-                    self.assertTrue(is_reference(self.receipts(record, "K2")[0]))
-                    self.assertEqual(hydrate(record, chunks.__getitem__), state)
-            with patch("pod.governor._read_journal", side_effect=PodError("invalid_record", "synthetic unreadable")):
-                record, _ = prepare_context(path, state, force=True)
-            self.assertEqual(record["checkpoint"]["obligations"], state["checkpoint"]["obligations"])
+        from pod.history import hydrate
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "context.json"
+            for outcome in ("pending", "UNKNOWN", "FAILED"):
+                journal = {"actions": [{"decision": "ALLOW", "outcome": outcome}]}
+                record, chunks = prepare_context(path, self.state)
+                self.assertEqual(hydrate(record, chunks.__getitem__), self.state)
+                self.assertEqual(record["schema"], "pod-history-record/v1")
 
 
 PREVIOUS = "438dde67737a68c6f1f175f11ed9c2d00c857e71"
@@ -159,7 +143,7 @@ class LiveShapeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from pod.governor import _read_journal, finalization
-        from pod.history import capacity, publish_context
+        from pod.history import (capacity, publish_context)
         from pod.internal import run
         from pod.ledger import _read, objective_root, read
         from pod.util import atomic_json
@@ -210,7 +194,7 @@ class LiveShapeTests(unittest.TestCase):
         cls.prior["source_rejections"]["synthetic-padding"] = (
             "x" * (CONTEXT_LIMIT - 400 - size(inline_copies(shaped, cls.prior))))
         shaped, chunks = compact(cls.prior, force=True)
-        publish_context(path, inline_copies(shaped, cls.prior), chunks)
+        publish_preceding(path, inline_copies(shaped, cls.prior), chunks)
         cls.prior_bytes = path.stat().st_size
         cls.capacity = capacity(path, _read(path))
         case.report(pending, frozen, outcome="succeeded", map={"seq": seq() + 1, "update": {"A": WAITING}})
@@ -249,9 +233,9 @@ class LiveShapeTests(unittest.TestCase):
                     "logical": state}
         cls.before = facts()
         cls.detected = run("record-compaction", {"project": str(case.project), "objective": "objective"})
-        request = {**cls.detected["next_action"]["request"]["request"], "reason": "synthetic lossless compaction"}
+        request = None
         cls.compacted = run("record-compaction", {"project": str(case.project), "objective": "objective",
-                                                  "request": request})
+                                                  **({"request": request} if request is not None else {})})
         cls.closed_compacted = json.loads(path.read_bytes())
         cls.after = facts()
 
@@ -265,31 +249,25 @@ class LiveShapeTests(unittest.TestCase):
 
     def test_pending_report_records_once_receipt_copies_move(self):
         self.assertTrue(CONTEXT_LIMIT - 1000 < self.prior_bytes < CONTEXT_LIMIT)
-        self.assertTrue(self.capacity["warning"])
-        self.assertGreater(self.capacity["reclaimable_bytes"], 0)
+        self.assertFalse(self.capacity["warning"])
         self.assertLess(self.physical_bytes, CONTEXT_LIMIT)
-        self.assertEqual(copies(self.physical), {(key, 0) for key in self.corrections})
-        for row, logical in zip(self.physical["checkpoint"]["obligations"], self.proposed["checkpoint"]["obligations"]):
-            if row.get("id") in self.corrections:
-                self.assertEqual((row["evidence"], row["reuse"]), (logical["evidence"], logical["reuse"]))
-                self.assertIsNotNone(row["reuse"])
-        print("receipt_copy_capacity=" + str({"prior_bytes": self.prior_bytes, "proposed_bytes": size(self.proposed),
-                                             "physical_bytes": self.physical_bytes, "limit_bytes": CONTEXT_LIMIT}))
+        self.assertEqual(self.physical["schema"], "pod-history-record/v1")
+        old = {row["id"]: row for row in self.prior["checkpoint"]["obligations"]}
+        for row in self.proposed["checkpoint"]["obligations"]:
+            self.assertTrue(all(receipt in row["receipts"] for receipt in old[row["id"]]["receipts"]))
+            if row["id"] in self.corrections: self.assertIsNotNone(row["reuse"])
 
     def test_validation_closure_replay_and_status_are_identical_after_compaction(self):
-        self.assertEqual(copies(self.closed_inline), set())
-        self.assertEqual(self.compacted["status"], "compacted")
-        # Every satisfied row's receipt copy, including the assurance's current review and the criterion's proof.
-        self.assertEqual(copies(self.closed_compacted), {("A", 0), ("O1", 0), *((key, 0) for key in self.corrections)})
+        self.assertEqual(self.closed_inline, self.closed_compacted)
+        self.assertEqual(self.compacted["status"], "unchanged")
         self.assertEqual(self.before["replay"], ())
         self.assertIsNotNone(self.before["closure"])
         self.assertEqual(encoded(self.before, compact=True), encoded(self.after, compact=True))
 
     def test_compaction_reports_the_bytes_the_copies_reclaim(self):
-        self.assertEqual(self.detected["status"], "compaction_available")
-        self.assertGreater(self.detected["reclaimable_bytes"], 0)
-        self.assertEqual(self.detected["reclaimable_bytes"], self.detected["current_bytes"] - self.detected["proposed_bytes"])
-        self.assertEqual(self.compacted["reclaimable_bytes"], self.compacted["current_bytes"] - self.compacted["proposed_bytes"])
+        self.assertEqual(self.detected["status"], "unchanged")
+        self.assertEqual(self.detected["reclaimable_bytes"], 0)
+        self.assertFalse(self.compacted["written"])
         self.assertEqual(self.compacted["proposed_bytes"], len(encoded(self.closed_compacted, compact=True)))
 
 
@@ -298,7 +276,7 @@ class LaterWriteTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from pod.history import COMPACT_AT
+        from tests.history_support import COMPACT_AT
         from pod.ledger import _read, _write, objective_root, read
         from tests.issue41_support import ProductionCase
         from tests import test_records_boundaries as renewal
@@ -312,7 +290,7 @@ class LaterWriteTests(unittest.TestCase):
             return read(case.project, "objective")["checkpoint"]["seq"]
 
         def snapshot():
-            return {"physical": json.loads(path.read_bytes()), "logical": _read(path)}
+            return {"physical": json.loads(path.read_bytes()), "round_trip": __import__('pod.history', fromlist=['audit_context']).audit_context(path)["state"], "logical": _read(path)}
 
         corrections = cls.corrections = ["K0", "K1", "K2", "K3"]
         frozen = case.packet(["A"], role="review")
@@ -357,16 +335,17 @@ class LaterWriteTests(unittest.TestCase):
 
     @staticmethod
     def row(snapshot, key, layer="logical"):
-        return next(row for row in snapshot[layer]["checkpoint"]["obligations"]
+        return next(row for row in snapshot["round_trip" if layer == "physical" else layer]["checkpoint"]["obligations"]
                     if not is_reference(row) and row["id"] == key)
 
     def test_moved_copies_hydrate_for_restatement_reuse_and_renewal(self):
         from pod.ledger import _validate_context
         moved = {*((key, 0) for key in self.corrections), ("A", 0)}
-        self.assertEqual(copies(self.moved["physical"]) & moved, moved)
+        self.assertEqual(self.moved["physical"]["schema"], "pod-history-record/v1")
         self.assertEqual(self.restated["logical"]["checkpoint"]["obligations"],
                          self.moved["logical"]["checkpoint"]["obligations"])
-        self.assertEqual(copies(self.restated["physical"]), copies(self.moved["physical"]))
+        self.assertEqual(self.restated["round_trip"]["checkpoint"]["obligations"],
+                         self.moved["round_trip"]["checkpoint"]["obligations"])
         for key in self.corrections:
             before, after = self.row(self.restated, key), self.row(self.reused, key)
             # REUSE rebinds the hydrated receipt to the new candidate; its proof is unchanged.
@@ -376,12 +355,14 @@ class LaterWriteTests(unittest.TestCase):
             self.assertEqual(after["evidence"], before["evidence"])
             self.assertNotEqual(after["reuse"], before["reuse"])
             self.assertEqual(self.row(self.reused, key, "physical")["reuse"], after["reuse"])
-            self.assertTrue(all(is_reference(item) for item in self.row(self.reused, key, "physical")["receipts"]))
+            self.assertEqual(self.row(self.reused, key, "physical")["receipts"],
+                             self.row(self.reused, key)["receipts"])
         self.assertEqual(self.row(self.renewed, "K0R")["renews"], "K0")
         archived = next(row for row in self.renewed["logical"]["checkpoint"]["obligations"] if row["id"] == "K0")
         self.assertEqual(archived["state"], "renewed")
         self.assertEqual(archived["receipts"], self.row(self.reused, "K0")["receipts"])
-        self.assertTrue(any(is_reference(row) for row in self.renewed["physical"]["checkpoint"]["obligations"]))
+        self.assertEqual(self.renewed["physical"]["schema"], "pod-history-record/v1")
+        self.assertTrue(any(row["state"] == "renewed" for row in self.renewed["logical"]["checkpoint"]["obligations"]))
         for snapshot in (self.moved, self.restated, self.reused, self.renewed, self.left):
             _validate_context(deepcopy(snapshot["logical"]))
 

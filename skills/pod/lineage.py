@@ -29,8 +29,6 @@ class Lineage:
         if not isinstance(rows, (dict, list)) or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) for row in values):
             _invalid("lineage retains complete named rows")
         self.rows = rows if isinstance(rows, dict) else {row["id"]: row for row in rows}
-        if len(self.rows) > bound("map", "obligations", "max_items"):
-            _invalid("lineage exceeds the total row bound")
         for key, row in self.rows.items():
             link = row.get("renewal")
             if row.get("state") == "renewed":

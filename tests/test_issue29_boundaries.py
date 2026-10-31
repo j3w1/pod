@@ -232,7 +232,8 @@ class LegacyConsentTests(ks.KernelCase):
         for scenario in ('A_prepared_unit_no_branch','B_default_unit_checkpoint_only','C_control_bound_branch'):
             with self.subTest(scenario=scenario):
                 journal = self.journal(scenario)
-                _write_journal(_record_path(self.project,'objective'), journal)
+                # Export captured preceding-format fixtures, independently of the current writer.
+                _record_path(self.project,'objective').write_text(json.dumps(journal))
                 reported = objective_delivery_reporting(self.project,'objective')
                 for unit in reported['units'].values(): self.assertEqual(unit['merge'], 'MISSING')
                 for unit in status(self.project,'objective')['units'].values():
@@ -269,7 +270,7 @@ class LegacyConsentTests(ks.KernelCase):
                 if change == 'unit-moved':
                     journal['units']['release']['candidate']['commit'] = 'b'*40
                     journal['units']['release']['candidate']['tree'] = 'd'*40
-                _write_journal(_record_path(self.project,'objective'), journal)
+                _record_path(self.project,'objective').write_text(json.dumps(journal))
                 self.assertEqual(objective_delivery_reporting(self.project,'objective')['units']['release']['merge'],
                                  'RECORDED' if granted else 'MISSING')
                 self.assertEqual(_authorization_granted(self.project,'objective')('merge', ks.COMMIT), granted)

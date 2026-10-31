@@ -46,7 +46,7 @@ def assert_render_after_readiness(test: unittest.TestCase, observed: dict, rende
     rest = rest.replace("Mode: normal\n", "", 1)
     rest = "".join(line for line in rest.splitlines(keepends=True)
                    if not line.startswith(("Decision policy: ", "Decision setup offered: ", "Decision waits: ",
-                                           "Tool permission: ", "Decision wait: ", "Needs you: ")))
+                                           "Tool permission: ", "Decision wait: ", "Needs you: ", "Storage cleanup queued: ")))
     test.assertEqual(rest, expected)
 
 

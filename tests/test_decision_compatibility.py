@@ -1,4 +1,7 @@
+from tests.common import logical_json
+from tests.history_support import publish_preceding
 """R120/R5: genuine released writers and earlier readers retain decision meaning."""
+from tests.history_support import compact
 
 from copy import deepcopy
 import json
@@ -10,7 +13,7 @@ import tarfile
 import tempfile
 from unittest.mock import patch
 
-from pod.history import load_context, compact, publish_context
+from pod.history import (load_context, publish_context)
 from pod.ledger import _validate_context, closed_snapshot_context, map_of
 from pod.obligations import validate_closed_snapshot, report_projection, status_projection
 from pod.util import context_decisions, map_decisions
@@ -50,7 +53,7 @@ class DecisionCompatibilityTests(KernelCase):
         destination.mkdir()
         self.earlier("from tests.decision_released_writer import main; main()", destination, kind)
         self.assertEqual(json.loads((destination / "provenance.json").read_text())["writer"], BASELINE)
-        state = json.loads((destination / "objective.json").read_bytes())
+        state = logical_json(destination / "objective.json")
         before = deepcopy(state)
         self.assertEqual(_validate_context(state), before)
         self.assertEqual(load_context(destination / "objective.json"), before)
@@ -152,7 +155,7 @@ except PodError as exc:
 else:
     print(json.dumps({"context": "readable"}))
 ''', path)
-        self.assertEqual(json.loads(result), {"refused": "invalid_context"})
+        self.assertEqual(json.loads(result), {"refused": "state_unsupported"})
         self.assertEqual(state["decision_channels"], 1)
         self.assertEqual(path.read_bytes(), before)
 
@@ -182,7 +185,7 @@ else:
     _check_carried_consent({"authorization": validate_authorization(json.loads(sys.argv[2]))}, journal, reasons)
     print(json.dumps({"misread": [row["code"] for row in reasons]}))
 ''', path, json.dumps(case.consent))
-            self.assertEqual(json.loads(result), {"refused": "invalid_governor"}, result)
+            self.assertEqual(json.loads(result), {"refused": "state_unsupported"}, result)
             reasons = []
             _check_carried_consent({"authorization": validate_authorization(case.consent)}, _read_journal(path), reasons)
             self.assertEqual([row["code"] for row in reasons], ["authorization_missing"])
@@ -229,7 +232,7 @@ else:
         record, chunks = compact(state, force=True, archive_retirement=True)
         self.assertTrue(chunks)
         path = self.root / "history-context.json"
-        publish_context(path, record, chunks)
+        publish_preceding(path, record, chunks)
         before = path.read_bytes()
         result = self.earlier('''import json, sys
 from pathlib import Path
@@ -294,7 +297,7 @@ print(json.dumps(outcomes))
         state["checkpoint"]["native_refs"].append({"runId": row["run_id"], "runtime": row["runtime"]})
         record, chunks = compact(state, force=True)
         path = self.root / "combined.json"
-        publish_context(path, record, chunks)
+        publish_preceding(path, record, chunks)
         restored = load_context(path)
         self.assertEqual(encoded(restored, compact=True), encoded(state, compact=True))
         self.assertEqual(context_decisions(restored) + map_decisions(restored["checkpoint"]),

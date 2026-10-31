@@ -93,8 +93,9 @@ class AssuranceCapacityTests(unittest.TestCase):
 
     @classmethod
     def files(cls):
-        return {path.relative_to(cls.case.root / "state"): path.read_bytes()
-                for path in (cls.case.root / "state").rglob("*") if path.is_file()}
+        from tests.common import authority_files
+        root = cls.case.root / "state"
+        return {path.relative_to(root): raw for path, raw in authority_files(root).items()}
 
     def restore(self, count):
         saved = self.snapshots[count]
@@ -148,45 +149,42 @@ class AssuranceCapacityTests(unittest.TestCase):
     def test_retained_63_plus_one_required_finding_preserves_every_prior_record(self):
         self.assert_added(63)
 
-    def test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action(self):
-        admission, packet = self.restore(64)
-        before = self.files()
-        with self.assertRaises(PodError) as caught:
-            self.report_required(admission, packet)
-        self.assertEqual(caught.exception.code, "obligation_invalid")
-        self.assertEqual(caught.exception.detail["detail"], "finding_limit")
-        self.assertEqual(caught.exception.detail["referent"]["limit"], 64)
-        action = caught.exception.detail["next_action"]
-        self.assertEqual(action["seq"], _read(self.path)["checkpoint"]["seq"] + 1)
-        self.assertEqual(action["renew"], [{"id": "A", "as": "<fresh-id>", "state": "waiting",
-                                            "wait": {"class": "sequenced", "referent": "O1"}}])
-        self.assertEqual(self.files(), before)
+    def test_retained_64_plus_one_preserves_resolved_history_and_new_finding(self):
+        self.assert_added(64)
 
-    def test_new_admission_reserves_the_full_finding_budget(self):
+    def test_unadopted_advisory_history_does_not_consume_new_review_capacity(self):
         # Consume the preceding pending result, so refusal is about the new
         # attempt's 32-record budget, not an older pending result.
         admission, packet = self.restore(63)
         self.case.report(admission, packet, outcome="failed", map={"seq": _read(self.path)["checkpoint"]["seq"] + 1,
             "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}})
         packet = self.case.packet(["A"], role="review")
-        before = self.files()
-        workers = deepcopy(self.case.port.workers)
+        admitted = self.case.start("next-review", packet)["admission"]
+        self.assertEqual(admitted["role"], "review")
+        self.assertEqual(len(next(row for row in self.case.stored() if row["id"] == "A")["findings"]), 63)
+
+    def test_unresolved_required_findings_still_reserve_the_next_report_in_full(self):
+        from pod.assurance import reserve_capacity
+        ob = {"id": "A", "findings": [{"triage": "required_correction"} for _ in range(33)]}
         with self.assertRaises(PodError) as caught:
-            self.case.start("must-renew-first", packet)
+            reserve_capacity(ob, {"admissions": {}}, seq=1)
         detail = caught.exception.detail
         self.assertEqual(detail["detail"], "finding_limit")
         self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
-                         {"retained": 63, "proposed": 95, "reserved": 32, "limit": 64})
-        action = detail["next_action"]
-        self.assertEqual(action, {"seq": _read(self.path)["checkpoint"]["seq"] + 1,
-            "renew": [{"id": "A", "as": "<fresh-id>", "state": "waiting",
-                       "wait": {"class": "sequenced", "referent": "O1"}}]})
-        self.assertEqual(self.files(), before)
-        self.assertEqual(self.case.port.workers, workers)
-        action["renew"][0]["as"] = "A2"
-        self.case.write(**action)
-        fresh = self.case.start("review-renewal", self.case.packet(["A2"], role="review"))
-        self.assertEqual(fresh["admission"]["serves"], ["A2"])
+                         {"retained": 33, "proposed": 65, "reserved": 32, "limit": 64})
+
+    def test_verifying_review_advisories_cross_64_open_proposals_without_scope_adoption(self):
+        admission, packet = self.restore(64)
+        before = _read(self.path)
+        findings = deepcopy(next(row for row in before["checkpoint"]["obligations"] if row["id"] == "A")["findings"])
+        self.case.report(admission, packet, map={"seq": before["checkpoint"]["seq"] + 1,
+            "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}},
+            triage=[self.advisory(i) for i in range(62, 66)])
+        after = _read(self.path)
+        self.assertGreater(len(after["checkpoint"]["proposals"]), 64)
+        self.assertTrue(all(row["status"] == "open" for row in after["checkpoint"]["proposals"]))
+        self.assertEqual(next(row for row in after["checkpoint"]["obligations"] if row["id"] == "A")["findings"][:-4], findings)
+        self.assertEqual(len(after["checkpoint"]["obligations"]), len(before["checkpoint"]["obligations"]))
 
     def test_report_33_refuses_even_with_32_history_slots_remaining(self):
         admission, packet = self.restore(32)
@@ -197,7 +195,7 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["detail"], "malformed")
         self.assertEqual(self.files(), before)
         self.assertEqual((MAX_FINDINGS, MAX_REPORT_FINDINGS), (64, 32))
-        self.assertEqual(bound("obligation", "findings", "max_items"), 64)
+        self.assertEqual(bound("obligation", "findings", "max_live"), 64)
         self.assertEqual(bound("report request", "triage", "max_items"), 32)
 
     def test_exact_replay_of_32_old_findings_spends_no_new_slots(self):

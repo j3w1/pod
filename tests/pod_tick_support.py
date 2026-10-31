@@ -59,8 +59,8 @@ class TickCase(ProductionCase):
 
     def saved(self):
         root = objective_root(self.project, "objective")
-        return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*")
-                if path.is_file() and path.name != ".lock"}
+        from tests.common import authority_files
+        return {str(path.relative_to(root)): raw for path, raw in authority_files(root).items()}
 
     def prove(self, *, close=False, **fields):
         rows = self.stored()

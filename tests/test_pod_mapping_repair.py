@@ -80,7 +80,8 @@ class RepairCase(TickCase):
     def synthetic_admission_damage(self, transform):
         """Adversarial stored-record control, never positive provenance evidence."""
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_text())
+        from tests.common import logical_json
+        state = logical_json(path)
         transform(state)
         path.write_text(json.dumps(state))
 

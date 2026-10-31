@@ -154,7 +154,8 @@ class VerifiedDeliveryTests(KernelCase):
         self.prepare_result()
         journal_path = _record_path(self.project, "objective")
         from pod.governor import _read_journal
-        admitted = _read_journal(journal_path)
+        from pod.history_tree import plain
+        admitted = plain(_read_journal(journal_path))
         git(self.project, "update-ref", "refs/remotes/origin/other",
             git(self.project, "rev-parse", "refs/remotes/origin/target"))
         other = {"remote": "origin", "base": "other", "ref": "refs/remotes/origin/other"}
@@ -171,6 +172,7 @@ class VerifiedDeliveryTests(KernelCase):
             self.assertEqual(caught.exception.detail["detail"], "target_identity")
             self.assertEqual(read(self.project, "objective"), before)
         admitted["units"]["delivery"]["branch"]["base"] = "other"
+        admitted["revision"] = _read_journal(journal_path)["revision"]
         _write_journal(journal_path, admitted)
         self.assertEqual(self.write(self.stored(), delivery={"record": "merge-1"})["checkpoint"]["delivery"]
                          ["target_ref"], "refs/remotes/origin/target")

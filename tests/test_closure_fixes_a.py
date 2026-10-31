@@ -1,3 +1,4 @@
+from tests.common import logical_json
 """Closure audit regressions through production paths and isolated native/provider ports."""
 
 from copy import deepcopy
@@ -30,7 +31,7 @@ class SourceIntentTests(TickCase):
 
     def copy_closed(self, name):
         root = objective_root(self.project, "objective")
-        raw = json.loads((root / "context.json").read_text())
+        raw = logical_json(root / "context.json")
         raw["checkpoint"]["objective"] = name
         other = objective_root(self.project, name)
         other.mkdir(parents=True)
@@ -91,7 +92,7 @@ class SourceIntentTests(TickCase):
     def test_older_ordinary_closure_observes_completed_source_without_conversion(self):
         self.ready(); self.write(close=True)
         path = objective_root(self.project, "objective") / "context.json"
-        raw = json.loads(path.read_text()); raw["schema"] = _older(STATE_SCHEMAS["context"])
+        raw = logical_json(path); raw["schema"] = _older(STATE_SCHEMAS["context"])
         path.write_text(json.dumps(raw))
         before = self.saved()
         result = sweep(self.project)
@@ -105,7 +106,7 @@ class SourceIntentTests(TickCase):
     def test_older_ordinary_closure_cannot_authorize_a_new_source_write(self):
         self.ready(); self.issue.close_result = "refused"; self.write(close=True)
         path = objective_root(self.project, "objective") / "context.json"
-        raw = json.loads(path.read_text()); raw["schema"] = _older(STATE_SCHEMAS["context"])
+        raw = logical_json(path); raw["schema"] = _older(STATE_SCHEMAS["context"])
         path.write_text(json.dumps(raw))
         self.issue.close_result = "accepted"
         before = self.saved()
@@ -207,7 +208,7 @@ class ClaimedSourceTests(ClosureCase):
         def concurrent(**arguments):
             result = original(**arguments)
             path = objective_root(self.project, "successor") / "context.json"
-            raw = json.loads(path.read_text()); raw["checkpoint"]["closure"] = None
+            raw = logical_json(path); raw["checkpoint"]["closure"] = None
             path.write_text(json.dumps(raw))
             return result
         with patch.object(self.remote, "issue", side_effect=concurrent):

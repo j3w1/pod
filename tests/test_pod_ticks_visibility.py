@@ -1,4 +1,5 @@
 """R11 and compatibility: ledger-derived acknowledgements and fetch-free status."""
+from tests.common import logical_json
 
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -116,7 +117,7 @@ class VisibilityTests(TickCase):
         with patch("pod.pod_ticks.require_closing"):
             self.prove(close=True)
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_text()); state.pop("pod_ticks")
+        state = logical_json(path); state.pop("pod_ticks")
         path.write_text(json.dumps(state)); before = self.saved()
         state = read(self.project, "objective")
         self.assertEqual(validate_closed_snapshot(map_of(state), kernel_context(self.project, "objective", state, None)), ())
@@ -128,7 +129,7 @@ class VisibilityTests(TickCase):
         # Synthetic old-writer control, without inserting the capability under
         # test: remove only the optional field absent from preceding versions.
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_text()); state.pop("pod_ticks")
+        state = logical_json(path); state.pop("pod_ticks")
         path.write_text(json.dumps(state))
         before = self.saved()
         self.failure("pod_ticks_due", self.write, close=True)

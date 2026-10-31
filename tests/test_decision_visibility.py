@@ -1,4 +1,5 @@
 """Synthetic visibility facts and public status boundaries; no native mutation proof."""
+from tests.common import logical_json
 
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -239,7 +240,7 @@ class DecisionPublicStatusTests(KernelCase):
         from tests.test_route_rules import rule
         self.intake()
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_bytes())
+        state = logical_json(path)
         state["constraints"] = [{**rule(), "instruction": "private original rule request"}]
         path.write_text(json.dumps(state))
         before = path.read_bytes()

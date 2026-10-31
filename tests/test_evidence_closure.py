@@ -1,3 +1,4 @@
+from tests.common import logical_json
 """R144-R148: delivered objectives always close, by evidence when the coordinator is gone; no owner decision."""
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -120,7 +121,7 @@ class ClosureCase(RetirementCase):
 
     def closure(self, objective="objective"):
         path = objective_root(self.project, objective) / FILE
-        return json.loads(path.read_text()) if path.exists() else None
+        return logical_json(path) if path.exists() else None
 
     def sweep(self, *args, project=None, text=False):
         out = StringIO()
@@ -165,7 +166,7 @@ class ClosureCase(RetirementCase):
     def rewrite(self, objective="objective", **fields):
         """Edit a stored record's raw JSON, as another Pod version or a damaged write would have left it."""
         path = objective_root(self.project, objective) / "context.json"
-        raw = json.loads(path.read_text())
+        raw = logical_json(path)
         for key, value in fields.items():
             if callable(value):
                 value(raw)
@@ -268,7 +269,7 @@ class ClosureCase(RetirementCase):
     def finished(self, count):
         """Synthetic record-only controls: `count` objectives an earlier coordinator closed, each sorting before the
         delivered objective, so the presentation list's first rows are all of them. They add no work."""
-        seed = json.loads((objective_root(self.project, "objective") / "context.json").read_text())
+        seed = logical_json(objective_root(self.project, "objective") / "context.json")
         for index in range(count):
             raw = deepcopy(seed)
             raw["admissions"] = {}
@@ -330,9 +331,9 @@ class ClosureCase(RetirementCase):
         return error
 
     def everything(self):
+        from tests.common import authority_files
         root = self.root / "state"
-        return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*")
-                if path.is_file() and path.name != ".lock"}
+        return {str(path.relative_to(root)): raw for path, raw in authority_files(root).items()}
 
 
 class DeliveryClosesTests(unittest.TestCase):
@@ -720,6 +721,14 @@ class UndeliveredTests(ClosureCase):
 
 
 class PreservedResultsTests(ClosureCase):
+    def test_revision_journal_preserves_recorded_delivery_prs_for_closure(self):
+        from pod.evidence_closure import _journal_prs
+        self.shipped(unknown_start=False)
+        root = objective_root(self.project, "objective")
+        self.assertEqual(json.loads((root / "governor.json").read_bytes())["schema"], "pod-history-record/v1")
+        self.assertEqual(_journal_prs(root), [7])
+        self.assertEqual(prove(self.project, "objective")["status"], "proved")
+
     """R145: pending results are read back where the provider answers; the rest stay UNKNOWN, never stamped."""
 
     def test_pending_rows_are_read_back_and_the_rest_preserved_without_writing(self):
@@ -831,8 +840,8 @@ class ChainTests(ClosureCase):
     def test_an_all_direct_chain_requires_its_predecessors_criteria_and_delivery(self):
         self.direct_chain()
         path = objective_root(self.project, "objective") / "context.json"
-        original = path.read_bytes()
-        # Synthetic missing evidence controls, restored byte-for-byte; no frozen history is repaired by Pod.
+        original = json.dumps(logical_json(path)).encode()
+        # Synthetic missing evidence controls restore a complete logical fixture; GC may reclaim prior pages.
         for field in ("criteria", "delivery"):
             with self.subTest(field=field):
                 def damage(raw):
@@ -848,7 +857,7 @@ class ChainTests(ClosureCase):
     def test_an_all_direct_chain_requires_satisfied_successor_criteria_and_merged_prs(self):
         self.direct_chain()
         path = objective_root(self.project, "successor") / "context.json"
-        original = path.read_bytes()
+        original = json.dumps(logical_json(path)).encode()
         self.rewrite("successor", damage=lambda raw: raw["checkpoint"]["obligations"][0].update(
             state="active", executor="coordinator"))
         self.direct_chain_refuses("source_unproved")
