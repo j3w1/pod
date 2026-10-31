@@ -28,13 +28,10 @@ main() {
     if [ "$(uname -s)" != Linux ]; then pod_fail 'Linux is required' 1; return $?; fi
     if [ "$(id -u)" -eq 0 ]; then pod_fail 'refuse root; run as your user' 1; return $?; fi
     pod_python=
-    for candidate in python3 python3.14 python3.13; do
-        if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; assert sys.version_info >= (3, 13); import ensurepip, curses' </dev/null >/dev/null 2>&1; then
-            pod_python=$(command -v "$candidate")
-            break
-        fi
-    done
-    if [ -z "$pod_python" ]; then pod_fail 'Python 3.13+ with venv, ensurepip and curses is required' 1; return $?; fi
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info.releaselevel == "final"; import ensurepip, curses' </dev/null >/dev/null 2>&1; then
+        pod_python=$(command -v python3)
+    fi
+    if [ -z "$pod_python" ]; then pod_fail 'A stable python3 (the latest CPython, not a prerelease) with venv, ensurepip and curses is required' 1; return $?; fi
     if ! command -v npx >/dev/null 2>&1; then pod_fail 'Node and npx are required' 1; return $?; fi
     pod_source=${POD_INSTALL_SOURCE:-https://codeload.github.com/j3w1/pod/tar.gz/refs/heads/main}
     case "$pod_source" in https://*|file://*|http://127.0.0.1:*|http://localhost:*) ;; *) pod_fail 'POD_INSTALL_SOURCE must be HTTPS, file, or local loopback HTTP' 2; return $?;; esac

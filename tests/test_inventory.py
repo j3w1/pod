@@ -517,9 +517,10 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         # `linux` is the status check the main branch ruleset requires. It always reports and
         # passes only when every lane share and every check passed, so it is never skipped.
         jobs = workflow["jobs"]
-        self.assertEqual(list(jobs), ["tests", "checks", "linux"])
+        self.assertEqual(list(jobs), ["python", "tests", "checks", "linux"])
         linux = jobs["linux"]
-        self.assertEqual((linux["name"], linux["if"], set(linux["needs"])), ("linux", "always()", {"tests", "checks"}))
+        self.assertEqual((linux["name"], linux["if"], set(linux["needs"])),
+                         ("linux", "always()", {"python", "tests", "checks"}))
         self.assertIn("all(.[]; .result == \"success\")", "\n".join(step.get("run", "") for step in linux["steps"]))
         # The matrix runs exactly the lane shares the manifest plans, with CI's strict flags.
         strategy = jobs["tests"]["strategy"]

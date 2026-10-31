@@ -4,7 +4,7 @@ Pod helps a Codex or Claude Code conversation coordinate a software objective. I
 
 ## Install
 
-On Linux, with Python 3.13+ (including `venv`), Node/npx, curl or wget, and access to GitHub and PyPI:
+On Linux, with the latest stable Python (including `venv`), Node/npx, curl or wget, and access to GitHub and PyPI:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh

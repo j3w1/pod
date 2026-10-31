@@ -325,7 +325,7 @@ def _admissions(state: dict, *, runtime: str, port,
 
     Read failures are discovery metadata only: execution may still record that admission UNKNOWN.
     """
-    from .ledger import _native_assignment_settled
+    from .ledger import _native_assignment_claim_free as _native_assignment_settled
     from .orca import worker_rows
     rows, differs, read_failures = [], [], []
     fleets: dict[str, object] = {}

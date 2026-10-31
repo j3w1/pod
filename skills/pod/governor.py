@@ -531,6 +531,19 @@ def _exception_grant(governor_policy: dict, supplied: dict | None, *, action: di
 
 # --------------------------------------------------------------------------- scoping
 
+def _settled_abandoned(admissions: dict, native_projection: dict | None) -> set[str]:
+    """Accounted abandoned attempts the exact native read no longer holds outstanding.
+
+    Without that read nothing is known to be released, so nothing is history.
+    """
+    rows = native_projection.get("outstanding") if isinstance(native_projection, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    held = {row.get("admission_id") for row in rows if isinstance(row, dict)}
+    return {key for key, row in admissions.items()
+            if isinstance(row, dict) and "abandoned_accounting" in row and key not in held}
+
+
 def _unit_tasks(unit: dict | None) -> list[str] | None:
     return None if unit is None else list(unit.get("tasks", []))
 
@@ -548,11 +561,12 @@ def _active(native_projection: dict | None, tasks: list[str] | None = None, *,
         if not isinstance(row, dict):
             raise PodError("native_assignment_unverified", "Governor logical projection is malformed")
         task = row.get("task")
-        if tasks is not None and task is not None and task not in tasks:
+        # A held claim of an abandoned attempt that may still run is material to every unit.
+        if tasks is not None and task is not None and task not in tasks and "hold" not in row:
             continue
         # Only a review admitted on this exact commit id overlaps validation. A ref name is not resolved
         # here: it may have moved since admission, and an older review must not count for a newer candidate.
-        if (ignore_review_commit is not None and row.get("role") == "review"
+        if (ignore_review_commit is not None and row.get("role") == "review" and "hold" not in row
                 and isinstance(row.get("candidate"), str) and gitio.OBJECT_ID.fullmatch(row["candidate"])
                 and row["candidate"] == ignore_review_commit):
             continue
@@ -1168,10 +1182,16 @@ def _evaluate(action: dict, state: dict, journal: dict, governor_policy: dict, *
         _reason(reasons, "correctness", "unit_unbound",
                 "managed execution needs the unit's prepared candidate and its remote, branch and base")
     checkpoint = _checkpoint(state)
-    mismatch, unknown = route_summary(list(state.get("admissions", {}).values()),
-                                      unknown_states=("bound", "closed"))
+    admissions = state.get("admissions", {})
+    history = _settled_abandoned(admissions, native_projection)
+    if history:
+        _warn(warnings, "abandoned_attempt_history",
+              "settled non-success attempt(s) with no live claim are history, not readiness: "
+              + ", ".join(sorted(history)[:8]))
+    live = [row for key, row in admissions.items() if key not in history]
+    mismatch, unknown = route_summary(live, unknown_states=("bound", "closed"))
     if mismatch:
-        for row in state.get("admissions", {}).values():
+        for row in live:
             if route_hold(row):
                 _reason(reasons, "correctness", "route_mismatch",
                         f"Admission {row['admission_id']} has unsettled route evidence. " + route_next_action(row))
@@ -2471,6 +2491,7 @@ def finalization(state: dict | None, journal: dict) -> dict:
     context = state if isinstance(state, dict) else {}
     map_state = map_of(context)
     records: dict[str, list[dict]] = {name: [] for name in FINALIZATION_RECORDS}
+    history: list[str] = []
     closed = bool(map_state is not None and map_state.get("closure"))
     if not closed:
         for row in journal.get("actions", []):
@@ -2488,6 +2509,11 @@ def finalization(state: dict | None, journal: dict) -> dict:
             if not isinstance(admission, dict) or admission.get("state") in ("closed", "deferred"):
                 continue
             role = str(admission.get("role"))
+            if "abandoned_accounting" in admission:
+                # Non-success without output: nothing to consume. Whether a live claim remains is the
+                # native read's (outstanding assignments), so it is history here and never a record owed.
+                history.append(key)
+                continue
             # An implementation result settles by its disposition, which needs no report; other roles by
             # their consumed report.
             if role == "implement" and admission.get("disposition") is not None:
@@ -2510,7 +2536,7 @@ def finalization(state: dict | None, journal: dict) -> dict:
                        "to close.")
     return {"schema": "pod-finalization/v1", "remaining": remaining,
             "records": {name: records[name] for name in remaining}, "finished": not remaining,
-            "next_action": next_action}
+            "history": history, "next_action": next_action}
 
 
 def objective_finalization(project: Path, objective: str) -> dict | None:
