@@ -10,6 +10,8 @@ import textwrap
 import unittest
 from unittest.mock import patch
 
+from tests import isolation
+
 ORCA_VERSION = "1.4.209"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / f"orca-{ORCA_VERSION}"
 HOST_HOME = Path.home().resolve()
@@ -111,6 +113,8 @@ def fixture(*, caller: str | None = "owner"):
             os.environ.pop("POD_CONFIG_HOME", None)
             os.environ.pop("POD_STATE_HOME", None)
             os.environ.pop("POD_CACHE_HOME", None)
+            isolation.scrub_git_environment(os.environ, ceiling=base)
+            isolation.assert_disposable(base, os.environ)
             yield path
 
 

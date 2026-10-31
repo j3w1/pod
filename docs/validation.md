@@ -18,7 +18,7 @@ records an assignment outcome, not acceptance of the objective.
 | Terminal behavior | Required PTY suite, frame/size checks and affected visual snapshots. |
 | Installation or bundle inventory | Installer and copied-bundle tests in scrubbed disposable homes, including `tests.test_bundle_install`. |
 | Admission, assurance or closure governance | The preceding installed mechanism's independent final audit, with affected policy and production-boundary evidence. Candidate self-hosting evidence is separate. |
-| Admission, authority, persistence, recovery or test-isolation correction | Focused affected tests and boundary regressions locally, then the full suite once in hosted CI on the latest stable CPython (the `tests` matrix of `ci.yml`, every lane share once, `--strict --forbid-skips`). No local full suite and no second interpreter is required; a source change after a hosted result needs a fresh result on the new head. |
+| Admission, authority, persistence, recovery or test-isolation correction | Focused affected tests and boundary regressions locally, then the full suite once in hosted CI on the latest stable CPython (the `tests` matrix of `ci.yml`, every lane share once, `--strict --forbid-skips`). Local focused checks may run on the host's own Python (the owner accepts the host's current interpreter for them); hosted CI's one resolved latest stable CPython is the single qualification, and no local full suite or second interpreter is required; a source change after a hosted result needs a fresh result on the new head. |
 | Milestone | A change whose risk warrants the full gates (a release candidate, or a change the classes above name as wide or governance-affecting): all local gates below, except that the full-suite result of a change in the class above comes from hosted CI rather than a local run; then separate hosted, review, live and acceptance evidence as required. A root `VERSION` number alone never makes a milestone and never defeats risk-based verification; a version-only change keeps proof whose scope it does not touch. |
 
 Use cheap discriminating checks early and focused checks during development.
@@ -32,7 +32,7 @@ fabricate compatibility to make a result pass.
 
 | Check | Command or evidence | What it proves |
 | --- | --- | --- |
-| Unit and incident suite | `PYTHONPATH=skills python tools/suite_lanes.py run` | Current behavior in disposable fixtures; every discovered test once, in its lane. `python -m unittest discover -s tests -v` is the equivalent serial run. |
+| Unit and incident suite | `PYTHONPATH=skills python tools/isolate.py -- python tools/suite_lanes.py run` | Current behavior in disposable fixtures; every discovered test once, in its lane, with the home directory, credentials and other checkouts absent before discovery. `python -m unittest discover -s tests -v` is the equivalent serial run. |
 | Suite lanes | `PYTHONPATH=skills python tools/suite_lanes.py check` | Each test has one lane, tests the timing heuristic flags are classified, recorded entries name real tests, incident modules yield tests and every lane fits its target. |
 | Explicit incidents | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident cases are discovered. |
 | Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check $(git hash-object -t tree /dev/null) HEAD` | Syntax and whole-candidate whitespace. |
@@ -163,7 +163,12 @@ templates serving authoring and revision; contributor checks live here.
 ## Containment and live boundary
 
 Run broad gates with fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` and
-`POD_CACHE_HOME` in disposable task storage. Test fixtures clear these locally and
+`POD_CACHE_HOME` in disposable task storage. Every test process starts with disposable homes,
+a scrubbed Git environment and no credential-looking variables (`tests/boundary.py`), which
+stops an inherited `GIT_DIR` from sending a fixture to a real repository. Where a local run must
+not reach the home directory, credentials or other checkouts, wrap the whole command with
+`python tools/isolate.py -- COMMAND` (bubblewrap, read-only checkout, environment allowlist, also
+for bubblewrap itself); hosted CI launches its test lanes that way. Test fixtures clear these locally and
 restore them. Installer trials use a scrubbed fresh temporary HOME with every
 base-directory variable contained or unset: XDG config/data/state/cache homes,
 CODEX_HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and Pod overrides. PATH excludes real launchers.
