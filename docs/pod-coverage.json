@@ -9205,6 +9205,10 @@
         "tests.test_suite_lanes.RefreshTests.test_a_refresh_run_must_have_one_interpreter_and_earlier_unnamed_logs_still_refresh",
         "tests.test_installer.InstallerTests.test_preflight_refusals_half_pipe_and_no_profile_mutation",
         "tests.test_bundle_install.CopiedBundleTests.test_prerelease_interpreter_fails_before_package_or_yaml_import",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_a_prebuilt_wheel_keeps_the_wheel_only_path_unchanged",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_without_a_wheel_it_builds_exactly_the_hash_pinned_archive",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_a_wrong_hash_or_a_failed_build_refuses_with_a_clear_message",
+        "tests.test_installer_pin.PinnedPyYamlTests.test_a_network_failure_or_another_pin_never_tries_a_source_build",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_ci_validates_the_skill_and_publishes_nothing"
       ],
       "status": "NOT_RUN"

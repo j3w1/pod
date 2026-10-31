@@ -21,6 +21,10 @@ import tempfile
 import urllib.request
 
 PIN = "PyYAML==6.0.3"
+# PyYAML installs from a prebuilt wheel. Only when pip finds no compatible wheel for the running
+# interpreter, and only for this exact pin, it builds PyPI's source archive pyyaml-6.0.3.tar.gz,
+# accepted solely by this hash; pip's build tools then come from PyPI.
+PIN_SOURCE_SHA256 = {"PyYAML==6.0.3": "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f"}
 SKILLS_CLI = "skills@1.7.0"
 SOURCE = "https://codeload.github.com/j3w1/pod/tar.gz/refs/heads/main"
 REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
@@ -559,6 +563,30 @@ def _venv_ready(path: Path) -> bool:
         return False
 
 
+def _pip(python: Path, *arguments: str, timeout: int) -> subprocess.CompletedProcess:
+    return subprocess.run([str(python), "-m", "pip", "install", "--no-input", "--disable-pip-version-check",
+                           *arguments], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+
+
+def _install_pin(python: Path) -> None:
+    result = _pip(python, "--only-binary=:all:", PIN, timeout=180)
+    if not result.returncode:
+        return
+    digest = PIN_SOURCE_SHA256.get(PIN)
+    if digest is None or "No matching distribution found" not in result.stderr:
+        raise InstallError(1, "PyYAML installation failed; check network or wheel source")
+    with tempfile.TemporaryDirectory(prefix="pin-source-") as scratch:
+        requirements = Path(scratch) / "requirements.txt"
+        requirements.write_text(f"{PIN} --hash=sha256:{digest}\n")
+        result = _pip(python, "--require-hashes", "--no-binary", PIN.split("==", 1)[0], "-r", str(requirements),
+                      timeout=600)
+    if result.returncode:
+        reason = ("the source archive did not match its pinned hash" if "DO NOT MATCH THE HASHES" in result.stderr
+                  else "the source build failed")
+        raise InstallError(1, f"PyYAML has no prebuilt wheel for this Python and {reason}; "
+                              "check network or wait for a wheel")
+
+
 def _venv(paths: dict[str, Path]) -> Path:
     path = _venv_path(paths)
     if _venv_ready(path):
@@ -572,11 +600,7 @@ def _venv(paths: dict[str, Path]) -> Path:
                                 capture_output=True, text=True, timeout=120)
         if result.returncode:
             raise InstallError(1, "Python venv creation failed: " + result.stderr.strip()[:300])
-        result = subprocess.run([str(building / "bin/python"), "-m", "pip", "install", "--no-input",
-                                 "--disable-pip-version-check", "--only-binary=:all:", PIN],
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180)
-        if result.returncode:
-            raise InstallError(1, "PyYAML installation failed; check network or wheel source")
+        _install_pin(building / "bin/python")
         _atomic(building / ".pod-venv", json.dumps({"pin": PIN, "python": str(_base_python())}).encode())
         if not _venv_ready(building):
             raise InstallError(1, "Pinned PyYAML could not be validated")

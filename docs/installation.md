@@ -6,6 +6,7 @@ Pod's one-shot installer downloads the current `main` source, validates the `ski
 
 - Linux and a non-root user.
 - The latest stable CPython as `python3` on PATH, with `venv`, `ensurepip`, and curses. The installer uses that `python3` and refuses a prerelease or a missing module; it never falls back to another interpreter. On Debian-derived systems the matching `venv` package may be needed. Provision the interpreter through the host's approved runtime provisioning, not through the installer.
+- PyYAML is installed from a prebuilt wheel. Only when pip finds no wheel for the running interpreter (a new CPython often precedes its wheels), and only for the exact pinned `PyYAML==6.0.3`, the installer builds PyPI's source archive `pyyaml-6.0.3.tar.gz`, accepted solely by its pinned SHA-256; a hash mismatch or a failed build refuses. That build downloads its build tools from PyPI.
 - Node and `npx`, plus curl or wget.
 - Network access to `raw.githubusercontent.com` for the bootstrap script, `codeload.github.com` for source, PyPI for the pinned PyYAML wheel, and npm for `skills@1.7.0`.
 - Orca and an authenticated Codex or Claude Code session for live delegation. Installation itself does not require them to be running.
