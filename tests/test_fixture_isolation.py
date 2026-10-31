@@ -71,12 +71,26 @@ class ScrubTests(unittest.TestCase):
     def test_this_process_started_inside_the_private_root_with_no_credentials(self):
         root = boundary.PRIVATE_ROOT
         self.assertIsNotNone(root)
+        # Other tests may unset the Pod homes for good, so those are proven in a fresh interpreter.
         for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CODEX_HOME",
-                    "CLAUDE_CONFIG_DIR", "POD_STATE_HOME", "POD_CONFIG_HOME", "POD_CACHE_HOME", "TMPDIR"):
+                    "CLAUDE_CONFIG_DIR", "TMPDIR"):
             self.assertTrue(Path(os.environ[key]).resolve().is_relative_to(root), key)
         self.assertEqual(Path(tempfile.gettempdir()).resolve(), (root / "tmp").resolve())
-        self.assertEqual(os.environ["GIT_CONFIG_GLOBAL"], os.devnull)
-        self.assertFalse({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} & set(os.environ))
+        result = child("""
+            import json, os
+            import tests
+            from tests import boundary
+            keys = ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CODEX_HOME",
+                    "CLAUDE_CONFIG_DIR", "POD_STATE_HOME", "POD_CONFIG_HOME", "POD_CACHE_HOME", "TMPDIR")
+            print(json.dumps({"root": str(boundary.PRIVATE_ROOT),
+                              "inside": {key: os.path.realpath(os.environ[key]).startswith(str(boundary.PRIVATE_ROOT.resolve()))
+                                         for key in keys},
+                              "git": [os.environ["GIT_CONFIG_GLOBAL"], os.environ.get("GIT_DIR")]}))
+        """, {}, nested=False, env={"GIT_DIR": "/host/.git"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        seen = json.loads(result.stdout)
+        self.assertEqual(set(seen["inside"].values()), {True}, seen)
+        self.assertEqual(seen["git"], [os.devnull, None])
 
     def test_a_child_cannot_have_credentials_or_git_redirection_reintroduced_by_its_env(self):
         result = child("""
