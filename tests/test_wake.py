@@ -270,8 +270,8 @@ class WakeStatusTests(KernelCase):
 
     def test_legacy_and_contradictory_questions_count_and_stay_unknown(self):
         self.intake(questions=[{"id": "older", "text": "Decide", "choices": []}])
-        legacy = self.wake()
-        self.assertEqual((legacy["state"], legacy["owned"]["awaited_replies"], legacy["owned"]["unknown_replies"]),
+        older = self.wake()
+        self.assertEqual((older["state"], older["owned"]["awaited_replies"], older["owned"]["unknown_replies"]),
                          ("quiet_with_owned_work", 1, 1))
 
     def test_a_settled_worker_whose_report_is_unconsumed_is_owned_until_consumed(self):
