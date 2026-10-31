@@ -3,19 +3,16 @@
 import os
 
 
-def _without_background_git_maintenance() -> None:
-    """Disposable test repositories never need automatic maintenance.
+def _isolate_git_and_snapshot_host() -> None:
+    """Keep every Git command in the suite inside its fixture, and record the host state to guard.
 
-    Git detaches that maintenance into a background process after a commit. Under a process
-    manager that does not reap orphans, each one stays behind as a zombie, so a suite run would
-    leave thousands of them on the host.
+    The snapshot is taken first, from the environment the suite was started in. See tests/isolation.py
+    for the cause of #141 and for why maintenance is turned off (Git detaches it after a commit and,
+    under a process manager that does not reap orphans, each one stays behind as a zombie).
     """
-    count = int(os.environ.get("GIT_CONFIG_COUNT", "0") or 0)
-    if any(os.environ.get(f"GIT_CONFIG_KEY_{index}") == "maintenance.auto" for index in range(count)):
-        return
-    os.environ[f"GIT_CONFIG_KEY_{count}"] = "maintenance.auto"
-    os.environ[f"GIT_CONFIG_VALUE_{count}"] = "false"
-    os.environ["GIT_CONFIG_COUNT"] = str(count + 1)
+    from tests import isolation
+    isolation.snapshot_host()
+    isolation.scrub_git_environment(os.environ)
 
 
-_without_background_git_maintenance()
+_isolate_git_and_snapshot_host()
