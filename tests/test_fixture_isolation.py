@@ -220,6 +220,24 @@ class IsolateTests(unittest.TestCase):
             for path in (checkout, gitdir.resolve(), common.resolve(), extra):
                 self.assertTrue(self.bound(argv, path), path)
 
+    def test_the_self_check_setup_git_ignores_an_inherited_git_environment(self):
+        with fixture() as root:
+            external = repository(root / "external")
+            before = state(external)
+            hostile = {"GIT_DIR": str(external / ".git"), "GIT_WORK_TREE": str(external),
+                       "GIT_INDEX_FILE": str(external / ".git/index")}
+            with patch.dict(os.environ, hostile):
+                setup = root / "setup"
+                setup.mkdir()
+                isolate.git(setup, "init", "-q", "-b", "main")
+                isolate.git(setup, "config", "user.name", "Real")
+                isolate.git(setup, "config", "user.email", "real@example.invalid")
+                (setup / "tracked").write_text("real\n")
+                isolate.git(setup, "add", ".")
+                isolate.git(setup, "commit", "-qm", "real")
+            self.assertEqual(state(external), before)
+            self.assertEqual(isolate.git(setup, "log", "--format=%an", "-1"), "Real")
+
     def test_bubblewrap_itself_starts_with_the_allowlisted_environment(self):
         caller = {"PATH": "/usr/bin", "GH_TOKEN": "t", "ORCA_HOOK": "h", "POD_CANARY_TOKEN": "c", "LC_ALL": "C"}
         with patch.object(isolate.shutil, "which", return_value="/usr/bin/bwrap"), \

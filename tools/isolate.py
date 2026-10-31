@@ -89,6 +89,16 @@ def arguments(command: list[str], *, checkout: Path = ROOT, readable: tuple[str,
     return argv + ["--", *command]
 
 
+def git(where: Path, *argv: str) -> str:
+    """Git for the self-check's setup, outside bubblewrap: the allowlisted environment carries no
+    inherited GIT_* variable (an inherited GIT_DIR sends any command to that repository), and config is
+    pinned to nothing, as for the fixtures (tests/isolation.py)."""
+    env = {**environment(dict(os.environ)), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_TERMINAL_PROMPT": "0", "GIT_CEILING_DIRECTORIES": str(where.parent)}
+    return subprocess.run(["git", "-C", str(where), *argv], capture_output=True, text=True, check=True,
+                          env=env).stdout.strip()
+
+
 def launch(command: list[str], *, capture: bool = False, env: dict[str, str] | None = None, **options):
     """Start the command under bubblewrap, itself started with only the allowlisted environment."""
     env = dict(os.environ if env is None else env)
@@ -137,9 +147,6 @@ PROBE = textwrap.dedent('''
 
 def self_check() -> int:
     """Prove the wrapper against stand-ins: nothing real is read or written."""
-    def git(where, *argv):
-        return subprocess.run(["git", "-C", str(where), *argv], capture_output=True, text=True, check=True).stdout.strip()
-
     def snapshot(where):
         return [git(where, "rev-parse", "HEAD"), git(where, "for-each-ref"), (where / ".git/config").read_text()]
 
