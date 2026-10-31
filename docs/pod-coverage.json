@@ -9268,6 +9268,33 @@
         "tests.test_proportional_review.ReviewProgressTests.test_repeated_review_without_progress_flags_a_diagnostic_and_blocks_nothing"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A609",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_verification_gaps.VerificationGapsTests.test_a_sentence_is_refused_precisely_and_never_counted_per_character",
+        "tests.test_verification_gaps.VerificationGapsTests.test_other_wrong_types_and_items_are_refused",
+        "tests.test_verification_gaps.VerificationGapsTests.test_genuine_gaps_and_the_empty_list_are_accepted_and_kept_as_given",
+        "tests.test_verification_gaps.VerificationGapsTests.test_a_stored_legacy_sentence_is_one_unresolved_requirement_not_hundreds"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A610",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_inventory.InventoryIntegrityTests.test_scenario_ids_are_unique_and_withdrawn_ids_are_never_reused_but_gaps_are_allowed",
+        "tests.test_inventory.InventoryIntegrityTests.test_spec_and_coverage_ids_are_complete",
+        "tests.test_inventory.InventoryIntegrityTests.test_requirement_scenario_references_resolve"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
