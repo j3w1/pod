@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import ExitStack
@@ -465,3 +466,43 @@ def acceptance(criteria: list[str], evidence_rows: list[dict], *, candidate: str
             "merged": bool(observed and observed.get("ancestor_of_base") is True),
             "released": bool(observed and observed.get("tags")),
             "criteria": checks, "project_assessment_required": granted is None}
+
+
+def storage(project, objective, *, action="inspect", record="context", revision=None, sha256=None):
+    """Read-only inspection/audit or explicit lossless storage-format migration."""
+    import hashlib
+    import json
+    from .ledger import _path
+    from .history import _context_bytes, MAINTENANCE_LIMIT, migrate_context, audit_context, ChunkStore
+    from .history_tree import SCHEMA
+    bounded_text(objective, name="objective")
+    if record not in ("context", "governor"):
+        raise PodError("storage_record_invalid", "Storage record must be context or governor")
+    path = _path(project, objective).with_name("context.json" if record == "context" else "governor.json")
+    if action == "migrate":
+        if type(revision) is not int or revision < 0 or not _sha256(sha256):
+            raise PodError("storage_migration_invalid", "Migration requires the inspected revision and SHA256")
+        return migrate_context(path, revision=revision, sha256=sha256, project=project, kind=record)
+    if revision is not None or sha256 is not None:
+        raise PodError("storage_migration_invalid", "Source facts apply only to migration")
+    if action == "gc":
+        store = ChunkStore(path.parent)
+        store.request_collection()
+        return store.collect()
+    if action == "audit":
+        result = audit_context(path, kind=record)
+        # The audit verifies all dependencies; do not print private evidence.
+        return {key: result[key] for key in ("physical_bytes", "logical_bytes", "complete")}
+    if action != "inspect":
+        raise PodError("storage_action_invalid", "Storage action must be inspect, migrate, audit or gc")
+    raw = _context_bytes(path, MAINTENANCE_LIMIT)
+    try:
+        physical = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise PodError("invalid_record", "Cannot decode context for migration inspection") from exc
+    if not isinstance(physical, dict) or type(physical.get("revision")) is not int:
+        raise PodError("history_invalid", "Context has no migration revision")
+    return {"format": physical.get("schema"), "physical_bytes": len(raw),
+            "migrated": physical.get("schema") == SCHEMA, "revision": physical["revision"],
+            "sha256": hashlib.sha256(raw).hexdigest(), "written": False, "cleanup": ChunkStore(path.parent).cleanup_info(),
+            "next_action": "migrate with these exact source facts" if physical.get("schema") != SCHEMA else "continue ordinary operations"}

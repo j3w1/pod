@@ -1,3 +1,4 @@
+from tests.common import logical_json
 """R112: the owner's historical retirement of delivered objectives whose coordinator is lost."""
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -498,7 +499,7 @@ class WriteTests(RetirementCase):
         self.delivered()
         decision = self.decide()
         path = _record_path(self.project, "objective")
-        journal = json.loads(path.read_text())
+        journal = logical_json(path)
         journal["actions"][-1]["outcome"] = "UNKNOWN"  # Another writer recorded the pending validation.
         path.write_text(json.dumps(journal))
         before = self.snapshot()

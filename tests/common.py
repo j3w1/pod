@@ -278,3 +278,47 @@ def without_module(name: str):
     finally:
         if saved is not None:
             setattr(pod, attribute, saved)
+
+
+def logical_json(path):
+    """A disposable corruption fixture's value, independent of storage placement."""
+    value = json.loads(path.read_text())
+    if isinstance(value, dict) and value.get("schema") == "pod-history-record/v1":
+        from pod.history import load_context, load_document
+        value = (load_document(path) if value.get("kind") == "governor"
+                 else load_context(path, validate=False))
+        return json.loads(json.dumps(value))
+    return value
+
+
+def authority_files(root):
+    """Bytes of primary/other files and conservatively reachable immutable data.
+
+    Unreferenced cache pages and the bounded GC hint may disappear after an
+    earlier publication; that is not a change to a refused operation's authority.
+    This derives addresses independently of the production collector.
+    """
+    import json
+    import re
+    root = Path(root)
+    files = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()
+             and p.name not in (".lock", ".history-gc")}
+    def hashes(value):
+        if isinstance(value, str): return {value} if re.fullmatch(r"[a-f0-9]{64}", value) else set()
+        if isinstance(value, dict): return set().union(*(hashes(v) for v in value.values()))
+        if isinstance(value, list): return set().union(*(hashes(v) for v in value))
+        return set()
+    reached = set()
+    for primary in files:
+        if primary.name not in ("context.json", "governor.json"): continue
+        try: pending = list(hashes(json.loads(files[primary])))
+        except (ValueError, UnicodeError): continue
+        while pending:
+            address = pending.pop()
+            target = primary.parent / "history" / "sha256" / (address + ".json")
+            if target in reached: continue
+            reached.add(target)
+            if target in files:
+                try: pending.extend(hashes(json.loads(files[target])))
+                except (ValueError, UnicodeError): pass
+    return {p: raw for p, raw in files.items() if p.parent.name != "sha256" or p in reached}

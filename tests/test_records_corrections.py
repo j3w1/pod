@@ -27,7 +27,7 @@ def files(case):
 
 
 class CapacityPaddingTests(ProductionCase):
-    def test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt(self):
+    def test_retained_padding_preserves_report_landing_and_required_findings(self):
         renewal.RenewalAssuranceTests.policy(self)
         packet = self.packet(["A"], role="review")
         admission = self.start("honest-review", packet)["admission"]; self.settle(admission)
@@ -36,17 +36,10 @@ class CapacityPaddingTests(ProductionCase):
                 **waiting(), "evidence": [{"attempt": f"retained-{index}"}
                     for index in range(start, min(start + 16, 63))]}})
         state = read(self.project, "objective")
+        self.write(seq=state["checkpoint"]["seq"] + 1,
+                   update={"A": {"evidence": [{"attempt": "padding-last"}]}})
+        state = read(self.project, "objective")
         before = files(self)
-        with self.assertRaises(PodError) as caught:
-            self.write(seq=state["checkpoint"]["seq"] + 1,
-                       update={"A": {"evidence": [{"attempt": "padding-last"}]}})
-        detail = caught.exception.detail
-        self.assertEqual(detail["detail"], "receipt_limit")
-        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
-                         {"retained": 63, "proposed": 65, "reserved": 1, "limit": 64})
-        self.assertEqual(detail["referent"]["admission"], admission["admission_id"])
-        self.assertEqual(detail["next_action"], f"settle and consume the report for admission {admission['admission_id']} before retrying this write")
-        self.assertEqual(files(self), before)
         for extra in ({}, {"capacity": {"packet": packet, "report": report_body(self, admission, packet)}}):
             with self.subTest(extra=tuple(extra)):
                 with self.assertRaises(PodError) as caught:
@@ -64,7 +57,7 @@ class CapacityPaddingTests(ProductionCase):
                 "finding": f"real-{index}", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                 "summary": "real defect", "correction": "K"} for index in range(3)])
         assurance = next(row for row in self.stored() if row["id"] == "A")
-        self.assertEqual((len(assurance["receipts"]), len(assurance["findings"])), (64, 3))
+        self.assertEqual((len(assurance["receipts"]), len(assurance["findings"])), (65, 3))
         self.assertEqual(renewal.RenewalAssuranceTests.qualification(self), "WITHHELD")
 
 

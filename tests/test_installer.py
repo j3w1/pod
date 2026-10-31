@@ -156,7 +156,21 @@ class InstallerTests(unittest.TestCase):
         claude = self.home / "claude/settings.json"
         codex.parent.mkdir(parents=True); claude.parent.mkdir(parents=True)
         codex.write_bytes(b"agent setting\n"); claude.write_bytes(b'{"private":true}\n')
+        from pod.history import ChunkStore
+        from pod.ledger import _write
+        from pod.util import encoded
+        from tests.history_support import synthetic_state
+        import hashlib
+        authority = Path(self.env["XDG_STATE_HOME"]) / "pod" / ("e" * 64) / "context.json"
+        _write(authority, synthetic_state(1))
+        before_authority = authority.read_bytes()
+        store = ChunkStore(authority.parent)
+        orphan = encoded({"fixture": "unpublished bytes"}, compact=True)
+        address = hashlib.sha256(orphan).hexdigest()
+        store.put({address: orphan})
         first = self.installed()
+        self.assertEqual(authority.read_bytes(), before_authority)
+        self.assertFalse((store.root / (address + ".json")).exists())
         self.assertIn("pod-install: Preflight ready", first.stdout)
         self.assertIn("pod-install: Installed Codex skill:", first.stdout)
         from pod.bundle import BUNDLE_FILES
@@ -177,6 +191,7 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(doctor["installation_checks"]["healthy"])
         self.assertTrue(doctor["launcher"]["ownership"]["owned"])
         self.assertTrue(doctor["installation_checks"]["venv"]["ready"])
+        self.assertEqual(doctor["installation_checks"]["storage_cleanup"], [])
         self.assertEqual({p.relative_to(self.canonical).as_posix() for p in self.canonical.rglob("*")
                           if p.is_file() and "__pycache__" not in p.parts}, set(BUNDLE_FILES))
         self.assertEqual((self.home / "claude/skills/pod").resolve(), self.canonical.resolve())

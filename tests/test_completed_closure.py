@@ -1,3 +1,4 @@
+from tests.common import logical_json
 """Completed bookkeeping uses proof; provider effects are isolated, exact and retryable."""
 
 from copy import deepcopy
@@ -244,7 +245,7 @@ class SourceClosingTests(TickCase):
         def concurrent(**arguments):
             result = original(**arguments)
             path = objective_root(self.project, "objective") / "context.json"
-            raw = json.loads(path.read_text()); raw["checkpoint"]["closure"] = None
+            raw = logical_json(path); raw["checkpoint"]["closure"] = None
             path.write_text(json.dumps(raw))
             return result
         before = len(self.issue.closes)
@@ -275,7 +276,7 @@ class SourceClosingTests(TickCase):
     def test_malformed_ordinary_closure_cannot_authorize_an_issue_effect(self):
         self.ready(); self.issue.close_result = "refused"; self.write(close=True)
         path = objective_root(self.project, "objective") / "context.json"
-        raw = json.loads(path.read_text()); raw["checkpoint"]["closure"]["report"] = {}
+        raw = logical_json(path); raw["checkpoint"]["closure"]["report"] = {}
         path.write_text(json.dumps(raw))
         before = len(self.issue.closes)
         row = close_source_issues(self.project, "objective")["source_issues"][0]
@@ -532,16 +533,11 @@ class CompletionGuidanceTests(unittest.TestCase):
         from pod import governance, history
         with self.assertRaises(PodError) as full:
             history._require_size({"padding": "x" * history.CONTEXT_LIMIT}, current_bytes=0)
-        self.assertIn("project lead", full.exception.detail["next_action"])
+        self.assertIn("storage", full.exception.detail["next_action"])
+        self.assertIn("inspect", full.exception.detail["next_action"])
+        self.assertIn("migrate", full.exception.detail["next_action"])
+        self.assertNotIn("renew", full.exception.detail["next_action"])
         self.assertNotIn("with an owner decision", full.exception.detail["next_action"])
-        self.assertIn("waiting rows", full.exception.detail["next_action"])
-        self.assertIn("evidence: []", full.exception.detail["next_action"])
-        self.assertIn("retained receipts can move to immutable history", full.exception.detail["next_action"])
-        self.assertIn("renew", full.exception.detail["next_action"])
-        self.assertIn("terminal rows can archive", full.exception.detail["next_action"])
-        self.assertIn("run internal record-compaction detection", full.exception.detail["next_action"])
-        self.assertIn("submit its exact scoped maintenance request; no owner decision is required",
-                      full.exception.detail["next_action"])
         case, _ = evidence.DeliveryClosesTests.merged(self)
         state = read(case.project, "objective")["checkpoint"]
         observed = governance.governance_observation(case.project, state["governance"]["base_ref"])

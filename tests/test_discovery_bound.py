@@ -229,6 +229,12 @@ class BoundTests(WindowCase):
                 return forbidden()
             return open_fd(file, flags, *args, **kwargs)
 
+        def shared_directory_pin(fd, operation):
+            import stat
+            if operation not in (fcntl.LOCK_SH | fcntl.LOCK_NB, fcntl.LOCK_UN) or not stat.S_ISDIR(os.fstat(fd).st_mode):
+                return forbidden()
+            return None
+
         config._decoded.cache_clear()
         with ExitStack() as stack:
             stack.enter_context(patch.object(catalog, "_DEFAULT", None))
@@ -238,7 +244,7 @@ class BoundTests(WindowCase):
             for name in ("mkdir", "makedirs", "write", "replace", "rename", "unlink", "remove", "link",
                          "symlink", "truncate", "ftruncate"):
                 stack.enter_context(patch.object(os, name, side_effect=forbidden))
-            stack.enter_context(patch.object(fcntl, "flock", side_effect=forbidden))
+            stack.enter_context(patch.object(fcntl, "flock", side_effect=shared_directory_pin))
             stack.enter_context(patch.object(github, "worktree_inventory", side_effect=forbidden))
             stack.enter_context(patch.object(orca, "mutate_command", side_effect=forbidden))
             chunks = stack.enter_context(patch.object(history.ChunkStore, "_load", autospec=True,

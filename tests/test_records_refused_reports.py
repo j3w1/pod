@@ -77,17 +77,18 @@ class RefusedReportTests(unittest.TestCase):
         self.assertEqual(caught.exception.detail["referent"]["admission"], rejected["admission_id"])
         self.assertEqual(files(self.case), before)
 
-    def test_recorded_mismatch_keeps_the_reserved_checkpoint_receipt(self):
+    def test_retained_receipt_growth_does_not_clear_a_recorded_mismatch(self):
         for start in range(0, 63, 16):
             self.case.write(**self.report_map(evidence=[{"attempt": f"retained-{index}"}
                 for index in range(start, min(start + 16, 63))]))
         rejected, _ = self.refused_review()
-        before = files(self.case)
-        with self.assertRaises(PodError) as caught:
-            self.case.write(**self.report_map(evidence=[{"attempt": "last"}]))
-        self.assertEqual(caught.exception.detail["detail"], "receipt_limit")
-        self.assertEqual(caught.exception.detail["referent"]["admission"], rejected["admission_id"])
-        self.assertEqual(files(self.case), before)
+        self.case.write(**self.report_map(evidence=[{"attempt": "last"}]))
+        state = read(self.case.project, "objective")
+        row = state["admissions"][rejected["admission_id"]]
+        self.assertTrue(row["route_decision"]["route_mismatch"])
+        self.assertIsNone(row["report"])
+        self.assertIsNone(row["disposition"])
+        self.assertEqual(len(next(row for row in self.case.stored() if row["id"] == "A")["receipts"]), 64)
 
     def test_consumable_review_keeps_its_slot_and_records_its_finding(self):
         # Baseline for the hold tests above: an ordinary review keeps its

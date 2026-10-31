@@ -39,36 +39,24 @@ class ReceiptReservationTests(unittest.TestCase):
     def write(self, patch):
         self.case.write(seq=read(self.case.project, "objective")["checkpoint"]["seq"] + 1, update={"A": patch})
 
-    def test_full_history_refuses_before_an_outcome_or_native_launch(self):
+    def test_retained_unknown_receipts_allow_launch_and_failed_report(self):
         self.write({"evidence": [{"attempt": "last"}]})
         packet = self.case.packet(["A"], role="review")
-        before = files(self.case)
-        with self.assertRaises(PodError) as caught:
-            self.case.start("failed-outcome-probe", packet)
-        detail = caught.exception.detail
-        self.assertEqual(detail["detail"], "receipt_limit")
-        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
-                         {"retained": 64, "proposed": 65, "reserved": 1, "limit": 64})
-        action = detail["next_action"]
-        self.assertEqual(action, {"seq": read(self.case.project, "objective")["checkpoint"]["seq"] + 1,
-            "renew": [{"id": "A", "as": "<fresh-id>", **waiting()}]})
-        self.assertEqual(files(self.case), before)
-        self.assertEqual(self.case.port.workers, self.port["workers"])
-        action["renew"][0]["as"] = "A2"
-        self.case.write(**action)
-        packet = self.case.packet(["A2"], role="review")
-        admission = self.case.start("renewed-failed-review", packet)["admission"]
+        before = next(row for row in self.case.stored() if row["id"] == "A")["receipts"]
+        admission = self.case.start("failed-outcome-probe", packet)["admission"]
         self.case.port.workers[admission["native_binding"]["dispatchId"]]["outcome"] = "failed"
         self.case.report(admission, packet, outcome="failed", map={
             "seq": read(self.case.project, "objective")["checkpoint"]["seq"] + 1,
-            "update": {"A2": waiting(), "K": {"kind": "correction", "provenance": "coordinator", "parent": "A2",
+            "update": {"A": waiting(), "K": {"kind": "correction", "provenance": "coordinator", "parent": "A",
                 "check": "repair real defect", **waiting()}}}, triage=[{"finding": "real", "severity": "major",
                 "triage": "required_correction", "blocks": "outcome", "summary": "failed review finding", "correction": "K"}])
-        rows = {row["id"]: row for row in self.case.stored()}
-        self.assertEqual((len(rows["A"]["receipts"]), rows["A2"]["receipts"], len(rows["A2"]["findings"])), (64, [], 1))
+        row = next(row for row in self.case.stored() if row["id"] == "A")
+        self.assertEqual(row["receipts"][:64], before)
+        self.assertEqual(len(row["receipts"]), 64)
+        self.assertEqual(row["findings"][0]["correction"], "K")
         self.assertEqual(renewal.RenewalAssuranceTests.qualification(self.case), "WITHHELD")
 
-    def test_sibling_result_states_reserve_until_consumed(self):
+    def test_sibling_result_states_never_evict_retained_observations(self):
         for state in ("running", "settled-success", "settled-failure", "consumed-success", "consumed-failure"):
             with self.subTest(state=state):
                 self.restore()
@@ -80,59 +68,43 @@ class ReceiptReservationTests(unittest.TestCase):
                 if state.startswith("consumed"):
                     self.case.report(admission, packet, outcome="failed" if failed else "succeeded", map={
                         "seq": read(self.case.project, "objective")["checkpoint"]["seq"] + 1, "update": {"A": waiting()}})
-                before = files(self.case)
-                patch = {"evidence": [{"attempt": "padding-last"}]}
-                if state != "running":
-                    patch.update(waiting())
-                if state == "consumed-failure":
-                    self.write(patch)  # Failed consumption releases the unused receipt.
-                    self.assertEqual(len(next(row for row in self.case.stored() if row["id"] == "A")["receipts"]), 64)
-                else:
-                    with self.assertRaises(PodError) as caught:
-                        self.write(patch)
-                    detail = caught.exception.detail
-                    self.assertEqual(detail["detail"], "receipt_limit")
-                    self.assertEqual(detail["referent"]["reserved"], 0 if state.startswith("consumed") else 1)
-                    self.assertEqual(files(self.case), before)
-                # Replaying retained evidence spends no reserved slot.
-                patch["evidence"] = [{"attempt": "retained-0"}]
-                self.write(patch)
+                old = deepcopy(next(row for row in self.case.stored() if row["id"] == "A")["receipts"])
+                value = {"evidence": [{"attempt": "padding-last"}]}
+                if state != "running": value.update(waiting())
+                self.write(value)
+                row = next(row for row in self.case.stored() if row["id"] == "A")
+                self.assertEqual(row["receipts"][:-1], old)
+                self.assertEqual(row["receipts"][-1]["evidence"]["attempt"], "padding-last")
+                self.write({**value, "evidence": [{"attempt": "retained-0"}]})
+                self.assertEqual(len(next(row for row in self.case.stored() if row["id"] == "A")["receipts"]), len(old) + 1)
 
-    def test_multiple_pending_reviews_reserve_separately(self):
+    def test_multiple_pending_reviews_reserve_finding_work_separately(self):
         packet = self.case.packet(["A"], role="review")
         first = self.case.start("first", packet)["admission"]; self.case.settle(first)
+        second = self.case.start("second", packet)["admission"]; self.case.settle(second)
         before = files(self.case)
         with self.assertRaises(PodError) as caught:
-            self.case.start("second", packet)
-        self.assertEqual(caught.exception.detail["detail"], "receipt_limit")
-        self.assertEqual(caught.exception.detail["referent"]["reserved"], 2)
+            self.case.start("third", packet)
+        self.assertEqual(caught.exception.detail["detail"], "finding_limit")
+        self.assertEqual(caught.exception.detail["referent"]["reserved"], 96)
         self.assertEqual(files(self.case), before)
 
 
 class AcceptedRenewalAdviceTests(ProductionCase):
-    def test_receipt_refusal_uses_accepted_coordinator_slot(self):
+    def test_retention_does_not_mask_invalid_coordinator_sequence(self):
         self.intake(self.sub("S"))
         proof = self.proof("S")
         for start in range(0, 64, 16):
-            patch = {"evidence": [{**proof, "reference": f"retained-{index}"} for index in range(start, start + 16)]}
-            if start == 48:
-                patch["state"] = "satisfied"
-            self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, update={"S": patch})
+            value = {"evidence": [{**proof, "reference": f"retained-{index}"} for index in range(start, start + 16)]}
+            if start == 48: value["state"] = "satisfied"
+            self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, update={"S": value})
         before = files(self)
         with self.assertRaises(PodError) as caught:
             self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, update={
                 "S": {"evidence": [{**proof, "reference": "overflow"}]},
                 "O1": {"state": "waiting", "wait": {"class": "sequenced", "referent": "S"}}})
-        self.assertEqual(caught.exception.detail["detail"], "receipt_limit")
-        action = caught.exception.detail["next_action"]
-        self.assertEqual(action, {"seq": read(self.project, "objective")["checkpoint"]["seq"] + 1,
-            "renew": [{"id": "S", "as": "<fresh-id>", **waiting()}]})
+        self.assertEqual(caught.exception.detail["detail"], "sequenced_without_active")
         self.assertEqual(files(self), before)
-        action["renew"][0]["as"] = "S2"
-        self.write(**action)
-        rows = {row["id"]: row for row in self.stored()}
-        self.assertEqual(rows["O1"]["executor"], "coordinator")
-        self.assertEqual(rows["S2"]["wait"], waiting()["wait"])
 
 
 class FindingReservationTests(ProductionCase):

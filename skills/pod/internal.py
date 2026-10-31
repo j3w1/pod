@@ -674,6 +674,16 @@ def _op_record_compaction(request: dict) -> dict:
                              request=request.get("request"), decision=request.get("decision"))
 
 
+@input_record("storage")
+def _op_storage(request: dict) -> dict:
+    exact(request, fields("storage"), required("storage"), name="storage")
+    from .util import bounded_text
+    bounded_text(request["project"], name="project")
+    from .records import storage
+    return storage(Path(request["project"]), request["objective"], action=request.get("action", "inspect"), record=request.get("record", "context"),
+                   revision=request.get("revision"), sha256=request.get("sha256"))
+
+
 def _op_cleanup_plan(request: dict) -> dict:
     exact(request, {"project", "objective", "expect", "archives", "worker", "observe"},
           {"project"} if isinstance(request, dict) and "observe" in request else {"project", "objective"}, name="request")
@@ -771,6 +781,7 @@ _OPERATIONS = {
     'succession': _op_succession,
     'historical-retirement': _op_historical_retirement,
     'record-compaction': _op_record_compaction,
+    'storage': _op_storage,
     'cleanup-plan': _op_cleanup_plan,
     'map': _op_map,
 }

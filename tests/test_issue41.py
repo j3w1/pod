@@ -1,4 +1,5 @@
 """0.8.0 A1-A12 production boundary regressions (synthetic ports, no live claims)."""
+from tests.common import logical_json
 import ast
 from copy import deepcopy
 from contextlib import redirect_stdout, redirect_stderr
@@ -40,7 +41,7 @@ class GovernorBoundaryTests(ProductionCase):
         executed = self.op("governor-execute", action=self.action())
         self.assertEqual(executed["outcome"], "PASS")
         self.assertEqual(len([call for call in self.remote.calls if call[0] == "push"]), 1)
-        journal = json.loads((objective_root(self.project, "objective") / "governor.json").read_text())
+        journal = logical_json(objective_root(self.project, "objective") / "governor.json")
         self.assertTrue(all(row.get("decision_reserved") is True for row in journal["actions"][:-1]))
         self.assertNotIn("decision_reserved", journal["actions"][-1])
 
@@ -251,8 +252,8 @@ class ReleasedWriterTests(ProductionCase):
         before = journal.read_bytes()
         # Synthetic pre-channel control: reservations require consent, so no genuine
         # candidate-written reservation can omit its authorization's session channel.
-        control = json.loads(before)
-        control.pop("decision_channels")
+        control = logical_json(journal)
+        control.pop("decision_channels", None)
         for row in control["actions"]:
             consent = row["action"].get("authorization")
             if consent is not None:
@@ -280,7 +281,7 @@ print(json.dumps({"actual": actual, "control": control}))
         result=subprocess.run([sys.executable,"-c",program,str(journal),str(control_path)],
             cwd=source,env={**os.environ,"PYTHONPATH":str(source / "skills")},capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout), {"actual": "invalid_governor", "control": True})
+        self.assertEqual(json.loads(result.stdout), {"actual": "state_unsupported", "control": True})
         self.assertEqual(journal.read_bytes(), before)
         self.assertEqual(control_path.read_bytes(), control_before)
 
@@ -471,7 +472,8 @@ class StorageBoundaryTests(ProductionCase):
     def test_objective_governor_and_native_start_records_are_compact_and_old_indent_reads(self):
         self.prepare()
         root=objective_root(self.project,"objective"); context=root / "context.json"
-        value=json.loads(context.read_text());old_digest=digest(value)
+        from tests.common import logical_json
+        value=logical_json(context);old_digest=digest(value)
         context.write_text(json.dumps(value,indent=2)+"\n")
         self.assertEqual(digest(read(self.project,"objective")),old_digest)
         self.write()
@@ -483,13 +485,12 @@ class StorageBoundaryTests(ProductionCase):
         for path in observations:self.assertNotIn(b'\n  ',path.read_bytes())
         self.assertEqual(digest(value),old_digest)
 
-    def test_oversized_checkpoint_is_atomic_and_names_sizes_and_sections(self):
+    def test_bounded_checkpoints_cross_the_preceding_file_limit_losslessly(self):
         subs=[self.sub(f"S{i}",state="blocked_external",external={"party":"user","need":"input","unblocks_when":"provided"}) for i in range(64)]
         self.intake(*subs)
         root=objective_root(self.project,"objective");path=root / "context.json"
         # Unsatisfied rows retain current-candidate receipts; satisfied copies can archive.
         for turn in range(6):
-            before={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
             value={"schema":"pod-checkpoint/v3", "seq":read(self.project,"objective")["checkpoint"]["seq"]+1,
                    "update":{row["id"]:{"state":"blocked_external","external":row["external"],"evidence":[{
                        "check":"c"*512,"command":"d"*512,"result":"r"*512,"reference":f"{row['id']}-observation-{turn}"}]}
@@ -499,15 +500,11 @@ class StorageBoundaryTests(ProductionCase):
             self.assertLess(source.stat().st_size,128*1024)
             output=StringIO()
             with redirect_stdout(output):code=internal.main(["checkpoint","--input",str(source)])
-            if code == 0:continue
-            error=json.loads(output.getvalue())["error"];self.assertEqual(error["code"],"record_too_large")
-            detail=error["detail"]
-            self.assertEqual(detail["current_bytes"],len(before[str(path)]));self.assertEqual(detail["limit_bytes"],512*1024)
-            self.assertGreater(detail["proposed_bytes"],detail["limit_bytes"])
-            self.assertEqual(detail["largest_sections"][0]["section"],"checkpoint")
-            self.assertEqual({str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()},before)
-            break
-        else:self.fail("bounded genuine writes did not reach the context limit")
+            self.assertEqual(code, 0, output.getvalue())
+        state = logical_json(path)
+        self.assertGreater(len(json.dumps(state).encode()), 512 * 1024)
+        self.assertLess(path.stat().st_size, 512 * 1024)
+        self.assertEqual(len(state["checkpoint"]["obligations"][1]["receipts"]), 6)
 
 
 class AdditionalFindingTests(FindingBoundaryTests):

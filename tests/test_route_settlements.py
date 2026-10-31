@@ -1,4 +1,5 @@
 """Route holds settle from fresh kernel evidence without erasing their history."""
+from tests.history_support import admission_movable
 from copy import deepcopy
 import json
 import shutil
@@ -7,7 +8,7 @@ from unittest.mock import patch
 
 from pod.assurance import pending_serving
 from pod.errors import PodError
-from pod.history import admission_movable
+
 from pod.internal import acknowledge, run
 from pod.ledger import objective_root, read, update_admission
 from pod.operations import OrcaPort
@@ -167,10 +168,9 @@ class MatchingReportTests(SettlementCase):
         import pod.history as history
         admission, frozen = self.original()
         before = self.files()
-        current = (self.root / "context.json").stat().st_size
-        with patch.object(history, "CONTEXT_LIMIT", current + 1), self.assertRaises(PodError) as caught:
+        with patch.object(history, "preflight_landing", side_effect=PodError("storage_full", "injected disk full")), self.assertRaises(PodError) as caught:
             self.c.report(admission, frozen, map=self.parked())
-        self.assertEqual(caught.exception.code, "record_too_large")
+        self.assertEqual(caught.exception.code, "storage_full")
         self.assertEqual(self.files(), before)
         self.assertTrue(route_hold(self.row(admission)))
 
@@ -606,7 +606,8 @@ class SettlementReadTests(SettlementCase):
         admission, frozen = self.original()
         self.c.report(admission, frozen, map=self.parked())
         path = self.root / "context.json"
-        original = path.read_bytes()
+        from tests.common import logical_json
+        original = json.dumps(logical_json(path)).encode()
         for patch_value in ({"basis": "lead_decision"}, {"extra": True}, {"occurrence": 0}, {"report_digest": "0" * 64}):
             with self.subTest(changed=list(patch_value)):
                 value = json.loads(original)

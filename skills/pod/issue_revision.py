@@ -466,6 +466,8 @@ class Revision:
             raise refuse("unrelated_checkpoint_change")
         if core["policy_revision"] != prior["policy_revision"]:
             raise refuse("policy_changed")
+        if "obligations" in proposed:
+            obligations.row_bounds(proposed["obligations"], request=True)
         expanded = obligations.expand_update(prior, proposed)
         if type(expanded.get("seq")) is not int or expanded["seq"] != prior["seq"] + 1:
             raise obligations.refuse("map_stale", "map_stale", "issue revision needs the next sequence", expected=prior["seq"] + 1)
@@ -473,7 +475,7 @@ class Revision:
         if core["criteria"] != list(self.lines):
             raise refuse("criteria_not_exact_source")
         rows = expanded.get("obligations", prior["obligations"])
-        if not isinstance(rows, list) or len(rows) > obligations.MAX_OBLIGATIONS:
+        if not isinstance(rows, list):
             raise refuse("malformed_obligations")
         obligations.row_bounds(rows)
         previous_rows = {row["id"]: row for row in prior["obligations"]}
@@ -683,7 +685,7 @@ def _validate_decision(row: dict, checkpoint: dict) -> None:
         if (digest(source) != verdict[OPERATION]["source"][key]
                 or any(source[field] != verdict[OPERATION]["source"][field] for field in ("repository", "number", "locator"))):
             raise refuse("stored_source_binding")
-    if (not isinstance(previous["obligations"], list) or not previous["obligations"] or len(previous["obligations"]) > obligations.MAX_OBLIGATIONS
+    if (not isinstance(previous["obligations"], list) or not previous["obligations"]
             or not isinstance(previous["criteria"], list) or not previous["criteria"] or len(previous["criteria"]) > 64
             or any(not isinstance(ref, str) or not ref for ref in previous["criteria"])):
         raise refuse("stored_previous_map")

@@ -382,9 +382,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             superseded = []
     except PodError as exc:
         result.update({"status": "blocked", "blocker": exc.code,
-                       "next_safe_action": (((exc.detail or {}).get("next_action") or "Project lead or coordinator: run internal record-compaction "
-                                             "detection for this exact project and objective, then submit its exact scoped "
-                                             "maintenance request; no owner decision is required.")
+                       "next_safe_action": (((exc.detail or {}).get("next_action") or "Use internal storage inspect and migrate "
+                                             "with the exact source revision and SHA256; no owner decision is required.")
                                             if exc.code == "record_too_large"
                                             else "inspect the objective state")})
         if objective is not None:
@@ -392,10 +391,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             result["recorded_questions"] = recorded_questions(None, reason=exc.code)
             result.update(decision_status(preferences, None, objective=True))
         if exc.code == "record_too_large":
-            from .history import CONTEXT_LIMIT, WARN_AT, COMPACT_AT
+            from .history import MAINTENANCE_LIMIT
             result["record_capacity"] = {"status": "unavailable", "physical_bytes": (exc.detail or {}).get("current_bytes"),
-                                         "logical_bytes": None, "limit_bytes": CONTEXT_LIMIT,
-                                         "warning_bytes": WARN_AT, "compaction_bytes": COMPACT_AT, "warning": True,
+                                         "logical_bytes": None, "limit_bytes": MAINTENANCE_LIMIT, "warning": True,
                                          "next_action": result["next_safe_action"]}
         return result
     result["run"] = run
@@ -699,6 +697,9 @@ def render(result: dict) -> None:
         if isinstance(result.get("readiness"), dict):
             print(clean(result["readiness"]["summary"]))
         capacity = result.get("record_capacity") or {}
+        cleanup = capacity.get("cleanup") or {}
+        if cleanup.get("pending"):
+            print(f"Storage cleanup queued: {cleanup.get('queued_bytes') if cleanup.get('queued_bytes') is not None else 'unknown'} bytes")
         if capacity.get("warning"):
             print(f"Record capacity: {capacity['physical_bytes']}/{capacity['limit_bytes']} bytes. "
                   + clean(capacity["next_action"]))

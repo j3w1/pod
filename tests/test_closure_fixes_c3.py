@@ -1,4 +1,5 @@
 """A sweep observation cannot authorize a later source completion effect."""
+from tests.common import logical_json
 
 import json
 import unittest
@@ -28,7 +29,7 @@ class FreshSourceTests(TickCase):
         # Synthetic peer: the same source, closed before its latest reopen. The real closing write above
         # closed objective after that reopen, so only objective may retry source completion.
         path = objective_root(self.project, "objective") / "context.json"
-        peer = json.loads(path.read_text())
+        peer = logical_json(path)
         peer["checkpoint"]["objective"] = "another"
         peer["checkpoint"]["closure"]["at"] = "2000-01-01T00:00:00Z"
         other = objective_root(self.project, "another")

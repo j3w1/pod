@@ -268,16 +268,16 @@ def _journal_bytes(root: Path) -> bytes | None:
         os.lstat(path)
     except FileNotFoundError:
         return None
-    from .governor import MAX_JOURNAL
+    from .history import MAINTENANCE_LIMIT
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as file:
             if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
                 raise PodError("journal_unreadable", "The Governor journal is not a regular file")
-            data = file.read(MAX_JOURNAL + 1)
+            data = file.read(MAINTENANCE_LIMIT + 1)
     except OSError as exc:
         raise PodError("journal_unreadable", "The Governor journal cannot be read") from exc
-    if len(data) > MAX_JOURNAL:
+    if len(data) > MAINTENANCE_LIMIT:
         raise PodError("journal_unreadable", "The Governor journal exceeds its bound")
     return data
 
@@ -888,7 +888,8 @@ def _journal_prs(root: Path) -> list[int] | None:
     """The pull requests a Governor journal records, from its documented fields only; None when unreadable."""
     try:
         data = _journal_bytes(root)
-        value = json.loads(data.decode("utf-8")) if data is not None else {"actions": []}
+        from .history import load_document
+        value = load_document(root / "governor.json") if data is not None else {"actions": []}
     except (PodError, ValueError, UnicodeError, RecursionError):
         return None
     actions = value.get("actions") if isinstance(value, dict) else None

@@ -291,6 +291,7 @@ def _doctor(project: Path) -> dict:
                                "duplicates": installation["duplicates"],
                                "lock_entry": skills_cli_entry()}
         installation_checks["running_identity"] = running
+        installation_checks["storage_cleanup"] = installation.get("storage_cleanup", [])
         installation_checks["receipt_identity"] = receipt_identity
         installation_checks["installed_version_drift"] = drift
         installation_checks["healthy"] = bool(installed == "installed" and installation_checks["digest_matches"]
@@ -602,6 +603,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"venv {'ready' if checks['venv']['ready'] else 'unavailable'}")
         if checks.get("next_action"):
             print(f"Next: {checks['next_action']}")
+        for row in checks.get("storage_cleanup", []):
+            print(f"Storage cleanup {row['record']}: {row['queued_bytes'] if row['queued_bytes'] is not None else 'unknown'} bytes queued")
         if result["launcher"]["shadowed"]:
             print("Launcher: another pod command is earlier on PATH")
         for duplicate in checks.get("duplicates", []):

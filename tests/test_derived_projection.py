@@ -1,11 +1,13 @@
+from tests.history_support import publish_preceding
 """R119/R120: automatic adoptions have bounded public projections and complete history."""
+from tests.history_support import compact
 from contextlib import redirect_stdout
 from copy import deepcopy
 from io import StringIO
 import subprocess
 import unittest
 
-from pod.history import compact, hydrate, publish_context, CONTEXT_LIMIT
+from pod.history import (hydrate, publish_context, CONTEXT_LIMIT)
 from pod.ledger import objective_root, read
 from pod.obligations import validate_map_record
 from pod.status import render, status
@@ -105,7 +107,7 @@ class DerivedProjectionTests(unittest.TestCase):
         record, chunks = compact(self.state, force=True)
         self.assertTrue(chunks)
         self.assertEqual(hydrate(record, chunks.__getitem__), self.state)
-        publish_context(self.path, record, chunks)
+        publish_preceding(self.path, record, chunks)
         self.assertEqual(read(self.case.project, "objective"), self.state)
         self.assertEqual(self.observe()["derived_governance_decisions"], self.expected())
 

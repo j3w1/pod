@@ -55,7 +55,8 @@ class WithdrawalStatusTests(HandoffCase):
         self.establish()
         self.closed_review_peer(withdrawn=True)
         peer = objective_root(self.project, "closure-peer") / "context.json"
-        genuine = json.loads(peer.read_text())
+        from tests.common import logical_json
+        genuine = logical_json(peer)
         self.lose()
         for withdrawal in ([], "coordinator", False, 1):
             with self.subTest(withdrawal=withdrawal):

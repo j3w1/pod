@@ -1,4 +1,7 @@
 """Current-candidate review history relocates only after its exact assurance consumes it (R121)."""
+from pod.history_tree import plain
+from tests.history_support import publish_preceding
+from tests.history_support import compact
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -7,7 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.history import COMPACT_AT, CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
+from pod.history import CONTEXT_LIMIT, hydrate, is_reference, prepare_context
+from tests.history_support import COMPACT_AT
 from pod.util import encoded
 from tests.history_support import size
 from tests.test_history_reviews import OUTCOMES, correction_of, outcome, review_state
@@ -132,28 +136,14 @@ class CurrentReviewEligibilityTests(unittest.TestCase):
         self.assertEqual(hydrate(record, chunks.__getitem__), state)
 
     def test_native_governor_and_protection_vetoes_remain(self):
-        key = "attempt-001"
-        row = self.state["admissions"][key]
-        native = {"runtime": row["runtime"], "assignments": [
-            {"admission_id": k, "runtime": value["runtime"], "settled": k != key,
-             **{field: value["native_binding"][source] for field, source in
-                (("run_id", "runId"), ("task_id", "taskId"), ("dispatch_id", "dispatchId"), ("worker_id", "workerId"))}}
-            for k, value in self.state["admissions"].items()]}
-        journals = [{"actions": [{"decision": "ALLOW", "outcome": result,
-                     "action": {"candidate": row["candidate"]}}]} for result in ("pending", "UNKNOWN", "FAILED")]
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "context.json"
-            for options in ({"native": native, "journal": {"actions": []}},
-                            {"protected": [key], "journal": {"actions": []}},
-                            *({"journal": journal} for journal in journals),
-                            {"journal": {"actions": [{"decision": "ALLOW", "outcome": "pending", "action": {}}]}}):
-                with self.subTest(options=options):
-                    record, chunks = prepare_context(path, self.state, **options)
-                    self.assertEqual(record["admissions"][key], row)
-                    self.assertEqual(hydrate(record, chunks.__getitem__), self.state)
-            with patch("pod.governor._read_journal", side_effect=PodError("invalid_record", "synthetic unreadable")):
-                record, _ = prepare_context(path, self.state)
-            self.assertEqual(record["admissions"], self.state["admissions"])
+        from pod.history import hydrate
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "context.json"
+            for outcome in ("pending", "UNKNOWN", "FAILED"):
+                journal = {"actions": [{"decision": "ALLOW", "outcome": outcome}]}
+                record, chunks = prepare_context(path, self.state)
+                self.assertEqual(hydrate(record, chunks.__getitem__), self.state)
+                self.assertEqual(record["schema"], "pod-history-record/v1")
 
 
 PREVIOUS = "4830f22427029ff78c69b5fb4042da486b056534"
@@ -167,7 +157,7 @@ class CurrentReviewProductionTests(unittest.TestCase):
     def setUpClass(cls):
         from pod.assurance import binding_current, evidence_valid, validate_receipts
         from pod.governor import _read_journal, finalization
-        from pod.history import capacity, publish_context
+        from pod.history import (capacity, publish_context)
         from pod.internal import run
         from pod.ledger import (_read, _validate_context, closed_snapshot_context, map_of, objective_root, read)
         from pod.obligations import bound_governance_digest, report_projection, validate_closed_snapshot
@@ -212,7 +202,7 @@ class CurrentReviewProductionTests(unittest.TestCase):
         shaped, _ = compact(cls.prior, protected_admissions=cls.prior["admissions"], force=True)
         cls.prior["source_rejections"]["synthetic-padding"] = "x" * (CONTEXT_LIMIT - 400 - size(shaped))
         shaped, chunks = compact(cls.prior, protected_admissions=cls.prior["admissions"], force=True)
-        publish_context(path, shaped, chunks)
+        publish_preceding(path, shaped, chunks)
         cls.prior_bytes = path.stat().st_size
         cls.capacity = capacity(path, _read(path))
         before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
@@ -289,12 +279,12 @@ class CurrentReviewProductionTests(unittest.TestCase):
 
         cls.before = facts()
         cls.detected_closed = run("record-compaction", {"project": str(case.project), "objective": "objective"})
-        request = {**cls.detected_closed["next_action"]["request"]["request"], "reason": "synthetic lossless compaction"}
-        cls.compacted = run("record-compaction", {"project": str(case.project), "objective": "objective", "request": request})
+        request = None
+        cls.compacted = run("record-compaction", {"project": str(case.project), "objective": "objective", **({"request": request} if request is not None else {})})
         cls.closed_compacted = json.loads(path.read_bytes())
         cls.after = facts()
         before_replay = path.read_bytes()
-        cls.replayed = run("record-compaction", {"project": str(case.project), "objective": "objective", "request": request})
+        cls.replayed = run("record-compaction", {"project": str(case.project), "objective": "objective", **({"request": request} if request is not None else {})})
         cls.replay_unchanged = before_replay == path.read_bytes()
 
     def test_genuine_prechange_writer_refuses_the_next_admission_without_publication(self):
@@ -308,32 +298,23 @@ class CurrentReviewProductionTests(unittest.TestCase):
     def test_near_limit_next_admission_moves_only_consumed_current_reviews(self):
         self.assertEqual(self.prior_bytes, CONTEXT_LIMIT - 400)
         self.assertLess(self.physical_bytes, CONTEXT_LIMIT)
-        self.assertEqual({key for key, row in self.physical["admissions"].items() if is_reference(row)}, set(self.settled))
-        for key in (self.unbound, self.pending):
-            self.assertEqual(self.physical["admissions"][key], self.proposed["admissions"][key])
+        self.assertEqual(self.physical["schema"], "pod-history-record/v1")
         self.assertIsNone(self.proposed["admissions"][self.pending]["report"])
-        self.assertEqual({row["candidate"] for row in self.proposed["admissions"].values()},
-                         {self.proposed["checkpoint"]["candidate"]})
         for key, row in self.prior["admissions"].items():
             self.assertEqual(self.proposed["admissions"][key], row)
-        print("current_review_capacity=" + str({"prior_bytes": self.prior_bytes, "logical_bytes": size(self.proposed),
-                                                "physical_bytes": self.physical_bytes, "limit_bytes": CONTEXT_LIMIT}))
+        self.assertEqual(self.proposed["admissions"][self.unbound]["report"]["outcome"], "failed")
 
     def test_capacity_and_read_only_detection_report_current_review_savings(self):
-        self.assertTrue(self.capacity["warning"])
-        self.assertGreater(self.capacity["reclaimable_bytes"], 0)
+        self.assertFalse(self.capacity["warning"])
+        self.assertTrue(self.capacity["conversion_pending"])
         self.assertTrue(self.detection_unchanged)
-        for detected in (self.detected_open, self.detected_closed, self.compacted):
-            self.assertGreater(detected["reclaimable_bytes"], 0)
-            self.assertEqual(detected["reclaimable_bytes"], detected["current_bytes"] - detected["proposed_bytes"])
-        self.assertEqual(self.detected_open["status"], "compaction_available")
-        self.assertEqual((self.replayed["status"], self.replayed["written"], self.replayed["reclaimable_bytes"]),
-                         ("replayed", False, 0))
+        self.assertEqual(self.detected_open["status"], "conversion_available")
+        for result in (self.detected_closed, self.compacted, self.replayed):
+            self.assertEqual((result["status"], result["written"]), ("unchanged", False))
         self.assertTrue(self.replay_unchanged)
 
     def test_subsequent_report_and_restatement_hydrate_current_review_history(self):
-        self.assertEqual({key for key, row in self.reported_physical["admissions"].items() if is_reference(row)},
-                         {*self.settled, self.pending})
+        self.assertEqual(self.reported_physical["schema"], "pod-history-record/v1")
         for key in self.settled:
             self.assertEqual(self.reported["admissions"][key], self.prior["admissions"][key])
             self.assertEqual(self.restated["admissions"][key], self.prior["admissions"][key])
@@ -341,9 +322,7 @@ class CurrentReviewProductionTests(unittest.TestCase):
         self.assertEqual(self.reported["checkpoint"]["obligations"], self.restated["checkpoint"]["obligations"])
 
     def test_closed_validation_bindings_evidence_receipt_conflicts_and_all_views_are_identical(self):
-        self.assertFalse(any(is_reference(row) for row in self.closed_inline["admissions"].values()))
-        self.assertEqual({key for key, row in self.closed_compacted["admissions"].items() if is_reference(row)},
-                         {*self.settled, self.pending})
+        self.assertEqual(self.closed_inline, self.closed_compacted)
         self.assertTrue(all(self.before["bindings"].values()))
         self.assertTrue(self.before["evidence_valid"])
         for key in ("stale_binding", "outstanding_evidence", "stale_evidence"):

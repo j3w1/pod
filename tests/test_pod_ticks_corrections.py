@@ -1,4 +1,5 @@
 """Regression controls for bounded tick recovery and truthful status/readback."""
+from tests.common import logical_json
 
 from copy import deepcopy
 from contextlib import redirect_stdout
@@ -204,7 +205,7 @@ class ConcurrentCorrections(TickCase):
             self.tick()
         # Pre-correction representation lacked only the optional intent time.
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_text())
+        state = logical_json(path)
         state["pod_ticks"]["requests"]["1"].pop("intent_at")
         path.write_text(json.dumps(state))
         self.issue.calls.clear()

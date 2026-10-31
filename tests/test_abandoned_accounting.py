@@ -1164,9 +1164,17 @@ print(json.dumps({'version':version(),**result}))
 
     def test_genuine_02121_reads_unchanged_records_and_refuses_new_accounting_without_writes(self):
         admission = self.held()
+        from tests.common import logical_json
+        path = objective_root(self.project, 'objective') / 'context.json'
+        # Explicit preceding-format control tests accounting vocabulary independently of storage format.
+        path.write_text(json.dumps(logical_json(path)))
         self.assertEqual(self.previous(), {'version': '0.21.21', 'status': 'read', 'admissions': 1})
         self.account(admission)
-        path = objective_root(self.project, 'objective') / 'context.json'
+        before = path.read_bytes()
+        result = self.previous()
+        self.assertEqual((result['status'], result['code']), ('refused', 'state_unsupported'))
+        self.assertEqual(path.read_bytes(), before)
+        path.write_text(json.dumps(logical_json(path)))
         before = path.read_bytes()
         result = self.previous()
         self.assertEqual((result['version'], result['status'], result['code']),

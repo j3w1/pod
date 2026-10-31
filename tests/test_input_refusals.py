@@ -56,6 +56,7 @@ REQUIRED = {
     "succession": (*OWNED, "predecessor"),
     "historical-retirement": ("project", "objectives"),
     "record-compaction": ("project", "objective"),
+    "storage": ("project", "objective"),
 }
 
 
@@ -79,7 +80,7 @@ class OperationFieldRefusalTests(unittest.TestCase):
                 code, stdout, stderr = self.invoke(operation, request)
                 self.assertEqual(code, 1)
                 envelope = json.loads(stdout)
-                record = "packet" if operation == "packet" else "standing authorization" if operation == "standing-authorization" else "request"
+                record = "packet" if operation == "packet" else "standing authorization" if operation == "standing-authorization" else "storage" if operation == "storage" else "request"
                 self.assertEqual(envelope["error"]["code"], f"invalid_{record.replace(' ', '_')}")
                 message = envelope["error"]["message"]
                 for name in (operation, record, dropped, "unexpected_field"):
@@ -91,7 +92,7 @@ class OperationFieldRefusalTests(unittest.TestCase):
                                   "optional": envelope["error"]["detail"]["optional"],
                                   **({"bounded_fields": envelope["error"]["detail"]["bounded_fields"],
                                       "next_action": envelope["error"]["detail"]["next_action"]}
-                                     if operation in ("packet", "admission", "standing-authorization", "tool") else {})})
+                                     if operation in ("packet", "admission", "standing-authorization", "tool", "storage") else {})})
                 shape = envelope["error"]["detail"]
                 self.assertEqual(set(shape["accepted"]) - set(shape["optional"]), set(required))
                 self.assertEqual(shape["accepted"], sorted(shape["accepted"]))

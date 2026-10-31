@@ -1,4 +1,5 @@
 """R120: every accepted owner decision records its honest delivery channel."""
+from tests.common import logical_json
 
 from copy import deepcopy
 import unittest
@@ -272,7 +273,7 @@ class RetirementChannelTests(retirement.RetirementCase):
         decision = self.decide()
         self.assertEqual(self.retire(decision)["status"], "retired")
         path = objective_root(self.project, "objective") / "context.json"
-        state = json.loads(path.read_bytes())
+        state = logical_json(path)
         state["historical_retirement"].pop("channel")
         state["historical_retirement"]["decision"] = digest(decision)
         state.pop("decision_channels", None)

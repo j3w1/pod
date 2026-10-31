@@ -1,4 +1,5 @@
 """R119: a checkpoint adopts an unchanged target without owner authority."""
+from tests.common import logical_json
 
 from copy import deepcopy
 from unittest.mock import patch
@@ -264,7 +265,7 @@ class DeliveredAdoptionTests(KernelCase):
         try:
             decided = case.op("governor", action=case.merge())
             path = _record_path(case.project, "objective")
-            journal = json.loads(path.read_bytes())
+            journal = logical_json(path)
             row = next(row for row in journal["actions"] if row["record_id"] == decided["record_id"])
             self.assertIsNotNone(row.pop("governance_binding"))
             path.write_text(json.dumps(journal))

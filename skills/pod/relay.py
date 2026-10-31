@@ -16,6 +16,7 @@ from functools import wraps
 
 from .errors import PodError
 from .contracts import bound
+from .history_tree import state_digest
 from .util import atomic_json, bounded_json, bounded_text, digest, exact, normalize_timestamp
 
 SCHEMA = "pod-relay-verification/v1"
@@ -509,7 +510,7 @@ class Decision:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.keys, self.kinds, self.prior = [], {kind}, []
         self.project, self.objective, self.kind = project, objective, kind
-        self.effect, self.state = deepcopy(effect), digest(state)
+        self.effect, self.state = deepcopy(effect), state_digest(state)
         self.raw = _raw_decision(decision)
         self.snapshot = snapshot or config.load(project)
         if self.snapshot["status"] not in ("valid", "missing"):
@@ -631,7 +632,7 @@ class Decision:
         if (self.kind not in ("claim", "handoff", "retirement") and not
                 (self.reused and self.kind in ("tool_permission", "tool_operation"))) or set(paths) != set(states):
             raise PodError("decision_scope_mismatch", "Transition phases must name its exact existing records")
-        if not self.reused and digest(states) != self.state:
+        if not self.reused and state_digest(states) != self.state:
             raise PodError("decision_stale", "Transition predecessors changed before preparation")
         self.phase_paths, self.phase_expected = dict(paths), deepcopy(states)
 
@@ -684,7 +685,7 @@ class Decision:
             raise PodError("decision_stale", "Decision state, policy or memory changed; ask for a fresh decision")
 
     def recheck(self, current_state, snapshot):
-        if digest(current_state) != self.state:
+        if state_digest(current_state) != self.state:
             raise PodError("decision_stale", "The exact decision state changed")
         self.recheck_policy(snapshot)
 
@@ -704,6 +705,9 @@ class Decision:
         if self.verdict is None:
             self.record["decided_at"] = at
         def stamp(item):
+            from .history_tree import from_revision
+            if from_revision(item):
+                return  # Previously accepted immutable rows keep their original decision timestamps.
             if isinstance(item, dict):
                 if (item.get("decision_binding") == self.binding
                         or isinstance(item.get("decision_verification"), dict)
@@ -789,7 +793,7 @@ class Decision:
             previous = datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp is not None else None
             if previous is not None and (at < previous or at == previous and not stop):
                 raise PodError("decision_stale", "A conflicting decision is newer or tied")
-        transition = digest({"predecessor": self.state, "binding": self.binding,
+        transition = state_digest({"predecessor": self.state, "binding": self.binding,
                              "result": result, "keys": sorted(keys)})
         receipt = {"schema": "pod-relay-use/v1", "authorization": digest(self.verdict or self.record),
                    "transition": transition, "decision": {"request_id": self.binding["request_id"],
@@ -857,8 +861,8 @@ def decision_boundary(derive):
 
 
 def validate_order(value: object) -> list:
-    if not isinstance(value, list) or len(value) > 512:
-        raise PodError("state_unsupported", "Decision chronology is malformed or full")
+    if not isinstance(value, list):
+        raise PodError("state_unsupported", "Decision chronology is malformed")
     seen = set()
     for item in value:
         row = exact(item, {"key", "request_id", "decided_at", "actor"},
@@ -871,13 +875,16 @@ def validate_order(value: object) -> list:
     return value
 
 
-def _contains_binding(value, binding):
+def _contains_binding(value, binding, *, changed_only=False):
+    from .history_tree import from_revision
+    if changed_only and from_revision(value):
+        return False
     if isinstance(value, dict):
         return (value.get("decision_binding") == binding
                 or value.get("schema") in (SCHEMA, "pod-tool-proof/v1") and value.get("action") == "decision" and value.get("decision") == binding
-                or any(_contains_binding(item, binding) for item in value.values()))
+                or any(_contains_binding(item, binding, changed_only=changed_only) for item in value.values()))
     if isinstance(value, list):
-        return any(_contains_binding(item, binding) for item in value)
+        return any(_contains_binding(item, binding, changed_only=changed_only) for item in value)
     return False
 
 
@@ -886,7 +893,7 @@ def stamp_decision(value: dict) -> None:
     if capability is None:
         return
     capability.finalize(value)
-    if not _contains_binding(value, capability.binding) and not (capability.phase_paths and capability.completion_only):
+    if not _contains_binding(value, capability.binding, changed_only=not capability.reused) and not (capability.phase_paths and capability.completion_only):
         raise PodError("decision_capability_unused", "Record the exact decision in its actual mutation before publication")
     index = {row["key"]: row for row in validate_order(value.get("decision_order", []))}
     for key in capability.keys:
@@ -910,7 +917,7 @@ def publish_decision(path: Path, proposed: dict, publish) -> None:
             raise PodError("decision_scope_mismatch", "This write is outside the accepted transition records")
         with config._edit_lock(config.personal_path(capability.project)):
             current = {key: _read(target) for key, target in capability.phase_paths.items()}
-            if digest(current) != digest(capability.phase_expected):
+            if state_digest(current) != state_digest(capability.phase_expected):
                 raise PodError("decision_stale", "A phased transition record changed")
             snapshot = config.load(capability.project)
             if not capability.phase_started:

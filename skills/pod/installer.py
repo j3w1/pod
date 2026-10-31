@@ -36,6 +36,7 @@ PATH_END = "# <<< pod path <<<"
 # installer's read-only notice and doctor/status agree without a second list.
 STATE_SCHEMAS = {"context": "pod-context/v4", "checkpoint": "pod-checkpoint/v3",
                  "admission": "pod-admission/v4"}
+STORAGE_SCHEMA = "pod-history-record/v1"
 MAX_STATE_SCAN = 256
 
 
@@ -43,6 +44,10 @@ def superseded_schemas(value: object) -> list[str]:
     """The superseded schema names one objective record carries; empty when current."""
     if not isinstance(value, dict):
         return ["unknown"]
+    if value.get("schema") == STORAGE_SCHEMA and value.get("kind") == "context":
+        # Physical format/family notice only, exactly as for typed history below.
+        # The verified reader still checks every dependency its decision needs.
+        return []
     found = set()
     # Schema-family notice only: typed history placeholders carry no admission schema.
     # Full validity still requires the verified context reader, never this installer scan.
@@ -669,12 +674,34 @@ def doctor_snapshot() -> dict:
     receipt = read_receipt(receipt_path)
     venv = _venv_path(paths)
     launcher = paths["launcher"]
+    from .history import cleanup_inventory
+    from .errors import PodError
+    try:
+        cleanup = cleanup_inventory(_state_root(paths))
+    except (OSError, PodError) as exc:
+        cleanup = [{"record": None, "queued_bytes": None, "untracked": True,
+                    "error": getattr(exc, "code", "storage_unavailable")}]
     return {"paths": paths, "receipt_path": receipt_path, "receipt": receipt,
             "canonical_digest": optional_digest(paths["canonical"]), "venv": venv,
             "venv_ready": _venv_ready(venv), "launcher": launcher,
             "launcher_ownership": launcher_info(
                 launcher, _launcher_template(venv / "bin/python", paths["canonical"])),
-            "duplicates": _duplicates(paths)}
+            "duplicates": _duplicates(paths), "storage_cleanup": cleanup}
+
+
+def _storage_cleanup(paths, python):
+    """Best-effort cache reclamation with the placed reader; never migrate or edit logical state."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(paths["canonical"].parent)
+    program = ("import json,sys\nfrom pod.history import cleanup_inventory\n"
+               "print(json.dumps(cleanup_inventory(sys.argv[1],collect=True)))\n")
+    try:
+        result = subprocess.run([str(python), "-c", program, str(_state_root(paths))], env=env,
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        if result.returncode:
+            _say("Storage cleanup deferred; inspect pod doctor for queued cleanup")
+    except (OSError, subprocess.SubprocessError):
+        _say("Storage cleanup deferred; inspect pod doctor for queued cleanup")
 
 
 def _preferences(paths: dict[str, Path], python: Path) -> tuple[str, str | None]:
@@ -825,6 +852,7 @@ def install(stage: Path) -> int:
             for note in notes:
                 _say(note)
             _cutover_notice(paths)
+            _storage_cleanup(paths, python)
             _print_summary(paths, prefs, path_status, _duplicates(paths), None, notes)
             return 0
         previous = ({"version": _version(canonical), "digest": current}
@@ -881,6 +909,7 @@ def install(stage: Path) -> int:
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
         _cutover_notice(paths)
+        _storage_cleanup(paths, python)
         _print_summary(paths, prefs, path_status, duplicates, preserved, notes)
         return 0
 

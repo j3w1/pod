@@ -1584,7 +1584,7 @@
         "tests.test_governance_history.GovernanceHistoryTests.test_old_checkpoint_candidates_survive_round_trip_omission_and_later_writes",
         "tests.test_governance_history.GovernanceHistoryTests.test_pruned_discarded_result_requires_exact_consent_without_losing_history",
         "tests.test_governance_history.GovernanceHistoryTests.test_decisions_persist_through_admission_report_and_attempted_replacement",
-        "tests.test_governance_history.GovernanceHistoryTests.test_candidate_history_limit_preserves_the_previous_checkpoint",
+        "tests.test_governance_history.GovernanceHistoryTests.test_retained_candidate_history_has_no_lifetime_limit",
         "tests.test_governance_history.GovernanceHistoryTests.test_malformed_shared_ancestry_observation_cannot_approve_refresh",
         "tests.test_governance_history.GovernanceHistoryTests.test_unresolvable_candidate_is_refused_before_intake_or_history_mutation"
       ],
@@ -1676,7 +1676,7 @@
         "tests.test_assurance_history.AssuranceHistoryTests.test_advisory_overflow_refuses_without_evicting_required_finding",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_32_plus_one_required_finding_preserves_every_prior_record",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_63_plus_one_required_finding_preserves_every_prior_record",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_preserves_resolved_history_and_new_finding",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_exact_replay_of_32_old_findings_spends_no_new_slots",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_persisted_history_refuses_33_records_from_the_same_attempt",
@@ -2234,7 +2234,7 @@
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_unchanged_runtime_runs_no_continuity_path",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_status_never_rebinds",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_starts_replays_creates_adopts_and_reassigns_nothing",
-        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_past_the_history_bound_refuses_without_a_write",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_past_eight_entries_retains_history_and_authority",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_a_runtime_change_that_destroyed_its_dispatch_refuses_and_stays_reserved",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_another_calls_locked_rebind_refuses_and_stays_reserved",
         "tests.test_runtime_continuity.ContinuityBoundaryTests.test_bind_read_before_another_calls_checkpoint_rebind_refuses_and_stays_reserved",
@@ -2731,7 +2731,7 @@
         "tests.test_issue41.AdditionalFindingTests.test_findings_and_correction_id_bounds_refuse_without_eviction",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_32_plus_one_required_finding_preserves_every_prior_record",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_63_plus_one_required_finding_preserves_every_prior_record",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_refuses_atomically_with_an_actual_next_action",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_retained_64_plus_one_preserves_resolved_history_and_new_finding",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_interrupted_report_publication_retries_without_losing_or_duplicating_findings",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_genuine_previous_reader_keeps_32_record_meaning_unchanged",
@@ -2747,7 +2747,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_issue41.StorageBoundaryTests.test_oversized_checkpoint_is_atomic_and_names_sizes_and_sections",
+        "tests.test_issue41.StorageBoundaryTests.test_bounded_checkpoints_cross_the_preceding_file_limit_losslessly",
         "tests.test_issue41.StorageBoundaryTests.test_objective_governor_and_native_start_records_are_compact_and_old_indent_reads"
       ],
       "status": "NOT_RUN"
@@ -3064,7 +3064,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_owner_handoff.TransitionTableTests.test_full_history_without_reusable_record_and_closed_objective_refuse",
+        "tests.test_owner_handoff.TransitionTableTests.test_completed_history_alone_does_not_refuse_a_new_handoff",
         "tests.test_owner_handoff.TransitionTableTests.test_closed_objective_is_detected_and_never_written"
       ],
       "status": "NOT_RUN"
@@ -4221,9 +4221,9 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_carried_claim.ContinuityCapacityTests.test_a_full_history_refuses_the_claim_before_any_write",
+        "tests.test_carried_claim.ContinuityCapacityTests.test_completed_history_does_not_block_a_valid_claim",
         "tests.test_carried_claim.ContinuityCapacityTests.test_one_free_entry_finishes_a_claim_interrupted_after_the_link",
-        "tests.test_carried_claim.ContinuityCapacityTests.test_a_reservation_whose_last_entry_went_to_a_handoff_is_released_unlinked"
+        "tests.test_carried_claim.ContinuityCapacityTests.test_interrupted_reservation_survives_handoff_past_former_history_limit"
       ],
       "status": "NOT_RUN"
     },
@@ -4257,8 +4257,8 @@
         "tests.test_governance_adoption.DeliveredAdoptionTests.test_sibling_merge_after_delivery_adopts_derived",
         "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_record_and_replay_at_unchanged_later_target_pass",
         "tests.test_governance_capacity.LongAdoptionTests.test_eighty_plain_checkpoints_preserve_the_complete_adoption_chain",
-        "tests.test_governance_capacity.LongAdoptionTests.test_owner_bound_still_refuses_after_eighty_derived_adoptions",
-        "tests.test_governance_capacity.GovernanceCapacityTests.test_sixty_fifth_owner_decision_refuses_checkpoint_and_closure_without_write",
+        "tests.test_governance_capacity.LongAdoptionTests.test_owner_history_continues_after_eighty_derived_adoptions",
+        "tests.test_governance_capacity.GovernanceCapacityTests.test_sixty_fifth_owner_decision_preserves_history_through_closure",
         "tests.test_governance_capacity.GovernanceCapacityTests.test_well_formed_owner_overflow_uses_capacity_refusal_on_every_path",
         "tests.test_governance_capacity.GovernanceCapacityTests.test_well_formed_candidate_overflow_uses_capacity_refusal_on_every_path",
         "tests.test_derived_projection.DerivedProjectionTests.test_six_hundred_adoptions_close_with_a_bounded_report",
@@ -4462,7 +4462,7 @@
         "tests.test_history.SidecarTests.test_unknown_route_and_failed_receipts_stay_inline",
         "tests.test_history.SidecarTests.test_native_settlement_and_production_projections_are_identical",
         "tests.test_history.SidecarTests.test_real_closed_snapshot_contract_is_identical",
-        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
+        "tests.test_history.SidecarTests.test_retained_receipts_do_not_refuse_sixty_fifth",
         "tests.test_history.SidecarTests.test_store_roundtrip_and_write_once",
         "tests.test_history.SidecarTests.test_missing_chunk_refuses",
         "tests.test_history.SidecarTests.test_tampered_chunk_refuses",
@@ -4505,7 +4505,7 @@
         "tests.test_history.SidecarTests.test_unknown_route_and_failed_receipts_stay_inline",
         "tests.test_history.SidecarTests.test_native_settlement_and_production_projections_are_identical",
         "tests.test_history.SidecarTests.test_real_closed_snapshot_contract_is_identical",
-        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
+        "tests.test_history.SidecarTests.test_retained_receipts_do_not_refuse_sixty_fifth",
         "tests.test_history.SidecarTests.test_store_roundtrip_and_write_once",
         "tests.test_history.SidecarTests.test_missing_chunk_refuses",
         "tests.test_history.SidecarTests.test_tampered_chunk_refuses",
@@ -4539,18 +4539,7 @@
         "tests.test_history.HistoryIntegrityTests.test_pointer_shaped_user_evidence_is_never_expanded",
         "tests.test_history.HistoryIntegrityTests.test_utf8_fragments_roundtrip_after_byte_reassembly",
         "tests.test_history.HistoryIntegrityTests.test_recursive_pointer_and_bad_part_count_refuse",
-        "tests.test_history.HistoryIntegrityTests.test_nonregular_and_oversized_chunks_are_never_read_as_evidence",
-        "tests.test_record_compaction.RecordCompactionTests.test_detection_has_exact_facts_plain_question_and_no_writes",
-        "tests.test_record_compaction.RecordCompactionTests.test_owner_maintenance_preserves_every_logical_field_and_revision",
-        "tests.test_record_compaction.RecordCompactionTests.test_exact_replay_writes_nothing_and_receipt_survives_ordinary_write",
-        "tests.test_record_compaction.RecordCompactionTests.test_later_maintenance_appends_immutable_receipt_history",
-        "tests.test_record_compaction.RecordCompactionTests.test_stale_input_digest_revision_objective_repository_refuse",
-        "tests.test_record_compaction.RecordCompactionTests.test_indirect_and_relayed_compaction_refuse_shared_authority_rule",
-        "tests.test_record_compaction.RecordCompactionTests.test_concurrent_change_needs_new_detection",
-        "tests.test_record_compaction.RecordCompactionTests.test_unknown_objective_and_unsafe_record_create_nothing",
-        "tests.test_record_compaction.RecordCompactionTests.test_maintenance_bound_and_unsupported_schema_remain_unavailable",
-        "tests.test_record_compaction.RecordCompactionTests.test_impossible_fit_publishes_no_chunks",
-        "tests.test_record_compaction.RecordCompactionTests.test_crash_after_chunks_before_context_keeps_readable_old_record_and_orphans"
+        "tests.test_history.HistoryIntegrityTests.test_nonregular_and_oversized_chunks_are_never_read_as_evidence"
       ],
       "status": "NOT_RUN"
     },
@@ -4623,20 +4612,8 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_history_boundaries.HistoryScanTests.test_run_membership_handoff_and_listing_retain_archived_references",
-        "tests.test_history_boundaries.HistoryScanTests.test_doctor_inventory_does_not_call_valid_compacted_state_superseded",
-        "tests.test_history_boundaries.HistoryScanTests.test_missing_chunk_holds_every_semantic_scan",
-        "tests.test_history_boundaries.HistoryScanTests.test_raw_claimant_scan_sees_link_even_with_all_admissions_archived",
-        "tests.test_history_boundaries.HistoryScanTests.test_fresh_native_outstanding_exact_identity_vetoes_move",
-        "tests.test_history_boundaries.HistoryScanTests.test_governor_pending_unknown_failed_candidate_and_unreadable_join_veto",
-        "tests.test_history_boundaries.HistoryScanTests.test_claim_capacity_preflight_uses_planner_and_publishes_nothing",
-        "tests.test_history_boundaries.HistoryScanTests.test_capacity_thresholds_and_largest_sections_are_additive_observations",
-        "tests.test_history_boundaries.PublicHistoryProjectionTests.test_status_by_run_and_objective_preserve_every_existing_key",
-        "tests.test_history_boundaries.PublicHistoryProjectionTests.test_governor_map_and_checkpoint_rewrite_hydrated_history",
-        "tests.test_history_boundaries.HistoryScanTests.test_warning_before_trigger_describes_compaction_conditionally",
-        "tests.test_compaction_requests.OverLimitGuidanceTests.test_ordinary_read_over_limit_names_the_request_step",
-        "tests.test_compaction_requests.OverLimitGuidanceTests.test_above_the_maintenance_bound_names_lead_preservation_only",
-        "tests.test_completed_closure.CompletionGuidanceTests.test_capacity_and_governance_unavailable_name_the_lead_action"
+        "tests.test_storage_scale.MigrationFaultTests.test_explicit_migration_lossless_source_and_idempotent_replay",
+        "tests.test_storage_gc.ReclamationTests.test_cleanup_inventory_reads_only_the_bounded_hint"
       ],
       "status": "NOT_RUN"
     },
@@ -4656,7 +4633,7 @@
         "tests.test_history.SidecarTests.test_unknown_route_and_failed_receipts_stay_inline",
         "tests.test_history.SidecarTests.test_native_settlement_and_production_projections_are_identical",
         "tests.test_history.SidecarTests.test_real_closed_snapshot_contract_is_identical",
-        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
+        "tests.test_history.SidecarTests.test_retained_receipts_do_not_refuse_sixty_fifth",
         "tests.test_history.SidecarTests.test_store_roundtrip_and_write_once",
         "tests.test_history.SidecarTests.test_missing_chunk_refuses",
         "tests.test_history.SidecarTests.test_tampered_chunk_refuses",
@@ -4737,9 +4714,7 @@
         "tests.test_retirement_capacity.RetirementCapacityTests.test_full_unsettled_record_uses_entry_pointer_and_preserves_every_guarantee",
         "tests.test_retirement_capacity.RetirementCapacityTests.test_pointer_impossible_fit_preserves_context_journal_and_sidecars",
         "tests.test_retirement_capacity.RetirementCapacityTests.test_small_record_keeps_inline_entry_and_maintenance_refuses_frozen_record",
-        "tests.test_retirement_capacity.RetirementCapacityTests.test_over_limit_record_requires_explicit_maintenance_then_retires",
-        "tests.test_compaction_requests.CompactionRequestTests.test_coordinator_compacts_over_limit_without_a_decision",
-        "tests.test_compaction_requests.CompactionRequestTests.test_project_lead_compacts_without_a_live_coordinator"
+        "tests.test_retirement_capacity.RetirementCapacityTests.test_over_limit_record_requires_explicit_maintenance_then_retires"
       ],
       "status": "NOT_RUN"
     },
@@ -6058,7 +6033,7 @@
         "tests.test_standing_authorization.StandingRecordTests.test_revoke_is_immediate_and_revoke_when_off_is_a_noop",
         "tests.test_standing_authorization.StandingRecordTests.test_verified_relay_revoke_and_replacement_preserve_history",
         "tests.test_standing_authorization.StandingGovernorTests.test_revocation_between_admission_and_effect_fails_row_without_effect",
-        "tests.test_standing_authorization.StandingCapacityTests.test_activation_reserves_last_slot_so_revoke_always_fits",
+        "tests.test_standing_authorization.StandingCapacityTests.test_standing_decisions_continue_past_the_previous_history_cap",
         "tests.test_standing_authorization.StandingRecordTests.test_relay_revoke_replay_cannot_end_a_new_session_activation",
         "tests.test_standing_authorization.StandingRecordTests.test_interrupted_relay_revoke_receipt_can_complete_exactly_one_row",
         "tests.test_standing_authorization.StandingGovernorTests.test_dirty_prepared_binding_fails_mutation_recheck_without_remote_effect",
@@ -6438,7 +6413,7 @@
         "tests.test_standing_authorization.StandingResponderTests.test_without_active_yolo_answers_keep_owner_route_and_unrecorded_questions_refuse",
         "tests.test_standing_authorization.StandingResponderTests.test_answer_cannot_carry_owner_decisions_or_verifier_proof",
         "tests.test_standing_authorization.StandingGuidanceTests.test_responder_answers_never_resolve_excluded_or_owner_decisions",
-        "tests.test_standing_authorization.StandingCapacityTests.test_full_maximum_size_verified_answers_fit_and_next_refuses_without_write",
+        "tests.test_standing_authorization.StandingCapacityTests.test_maximum_size_verified_answers_continue_without_eviction",
         "tests.test_standing_authorization.StandingCapacityTests.test_worst_case_record_leaves_headroom_for_checkpoint_and_closure_report",
         "tests.test_standing_authorization.StandingCapacityTests.test_full_standing_history_keeps_admission_and_report_writes_available",
         "tests.test_standing_authorization.StandingRecordTests.test_encoded_row_caps_refuse_before_any_receipt_is_consumed",
@@ -7604,19 +7579,19 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_records_receipts.ReceiptBoundaryTests.test_65th_report_refuses_atomically_with_exact_renewal_request",
+        "tests.test_records_receipts.ReceiptBoundaryTests.test_65th_checkpoint_and_report_preserve_every_earlier_receipt",
         "tests.test_obligations.ProofIntegrityTests.test_ordinary_receipt_requires_definition_and_history_never_evicts",
-        "tests.test_records_reservations.ReceiptReservationTests.test_full_history_refuses_before_an_outcome_or_native_launch",
-        "tests.test_records_reservations.ReceiptReservationTests.test_sibling_result_states_reserve_until_consumed",
-        "tests.test_records_reservations.ReceiptReservationTests.test_multiple_pending_reviews_reserve_separately",
-        "tests.test_records_reservations.AcceptedRenewalAdviceTests.test_receipt_refusal_uses_accepted_coordinator_slot",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
-        "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
+        "tests.test_records_reservations.ReceiptReservationTests.test_retained_unknown_receipts_allow_launch_and_failed_report",
+        "tests.test_records_reservations.ReceiptReservationTests.test_sibling_result_states_never_evict_retained_observations",
+        "tests.test_records_reservations.ReceiptReservationTests.test_multiple_pending_reviews_reserve_finding_work_separately",
+        "tests.test_records_reservations.AcceptedRenewalAdviceTests.test_retention_does_not_mask_invalid_coordinator_sequence",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_unadopted_advisory_history_does_not_consume_new_review_capacity",
+        "tests.test_records_corrections.CapacityPaddingTests.test_retained_padding_preserves_report_landing_and_required_findings",
         "tests.test_records_reservations.FindingReservationTests.test_incremental_old_report_cannot_take_a_pending_reviews_finding_budget",
         "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_its_reservation_and_renewal_hold",
         "tests.test_records_refused_reports.RefusedReportTests.test_failed_without_report_names_consumption_and_keeps_renewal_blocked",
         "tests.test_records_refused_reports.RefusedReportTests.test_sibling_states_never_release_a_hold_without_consumption_or_disposition",
-        "tests.test_records_refused_reports.RefusedReportTests.test_recorded_mismatch_keeps_the_reserved_checkpoint_receipt",
+        "tests.test_records_refused_reports.RefusedReportTests.test_retained_receipt_growth_does_not_clear_a_recorded_mismatch",
         "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_releases_reservations_and_keeps_review_incomplete",
         "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_and_renewal_commit_together",
         "tests.test_route_settlements.ReviewDiscardTests.test_invalid_discard_cannot_release_a_same_write_renewal",
@@ -7636,7 +7611,7 @@
       ],
       "offline_test": [
         "tests.test_records_boundaries.RenewalTickTests.test_tick_pending_transfers_requirement_scope_without_proofs",
-        "tests.test_history.SidecarTests.test_sixty_four_receipt_logical_limit_refuses_sixty_fifth",
+        "tests.test_history.SidecarTests.test_retained_receipts_do_not_refuse_sixty_fifth",
         "tests.test_records_renewal.RowAndHistoryTests.test_receipt_selection_and_criterion_proof_bounds_stay_independent"
       ],
       "status": "NOT_RUN"
@@ -7706,8 +7681,8 @@
         "tests.test_records_receipts.ReceiptBoundaryTests.test_consumption_then_renewal_keeps_history_without_replacement_proof",
         "tests.test_records_renewal.RenewalTests.test_renewal_refusals_and_pending_results",
         "tests.test_records_receipts.ReceiptBoundaryTests.test_historical_review_cannot_be_discarded",
-        "tests.test_records_corrections.CapacityPaddingTests.test_stored_padding_cannot_spend_a_settled_reviews_reserved_receipt",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_new_admission_reserves_the_full_finding_budget",
+        "tests.test_records_corrections.CapacityPaddingTests.test_retained_padding_preserves_report_landing_and_required_findings",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_unadopted_advisory_history_does_not_consume_new_review_capacity",
         "tests.test_records_corrections.InvestigationCapacityTests.test_full_ordinary_history_never_allows_investigation_discard",
         "tests.test_records_refused_reports.RefusedReportTests.test_consumable_review_keeps_its_slot_and_records_its_finding",
         "tests.test_route_settlements.ReviewDiscardTests.test_terminal_discard_releases_reservations_and_keeps_review_incomplete",
@@ -7742,8 +7717,8 @@
       ],
       "offline_test": [
         "tests.test_records_capacity.RecordsCapacityTests.test_acceptance_shape_and_original_three_findings_share_one_new_correction",
-        "tests.test_records_capacity.RecordsCapacityTests.test_post_upgrade_admission_renews_before_recording_further_groups",
-        "tests.test_records_capacity.RecordsCapacityTests.test_group_metrics_follow_the_renewed_assurance_tip"
+        "tests.test_records_capacity.RecordsCapacityTests.test_storage_migration_preserves_live_work_and_continues_original_report",
+        "tests.test_records_capacity.RecordsCapacityTests.test_group_metrics_follow_the_same_assurance_revision"
       ],
       "status": "NOT_RUN"
     },
@@ -8381,9 +8356,9 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_compaction_requests.OverLimitGuidanceTests.test_ordinary_read_over_limit_names_the_request_step",
-        "tests.test_compaction_requests.OverLimitGuidanceTests.test_above_the_maintenance_bound_names_lead_preservation_only",
-        "tests.test_completed_closure.CompletionGuidanceTests.test_capacity_and_governance_unavailable_name_the_lead_action"
+        "tests.test_storage_scale.MigrationFaultTests.test_explicit_migration_lossless_source_and_idempotent_replay",
+        "tests.test_storage_gc.ReclamationTests.test_cleanup_inventory_reads_only_the_bounded_hint",
+        "tests.test_storage_scale.MigrationFaultTests.test_conversion_input_bound_names_preservation_and_never_rewrites_source"
       ],
       "status": "NOT_RUN"
     },
@@ -8654,8 +8629,6 @@
       "offline_test": [
         "tests.test_verified_decisions.VerifiedCheckpointTests.test_stored_actor_or_capability_fields_are_not_public_credentials",
         "tests.test_verified_decisions.VerifiedCheckpointTests.test_verified_agent_revision_needs_no_previously_recorded_question",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_local_cooperative_compaction_keeps_its_truthful_actor",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_public_input_refuses_forged_stored_metadata",
         "tests.test_tool_question_privacy.PublicDecisionPrivacyTests.test_public_summary_cannot_replace_private_authority"
       ],
       "status": "NOT_RUN"
@@ -8687,13 +8660,7 @@
         "tests.test_verified_decisions.VerifiedStandingTests.test_saved_scoped_standing_activation_keeps_agent_origin",
         "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_saved_source_vouch_accepts_exact_revision_without_a_question",
         "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_new_source_vouch_refuses_stale_payload_state_and_wrong_scope",
-        "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_new_source_decision_policy_and_missing_verifier_have_no_effects",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_saved_agent_vouch_compacts_without_a_recorded_question_losslessly",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_stale_payload_refuses_without_receipt_or_state_effect",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_stale_state_refuses_without_receipt_or_state_effect",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_scope_for_another_record_refuses_without_effect",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_vouch_for_another_kind_refuses_without_effect",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_absent_verifier_never_turns_relay_into_session_authority"
+        "tests.test_verified_decisions.VerifiedIssueRevisionTests.test_new_source_decision_policy_and_missing_verifier_have_no_effects"
       ],
       "status": "NOT_RUN"
     },
@@ -8715,9 +8682,6 @@
         "installed_bundle"
       ],
       "offline_test": [
-        "tests.test_verified_compaction.MaintenanceReaderTests.test_other_kind_stored_evidence_is_not_a_compaction_receipt",
-        "tests.test_verified_compaction.MaintenanceReaderTests.test_partial_or_forged_old_receipt_is_not_upgraded_into_authority",
-        "tests.test_verified_compaction.MaintenanceReaderTests.test_ordinary_request_never_erases_an_existing_new_evidence_marker",
         "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_forged_resolution_sequence_is_rejected_before_history",
         "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_person_actor_cannot_be_relabelled_as_agent_withdrawal",
         "tests.test_verified_compaction.AgentWithdrawalHistoryTests.test_wrong_kind_cannot_resolve_a_retained_correction",
@@ -8734,11 +8698,7 @@
       ],
       "offline_test": [
         "tests.test_verified_history.VerifiedReaderTests.test_genuine_preceding_config_reader_refuses_new_semantics_without_write",
-        "tests.test_verified_history.VerifiedReaderTests.test_every_old_relay_wire_function_has_identical_preceding_code",
-        "tests.test_verified_compaction.MaintenanceReaderTests.test_coordinator_request_does_not_upgrade_an_older_record",
-        "tests.test_verified_compaction.MaintenanceReaderTests.test_project_lead_request_does_not_upgrade_an_older_record",
-        "tests.test_verified_compaction.MaintenanceReaderTests.test_session_compaction_keeps_exact_three_field_receipt_and_reader_floor",
-        "tests.test_verified_compaction.MaintenanceReaderTests.test_genuine_preceding_writer_receipt_reads_without_conversion"
+        "tests.test_verified_history.VerifiedReaderTests.test_every_old_relay_wire_function_has_identical_preceding_code"
       ],
       "status": "NOT_RUN"
     },
@@ -8757,9 +8717,6 @@
         "tests.test_verified_ordering.VerifiedPublicationTests.test_failure_after_replace_is_committed_and_retry_is_readback",
         "tests.test_decision_integration.ObjectiveToolTests.test_interrupted_memory_answer_finishes_only_context_after_personal_commit",
         "tests.test_decision_integration.ObjectiveToolTests.test_interrupted_operation_consumption_never_issues_another_execute",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_actual_record_preflight_failure_precedes_receipt_and_publication",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_receipt_before_publication_recovers_only_identical_transition",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_response_loss_after_atomic_replace_recovers_committed_readback",
         "tests.test_tool_use_revalidation.MachineToolUseTests.test_interrupted_consumption_recovers_without_current_authority_or_execution",
         "tests.test_tool_use_revalidation.ObjectiveToolUseTests.test_interrupted_consumption_recovers_without_current_authority_or_execution"
       ],
@@ -8881,8 +8838,7 @@
       ],
       "offline_test": [
         "tests.test_decision_policy.DecisionPolicyTests.test_all_presets_and_invariant_person_only",
-        "tests.test_decision_integration.ObjectiveToolTests.test_completed_objective_closes_without_answering_an_unused_question",
-        "tests.test_verified_compaction.VerifiedCompactionTests.test_routine_remains_any_agent_under_all_presets"
+        "tests.test_decision_integration.ObjectiveToolTests.test_completed_objective_closes_without_answering_an_unused_question"
       ],
       "status": "NOT_RUN"
     },
@@ -9318,88 +9274,222 @@
       "status": "NOT_RUN"
     },
     {
-      "id": "A690",
-      "required_evidence": [
-        "unit"
-      ],
-      "offline_test": [
-        "tests.test_wake.WakeTests.test_event_between_inspection_and_wait_arm_is_not_lost",
-        "tests.test_wake.WakeTests.test_mail_pending_before_the_wait_is_returned_without_arming_one",
-        "tests.test_wake.WakeTests.test_one_wait_per_call_and_a_timeout_is_a_checkpoint_not_a_rearm"
-      ],
-      "status": "NOT_RUN"
-    },
-    {
-      "id": "A691",
-      "required_evidence": [
-        "unit"
-      ],
-      "offline_test": [
-        "tests.test_wake.WakeTests.test_a_duplicate_is_delivered_once",
-        "tests.test_wake.WakeTests.test_second_settlement_report_for_one_dispatch_is_one_event",
-        "tests.test_wake.WakeTests.test_a_rejected_settlement_is_not_a_completion",
-        "tests.test_wake.WakeTests.test_wake_after_compaction_replays_the_unacknowledged_batch_then_continues",
-        "tests.test_wake.WakeTests.test_events_carry_the_native_text_and_payload_the_coordinator_must_act_on",
-        "tests.test_wake.WakeTests.test_content_over_the_bounds_is_flagged_and_never_silently_dropped",
-        "tests.test_wake.WakeTests.test_a_second_settlement_report_keeps_its_own_content"
-      ],
-      "status": "NOT_RUN"
-    },
-    {
-      "id": "A692",
-      "required_evidence": [
-        "unit"
-      ],
-      "offline_test": [
-        "tests.test_wake.WakeTests.test_a_lost_connection_consumes_nothing_and_leaves_no_armed_wait",
-        "tests.test_wake.WakeTests.test_a_fenced_coordinator_stops_before_waiting",
-        "tests.test_wake.WakeTests.test_a_repeated_acknowledgement_reads_what_is_pending_now",
-        "tests.test_wake.WakeTests.test_other_native_refusals_and_an_unbound_run_are_refused"
-      ],
-      "status": "NOT_RUN"
-    },
-    {
-      "id": "A693",
-      "required_evidence": [
-        "unit"
-      ],
-      "offline_test": [
-        "tests.test_wake.MailboxCheckTests.test_argument_shape_is_exact_and_the_process_outlives_the_native_timeout",
-        "tests.test_wake.MailboxCheckTests.test_a_batch_carries_its_delivery_identity_and_replay_flag",
-        "tests.test_wake.MailboxCheckTests.test_native_refusals_keep_their_code_and_bad_input_never_starts_a_process"
-      ],
-      "status": "NOT_RUN"
-    },
-    {
-      "id": "A694",
-      "required_evidence": [
-        "unit"
-      ],
-      "offline_test": [
-        "tests.test_wake.WakeTests.test_status_reports_a_quiet_coordinator_that_owns_work_and_never_invents_an_armed_flag",
-        "tests.test_wake.WakeTests.test_owned_work_counts_unconsumed_reports_unverified_assignments_and_unknown_replies_once",
-        "tests.test_wake.WakeStatusTests.test_a_pending_question_is_an_awaited_reply_for_a_quiet_coordinator",
-        "tests.test_wake.WakeStatusTests.test_resolved_questions_are_not_awaited_replies",
-        "tests.test_wake.WakeStatusTests.test_legacy_and_contradictory_questions_count_and_stay_unknown",
-        "tests.test_wake.WakeStatusTests.test_a_settled_worker_whose_report_is_unconsumed_is_owned_until_consumed"
-      ],
-      "status": "NOT_RUN"
-    },
-    {
-      "id": "A695",
+      "id": "A650",
       "required_evidence": [
         "unit",
-        "installed_bundle"
+        "hosted_ci",
+        "independent_review"
       ],
-      "offline_test": "tests.test_inventory.InventoryIntegrityTests.test_repository_owned_validator_checks_the_actual_canonical_skill",
+      "offline_test": [
+        "tests.test_storage_scale.LargeObjectiveTests.test_large_map_crosses_old_physical_and_lifetime_row_ceilings",
+        "tests.test_evidence_closure.PreservedResultsTests.test_revision_journal_preserves_recorded_delivery_prs_for_closure"
+      ],
       "status": "NOT_RUN"
     },
     {
-      "id": "A696",
+      "id": "A651",
       "required_evidence": [
-        "live_native"
+        "unit",
+        "hosted_ci",
+        "independent_review"
       ],
-      "offline_test": null,
+      "offline_test": "tests.test_storage_scale.RevisionPageTests.test_current_read_and_update_do_not_open_retained_payloads",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A652",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_scale.MigrationFaultTests.test_explicit_migration_lossless_source_and_idempotent_replay",
+        "tests.test_storage_previous_reader.PrecedingReaderTests.test_preceding_reader_and_writer_refuse_without_changing_context_or_chunks"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A653",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_scale.MigrationFaultTests.test_crash_after_chunk_publication_leaves_old_authority_and_resumes",
+        "tests.test_storage_scale.MigrationFaultTests.test_serialized_concurrent_writers_accept_exactly_one_snapshot"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A654",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_claims.AdmissionFactsTests.test_routine_checkpoint_does_not_read_unselected_report_body",
+        "tests.test_storage_claims.SelectedReportTests.test_missing_selected_review_body_cannot_supply_current_proof",
+        "tests.test_storage_journal.JournalScaleTests.test_missing_old_receipt_does_not_hide_current_effects_but_fails_full_audit"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A655",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_scale.MigrationFaultTests.test_disk_full_before_and_during_publication_preserves_source",
+        "tests.test_storage_journal.JournalScaleTests.test_journal_disk_full_preserves_prior_authority"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A656",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_history.SidecarTests.test_retained_receipts_do_not_refuse_sixty_fifth",
+        "tests.test_storage_migration.RetainedFindingTests.test_retained_findings_cross_sixty_four_without_spending_current_work",
+        "tests.test_runtime_continuity.ContinuityBoundaryTests.test_rebind_past_eight_entries_retains_history_and_authority",
+        "tests.test_governance_capacity.LongAdoptionTests.test_owner_history_continues_after_eighty_derived_adoptions",
+        "tests.test_standing_authorization.StandingCapacityTests.test_standing_decisions_continue_past_the_previous_history_cap",
+        "tests.test_storage_migration.MaintenanceRetentionTests.test_many_complete_maintenance_receipts_live_outside_the_primary"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A657",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_storage_journal.JournalScaleTests.test_next_governed_operation_completes_beyond_action_unit_and_candidate_limits",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A658",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_claims.AdmissionFactsTests.test_possibly_live_worker_remains_visible_after_migration",
+        "tests.test_storage_claims.AdmissionFactsTests.test_foreign_attribution_does_not_open_claim_index",
+        "tests.test_storage_migration.NormalizationTests.test_record_namespace_proves_repository_without_inventing_a_placement",
+        "tests.test_storage_migration.NormalizationTests.test_conflicting_or_absent_facts_stay_scoped_unknown"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A659",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_storage_scale.RevisionPageTests.test_verification_json_and_earlier_text_keep_exact_values",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A660",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_gc.ReclamationTests.test_new_and_preceding_contexts_use_the_same_only_writer",
+        "tests.test_storage_gc.ReclamationTests.test_first_governor_write_and_context_write_share_one_store_and_gc_roots",
+        "tests.test_storage_gc.ReclamationTests.test_publisher_refuses_a_second_physical_representation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A661",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_gc.ReclamationTests.test_old_reader_pins_survive_publication_and_last_release_collects",
+        "tests.test_storage_gc.ReclamationTests.test_corrupt_or_missing_live_root_aborts_sweep_before_any_unlink",
+        "tests.test_storage_gc.ReclamationTests.test_unconfirmed_switch_cannot_reclaim_until_the_root_directory_is_durable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A662",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_storage_gc.ReclamationTests.test_unchanged_pages_keep_exact_bytes_and_inode_across_checkpoints",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A663",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_storage_gc.ReclamationTests.test_one_writer_can_publish_two_phases_but_an_independent_snapshot_stays_stale",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A664",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_verifying_review_advisories_cross_64_open_proposals_without_scope_adoption",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_unresolved_required_findings_still_reserve_the_next_report_in_full",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A665",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_scale.RevisionPageTests.test_lazy_reads_ignore_external_wait_and_charge_actual_storage_time",
+        "tests.test_storage_gc.ReclamationTests.test_admission_effects_pin_precedes_primary_read"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A666",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_storage_gc.ReclamationTests.test_routine_writes_queue_cleanup_without_scanning_retained_pages",
+        "tests.test_storage_gc.ReclamationTests.test_threshold_cleanup_runs_after_the_semantic_record_lock_is_released",
+        "tests.test_storage_gc.ReclamationTests.test_cleanup_inventory_reads_only_the_bounded_hint",
+        "tests.test_installer.InstallerTests.test_fresh_rerun_placements_receipt_and_untouched_agent_configs",
+        "tests.test_storage_gc.MaintenanceEntryTests.test_preceding_compaction_entry_is_read_only_and_names_the_source_bound_route"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -9505,6 +9595,91 @@
         "tests.test_admission_query.ReviewCorrectionTests.test_target_only_read_keeps_shared_reader_pending_native_target"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A690",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_event_between_inspection_and_wait_arm_is_not_lost",
+        "tests.test_wake.WakeTests.test_mail_pending_before_the_wait_is_returned_without_arming_one",
+        "tests.test_wake.WakeTests.test_one_wait_per_call_and_a_timeout_is_a_checkpoint_not_a_rearm"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A691",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_a_duplicate_is_delivered_once",
+        "tests.test_wake.WakeTests.test_second_settlement_report_for_one_dispatch_is_one_event",
+        "tests.test_wake.WakeTests.test_a_rejected_settlement_is_not_a_completion",
+        "tests.test_wake.WakeTests.test_wake_after_compaction_replays_the_unacknowledged_batch_then_continues",
+        "tests.test_wake.WakeTests.test_events_carry_the_native_text_and_payload_the_coordinator_must_act_on",
+        "tests.test_wake.WakeTests.test_content_over_the_bounds_is_flagged_and_never_silently_dropped",
+        "tests.test_wake.WakeTests.test_a_second_settlement_report_keeps_its_own_content"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A692",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_a_lost_connection_consumes_nothing_and_leaves_no_armed_wait",
+        "tests.test_wake.WakeTests.test_a_fenced_coordinator_stops_before_waiting",
+        "tests.test_wake.WakeTests.test_a_repeated_acknowledgement_reads_what_is_pending_now",
+        "tests.test_wake.WakeTests.test_other_native_refusals_and_an_unbound_run_are_refused"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A693",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.MailboxCheckTests.test_argument_shape_is_exact_and_the_process_outlives_the_native_timeout",
+        "tests.test_wake.MailboxCheckTests.test_a_batch_carries_its_delivery_identity_and_replay_flag",
+        "tests.test_wake.MailboxCheckTests.test_native_refusals_keep_their_code_and_bad_input_never_starts_a_process"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A694",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_status_reports_a_quiet_coordinator_that_owns_work_and_never_invents_an_armed_flag",
+        "tests.test_wake.WakeTests.test_owned_work_counts_unconsumed_reports_unverified_assignments_and_unknown_replies_once",
+        "tests.test_wake.WakeStatusTests.test_a_pending_question_is_an_awaited_reply_for_a_quiet_coordinator",
+        "tests.test_wake.WakeStatusTests.test_resolved_questions_are_not_awaited_replies",
+        "tests.test_wake.WakeStatusTests.test_legacy_and_contradictory_questions_count_and_stay_unknown",
+        "tests.test_wake.WakeStatusTests.test_a_settled_worker_whose_report_is_unconsumed_is_owned_until_consumed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A695",
+      "required_evidence": [
+        "unit",
+        "installed_bundle"
+      ],
+      "offline_test": "tests.test_inventory.InventoryIntegrityTests.test_repository_owned_validator_checks_the_actual_canonical_skill",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A696",
+      "required_evidence": [
+        "live_native"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
@@ -9527,6 +9702,10 @@
     {
       "id": "A497",
       "reason": "Archive/reversible recovery requirement withdrawn; retained stash, completeness and completed-task predicates use A498-A500 without reusing prior evidence."
+    },
+    {
+      "id": "A347",
+      "reason": "Scoped compaction publication withdrawn: R180 has one source-bound storage migration entry; prior authority receipts remain readable and lossless migration is covered by A652/A666."
     }
   ]
 }

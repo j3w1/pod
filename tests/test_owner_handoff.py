@@ -18,6 +18,17 @@ from pod.operations import OrcaPort
 from tests.common import GroupedTable, assert_grouped_table
 from tests.issue41_support import ProductionCase
 
+
+
+def logical_fixture(path):
+    """Materialize an earlier/new physical input before deliberate corruption."""
+    try:
+        from pod.history import load_context
+    except ImportError:
+        return json.loads(path.read_text())
+    return json.loads(json.dumps(load_context(path, validate=False)))
+
+
 SENTINEL = "PRESENTATION-MUST-NOT-LEAK"
 BASELINE = "86d8b90db7c1d0f6a38c3c9167b950548ff79fad"
 
@@ -262,8 +273,35 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
         self.native_calls.clear()
 
     def snapshot(self):
-        return {str(p.relative_to(self.root / "state")): p.read_bytes()
-                for p in (self.root / "state").rglob("*.json")}
+        import re
+        own_history = objective_root(self.project, "objective") / "history"
+        all_files = {p: p.read_bytes() for p in (self.root / "state").rglob("*.json")
+                     if not p.is_relative_to(own_history)}
+        # GC may finish an earlier write after its borrowed response disappears.
+        # Orphans are not peer authority. Cover every primary and every byte
+        # reachable from it, conservatively following all content-address strings
+        # rather than reusing the collector's typed mark implementation.
+        reachable = set()
+        def hashes(value):
+            if isinstance(value, str):
+                return {value} if re.fullmatch(r"[a-f0-9]{64}", value) else set()
+            if isinstance(value, dict): return set().union(*(hashes(v) for v in value.values()))
+            if isinstance(value, list): return set().union(*(hashes(v) for v in value))
+            return set()
+        for primary in all_files:
+            if primary.name not in ("context.json", "governor.json"): continue
+            try: queue = list(hashes(json.loads(all_files[primary])))
+            except (ValueError, UnicodeError): continue
+            while queue:
+                address = queue.pop()
+                target = primary.parent / "history" / "sha256" / (address + ".json")
+                if target in reachable: continue
+                reachable.add(target)
+                if target in all_files:
+                    try: queue.extend(hashes(json.loads(all_files[target])))
+                    except (ValueError, UnicodeError): pass  # Canonical scalar fragments have no descendants.
+        return {str(p.relative_to(self.root / "state")): raw for p, raw in all_files.items()
+                if p.parent.name != "sha256" or p in reachable}
 
     def state(self):
         return read(self.project, "objective")
@@ -554,7 +592,7 @@ class DetectionTableTests(HandoffCase):
                     case.current = saved
                     other = objective_root(case.project, "scope-objective") / "context.json"
                     if kind in ("corrupt-revision", "opaque-schema", "corrupt-closure", "unsupported-closed"):
-                        raw = json.loads(other.read_text())
+                        raw = logical_fixture(other)
                         if kind == "corrupt-revision": raw["revision"] = "corrupted"
                         elif kind == "corrupt-closure": raw["checkpoint"]["closure"]["report"]["status"] = "unverified"
                         else: raw["schema"] = "unknown-future-context"
@@ -598,7 +636,7 @@ class DetectionTableTests(HandoffCase):
                             "value":case.core(obligations=rows, governance={"base_ref":"refs/remotes/origin/target"}, **({"close":True} if closed else {}))})
                         case.current = current
                         other = objective_root(case.project, "frontier-peer") / "context.json"
-                        raw = json.loads(other.read_text())
+                        raw = logical_fixture(other)
                         if kind == "active-obligation":
                             ob = raw["checkpoint"]["obligations"][0]; ob.update(state="active", executor="coordinator")
                             ob.pop("evidence", None); ob.pop("receipts", None)
@@ -855,7 +893,7 @@ class ClosureContractTableTests(GroupedTable):
                 elif not released: checkpoint(rows, **extra)
                 case.current = current
                 peer = objective_root(case.project, "closure-peer") / "context.json"
-                raw = json.loads(peer.read_text()); cp = raw["checkpoint"]; ob = (cp.get("obligations") or [{}])[0]
+                raw = logical_fixture(peer); cp = raw["checkpoint"]; ob = (cp.get("obligations") or [{}])[0]
                 selected = ob.get("evidence", [{}])[0] if ob.get("evidence") else {}
                 retained = (ob.get("receipts") or [{"evidence":{}}])[0]["evidence"]
                 if kind.startswith("selected-missing-"): selected.pop(kind.removeprefix("selected-missing-"))
@@ -1031,7 +1069,7 @@ class RetainedReviewHistoryTableTests(GroupedTable):
                 if kind.startswith("reuse-"): case.reused_review_peer()
                 else: case.closed_review_peer(withdrawn=True, objective="history-peer", unknown=kind == "unknown-genuine")
                 peer = objective_root(case.project, "history-peer") / "context.json"
-                raw = json.loads(peer.read_text()); cp = raw["checkpoint"]
+                raw = logical_fixture(peer); cp = raw["checkpoint"]
                 ob = cp["obligations"][1]; receipt = ob["receipts"][0]; evidence = receipt["evidence"]
                 admission = next(iter(raw["admissions"].values()))
                 for marker in markers: receipt.pop(marker)
@@ -1151,7 +1189,7 @@ class ContinuityRuntimeShapeTableTests(GroupedTable):
                     case.lose(); case.mode = "lost"; case.refused(lambda:case.handoff()); case.mode = "success"
                 case.closed_review_peer(withdrawn=True, objective="runtime-peer")
                 peer = objective_root(case.project, "runtime-peer") / "context.json"
-                raw = json.loads(peer.read_text()); entry = {"from_runtime":"runtime", "to_runtime":"runtime",
+                raw = logical_fixture(peer); entry = {"from_runtime":"runtime", "to_runtime":"runtime",
                     "at":"offline control", "provenance":"automatic", "verified":{}}
                 if field == "row": entry = value
                 elif value == "missing": entry.pop(field)
@@ -1335,10 +1373,14 @@ class TransitionTableTests(HandoffCase):
         self.assertEqual(len(self.mutations), before_calls)
         self.assertEqual(len(self.state()["checkpoint"]["continuity"]["history"]), 8)
 
-    def test_full_history_without_reusable_record_and_closed_objective_refuse(self):
-        self.establish(admissions=False); self.fill_history(8); self.lose(); before = self.snapshot()
-        self.refused(lambda: self.handoff(), code="runtime_continuity_full")
-        self.assertEqual(self.snapshot(), before); self.assertEqual(self.mutations, [])
+    def test_completed_history_alone_does_not_refuse_a_new_handoff(self):
+        self.establish(admissions=False); self.fill_history(8); self.lose()
+        before = deepcopy(self.state()["checkpoint"]["continuity"]["history"])
+        self.handoff()
+        history = self.state()["checkpoint"]["continuity"]["history"]
+        self.assertEqual(history[:-1], before)
+        self.assertEqual(len(history), 9)
+        self.assertEqual(self.state()["owner"], "next")
 
     def test_no_work_effects_old_handle_refuses_and_lost_reviewer_settles_normally(self):
         self.establish(); self.lose(); self.handoff()
@@ -1453,7 +1495,7 @@ print(json.dumps({'objective':status(Path.cwd(),None,objective='objective'), 'ru
         env = {**os.environ, "PYTHONPATH": str(old / "skills")}
         result = subprocess.run([os.sys.executable, "-c", script, str(control_path)], cwd=self.project, env=env, capture_output=True, text=True, check=True)
         observed = json.loads(result.stdout)
-        self.assertEqual(observed["objective"]["blocker"], "invalid_context")
+        self.assertEqual(observed["objective"]["blocker"], "state_unsupported")
         self.assertEqual(observed["nested_blocker"], "state_unsupported")
         self.assertNotEqual(observed["run"].get("objective"), "objective")
         self.assertEqual(self.snapshot(), before)
@@ -1506,7 +1548,7 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),'genuine-050-shared')/'co
         # Owner-approved proof exception is defensive, never genuine-writer/live evidence.
         self.establish()
         path = objective_root(self.project, "objective") / "context.json"
-        restored = json.loads(path.read_text())
+        restored = logical_fixture(path)
         restored["checkpoint"]["native_refs"].append({"runId":"unseen", "runtime":"runtime"})
         path.write_text(json.dumps(restored))
         self.lose(); before = self.snapshot(); detected = self.status()["owner_handoff"]

@@ -38,12 +38,12 @@ TERMINAL = ("satisfied", *FROZEN)
 EXTERNAL_WAITS = ("authority", "user_hold", "input_unavailable")
 AUTHORIZED_SCOPES = ("publish", "merge", "release", "deploy")
 MAX_OBLIGATIONS = bound("map", "obligations", "max_items")
-MAX_PROPOSALS = bound("map", "proposals", "max_items")
+MAX_PROPOSALS = bound("map", "proposals", "max_new")
 MAX_SERVES = bound("packet", "serves", "max_items")
 MAX_EVIDENCE = bound("obligation", "evidence", "max_items")
-MAX_RECEIPTS = bound("obligation", "receipts", "max_items")
+MAX_RECEIPTS = bound("obligation", "receipts", "max_pending")
 MAX_LIVE = bound("map", "obligations", "max_live")
-MAX_FINDINGS = bound("obligation", "findings", "max_items")
+MAX_FINDINGS = bound("obligation", "findings", "max_live")
 MAX_REPORT_FINDINGS = bound("report request", "triage", "max_items")
 MAX_ACCEPTANCES = bound("map", "acceptances", "max_items")
 MAX_CITED_LINES = bound("policy citation", "lines", "max_lines")
@@ -87,8 +87,8 @@ def refuse(code: str, detail: str, message: str, *, next_action: str | None = No
         "receipt_conflict": "preserve the immutable receipt; use a fresh reference or review attempt for fresh evidence",
         "finding_limit": "preserve every stored finding; consolidate only related new findings within the group/id bounds",
         "receipt_limit": "preserve receipt history; no receipt can be evicted to admit new proof",
-        "row_limit": (f"keep every row; a map holds at most {MAX_LIVE} live and {MAX_OBLIGATIONS} total rows, "
-                      "withdrawn and renewed rows leave the live count, so record fewer new rows in this write"),
+        "row_limit": (f"keep every stored row; one request holds at most {MAX_OBLIGATIONS} entries and "
+                      f"the current map holds at most {MAX_LIVE} live rows; send a smaller delta or settle current work"),
         "malformed": "correct the named record or fields to the accepted shape and retry",
     }
     action = next_action or actions.get(detail) or NEXT_ACTIONS.get(code, "inspect the refused record")
@@ -422,8 +422,8 @@ def _structure(raw: Any) -> dict:
     evidence = ob.get("evidence", [])
     if not isinstance(evidence, list) or len(evidence) > MAX_EVIDENCE:
         raise refuse("obligation_invalid", "malformed", "evidence is a bounded list", obligation=ob["id"])
-    if "receipts" in ob and (not isinstance(ob["receipts"], list) or len(ob["receipts"]) > MAX_RECEIPTS):
-        raise refuse("obligation_invalid", "malformed", "receipts is a bounded stored history", obligation=ob["id"], limit=MAX_RECEIPTS)
+    if "receipts" in ob and not isinstance(ob["receipts"], list):
+        raise refuse("obligation_invalid", "malformed", "receipts is a stored history list", obligation=ob["id"], limit=MAX_RECEIPTS)
     if "acceptances" in ob:
         ob["acceptances"] = _acceptance_records(ob["acceptances"], obligation=ob["id"])
     if "pod_mapping" in ob:
@@ -450,7 +450,7 @@ def _acceptance(raw: Any, fields: set[str], *, obligation: str | None) -> dict:
 
 def _acceptance_records(raw: Any, *, obligation: str) -> list[dict]:
     """The stored acceptance records of one obligation, each stamped with the sequence that wrote it."""
-    if not isinstance(raw, list) or not raw or len(raw) > MAX_ACCEPTANCES:
+    if not isinstance(raw, list) or not raw:
         raise refuse("obligation_invalid", "malformed", "acceptances are a bounded nonempty list",
                      obligation=obligation, field="acceptances")
     rows = []
@@ -500,9 +500,6 @@ def _write_acceptances(rows: dict[str, dict], prior_rows: dict[str, dict], reque
                              "a recorded acceptance is immutable; record a new result under a new source",
                              obligation=key, field="source")
             continue
-        if len(recorded) >= MAX_ACCEPTANCES:
-            raise refuse("obligation_invalid", "malformed", "an obligation keeps at most 16 acceptances",
-                         obligation=key, field="acceptances")
         ob["acceptances"] = [*ob.get("acceptances", []), {**request, "seq": seq}]
 
 
@@ -673,7 +670,7 @@ def _write_proposals(prior_map: dict | None, value: dict) -> dict:
     # Proposals persist; only adoption changes their status.
     prior_proposals = {row["id"]: row for row in (prior_map or {}).get("proposals", [])}
     raw_proposals = _first(value, "proposals", list(prior_proposals.values()))
-    if not isinstance(raw_proposals, list) or len(raw_proposals) > MAX_PROPOSALS:
+    if not isinstance(raw_proposals, list):
         raise refuse("obligation_invalid", "malformed", "proposals are a bounded list", record='write proposals')
     proposals = {}
     for raw in raw_proposals:
@@ -689,10 +686,14 @@ def _write_proposals(prior_map: dict | None, value: dict) -> dict:
             raise refuse("obligation_invalid", "provenance_unauthorized",
                          "a proposal is adopted only by a user or governance obligation", proposal=row["id"])
         proposals[row["id"]] = row
-    for key in prior_proposals:
+    for key, earlier in prior_proposals.items():
         if key not in proposals:
-            raise refuse("obligation_invalid", "malformed", "a proposal cannot be dropped", proposal=key)
-
+            if earlier["status"] == "adopted":
+                proposals[key] = deepcopy(earlier)
+            else:
+                raise refuse("obligation_invalid", "malformed", "a current proposal cannot be dropped", proposal=key)
+    if len(set(proposals) - set(prior_proposals)) > MAX_PROPOSALS:
+        raise refuse("obligation_invalid", "malformed", "one write adds at most 64 proposals", record="write proposals")
     return proposals
 
 
@@ -922,16 +923,16 @@ def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: fr
 def row_bounds(rows: Any, *, request: bool = False, request_entries: int | None = None) -> None:
     if not isinstance(rows, list):
         raise refuse("obligation_invalid", "malformed", "obligations are a bounded list", record="obligation map")
-    live = sum(not isinstance(row, dict) or row.get("state") not in FROZEN for row in rows)
+    live = sum(not isinstance(row, dict) or row.get("state") not in TERMINAL for row in rows)
     total = len(rows)
     name = "request_entries" if request else "hydrated_total"
-    if total > MAX_OBLIGATIONS or live > MAX_LIVE:
-        bound_name = name if total > MAX_OBLIGATIONS else "live_rows"
+    if request and total > MAX_OBLIGATIONS or live > MAX_LIVE:
+        bound_name = name if request and total > MAX_OBLIGATIONS else "live_rows"
         raise refuse("obligation_invalid", "row_limit", "the obligation row bound is full",
                      bound=bound_name, request_entries=total if request else request_entries,
                      hydrated_total=total, live=live,
-                     proposed=total if total > MAX_OBLIGATIONS else live,
-                     limit=MAX_OBLIGATIONS if total > MAX_OBLIGATIONS else MAX_LIVE)
+                     proposed=total if request and total > MAX_OBLIGATIONS else live,
+                     limit=MAX_OBLIGATIONS if request and total > MAX_OBLIGATIONS else MAX_LIVE)
 
 
 def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
@@ -1092,7 +1093,7 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
                        else len(value["update"]) if isinstance(value.get("update"), dict) else 0)
     if (triaged or ctx.get("operation") == "report") and "report_request_entries" in ctx:
         request_entries = ctx["report_request_entries"]
-    elif isinstance(value.get("obligations"), list) and len(value["obligations"]) > MAX_OBLIGATIONS:
+    elif not ctx.get("stored_expansion") and isinstance(value.get("obligations"), list) and len(value["obligations"]) > MAX_OBLIGATIONS:
         row_bounds(value["obligations"], request=True)
     value = expand_update(prior_map, value)
     # Dispositions change admission rows, so the ledger applies them before this write.
@@ -1360,6 +1361,10 @@ def _route_settlements(entries, state: dict, ctx: dict) -> None:
         if basis == "redone":
             replacement = admissions.get(entry["replacement"]) if isinstance(entry["replacement"], str) else None
             consumed = (replacement or {}).get("report") or {}
+            if replacement is not None:
+                from .ledger import _consumed_report
+                if replacement.get("schema") == "pod-admission/v4":
+                    _consumed_report(replacement, set(ctx.get("report_runtimes", [])))
             if (row["role"] != "implement" or row.get("disposition") is None or replacement is None
                     or not _route_later(row, replacement) or replacement.get("role") != "implement"
                     or route_hold(replacement) or route_flags(replacement)[1]
@@ -2014,9 +2019,11 @@ def validate_map_record(state: dict) -> None:
                 or any(row["base"] != governance["base"] for row in sources))):
         raise refuse("obligation_invalid", "malformed", "governance header and declared sources retain one bound snapshot", record="persisted governance")
     proposals = value["proposals"]
-    if not isinstance(proposals, list) or len(proposals) > MAX_PROPOSALS:
+    if not isinstance(proposals, list):
         raise refuse("obligation_invalid", "malformed", "persisted proposals are a bounded list", record="persisted map")
     parsed = [_proposal(row) for row in proposals]
+    if sum(row["status"] == "open" and row["source"] != "reviewer_advisory" for row in parsed) > MAX_PROPOSALS:
+        raise refuse("obligation_invalid", "malformed", "current open proposals exceed the current-work bound", record="persisted map")
     if len({row["id"] for row in parsed}) != len(parsed):
         raise refuse("obligation_invalid", "malformed", "persisted proposal ids are unique", record="persisted map")
     if value["coordinator_slot"] is not None:
@@ -2385,6 +2392,8 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
     """The map write that accompanies an admission row: served obligations become active."""
     binding = admission_refusal(state, body, ctx, admission_id=admission_id)
     base = dict(accompanying) if accompanying is not None else {}
+    if "obligations" in base:
+        row_bounds(base["obligations"], request=True)
     if set(base) - fields("admission map"):
         raise refuse("obligation_invalid", "malformed", "an admission carries only obligations and proposals; unsupported "
                      + ", ".join(_field_names(set(base) - {"seq", "obligations", "proposals"})[0]), record="admission map", accepted=fields("admission map"), optional=fields("admission map"))
@@ -2400,7 +2409,8 @@ def admit(state: dict, body: dict, ctx: dict, *, admission_id: str, accompanying
         value["seq"] = base["seq"]
     admissions = {**_admissions(ctx), admission_id: reserved_admission_shape(body, ctx, state)}
     outstanding = list(dict.fromkeys([*_outstanding(ctx), admission_id]))
-    return accept_write(state, value, {**ctx, "admissions": admissions, "outstanding": outstanding})
+    return accept_write(state, value, {**ctx, "admissions": admissions, "outstanding": outstanding,
+                                       "stored_expansion": True})
 
 
 # --------------------------------------------------------------------------- results and review

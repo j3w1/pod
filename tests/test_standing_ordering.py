@@ -11,7 +11,7 @@ from unittest.mock import patch
 from pod import standing
 from pod.errors import PodError
 from pod.governor import _record_path
-from pod.ledger import _path, read, state_root
+from pod.ledger import objective_root, _path, read, state_root
 from tests.common import GroupedTable, assert_grouped_table
 from tests.test_standing_authorization import DECISION, StandingCase
 
@@ -105,9 +105,11 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
         discovery = patch("pod.github._read_repository_context", return_value=identity)
         discovery.start(); self.addCleanup(discovery.stop)
         self.initial = self.saved()
+        self.initial_chunks = {p: p.read_bytes() for p in objective_root(self.project, "objective").glob("history/sha256/*.json")}
 
     def reset(self):
         # Each order starts from the same disposable objective and empty journal.
+        for path, raw in self.initial_chunks.items(): path.write_bytes(raw)
         _path(self.project, "objective").write_bytes(self.initial[0])
         _record_path(self.project, "objective").write_bytes(self.initial[1])
         for path in (state_root(self.project) / ".relay-authorizations").glob("*.json"):
@@ -137,6 +139,7 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
             return json.dumps(verdict).encode()
 
         before, receipts = self.saved(), self.receipts()
+        old_standing = deepcopy(read(self.project, "objective").get("standing_authorization", {}))
         with patch("pod.relay._output", side_effect=output):
             try:
                 standing.operate({"project": str(self.project), "objective": "objective", "owner": "owner",
@@ -145,7 +148,7 @@ class StandingArrivalOracleTests(StandingCase, GroupedTable):
                 self.assertIn(exc.code, ("standing_authorization_stale", "standing_authorization_future", "relay_authorization_reused",
                                          "relay_verifier_mismatch", "relay_verifier_failed"))
                 if failed_stop:
-                    old = json.loads(before[0]).get("standing_authorization", {})
+                    old = old_standing
                     after = read(self.project, "objective")["standing_authorization"]
                     self.assertEqual(after["decisions"], old.get("decisions", []))
                     self.assertEqual(after["not_before"], self.instant(arrival).strftime("%Y-%m-%dT%H:%M:%SZ"))

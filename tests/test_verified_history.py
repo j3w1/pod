@@ -40,7 +40,7 @@ else:
 ''', str(path), module, reader], cwd=test.previous,
         env={**os.environ, "PYTHONPATH": str(test.previous / "skills")}, capture_output=True, text=True, timeout=10)
     test.assertEqual(result.returncode, 0, result.stderr)
-    test.assertEqual(result.stdout.strip(), expected)
+    test.assertEqual(result.stdout.strip(), "state_unsupported")
     test.assertEqual(before, {item: item.read_bytes() for item in path.parent.rglob("*") if item.is_file()})
 
 

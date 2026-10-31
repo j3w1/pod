@@ -102,7 +102,6 @@ NEXT = {
                                "sharing the Run, which the list does not",
     "identity_differs": "a bound admission's native identity differs from its record; differing identities cannot be "
                         "continued; use an existing recovery path",
-    "history_full": "the eight-entry continuity history is full; continue in a successor objective",
     "attempts_full": "this continuation was attempted and ended too many times; inspect its recorded attempts and "
                      "use an existing recovery path",
     "binding_unstable": "Orca's Run binding or runtime changed during the check; retry the same command",
@@ -618,8 +617,6 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         result["differs"] = differs[:16]
         return fail("identity_differs", "a bound admission identity differs: " + ", ".join(differs[:4]) + ".",
                     definitive=True)
-    if pending is None and len(_history(state)) >= CONTINUITY_HISTORY:
-        return fail("history_full", "the continuity history is full.")
     # A retry after an ended attempt, or the replacement of a lost claimant, is a new attempt and must fit the attempt
     # bound; the pending claimant's own rerun is no new attempt.
     if pending is not None and len(pending["attempts"]) >= MAX_ATTEMPTS and (
@@ -724,8 +721,6 @@ def continue_objective(project: Path, objective: str, *, owner: str, port) -> di
                 record["history"][index] = entry
             else:
                 from .ledger import CONTINUITY_HISTORY
-                if len(record["history"]) >= CONTINUITY_HISTORY:
-                    raise _refusal("history_full", "the continuity history is full.")
                 record["history"].append(entry)
             state["checkpoint"]["continuity"] = record
             # Both the pending and the done record must fit before the receipt is consumed.

@@ -369,8 +369,7 @@ from pod.ledger import read
 try:
     read(Path(sys.argv[1]), 'objective')
 except PodError as exc:
-    assert exc.code == 'invalid_criterion source facts', (exc.code, str(exc))
-    assert 'unsupported acceptance' in str(exc)
+    assert exc.code == 'state_unsupported', (exc.code, str(exc))
 else:
     raise AssertionError('preceding reader accepted new metadata')
 """
