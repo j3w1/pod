@@ -12,7 +12,7 @@ from .errors import PodError
 from . import gitio, history, listing
 from .github import repository_context
 from .ledger import binding_valid, record_name, state_root
-from .orca import _read, read_deadline
+from .orca import _read, _passable, read_deadline
 from .util import digest as _digest, public_decisions
 from .window import Budget
 
@@ -89,14 +89,19 @@ def _worker_fact(row: dict) -> dict:
     if not all(isinstance(value, dict) for value in (resource, workspace, release, live)):
         raise PodError("orca_contract", "Native worker claim facts are malformed")
     dispatch, run, task = row.get("dispatchId"), row.get("runId"), row.get("taskId")
-    if (not all(isinstance(value, str) and value for value in (dispatch, run, task))
+    if (not all(isinstance(value, str) and value and _passable(value) for value in (dispatch, run, task))
             or any(projection.get(field) != value for field, value in
                    (("dispatchId", dispatch), ("runId", run), ("taskId", task)))):
         raise PodError("orca_contract", "Native worker identity differs")
+    path = listing._location(resource.get("worktreeId") or workspace.get("id"))
+    if path is not None and not _passable(path):
+        raise PodError("orca_contract", "Native worker location is not valid UTF-8")
     return {"dispatch": dispatch, "run": run, "task": task,
             "worker": projection.get("id"),
             "terminal": row.get("agentTerminalHandle", resource.get("terminalHandle")),
-            "worktree": listing._location(resource.get("worktreeId") or workspace.get("id")),
+            "resource": {key: resource.get(key) for key in
+                         ("id", "ownerDispatchId", "ownershipState", "releaseState", "endpointId", "endpointIncarnation")},
+            "worktree": path,
             "liveness": live.get("verdict", "unverifiable"), "released": release.get("state") == "released"}
 
 
@@ -107,6 +112,13 @@ def _terminals() -> dict:
     rows = _complete(response["result"], "terminals")
     if rows is None:
         raise PodError("native_resources_incomplete", "Native terminal ownership inventory is incomplete")
+    for row in rows:
+        if not isinstance(row.get("handle"), str) or not row["handle"] or not _passable(row["handle"]):
+            raise PodError("native_resources_invalid", "Native terminal identity is malformed")
+        for field in ("worktreePath", "worktreeId"):
+            value = row.get(field)
+            if value is not None and (not isinstance(value, str) or not _passable(value)):
+                raise PodError("native_resources_invalid", "Native terminal location is malformed")
     return {"runtime": response["runtime"], "complete": True, "terminals": [
         {key: row.get(key) for key in ("handle", "worktreePath", "worktreeId", "connected", "writable", "orphaned", "exitCause")}
         for row in rows]}  # Presentation/preview text never leaves this reader.
@@ -181,6 +193,26 @@ def _phase(raw: dict) -> str:
     return raw["_facts_phase"] if "_facts_phase" in raw else listing._phase(raw)
 
 
+def _placement(row: dict) -> dict:
+    recovery = row.get("recovery")
+    if recovery is not None and not isinstance(recovery, dict):
+        raise PodError("admission_placement_invalid", "Accepted recovery placement facts are malformed")
+    placement = row.get("placement_binding")
+    if placement is None:
+        placement = (recovery or {}).get("placement_binding")
+    if placement is not None and not isinstance(placement, dict):
+        raise PodError("admission_placement_invalid", "Accepted placement binding is malformed")
+    if placement:
+        path, branch = placement.get("path"), placement.get("branch")
+        if (path is not None and (not isinstance(path, str) or len(path) > 4096 or not _passable(path) or not Path(path).is_absolute())
+                or branch is not None and (not isinstance(branch, str) or not branch or len(branch) > 256 or not _passable(branch))):
+            raise PodError("admission_placement_invalid", "Accepted placement location fields are malformed")
+        key = placement.get("repo_key")
+        if key is not None and (not isinstance(key, str) or not history.HEX.fullmatch(key)):
+            raise PodError("admission_placement_invalid", "Accepted placement repository identity is malformed")
+    return placement or {}
+
+
 def _membership(project: Path, context: dict, record: str, raw: dict, known=()) -> str | None:
     """A matching key proves membership; exclusion needs a second attributed key.
 
@@ -190,6 +222,8 @@ def _membership(project: Path, context: dict, record: str, raw: dict, known=()) 
     """
     from .installer import STATE_SCHEMAS
     from .records import worktree_binding
+    if raw.get("schema") != STATE_SCHEMAS["context"] or not isinstance(raw.get("checkpoint"), dict):
+        raise PodError("state_unsupported", "Required attribution header format is unsupported")
     name = listing._name(raw)
     if name is None or len(name) > 256 or "\x00" in name:
         raise PodError("unattributed", "Objective identity is unavailable")
@@ -220,10 +254,13 @@ def _membership(project: Path, context: dict, record: str, raw: dict, known=()) 
             return name if source["repo_key"] == context["repo_key"] else None
     # Earlier records can retain attribution in their accepted placement facts
     # even when the coordinator worktree was not recorded. Read no history here.
-    for row in (raw.get("admissions") or {}).values():
+    admissions = raw.get("admissions") or {}
+    if not isinstance(admissions, dict):
+        raise PodError("state_unsupported", "Admission attribution fields are malformed")
+    for row in admissions.values():
         if not isinstance(row, dict):
             continue
-        placement = (row.get("recovery") or {}).get("placement_binding")
+        placement = _placement(row)
         if isinstance(placement, dict) and isinstance(placement.get("repo_key"), str):
             if record_name(project, placement, name) == record:
                 return name if placement["repo_key"] == context["repo_key"] else None
@@ -279,6 +316,9 @@ def _admissions(raw: dict, directory: Path) -> dict:
             raise PodError("state_unsupported", "Admission claim is malformed")
         if row.get("native_binding") is not None and not isinstance(row.get("runtime"), str):
             raise PodError("state_unsupported", "Native claim runtime is unavailable")
+        if row.get("native_binding") is not None and not binding_valid(row["native_binding"]):
+            raise PodError("admission_binding_invalid", "Native claim binding is malformed")
+        _placement(row)
         rows[key] = row
     if projected:
         return rows  # The versioned reader validates phase without loading closure.report.
@@ -358,7 +398,7 @@ def _action_effects(row: dict, project: Path | None, policies: dict) -> tuple[li
     return sorted(set(effects or []) | set(recorded)), source if effects is not None else "recorded"
 
 
-def _relevant(facts: dict, request: dict, repo_key: str | None) -> bool:
+def _relevant(facts: dict, request: dict, repo_key: str | None, overlap=None) -> bool:
     """Intersect factual scopes, without deciding whether CE may perform an action."""
     if not any(request.values()):
         return True
@@ -373,7 +413,8 @@ def _relevant(facts: dict, request: dict, repo_key: str | None) -> bool:
     if request["worktree"] or request["branch"]:
         paths = facts.get("worktrees", [facts.get("worktree")])
         branches = facts.get("branches", [facts.get("branch")])
-        if request["worktree"] and request["worktree"] in paths or request["branch"] and request["branch"] in branches:
+        if (request["worktree"] and any(path and (overlap(request["worktree"], path) if overlap else request["worktree"] == path) for path in paths)
+                or request["branch"] and request["branch"] in branches):
             return True
         if facts.get("locations_complete") is True:
             return False
@@ -486,6 +527,29 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     placements_by_dispatch = {}
     scope_records_read, attribution_gaps = set(), []
     abandoned_dispatches = set()
+    physical_paths = {}
+
+    def physical(path):
+        if path not in physical_paths:
+            physical_paths[path] = Path(path).resolve()
+        return physical_paths[path]
+
+    def overlap(left, right):
+        try:
+            left, right = physical(left), physical(right)
+            return left.is_relative_to(right) or right.is_relative_to(left)
+        except (OSError, ValueError):
+            return True  # An inaccessible path cannot establish independence.
+
+    def relevant(facts, selection, key):
+        return _relevant(facts, selection, key, overlap)
+
+    def workspace(path, places):
+        if not path:
+            return None, False
+        roots = [root for root in places if physical(path).is_relative_to(physical(root))]
+        return (max(roots, key=len) if roots else None,
+                bool(roots) or any(overlap(path, root) for root in places))
     from .orca import _DEADLINE
     budget = _DEADLINE.get() or Budget(float(timeout))
 
@@ -496,10 +560,18 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             except UnicodeError:
                 record = "sha256:" + hashlib.sha256(os.fsencode(record)).hexdigest()
         fact_scope = extra.pop("fact_scope", record_scopes.get(record, scope))
+        repair = {"action": "inspect_record", "record": record,
+                  "condition": "Establish the named fact from its authoritative source; preserve the record and repeat the query"}
+        if record is None and code.startswith("native_resources"):
+            repair = {"command": ["orca", "terminal", "list", "--json"],
+                      "condition": "Establish complete, well-formed current native terminal ownership"}
+        elif record is None and code.startswith("orca_"):
+            repair = {"command": ["orca", "orchestration", "worker-list", "--include-remote", "--limit", "100", "--json"],
+                      "condition": "Reconcile the failed native inventory fact; incomplete coverage never proves absence"}
+        elif record is None and code == "discovery_budget":
+            repair = {"action": "inspect_read_budget", "condition": "Identify and reconcile the source read that exhausted CE's deadline before retrying"}
         result["unknowns"].append({"record": record, "code": code, "scope": fact_scope,
-            "fact": extra.pop("fact", code), "reconciliation": extra.pop("reconciliation",
-                {"action": "inspect_record", "record": record,
-                 "condition": "Establish the named fact from its authoritative source; preserve the record and repeat the query"}),
+            "fact": extra.pop("fact", code), "reconciliation": extra.pop("reconciliation", repair),
             **extra})
 
     def claim(row):
@@ -523,8 +595,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             if not source_path and source:
                 source_path = next((item["worktree"] for item in known if item["repo_key"] == source.get("repo_key")), None)
             source_project = Path(source_path) if source_path and Path(source_path).is_dir() else None
+            target_project = source_project or next((Path(item["worktree"]) for item in known
+                if source and item["repo_key"] == source.get("repo_key")), None)
             identities, effect_source = _action_effects(row, source_project, policies)
-            action_target = _canonical_target(source_project, action["target"]) if action["kind"] in ("merge", "push", "pr_update") else action["target"]
+            action_target = _canonical_target(target_project, action["target"]) if action["kind"] in ("merge", "push", "pr_update") else action["target"]
             fact_scope = {"effects": identities, "target": action_target, "action": row["record_id"],
                           "repo_key": source.get("repo_key") if source else None}
             claim({"objective": name, "record": directory.name,
@@ -592,7 +666,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     source = raw.get("_facts_attribution") or (raw.get("checkpoint") or {}).get("worktree")
                     source = source if isinstance(source, dict) else next((item for item in known
                         if record_name(Path(item["worktree"]), item, listing._name(raw)) == record), None)
-                    for ref in (raw.get("checkpoint") or {}).get("native_refs") or []:
+                    references = (raw.get("checkpoint") or {}).get("native_refs")
+                    for ref in references if isinstance(references, list) else []:
                         if isinstance(ref, dict) and isinstance(ref.get("runId"), str) and source:
                             run_repositories.setdefault(ref["runId"], set()).add(source.get("repo_key"))
                             run_sources.setdefault(ref["runId"], []).append((directory, identity))
@@ -606,14 +681,14 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     phases[record] = _phase(raw) if raw["checkpoint"]["schema"] == "pod-checkpoint/v3" else "noncurrent"
                     place = raw["checkpoint"].get("worktree") or {}
                     for row in rows.values():
-                        placement = (row.get("recovery") or {}).get("placement_binding") or {}
+                        placement = _placement(row)
                         binding = row.get("native_binding") or {}
                         if row.get("abandoned_accounting") and binding.get("dispatchId"):
                             abandoned_dispatches.add(binding["dispatchId"])
                         if (placement.get("path") == listing._location(binding.get("worktreeId"))
                                 and "branch" in placement and binding.get("dispatchId")):
                             placements_by_dispatch[binding["dispatchId"]] = (binding, placement)
-                    placements = [(row.get("recovery") or {}).get("placement_binding") or {} for row in rows.values()]
+                    placements = [_placement(row) for row in rows.values()]
                     paths = [place.get("path"), *(listing._location((row.get("native_binding") or {}).get("worktreeId"))
                               or listing._location(row.get("worktree")) or placement.get("path")
                               for row, placement in zip(rows.values(), placements))]
@@ -667,9 +742,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             claim({"objective": name, "record": record,
                                 "kind": "writer" if row["role"] == "implement" else "assignment",
                                 "admission": key, "worktree": listing._location(row.get("worktree"))
-                                    or ((row.get("recovery") or {}).get("placement_binding") or {}).get("path"),
-                                "branch": ((row.get("recovery") or {}).get("placement_binding") or {}).get("branch"),
-                                "locations_complete": bool(((row.get("recovery") or {}).get("placement_binding") or {}).get("path")),
+                                    or (_placement(row)).get("path"),
+                                "branch": (_placement(row)).get("branch"),
+                                "locations_complete": bool((_placement(row)).get("path")),
                                 "liveness": "unknown", "boundary": row.get("boundary")})
                             unknown(record, "assignment_unbound", objective=name, admission=key)
                     effect_claims(directory, raw, journal, source or context)
@@ -701,7 +776,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     continue
                 selection = {"worktree": str(Path(worktree).resolve()) if worktree else None,
                              "branch": branch, "target": target, "effects": effects or []}
-                if not worktree and ownership.get("objective") != objective or not _relevant(ownership, selection, context["repo_key"]):
+                if not worktree and ownership.get("objective") != objective or not relevant(ownership, selection, context["repo_key"]):
                     continue
                 observations = []
                 for run in sorted({ref["runId"] for ref in ownership["recorded_native_refs"]}):
@@ -736,7 +811,11 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     shown = _worker_fact(source)
                     path = shown["worktree"]
                     run = shown["run"]
-                    branch_fact, branch_known = places.get(path), path in places
+                    if shown["liveness"] == "exited" and source.get("workerState") != "abandoned" and shown["dispatch"] not in abandoned_dispatches:
+                        workers[shown["dispatch"]] = shown
+                        continue
+                    registered, in_repository = workspace(path, places)
+                    branch_fact, branch_known = places.get(registered), registered is not None
                     binding, placement = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
                     if not branch_known and _placement_matches(binding, shown):
                         branch_fact, branch_known = placement["branch"], True
@@ -760,7 +839,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                 continue
                             for candidate_row in candidate_rows.values():
                                 binding = candidate_row.get("native_binding") or {}
-                                placement = (candidate_row.get("recovery") or {}).get("placement_binding") or {}
+                                placement = _placement(candidate_row)
                                 if placement.get("path") == listing._location(binding.get("worktreeId")) and "branch" in placement:
                                     placements_by_dispatch[binding.get("dispatchId")] = (binding, placement)
                             bound, placed = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
@@ -768,9 +847,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                 branch_fact, branch_known = placed["branch"], True
                                 break
                     native_effects = []
-                    actor_scope = {**scope, "worktree": path, "branch": branch_fact,
+                    scope_binding, scope_placement = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
+                    actor_repo = context["repo_key"] if registered is not None else (
+                        scope_placement.get("repo_key") if _placement_matches(scope_binding, shown) else None)
+                    actor_scope = {"repo_key": actor_repo, "worktree": path, "branch": branch_fact,
                                    "locations_complete": bool(path) and branch_known}
-                    if (source.get("workerState") == "abandoned" or shown["dispatch"] in abandoned_dispatches) and (effects or _relevant(actor_scope,
+                    if (source.get("workerState") == "abandoned" or shown["dispatch"] in abandoned_dispatches) and (effects or relevant(actor_scope,
                             {"worktree": str(Path(worktree).resolve()) if worktree else None,
                              "branch": branch, "target": target, "effects": effects or []}, context["repo_key"])):
                         try:
@@ -790,7 +872,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                     fact_scope={"effects": None} if effects else actor_scope,
                                     fact="current_native_claim", reconciliation={"action": "read_shared_current_claim",
                                     "condition": "Load the W1-owned claim reader and read the exact current worker observation"})
-                    if requested_run is None and run not in runs and path not in places:
+                    if requested_run is None and run not in runs and not in_repository:
                         if path is None and shown["liveness"] != "exited":
                             owners = run_repositories.get(run, set())
                             unknown(None, "native_location_unavailable", dispatch=shown["dispatch"],
@@ -804,9 +886,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     stamps["dispatch:" + shown["dispatch"]] = digest(shown)
                     claim({"kind": "writer", "run": run,
                         "dispatch": shown["dispatch"], "worktree": path,
+                        "native_terminal": shown["terminal"], "native_resource": shown["resource"],
                         "branch": branch_fact, "liveness": shown["liveness"],
                         "native_effects": native_effects,
-                        "repo_key": context["repo_key"], "locations_complete": bool(path) and branch_known,
+                        "repo_key": actor_repo, "locations_complete": bool(path) and branch_known,
                         "boundaries": [row.get("boundary") for _, _, _, row in runs.get(run, [])
                                        if row["native_binding"]["dispatchId"] == shown["dispatch"]],
                         "objectives": sorted({name for _, name, _ in run_owners.get(run, [])})})
@@ -814,7 +897,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         unknown("run:" + str(run), "native_location_unavailable", dispatch=shown["dispatch"])
                     if shown["liveness"] not in ("live", "exited"):
                         unknown("run:" + str(run), "native_liveness_unverified", dispatch=shown["dispatch"],
-                                fact="process_liveness", fact_scope={**scope, "worktree": path, "branch": branch_fact,
+                                fact="process_liveness", fact_scope={"repo_key": actor_repo, "worktree": path, "branch": branch_fact,
                                     "locations_complete": bool(path) and branch_known},
                                 reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
                                                 "condition": "Read authoritative process liveness; resource release alone is not process exit"})
@@ -848,16 +931,17 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             reconciliation={"command": ["orca", "terminal", "show", "--terminal", terminal.get("handle"), "--json"],
                                             "condition": "Establish the current terminal's worktree and repository ownership"})
                     continue
-                if path not in places or _exited(terminal):
+                registered, in_repository = workspace(path, places)
+                if not in_repository or _exited(terminal):
                     continue
                 live = terminal.get("connected") is True and terminal.get("writable") is True and terminal.get("orphaned") is False
                 claim({"kind": "writer", "native_terminal": terminal.get("handle"), "worktree": path,
-                       "branch": places.get(path), "locations_complete": True, "repo_key": context["repo_key"],
+                       "branch": places.get(registered), "locations_complete": registered is not None, "repo_key": context["repo_key"],
                        "liveness": "live" if live else "unverifiable", "source": "native_terminal_inventory"})
                 if not live:
                     unknown(None, "native_liveness_unverified", fact="terminal_liveness",
                             terminal=terminal.get("handle"),
-                            fact_scope={**scope, "worktree": path, "branch": places.get(path), "locations_complete": True},
+                            fact_scope={**scope, "worktree": path, "branch": places.get(registered), "locations_complete": registered is not None},
                             reconciliation={"command": ["orca", "terminal", "show", "--terminal", terminal.get("handle"), "--json"],
                                             "condition": "Establish the current terminal ownership and process state"})
             if target:
@@ -936,7 +1020,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     all_unknowns = result["unknowns"]
     result["repository_complete"] = not all_unknowns
     result["unknowns"] = [row for row in all_unknowns if row.get("objective") == objective and objective
-                          or _relevant(row["scope"], request, context["repo_key"])]
+                          or relevant(row["scope"], request, context["repo_key"])]
     result["unrelated_unknowns"] = [*result.get("unrelated_unknowns", []),
                                     *(row for row in all_unknowns if row not in result["unknowns"])]
     unrelated = result["unrelated_unknowns"]
@@ -949,14 +1033,14 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                             if row.get("terminal") or row["scope"].get("terminal")})},
         "diagnostic": ["pod", "admission", "--repository", str(project), "--json"]}
     all_claims = result["claims"]
-    result["claims"] = [row for row in all_claims if _relevant(row, request, context["repo_key"])]
+    result["claims"] = [row for row in all_claims if relevant(row, request, context["repo_key"])]
     result["claims"].sort(key=digest)
     result["unrelated_claims"] = len(all_claims) - len(result["claims"])
     for claim in result["claims"]:
         if claim.get("objective") == objective and claim["kind"] == "ownership":
             continue
         dimensions = []
-        if worktree and claim.get("worktree") == str(Path(worktree).resolve()):
+        if worktree and claim.get("worktree") and overlap(claim["worktree"], str(Path(worktree).resolve())):
             dimensions.append("worktree")
         if branch and claim.get("branch") == branch:
             dimensions.append("branch")

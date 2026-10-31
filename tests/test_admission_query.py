@@ -181,7 +181,7 @@ class AdmissionQueryTests(AdmissionQueryCase):
         self.intake(worktree=self.place)
         # Intake records its exact Run; no global or another bound Run can stand in.
         with patch("pod.admission._fleet", return_value=None), \
-             patch("pod.orca.worker_rows", side_effect=AssertionError("historical Run hydration")) as read:
+             patch("pod.orca.worker_rows", side_effect=AssertionError("prior Run hydration")) as read:
             result = self.query()
         self.assertFalse(result["complete"])
         self.assertIn("native_inventory_scope", [row["code"] for row in result["unknowns"]])
@@ -794,3 +794,35 @@ class ReviewCorrectionTests(AdmissionQueryCase):
         self.assertEqual(summary["references"]["dispatches"], ["writer"])
         self.assertNotIn("reconciliation", summary)
         self.assertNotIn("scope", summary)
+
+    def test_native_folder_inside_repository_is_not_a_hidden_manual_writer(self):
+        self.intake(worktree=self.place)
+        terminal = {"handle": "nested", "worktreePath": str(self.project / "src"), "connected": True,
+                    "writable": True, "orphaned": False}
+        with patch("pod.admission._terminals", return_value={"runtime": "runtime", "complete": True, "terminals": [terminal]}):
+            result = self.query(worktree=str(self.project))
+        self.assertEqual(result["status"], "blocked", result["unknowns"])
+        self.assertTrue(any(row["claim"].get("native_terminal") == "nested" for row in result["conflicts"]))
+
+    def test_malformed_binding_and_placement_are_scoped_unknowns(self):
+        self.intake(worktree=self.place)
+        path, raw = self.raw()
+        base = {"schema": "pod-admission/v4", "admission_id": "a", "state": "reserved", "role": "implement", "runtime": "runtime"}
+        for extra, code in (({"native_binding": "invalid"}, "admission_binding_invalid"),
+                            ({"recovery": "invalid"}, "admission_placement_invalid")):
+            with self.subTest(code=code):
+                raw["admissions"] = {"a": {**base, **extra}}
+                self.save(path, raw)
+                result = self.query()
+                self.assertIn(code, [row["code"] for row in result["unknowns"]])
+
+    def test_target_alias_uses_registered_common_repository_when_old_worktree_is_gone(self):
+        self.intake(worktree=self.place)
+        path, raw = self.raw()
+        raw["checkpoint"]["worktree"]["path"] = str(self.root / "removed")
+        self.save(path, raw)
+        git(self.project, "update-ref", "refs/remotes/origin/main", self.base)
+        self.journal(kind="merge", target="origin/main")
+        result = self.query(target="refs/remotes/origin/main", target_commit=self.base)
+        self.assertEqual(result["status"], "blocked", result["unknowns"])
+        self.assertTrue(any("target_update" in row.get("dimensions", []) for row in result["conflicts"]))

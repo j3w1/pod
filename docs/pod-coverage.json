@@ -9333,7 +9333,8 @@
         "tests.test_admission_query.ReviewCorrectionTests.test_foreign_source_cannot_hide_a_shared_effect",
         "tests.test_admission_query.ReviewCorrectionTests.test_manual_native_terminal_is_a_current_writer_without_a_pod_admission",
         "tests.test_admission_query.ReviewCorrectionTests.test_settled_unsupervised_dispatch_uses_current_terminal_ownership",
-        "tests.test_admission_query.ReviewCorrectionTests.test_owner_observation_joins_run_and_live_terminal"
+        "tests.test_admission_query.ReviewCorrectionTests.test_owner_observation_joins_run_and_live_terminal",
+        "tests.test_admission_query.ReviewCorrectionTests.test_native_folder_inside_repository_is_not_a_hidden_manual_writer"
       ],
       "status": "NOT_RUN"
     },
@@ -9366,7 +9367,8 @@
         "tests.test_admission_query.ReviewCorrectionTests.test_missing_shared_reader_does_not_hide_possible_cross_repository_effect",
         "tests.test_admission_query.ReviewCorrectionTests.test_known_previous_binding_metadata_does_not_upgrade_candidate_proof",
         "tests.test_admission_query.ReviewCorrectionTests.test_closed_without_admissions_or_effects_keeps_attribution_gap_disclosed",
-        "tests.test_admission_query.ReviewCorrectionTests.test_foreign_placement_scope_requires_exact_current_native_identity"
+        "tests.test_admission_query.ReviewCorrectionTests.test_foreign_placement_scope_requires_exact_current_native_identity",
+        "tests.test_admission_query.ReviewCorrectionTests.test_malformed_binding_and_placement_are_scoped_unknowns"
       ],
       "status": "NOT_RUN"
     },
@@ -9388,7 +9390,8 @@
         "tests.test_admission_query.ReviewCorrectionTests.test_known_repository_keys_attribute_missing_worktree_without_migration",
         "tests.test_admission_query.ReviewCorrectionTests.test_successful_fact_read_exits_zero_for_intersections_and_uncertainty",
         "tests.test_admission_query.ReviewCorrectionTests.test_git_target_aliases_identify_the_same_pending_target_update",
-        "tests.test_admission_query.ReviewCorrectionTests.test_unrelated_diagnostics_are_counts_and_unique_resource_references"
+        "tests.test_admission_query.ReviewCorrectionTests.test_unrelated_diagnostics_are_counts_and_unique_resource_references",
+        "tests.test_admission_query.ReviewCorrectionTests.test_target_alias_uses_registered_common_repository_when_old_worktree_is_gone"
       ],
       "status": "NOT_RUN"
     }

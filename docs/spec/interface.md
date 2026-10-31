@@ -1099,11 +1099,14 @@ uncertainty, never guessed clearance or a replacement effect vocabulary.
 
 The query reads bounded primary facts, current Governor journals, a paginated
 native all-Run inventory, and a complete native terminal ownership inventory.
-The latter includes sessions outside supervised workers. A completed context-only
+The latter includes sessions outside supervised workers, including folder contexts
+inside a repository; physical workspace overlap is checked, not just literal
+path equality. Worker facts retain their current terminal/resource owner and
+endpoint references so CE can join its authoritative resource records. A completed context-only
 Dispatch with no supervised resource is not itself a current native resource
 claim: its terminal's current ownership is read separately, without inferring
 process exit. Native resource release alone does not prove exit. A bound caller cannot certify all-Run coverage and receives a specific CE-backend
-reconciliation without replaying unrelated historical Runs. Worker identity, host coverage,
+reconciliation without replaying unrelated prior Runs. Worker identity, host coverage,
 pagination, runtime changes and explicit completeness remain checked.
 
 Foreign exclusion requires repository/objective attribution consistent with the
@@ -1182,7 +1185,7 @@ is bound to the same current authority and record key. A matching requested key
 proves membership without requiring a coordinator placement; safe exclusion needs
 an independently proved foreign key. A missing placement is reported separately.
 Full current-claim reads retain admission role/runtime/Run/Task/native binding,
-request UUID, boundary/candidate, accepted `recovery.placement_binding` and W1's
+request UUID, boundary/candidate, accepted `placement_binding` (or stored `recovery.placement_binding`) and W1's
 accounting marker, excluding report bodies and old receipt/findings payloads.
 
 `governor.load_admission_effects(path)` returns `pod-admission-effects/v1`, exact
