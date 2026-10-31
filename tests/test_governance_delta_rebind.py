@@ -316,6 +316,39 @@ class LinkScopeTests(KernelCase):
         self.assertIsNone(self.scoped("code-link", [("code-link", "src/old.py")]))
 
 
+class ExemptedAdoptionTests(KernelCase):
+    """An attested rebind in the same write as an adoption through the first-parent exemption (R119 adoption-only):
+    an unrecorded prefix changes governance and becomes the target, and the rebased candidate is its suffix."""
+
+    commit = governance_commit
+
+    def test_the_attested_rebind_carries_proof_through_an_exempted_adoption(self):
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        self.write([self.criterion(proof_scope=["README.md"]), self.sub("S1", proof_scope=["README.md"])],
+                   governance={"base_ref": "target"})
+        self.write(satisfy(self, self.stored()))
+        git(self.project, "checkout", "-qb", "work")
+        prefix = self.commit("AGENTS.md", "Changed target governance.\n", "unrecorded prefix")
+        suffix = self.commit("src/old.py", "candidate work\n", "unrecorded suffix")
+        git(self.project, "update-ref", "refs/remotes/origin/target", prefix)
+        fields = dict(governance_refresh=True, governance=snapshot(self.project), candidate=suffix,
+                      rebind=["O1", "S1"], reuse={"from": self.base, "ids": ["O1", "S1"]},
+                      governance_delta=governance_attestation(self.project, reason=REASON))
+        record = objective_root(self.project, "objective") / "context.json"
+        before = record.read_bytes()
+        # Without a policy-valid authority the adoption-only rule refuses first.
+        error = self.refused("governance_unavailable", "governance_unavailable", self.write, self.stored(), **fields)
+        self.assertEqual(error.detail["referent"]["reason"], "adoption_only")
+        self.assertEqual(record.read_bytes(), before)
+        # The decider's own exact snapshot decision adopts, moves the candidate and rebinds in one write.
+        self.write(self.stored(), revision_authority=LOCAL, **fields)
+        stored = read(self.project, "objective")["checkpoint"]
+        self.assertEqual((stored["governance"]["base"], stored["candidate"]), (prefix, suffix))
+        self.assertTrue(all(row["state"] == "satisfied" for row in stored["obligations"]))
+        rebind = stored["governance_history"]["decisions"][-1]["rebind"]
+        self.assertEqual((rebind["rows"], [entry["removed"] for entry in rebind["delta"]]), (["O1", "S1"], [5]))
+
+
 class EarlierStepTests(KernelCase):
     """Proof bound under an earlier governance step that the record's own history names (its initial decision)."""
 

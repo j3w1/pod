@@ -9907,7 +9907,8 @@
         "tests.test_governance_delta_rebind.AttestedRebindTests.test_the_declared_delta_must_equal_the_delta_pod_reads",
         "tests.test_governance_delta_rebind.AttestedRebindTests.test_an_attested_rebind_is_a_snapshot_decision_by_the_policy_decider",
         "tests.test_governance_delta_rebind.AttestedRebindTests.test_an_empty_delta_rebinds_without_attestation",
-        "tests.test_issue41.RemainingProofTests.test_one_refusal_classifies_candidate_definition_binding_and_governance_failures"
+        "tests.test_issue41.RemainingProofTests.test_one_refusal_classifies_candidate_definition_binding_and_governance_failures",
+        "tests.test_governance_delta_rebind.ExemptedAdoptionTests.test_the_attested_rebind_carries_proof_through_an_exempted_adoption"
       ],
       "status": "NOT_RUN"
     },
