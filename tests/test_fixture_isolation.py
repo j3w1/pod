@@ -71,7 +71,7 @@ class ScrubTests(unittest.TestCase):
     def test_this_process_started_inside_the_private_root_with_no_credentials(self):
         root = boundary.PRIVATE_ROOT
         self.assertIsNotNone(root)
-        # Other tests may unset the Pod homes for good, so those are proven in a fresh interpreter.
+        # Other tests may unset the Pod homes for good, so those are proven in a fresh boundary of their own.
         for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CODEX_HOME",
                     "CLAUDE_CONFIG_DIR", "TMPDIR"):
             self.assertTrue(Path(os.environ[key]).resolve().is_relative_to(root), key)
@@ -86,7 +86,7 @@ class ScrubTests(unittest.TestCase):
                               "inside": {key: os.path.realpath(os.environ[key]).startswith(str(boundary.PRIVATE_ROOT.resolve()))
                                          for key in keys},
                               "git": [os.environ["GIT_CONFIG_GLOBAL"], os.environ.get("GIT_DIR")]}))
-        """, {}, nested=False, env={"GIT_DIR": "/host/.git"})
+        """, {}, env={"GIT_DIR": "/host/.git", "HOME": "/host/home", "POD_STATE_HOME": "/host/state"})
         self.assertEqual(result.returncode, 0, result.stderr)
         seen = json.loads(result.stdout)
         self.assertEqual(set(seen["inside"].values()), {True}, seen)
