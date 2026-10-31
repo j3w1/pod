@@ -63,7 +63,7 @@ class ReceiptReservationTests(unittest.TestCase):
             "seq": read(self.case.project, "objective")["checkpoint"]["seq"] + 1,
             "update": {"A2": waiting(), "K": {"kind": "correction", "provenance": "coordinator", "parent": "A2",
                 "check": "repair real defect", **waiting()}}}, triage=[{"finding": "real", "severity": "major",
-                "triage": "required_correction", "summary": "failed review finding", "correction": "K"}])
+                "triage": "required_correction", "blocks": "outcome", "summary": "failed review finding", "correction": "K"}])
         rows = {row["id"]: row for row in self.case.stored()}
         self.assertEqual((len(rows["A"]["receipts"]), rows["A2"]["receipts"], len(rows["A2"]["findings"])), (64, [], 1))
         self.assertEqual(renewal.RenewalAssuranceTests.qualification(self.case), "WITHHELD")

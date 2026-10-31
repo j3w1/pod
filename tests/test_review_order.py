@@ -33,7 +33,7 @@ class ReviewOrderBoundaryTests(ProductionCase):
         packet = self.packet(["A"], role="review")
         admission = self.start("find-defect", packet)["admission"]
         self.settle(admission)
-        finding = {"summary": "repair required", "triage": "required_correction", "correction": "K"}
+        finding = {"summary": "repair required", "triage": "required_correction", "blocks": "outcome", "correction": "K"}
         if grouped:
             finding["findings"] = [{"finding": "F1", "severity": "major"}, {"finding": "F2", "severity": "minor"}]
         else:

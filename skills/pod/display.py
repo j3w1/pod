@@ -108,6 +108,11 @@ def ordered(state: dict) -> list[dict]:
                   key=lambda row: row.get("admitted_seq", 0))
 
 
+def review_rounds(state: dict) -> list[dict]:
+    """The objective's counted review admissions, including reservations and unresolved starts."""
+    return [row for row in ordered(state) if row.get("role") == "review"]
+
+
 def placement(row: dict) -> str | None:
     return ((row.get("recovery") or {}).get("placement_binding") or {}).get("path")
 
@@ -139,7 +144,7 @@ def job(body: dict, worker_kind: str, task: str = "") -> str:
 def admission_facts(state: dict, body: dict, path: str | None, naming: dict | None = None) -> dict:
     worker_kind = kind(body, state)
     rows = ordered(state)
-    reviews = [row for row in rows if row.get("role") == "review"]
+    reviews = review_rounds(state)
     round_number = (len(reviews) + 1 if worker_kind in ("reviewer", "follow_up_reviewer")
                     else max(1, len(reviews)) if worker_kind == "fixer" else None)
     plain_task = ((state.get("checkpoint") or {}).get("display") or {}).get("task", "")
@@ -177,8 +182,8 @@ def round_of(state: dict, row: dict) -> int | None:
     if kind not in ("reviewer", "follow_up_reviewer", "fixer"):
         return None
     seq = row.get("admitted_seq", 0)
-    earlier = sum(1 for other in ordered(state) if other.get("role") == "review"
-                  and (other.get("admitted_seq", 0), other["admission_id"]) < (seq, row["admission_id"]))
+    earlier = sum(1 for other in review_rounds(state)
+                  if (other.get("admitted_seq", 0), other["admission_id"]) < (seq, row["admission_id"]))
     return earlier + 1 if kind != "fixer" else max(1, earlier)
 
 
@@ -186,7 +191,7 @@ def _title(state: dict, row: dict, review_count: int | None = None) -> str:
     display = facts(state, row)
     value = WORDS[display["kind"]]
     if review_count is None:
-        review_count = sum(r.get("role") == "review" for r in ordered(state))
+        review_count = len(review_rounds(state))
     number = round_of(state, row)
     if number is not None and review_count > 1:
         value += f" · round {number}"
@@ -201,7 +206,7 @@ def worker_titles(state: dict) -> dict[str, str]:
     latest = {(row.get("native_binding") or {}).get("terminalHandle"): row["admission_id"] for row in rows
               if (row.get("native_binding") or {}).get("terminalHandle")}
     continued = ((state.get("checkpoint") or {}).get("display") or {}).get("continued", [])
-    review_count = sum(row.get("role") == "review" for row in rows)
+    review_count = len(review_rounds(state))
     for row in rows:
         key = row["admission_id"]
         suffix = " (continued)" if row.get("reuse_of") or key in continued else ""

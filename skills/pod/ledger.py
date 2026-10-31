@@ -243,7 +243,9 @@ def _validate_context(value: object) -> dict:
         raise PodError("state_unsupported",
                        f"Objective state uses superseded schema {', '.join(superseded)}; it is listed, "
                        "blocked and never converted. Settle its workers through Orca and start a new objective")
-    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "decision_order", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    state = exact(value, _CONTEXT_FIELDS | _SUCCESSION_FIELDS | {_RETIREMENT_FIELD, "decision_channels", "decision_order", "question_channels", "pod_ticks", "standing_authorization"}, _CONTEXT_FIELDS, name="context")
+    if "question_channels" in state and (type(state["question_channels"]) is not int or state["question_channels"] != 1):
+        raise PodError("state_unsupported", "Question representation is unsupported")
     if "standing_authorization" in state:
         from .standing import validate_record
         validate_record(state["standing_authorization"])
@@ -292,7 +294,7 @@ def _validate_context(value: object) -> dict:
             raise PodError("state_unsupported", "Issue revision history is missing")
         for row in revisions:
             validate_decision(row, checkpoint_value)
-        if state.get("decision_channels") == 4 or state.get("decision_channels") == 5 and checkpoint_value.get("obligations") is not None:
+        if state.get("decision_channels") == 4 or (state.get("decision_channels") == 5 or state.get("question_channels") == 1) and checkpoint_value.get("obligations") is not None:
             from .obligations import validate_map_record
             validate_map_record(checkpoint_value)
         from .contracts import TOOL_QUESTION_SCHEMA
@@ -310,6 +312,13 @@ def _validate_context(value: object) -> dict:
             raise PodError("state_unsupported", "Admission key is malformed")
         _validate_admission(key, row, runtimes=runtimes)
     _validate_route_references(state)
+    checkpoint_value = state.get("checkpoint")
+    if (isinstance(checkpoint_value, dict) and checkpoint_value.get("obligations") is not None
+            and isinstance(checkpoint_value.get("questions"), list)):
+        from .assurance import owned_allowance_question
+        if state.get("question_channels") != 1 and any(
+                owned_allowance_question(row, checkpoint_value, state) for row in checkpoint_value["questions"]):
+            raise PodError("state_unsupported", "Owned questions require their reader capability")
     if (not isinstance(state["interventions"], dict) or not isinstance(state["source_rejections"], dict)
             or not isinstance(state["constraints"], list) or len(state["constraints"]) > 64):
         raise PodError("state_unsupported", "Context evidence is malformed")
@@ -1324,6 +1333,17 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
     old_questions = {row["id"]: row for row in (previous or {}).get("questions", [])
                      if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA} if isinstance((previous or {}).get("questions", []), list) else {}
     proposed_questions = value.get("questions")
+    from .assurance import REVIEW_ORIGIN
+    if isinstance(proposed_questions, list):
+        # Only an unchanged retained kernel row may carry private origin metadata.
+        # A forged/edited claim remains an ordinary visible question, without that claim.
+        previous_questions = (previous or {}).get("questions", [])
+        previous_questions = previous_questions if isinstance(previous_questions, list) else []
+        value["questions"] = proposed_questions = [
+            {**row, REVIEW_ORIGIN: None}
+            if isinstance(row, dict) and REVIEW_ORIGIN in row and not any(
+                row == old and digest(row) == digest(old) for old in previous_questions) else row
+            for row in proposed_questions]
     proposed_tool = {row.get("id"): row for row in proposed_questions if isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA} if isinstance(proposed_questions, list) else {}
     if (any(row != old_questions.get(key) for key, row in proposed_tool.items())
             or any(key not in proposed_tool and row["state"] in ("pending", "approved") for key, row in old_questions.items())):
@@ -1628,6 +1648,7 @@ def _checkpoint_decision(state, *, owner, value, native):
     from .relay import same_decision_input
     last = previous.get("revision_decisions", [])[-1:]
     if (last and last[0].get("decision_binding", {}).get("resources", {}).get("intent") == intent
+            and all(raw.get(key) == last[0].get(key) for key in ("allowance", "delegation"))
             and same_decision_input(raw, last[0])):
         return {"replay": state}
     if requested(raw):
@@ -1781,6 +1802,9 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                 exc.detail = {**(exc.detail or {}), "worker_tabs": tabs}
             raise
         state["owner"] = owner
+        if map_state:
+            from .assurance import allowance_questions
+            core["questions"] = allowance_questions(map_state, ctx, core.get("questions", []))
         identity = running_identity()
         if identity["bundle_digest"] is None:
             raise PodError("installed_version_changed", "Running bundle is incomplete; reload the skill and write a fresh checkpoint")

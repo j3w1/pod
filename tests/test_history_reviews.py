@@ -10,7 +10,7 @@ from pod.errors import PodError
 from pod.history import COMPACT_AT, CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
 from pod.util import digest, encoded
 from tests.history_support import inline_copies, size, synthetic_state
-from tests.records_support import start_before_review_guard
+from tests.records_support import start_before_review_guard, report_before_goal_links
 
 
 OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
@@ -271,10 +271,10 @@ class LiveShapeTests(unittest.TestCase):
         def seq():
             return read(case.project, "objective")["checkpoint"]["seq"]
 
-        def review(name, result, correction=None, *, before_guard=False):
+        def review(name, result, correction=None):
             frozen = case.packet(["A"], role="review")
-            admission = (start_before_review_guard(case, name, frozen) if before_guard
-                         else case.start(name, frozen))["admission"]
+            # The size comparison needs pre-allowance admissions, including the earlier ordering cases.
+            admission = start_before_review_guard(case, name, frozen)["admission"]
             case.settle(admission)
             update, triage = {"A": WAITING}, []
             if correction:
@@ -283,7 +283,8 @@ class LiveShapeTests(unittest.TestCase):
                 triage = [{"finding": "F1", "severity": "major", "triage": "required_correction",
                            "correction": correction, "summary": "repair required"},
                           {"finding": "F2", "severity": "minor", "triage": "advisory", "summary": "noted"}]
-            case.report(admission, frozen, outcome=result, map={"seq": seq() + 1, "update": update}, triage=triage)
+            report_before_goal_links(case, admission, frozen, outcome=result,
+                                     map={"seq": seq() + 1, "update": update}, triage=triage)
             return admission["admission_id"]
 
         def resolve(*keys):
@@ -296,6 +297,11 @@ class LiveShapeTests(unittest.TestCase):
                                                     for row in case.stored()
                                                     if row["state"] == "satisfied" and row["kind"] == "correction"})
 
+        # Synthetic preceding-writer shape: this size comparison predates owned
+        # questions. Do not manufacture new semantics then strip their capability.
+        old_questions = patch("pod.assurance.allowance_questions", side_effect=lambda state, ctx, questions: questions)
+        old_questions.start()
+        cls.addClassCleanup(old_questions.stop)
         cls.settled = []
         for index, result in enumerate(("failed", "partial", "blocked", "uncertain", "failed", "partial")):
             cls.settled.append(review(f"review-{index}", result, f"K{index}"))
@@ -304,12 +310,13 @@ class LiveShapeTests(unittest.TestCase):
         cls.unresolved = review("review-open", "failed", "KU")
         move()
         # These two already-admitted records predate the review-order guard.
-        cls.current = review("review-current", "partial", "KC", before_guard=True)
+        cls.current = review("review-current", "partial", "KC")
         frozen = case.packet(["A"], role="review")
         pending = start_before_review_guard(case, "review-pending", frozen)["admission"]
         case.settle(pending)
         cls.pending = pending["admission_id"]
         unpadded = _read(path)
+        old_questions.stop()
         cls.prior = deepcopy(unpadded)
         cls.prior["source_rejections"] = {"synthetic-padding": ""}
         # The preceding mechanism's physical shape: every review and receipt copy inline, other settled
@@ -437,7 +444,7 @@ class RenewedAssuranceTests(unittest.TestCase):
         case.report(admission, frozen, outcome="failed", map={"seq": seq() + 1, "update": {"A": WAITING, "K": {
             "kind": "correction", "provenance": "coordinator", "parent": "A", "check": "repair the defect",
             "proof_scope": ["src"], **WAITING}}}, triage=[{"finding": "F1", "severity": "major",
-            "triage": "required_correction", "correction": "K", "summary": "repair required"}])
+            "triage": "required_correction", "blocks": "outcome", "correction": "K", "summary": "repair required"}])
         case.write(renew=[{"id": "A", "as": "A2"}])
         case.write(seq=seq() + 1, update={"K": {"state": "withdrawn", "withdrawal": {"by": "user_direct",
                    "reason": "owner waiver"}}}, revision_authority={"provenance": "user_direct", "instruction": "Waive K"})

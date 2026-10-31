@@ -170,7 +170,8 @@ class RecordedQuestionStatusTests(KernelCase):
         self.assertTrue(len(json.dumps(sized, ensure_ascii=False).encode()) <= QUESTION_BYTES)
 
     def test_oversized_fact_and_missing_sequence_are_partial_without_invention(self):
-        self.intake(questions=[{"id": "question", "text": "Choose", "choices": ["x" * 4096], "resolved": False}])
+        self.intake(questions=[{"id": "question", "text": "Choose", "choices": ["x" * 4096], "resolved": False,
+                               "owner_only": True}])
         path = objective_root(self.project, "objective") / "context.json"
         state = json.loads(path.read_bytes())
         # A synthetic earlier map-less checkpoint, which has no map revision.
@@ -183,6 +184,7 @@ class RecordedQuestionStatusTests(KernelCase):
         self.assertIsNone(observed["checkpoint"]["revision"])
         self.assertEqual(observed["items"][0]["missing"], ["choices"])
         self.assertIsNone(observed["items"][0]["choices"])
+        self.assertTrue(observed["items"][0]["owner_only"])
 
     def test_unsupported_questions_container_is_unavailable(self):
         self.intake(questions={"unexpected": "shape"})

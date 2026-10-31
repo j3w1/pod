@@ -169,8 +169,8 @@ class FindingBoundaryTests(ProductionCase):
         rows = self.stored(); rows[1].pop("executor"); rows[1].update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
         rows.append({"id":"C", "kind":"correction", "provenance":"coordinator", "parent":"A", "check":"fix", "state":"waiting", "wait":{"class":"sequenced", "referent":"O1"}})
         self.report(admission, frozen, map={"obligations": rows}, triage=[
-          {"finding":"F1", "severity":"major", "triage":"required_correction", "summary":"root", "correction":"C"},
-          {"finding":"F2", "severity":"minor", "triage":"required_correction", "summary":"sibling", "correction":"C"}])
+          {"finding":"F1", "severity":"major", "triage":"required_correction", "blocks":"outcome", "summary":"root", "correction":"C"},
+          {"finding":"F2", "severity":"minor", "triage":"required_correction", "blocks":"outcome", "summary":"sibling", "correction":"C"}])
         rows = self.stored(); c = next(row for row in rows if row["id"] == "C")
         self.assertEqual(c["finding"]["findings"], ["F1", "F2"]); self.assertEqual(c["finding"]["severity"], "major")
         c.pop("wait"); c.update(state="satisfied", evidence=[self.proof("C")]); self.write(rows)
@@ -234,6 +234,13 @@ class ReleasedWriterTests(ProductionCase):
         self.assertEqual(result["report"]["label"]["label"],"QUALIFIED")
         self.assertEqual({row["id"]:row["definition"] for row in self.stored()},definitions)
         self.assertNotIn("findings",next(row for row in self.stored() if row["id"]=="C")["finding"])
+        self.assertNotIn("blocks",next(row for row in self.stored() if row["id"]=="A")["findings"][0])
+        earlier = json.loads((fixture / "finding-admission.json").read_text())
+        packet = json.loads((fixture / "finding-packet.json").read_text())
+        before = read(self.project, "objective")
+        self.report(earlier, packet, triage=[{"finding": "F1", "severity": "major", "triage": "required_correction",
+                                            "summary": "fix root", "correction": "C"}])
+        self.assertEqual(read(self.project, "objective"), before)
 
     def test_genuine_abbreviated_071_proof_is_listed_on_full_id_restatement(self):
         _, fixture = self.released(abbreviated=True); self.restore(fixture)
@@ -514,7 +521,7 @@ class AdditionalFindingTests(FindingBoundaryTests):
     def test_findings_and_correction_id_bounds_refuse_without_eviction(self):
         frozen,admission=self.intake_review();rows=self.stored();rows[1].pop("executor");rows[1].update(state="waiting",wait={"class":"sequenced","referent":"O1"})
         rows.append({"id":"C","kind":"correction","provenance":"coordinator","parent":"A","check":"fix","state":"waiting","wait":{"class":"sequenced","referent":"O1"}})
-        findings=[{"finding":f"F{i}","severity":"minor","triage":"required_correction","summary":"shared predicate","correction":"C"} for i in range(9)]
+        findings=[{"finding":f"F{i}","severity":"minor","triage":"required_correction", "blocks":"outcome","summary":"shared predicate","correction":"C"} for i in range(9)]
         before=read(self.project,"objective")
         with self.assertRaises(PodError) as caught:self.report(admission,frozen,map={"obligations":rows},triage=findings)
         self.assertEqual(caught.exception.detail["detail"],"finding_limit");self.assertEqual(read(self.project,"objective"),before)

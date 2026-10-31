@@ -213,7 +213,7 @@ class ProofIntegrityBoundaryTests(KernelCase):
                      "check": "repair the reported defect", "boundary": {"paths": ["src"]},
                      "state": "unassigned"})
         consumed = self.report(review, frozen, map={"obligations": rows}, triage=[
-            {"finding": "f1", "severity": "blocker", "triage": "required_correction",
+            {"finding": "f1", "severity": "blocker", "triage": "required_correction", "blocks": "outcome",
              "summary": "real defect", "correction": "K1"}])
         self.assertTrue(consumed["settled"])
         state = read(self.project, "objective")
@@ -675,7 +675,7 @@ class CapacityAndReviewTests(KernelCase):
         rows.append({"id": "K1", "kind": "correction", "provenance": "coordinator", "parent": "A",
                      "check": "the off-by-one is fixed", "boundary": {"paths": ["src"]}, "state": "unassigned"})
         consumed = self.report(review, frozen, map={"obligations": rows}, triage=[
-            {"finding": "f1", "severity": "blocker", "triage": "required_correction", "summary": "off by one",
+            {"finding": "f1", "severity": "blocker", "triage": "required_correction", "blocks": "outcome", "summary": "off by one",
              "correction": "K1"},
             {"finding": "f2", "severity": "major", "triage": "advisory", "summary": "naming",
              "reason": "style only"}])

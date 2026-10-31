@@ -110,9 +110,11 @@ Stamp the running `{version, bundle_digest}` in each checkpoint and refuse a new
 
 ### R90 — 0.6.0 is a hard objective-state cutover
 
-Type: B,H · Scenarios: [A161](#a161)
+Type: B,H · Scenarios: [A161](#a161), [A596](assurance.md#a596)
 
 0.6.0 is a hard objective-state cutover. `pod update` prints a read-only notice of objectives on superseded schemas. Status and doctor list them with their truthful schema and block ordinary writes. R146 may close an older record by read-only delivery proof; once its evidence file exists, status reads it closed by evidence without conversion. An older record without that file keeps its state_unsupported refusal. Future or unknown schemas are never evidence-closed, and in-flight workers are settled through Orca. New objectives are unaffected.
+
+Owned lead-question semantics add the private context capability `question_channels: 1`, with reader floor 0.21.22. The kernel stamps it only for a proven owned question and preserves it on later context writes, including answers, admission/report/tool/decision changes, compaction and closure. It is not an accepted caller input or authority. Unknown values and owned semantics missing the capability refuse without writes; ordinary earlier records require no new capability. Genuine 0.21.21 readers and writers reject the unknown retained field instead of exposing the question to owner observation. A version-drift mutation hold alone is not this protection. R173 owns the question lifecycle; R167's decision-channel discriminators retain their existing meaning.
 
 ### R98 — Rebind an Orca runtime change only on proven continuity
 

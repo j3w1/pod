@@ -246,7 +246,7 @@ class Simulation:
         except PodError:
             self.refused += 1
             return
-        self.admissions[key] = {"serves": list(body["serves"]), "role": role, "boundary": body["boundary"],
+        self.admissions[key] = {"admission_id": key, "serves": list(body["serves"]), "role": role, "boundary": body["boundary"],
                                 "state": "reserved", "disposition": None, "changed_paths": None,
                                 "boundary_exceeded": [], "candidate": self.candidate, "report": None,
                                 "result": {"base": "b" * 40, "head": None} if role == "implement" else None,
@@ -295,6 +295,7 @@ class Simulation:
                               "state": "unassigned"}
                 rows.append(correction)
                 finding["correction"] = correction["id"]
+                finding["blocks"] = "outcome"
             findings.append(finding)
         proposals = [{"summary": "a discovered idea"}] if self.random.random() < 0.3 else []
         try:
@@ -392,7 +393,7 @@ class Simulation:
         except PodError:
             self.refused += 1
             return
-        self.admissions[key] = {"serves": body["serves"], "role": "review", "boundary": body["boundary"],
+        self.admissions[key] = {"admission_id": key, "serves": body["serves"], "role": "review", "boundary": body["boundary"],
                                 "state": "reserved", "disposition": None, "changed_paths": None,
                                 "boundary_exceeded": [], "candidate": self.candidate, "report": None,
                                 "result": None, "binding": admission_binding(body, self.ctx(), self.map)}

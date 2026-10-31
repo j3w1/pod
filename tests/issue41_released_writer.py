@@ -33,6 +33,8 @@ def main():
             rows.append({"id":"C", "kind":"correction", "provenance":"coordinator", "parent":"A", "check":"fix", "state":"waiting", "wait":{"class":"sequenced","referent":"O1"}})
             case.report(admission,frozen,map={"obligations":rows},triage=[{
                 "finding":"F1", "severity":"major", "triage":"required_correction", "summary":"fix root", "correction":"C"}])
+            (args.destination / "finding-packet.json").write_text(json.dumps(frozen))
+            (args.destination / "finding-admission.json").write_text(json.dumps(admission))
             rows=case.stored(); c=next(row for row in rows if row["id"]=="C"); c.pop("wait"); c.update(state="satisfied",evidence=[case.proof("C")]);case.write(rows)
             frozen=case.packet(["A"], role="review"); admission=case.start("delta-review",frozen)["admission"]
             case.settle(admission)

@@ -299,7 +299,7 @@ and the verified standing-authorization activation and revocation of R136. R149'
 checkpoint-only issue revision has its separate verified path below. A responder's
 answer (R138) is never an owner decision and appears on no owner list. A general `revision_authority` answer supplies
 `question`, resolving to a string or the `id`/`reference` of a question previously
-recorded in the checkpoint; Pod preserves that reference. A question added in the
+recorded in the checkpoint; Pod preserves that reference. [R173](assurance.md#r173--keep-findings-goal-scoped-and-bound-review-rounds) requires sourced delegated lead authority or an actual person's own decision for review-allowance answers. A question added in the
 same write is not a previously recorded question. A relayed general revision
 without that binding refuses `relayed_decision_refused` with a next action.
 
@@ -402,7 +402,7 @@ genuine 0.17.0 readers refuse them. A context that holds a `standing_authorizati
 record, and a Governor journal holding a row whose authorization carries `standing`
 (R137), use `decision_channels: 3`; genuine 0.18.0 readers refuse them. R149's issue
 revision evidence and contexts/reports containing it use `decision_channels: 4`,
-which preceding helpers refuse. Other
+which preceding helpers refuse. R90's independent private `question_channels: 1` protects owned lead-question semantics at the context boundary; it grants no decision authority and does not replace these channel discriminators. Other
 channel-bearing records retain `1` and existing records read unchanged, without
 conversion.
 

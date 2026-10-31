@@ -113,7 +113,7 @@ owner decision.
 
 ## Evidence and review
 
-R33, R41, R43 and R87–R91 define source, receipt, obligation, triage and closure
+R33, R41, R43, R87–R91 and [R173](spec/assurance.md#r173--keep-findings-goal-scoped-and-bound-review-rounds) define source, receipt, obligation, triage, review allowance and closure
 contracts; R29/R98/R105 define exact native authority and continuity. Tests exercise
 those production boundaries with disposable projects and injected ports. Seeded
 stdlib generative checks test P1–P6 after each accepted transition and print
@@ -129,6 +129,23 @@ corrections. Missing audit remains incomplete, and withdrawal never passes revie
 A change to admission, assurance or closure is audited under the mechanism installed
 before it. Proof produced by the changed mechanism about itself is labeled
 self-hosting and cannot substitute for that audit.
+
+Apply R173's goal-scoped findings, per-requirement reuse statement and three-round
+allowance during review. Exercise report ingestion, review admission, checkpoint
+question deduplication, sourced delegated lead decisions, current machine policy and unsourced/reviewer/worker refusals through their production
+boundaries; fixture records stay separate from native and preceding-mechanism audit evidence.
+
+For the lead allowance, feed actual candidate public status to the currently installed
+host owner-question consumer in disposable host/Pod stores. Absent, present and timed-out
+lead facts must create no owner request or claimable card through due, carried clean-clear,
+answered/continue/simplify/stop, renewal and next-due transitions. Exercise carried, omitted,
+empty and public-round-tripped inputs and forged ownership claims;
+ordinary, earlier, tool/sensitive, policy, mixed and lookalike controls must still reach
+the owner feed. Pass actual persisted records to a separate genuine preceding reader/writer
+and its full installed host observation path; unsupported owned semantics must refuse or
+be unavailable without byte changes or owner requests. Verify capability persistence,
+anti-forgery and downgrade refusal through affected writes. Record reader/consumer hashes. This compatibility fixture is
+separate from live host notification proof; no real card or service operation is permitted.
 
 If a post-merge trial fails, preserve exact evidence and leave the objective
 incomplete. Distinguish product defects from environment/trial faults. Product fixes

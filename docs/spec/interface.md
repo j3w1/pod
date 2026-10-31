@@ -24,9 +24,9 @@ Read-only status and doctor report preferences including their status and any ro
 
 Every enumerated record has its record identity, objective (null if membership is unknown), revision, `outcome`, `exit_code`, complete `report` or null, and `failure`. A nonzero singular result keeps its complete JSON alongside the typed failure. Unreadable, unattributed, unsupported/earlier-schema, oversized, partial and changed records remain explicit. No phase/closed label skips validation. The scan bound is host-global: every non-dot entry under the shared Pod state root counts, including other repositories and plain files. Beyond 1024 entries enumeration is refused without paging or a raised cap. Within that bound, a page contains at most 128 records and a response is at most 2,000,000 UTF-8 bytes including its newline. A report that cannot fit alone yields `status_report_too_large`; full reports page before the output bound. The cohort distinguishes complete enumeration from complete membership attribution; an unreadable or unattributed identity keeps membership incomplete. Scan overflow or unenumerable membership cannot claim a complete cohort. No record is repaired, converted, locked or written.
 
-Follow the exact `page.next_cursor` until null, requiring one unchanged `cohort.id` and contiguous `page.offset`/`count` with no repeated record. Pages may be replayed with their explicit old offset; a replay adds no coverage. Cursors confer no authority or proof. A changed cohort, common input or native binding invalidates earlier pages; there is no silent restart. Top-level `complete` means this one response accounts for the entire stable cohort; `status: page` explicitly covers only its range, including the last page of a multi-page read. An `incomplete` result or any typed record failure exits nonzero even when every record has a typed outcome. `reason: record_failure` means a read record failed; `scan_limit` or `unreadable_root` means enumeration is incomplete. `page.valid` reports the final cohort/deadline fence, independently of each report's readiness. If that fence fails, per-record failure codes remain intact and `page_failure` names the page invalidation; the incomplete page has no continuation cursor because its cohort could not be revalidated. An unattributed record may belong to another repository and still keeps membership unknown. Successful reads still require the caller's unchanged admission/acceptance checks on every full report.
+Follow the exact `page.next_cursor` until null, requiring one unchanged `cohort.id` and contiguous `page.offset`/`count` with no repeated record. Pages may be replayed with their explicit old offset; a replay adds no coverage. Cursors confer no authority or proof. A changed cohort, common input or native binding invalidates earlier pages; there is no silent restart. Top-level `complete` means this one response accounts for the entire stable cohort; `status: page` explicitly covers only its range, including the last page of a multi-page read. An `incomplete` result or any typed record failure exits nonzero even when every record has a typed outcome. `reason: record_failure` means a read record failed; `scan_limit` or `unreadable_root` means enumeration is incomplete. `page.valid` is true only when enumeration is complete and the final cohort/deadline fence passes, independently of each report's readiness; `page.end` alone establishes neither fact. If that fence fails, per-record failure codes remain intact and `page_failure` names the page invalidation; the incomplete page has no continuation cursor because its cohort could not be revalidated. An unattributed record may belong to another repository and still keeps membership unknown. Successful reads still require the caller's unchanged admission/acceptance checks on every full report.
 
-The default whole-call budget is 10 seconds; `--timeout` takes the original caller's remaining positive budget, at most 30 seconds. An existing shorter outer deadline is retained. The existing native 10-second, repository Git 20-second and kernel Git 30-second per-read caps are clamped to the time left, and late results fail the final deadline fence. Cooperative file reads and process timeouts introduce no daemon, background reader, controller, mutable-proof cache or larger limit. Callers retain their own outer process/deadline guards, including across pages; a fresh CLI process does not restart the caller's remaining budget. Real consumer timing and usable complete-cohort qualification remain separate live evidence.
+The default whole-call budget is 10 seconds; `--timeout` takes the original caller's remaining positive budget, at most 30 seconds. An existing shorter outer deadline is retained. The existing native 10-second, repository Git 20-second and kernel Git 30-second per-read caps are clamped to the time left, and late results fail the final deadline fence. For a window-eligible non-owner record, configured host verification retains its existing five-second reservation: five seconds or less remaining can produce a per-record `status_deadline` while the page fence still passes. Host verification remains per record; its live cost is not established by fixture timing. Cooperative file reads and process timeouts introduce no daemon, background reader, controller, mutable-proof cache or larger limit. Callers retain their own outer process/deadline guards, including across pages; a fresh CLI process does not restart the caller's remaining budget. Real consumer timing and usable complete-cohort qualification remain separate live evidence.
 
 ### R49 — The one-shot installer places both agent
 
@@ -121,6 +121,8 @@ This is the authoritative documentation contract:
 The router instructs the coordinator to read a reference when the current action, or a necessary prerequisite of it, needs it; never preload the reference directory or read a reference merely because it is linked; read an authoring template only to author or revise that kind of document; and reload guidance when it is lost, changed or insufficient. Trivial work reads none. These are coordinator instructions, not a loading mechanism; static checks establish wording and routing, while observed runs establish actual reference reads.
 
 `SKILL.md` has exactly Roles, Done when, Boundaries, Helpers and Read when needed. Each bundled reference has one unique triggered router link and no reference-to-reference links. Validation retains frontmatter/metadata restrictions, VERSION, inventory and symlink rules, required and forbidden helper forms, launcher, interface, catalog and observations checks, and the 64 KiB per-file bundle byte bound. Metadata and VERSION restrictions are reported before body checks. Word and line counts cause neither refusals nor warnings; printed per-file stored word counts and their single total are informational and do not measure the context an agent loads. Runtime-required delivery, cleanup, coordination, model and bookkeeping guidance lives in the installed bundle's applicable task references, preserving authority, completion, judgment and recovery; templates serve authoring and revision, while repository docs provide contributor checks and detailed contracts.
+
+[R173](assurance.md#r173--keep-findings-goal-scoped-and-bound-review-rounds)'s review allowance, goal-scoped findings and review report-contract guidance follow this contract in the [verification reference](../../skills/pod/references/verification.md).
 
 ### R73 — The model workspace is one table of exact routes
 
@@ -313,7 +315,9 @@ or an unsupported questions container are unavailable, never evidence of no
 questions. Missing row facts and bounded truncation are partial and name their
 gaps. The projection is read-only and adds no question store, native scrape,
 private-service dependency, decision permission or lifecycle authority. Every prior
-status field and human rendering keeps its behavior.
+status field and human rendering keeps its behavior except R173's explicit lead-only
+owner-feed routing and additive visible lead question; raw decision waits keep their
+existing counts and uncertainty semantics.
 
 ### R139 — Show the objective's yolo mode and extend the relay verifier to it
 
@@ -893,7 +897,10 @@ and live proof remain separate from synthetic subprocess tests.
 ### Recorded-question status contract
 
 `pod status --objective ID --json`, and a status selecting one objective by Run,
-add `recorded_questions` with exactly this supported schema. Consumers must inspect
+add `recorded_questions` with exactly this supported schema. R173 excludes only its
+proven kernel-owned unanswered lead allowance rows from this owner feed; status exposes
+an unchanged unanswered row separately as `review_allowance_question`. Stored questions,
+answered history and full raw decision/attention accounting remain intact. R90's private context capability makes preceding 0.21.21 readers safely refuse these owned records; their unavailable projection is not compatibility PASS. Consumers must inspect
 its status and gaps: absent or unavailable projection never means an empty list.
 Native status failure does not erase question facts already read from the checkpoint.
 
@@ -902,8 +909,8 @@ Native status failure does not erase question facts already read from the checkp
 | `schema` | `pod-recorded-questions/v1`. |
 | `status` | `complete`, `partial` or `unavailable`. |
 | `checkpoint` | Object with `seq` and `revision`, each the recorded nonnegative integer or `null` when missing/unsupported. |
-| `items` | Ordered projected rows, each with `index` (zero-based recorded position), `id`, `reference`, `text`, `choices`, `resolution` and `missing`. Position is not a stable question identity. |
-| `total` | Recorded list length, including unsupported or unprojected rows; `null` when the list is unavailable. |
+| `items` | Ordered projected rows, each with `index` (zero-based recorded position), `id`, `reference`, `text`, `choices`, `resolution` and `missing`, plus `owner_only` when recorded as a boolean and `recipient` when recorded as `repository_lead`. Position is not a stable question identity. |
+| `total` | Owner-feed row count, including unsupported or unprojected rows, after R173's proven origin-based exclusion; `null` when the list is unavailable. Original recorded positions remain the item indices. |
 | `truncated` | Whether count/byte bounds omitted any recorded rows. |
 | `missing` | Top-level missing facts: `checkpoint`, `checkpoint.seq`, `checkpoint.revision`, `questions`, or `items` when truncated. |
 | `reason` | `null` for complete; `question_facts_missing` or `projection_limit` for partial; `checkpoint_unavailable`, `questions_missing`, `questions_unsupported`, or the record-read failure code for unavailable. |
@@ -918,7 +925,8 @@ bounded to 4096 bytes. Their meaning is not inferred; an absent resolution is
 unknown. Missing/unsupported/oversized fields become `null` and are named in the
 row's `missing` list as `identity` (neither id nor reference), `text`, `choices` or
 `resolution`. Explicit recorded `choices: null` stays distinct from an absent
-choices field through that list. Other object keys remain unprojected.
+choices field through that list. A recorded boolean `owner_only` is copied unchanged;
+when true, deliberately absent choices are not a missing fact. Other object keys remain unprojected.
 
 At most 64 rows and 32 KiB of encoded projection are returned. A complete explicit
 empty list has `items: []`, `total: 0`, `truncated: false` and no gaps. Any missing
@@ -929,7 +937,7 @@ them or proof that unrecorded questions do not exist.
 
 - <a id="a426"></a>**A426** — Public status projects populated questions and explicit empty lists with recorded ids/references, text, choices and resolution facts, checkpoint seq/revision and complete status. A changed question keeps its recorded id and exposes the new text/resolution and checkpoint sequence without writing on read.
 - <a id="a427"></a>**A427** — Existing string questions and partial/unsupported row forms remain readable with explicit missing facts and partial status; no id or resolution is invented. Missing questions and unsupported containers report unavailable with unknown total, rather than complete emptiness.
-- <a id="a428"></a>**A428** — A failed record read reports unavailable with its code. Missing sequence/revision, oversized facts, count and byte limits report explicit partial gaps/truncation. The projection preserves every prior status field and rendering, introduces no effect and does not change stored records or question authority.
+- <a id="a428"></a>**A428** — A failed record read reports unavailable with its code. Missing sequence/revision, oversized facts, count and byte limits report explicit partial gaps/truncation. R173's exact derived lead exception preserves ordinary owner-feed facts and bounds, original indices, separate lead visibility and full decision/attention counts; arbitrary labels or lookalikes cannot hide owner questions. The projection introduces no effect and changes no stored record or question authority.
 
 ### Standing-authorization status contract
 

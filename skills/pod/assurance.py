@@ -226,7 +226,11 @@ def validate_findings(ob: dict, rows: dict, *, seq: int, lineage=None) -> None:
     attempts = {}
     for raw in findings:
         required = {"attempt", "finding", "severity", "triage", "summary", "recorded_seq"}
-        row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq"}, required, "persisted finding", obligation=ob["id"])
+        row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq", "blocks"}, required, "persisted finding", obligation=ob["id"])
+        if "blocks" in row:
+            _text(row["blocks"], "blocks", limit=bound("finding", "blocks"), obligation=ob["id"])
+            if row["triage"] != "required_correction":
+                raise refuse("obligation_invalid", "malformed", "only required corrections carry blocks", obligation=ob["id"])
         _text(row["attempt"], "attempt", limit=128, obligation=ob["id"])
         attempts[row["attempt"]] = attempts.get(row["attempt"], 0) + 1
         if attempts[row["attempt"]] > MAX_REPORT_FINDINGS:
@@ -414,6 +418,147 @@ def review_completed(admission: Any) -> bool:
     report = admission.get("report") if isinstance(admission, dict) else None
     return (isinstance(report, dict) and report.get("outcome") == "succeeded"
             and report.get("status") == "validated_observation")
+
+
+def review_allowance(state: dict, ctx: dict) -> dict:
+    """R173: derive the allowance from admissions and accepted decisions only."""
+    from .display import review_rounds
+    reviews = review_rounds(ctx)
+    decisions = [row for row in state.get("revision_decisions", []) if "allowance" in row]
+    granted = 3
+    for row in decisions:
+        if row["allowance"]["choice"] != "stop":
+            granted = int(row["question"].removeprefix("review-allowance-")) + row["allowance"].get("rounds", 1)
+    finished = bool(reviews and reviews[-1].get("report")
+                    and reviews[-1]["admission_id"] not in ctx.get("outstanding", []))
+    open_assurance = any(ob["kind"] in ("assurance", "correction") and ob["state"] not in ("satisfied", "withdrawn", "renewed")
+                         for ob in state.get("obligations", []))
+    status = ("stopped" if any(row["allowance"]["choice"] == "stop" for row in decisions) else
+              "clear" if not open_assurance else "open" if len(reviews) < granted else
+              "running" if not finished else "due")
+    return {"state": status, "rounds": len(reviews), "granted": granted, "finished": finished,
+            "open_assurance": open_assurance,
+            "question": f"review-allowance-{len(reviews)}" if status == "due" else None}
+
+
+def allowance_question(rounds: int, granted: int) -> dict:
+    return {"id": f"review-allowance-{rounds}", "owner_only": False, "recipient": "repository_lead",
+            "kind": "review_allowance", "resolved": False, "choices": ["stop as incomplete", "simplify", "continue N"],
+            "text": f"{rounds} review rounds have been used, against {granted} granted, and assurance is unfinished. "
+                    "Stop as incomplete, simplify named obligations for one verification round, "
+                    "or continue for a stated 1..8 rounds. The coordinator asks the repository lead through native mail "
+                    "and records its delegated answer with the lead message reference and reason. "
+                    "Do not raise a maintainer card or owner-question notice."}
+
+
+REVIEW_ORIGIN = "_pod_review_origin"  # Private checkpoint metadata, never caller authority.
+
+
+def owned_allowance_question(row: Any, state: dict, ctx: dict) -> bool:
+    """Validate the retained kernel source independently of today's due/clear state."""
+    from .display import review_rounds
+    if not isinstance(row, dict) or not isinstance(origin := row.get(REVIEW_ORIGIN), dict):
+        return False
+    if (set(origin) != {"admission", "seq", "granted"} or type(origin["seq"]) is not int
+            or not 1 <= origin["seq"] <= state["seq"] or type(origin["granted"]) is not int):
+        return False
+    reviews = review_rounds(ctx)
+    index = next((i for i, admission in enumerate(reviews)
+                  if admission["admission_id"] == origin["admission"] and admission.get("report")
+                  and admission.get("admitted_seq", origin["seq"]) < origin["seq"]), None)
+    if index is None:
+        return False
+    granted = 3
+    for decision in state.get("revision_decisions", []):
+        if "allowance" in decision and decision["seq"] < origin["seq"]:
+            if decision["allowance"]["choice"] == "stop":
+                return False
+            granted = int(decision["question"].removeprefix("review-allowance-")) + decision["allowance"].get("rounds", 1)
+    if origin["granted"] != granted or index + 1 < granted:
+        return False
+    canonical = allowance_question(index + 1, granted)
+    public = {key: value for key, value in row.items() if key != REVIEW_ORIGIN}
+    forms = [canonical, *({**canonical, "resolved": True, "status": "answered", "answer": decision["allowance"]}
+                         for decision in state.get("revision_decisions", []) if "allowance" in decision
+                         and decision.get("question") == canonical["id"] and decision["seq"] >= origin["seq"])]
+    return any(public == form and digest(public) == digest(form) for form in forms)
+
+
+def allowance_questions(state: dict, ctx: dict, questions: Any) -> Any:
+    """Retain kernel-owned questions and sources, including CE's top-level answer facts."""
+    allowance = review_allowance(state, ctx)
+    if not isinstance(questions, list):
+        if allowance["state"] != "due" and not any("allowance" in row for row in state.get("revision_decisions", [])):
+            return questions
+        raise PodError("invalid_checkpoint", "Review allowance questions require a question list")
+    previous = [row for row in ctx.get("recorded_questions", []) if owned_allowance_question(row, state, ctx)]
+    generated, superseded = [], []
+    granted = 3
+    for decision in state.get("revision_decisions", []):
+        if "allowance" in decision:
+            rounds = int(decision["question"].removeprefix("review-allowance-"))
+            question = allowance_question(rounds, granted)
+            superseded.append(question)
+            generated.append({**question, "resolved": True, "status": "answered",
+                              "answer": deepcopy(decision["allowance"])})
+            prior = next((row for row in previous if row["id"] == question["id"]), None)
+            if prior is not None:
+                generated[-1][REVIEW_ORIGIN] = prior[REVIEW_ORIGIN]
+            if decision["allowance"]["choice"] != "stop":
+                granted = rounds + decision["allowance"].get("rounds", 1)
+    if allowance["state"] == "due":
+        from .display import review_rounds
+        question = allowance_question(allowance["rounds"], allowance["granted"])
+        prior = next((row for row in previous if row["id"] == question["id"]), None)
+        generated.append({**question, REVIEW_ORIGIN: (prior[REVIEW_ORIGIN] if prior is not None else {
+            "admission": review_rounds(ctx)[-1]["admission_id"], "seq": state["seq"], "granted": allowance["granted"]})})
+        superseded.append(question)  # Upgrade only the currently justified earlier unmarked form.
+    generated.extend(row for row in previous if not any(item["id"] == row["id"] for item in generated))
+    superseded.extend({key: value for key, value in row.items() if key != REVIEW_ORIGIN} for row in previous)
+    # Own only exact derived rows. Caller labels, ids or a reserved-looking string
+    # cannot erase an ordinary/tool question; accepted answers replace their old row.
+    return [row for row in questions if not any(row == owned and digest(row) == digest(owned)
+                                               for owned in generated + superseded + previous)] + generated
+
+
+def allowance_answer(value: Any) -> dict:
+    from .obligations import _exact, refuse
+    row = _exact(value, contract_fields("review allowance answer"), {"choice"}, "review allowance answer")
+    if (row["choice"] not in ("stop", "simplify", "continue")
+            or (row["choice"] == "continue" and (type(row.get("rounds")) is not int or not 1 <= row["rounds"] <= 8))
+            or (row["choice"] != "continue" and "rounds" in row)):
+        raise refuse("obligation_invalid", "malformed", "continue grants 1..8 rounds; stop and simplify take no rounds",
+                     record="review allowance answer")
+    return dict(row)
+
+
+def allowance_authority(record: dict) -> None:
+    """Reuse the delegated lead source shape and the enclosing decision capability.
+
+    As with route settlement, the coordinator relays the lead; Pod does not authenticate
+    that role. Workers cannot checkpoint for it. The machine decision policy still applies.
+    """
+    from .obligations import _exact, _text, refuse
+    delegation = record.get("delegation")
+    if delegation is None:
+        if record.get("provenance") == "user_direct" and record.get("channel", "session") == "session":
+            return
+        # The generic verifier can attest an actual person's own decision.
+        from .relay import current_decision
+        capability = current_decision()
+        actor = record.get("actor") or (capability.actor if capability is not None else {})
+        if actor.get("kind") == "person" and ("decision_binding" in record or capability is not None):
+            return
+        raise refuse("obligation_invalid", "allowance_source_required", "only a sourced repository-lead decision or actual person answer grants review",
+                     record="revision authority", next_action="ask the repository lead through native mail and record its source and reason; never relabel a worker or reviewer as the lead")
+    row = _exact(delegation, contract_fields("review allowance delegation"),
+                 {"basis", "source", "reason"}, "review allowance delegation")
+    source = _exact(row["source"], {"reference"}, {"reference"}, "route settlement source")
+    _text(source["reference"], "reference", limit=512)
+    _text(row["reason"], "reason", limit=1024)
+    if row["basis"] != "lead_decision" or record.get("provenance") not in ("agent_decision", "decision_request"):
+        raise refuse("obligation_invalid", "allowance_source_required", "record the repository lead as a delegated agent decision, never as the person's own words",
+                     record="revision authority")
 
 
 def _reuse_valid(ob: dict, ctx: dict, candidate: str) -> bool:
@@ -644,6 +789,11 @@ def _finding_record(raw, assurance_id):
     if record["severity"] not in SEVERITIES or record["triage"] not in TRIAGE:
         raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES) + "; triage allowed: " + ", ".join(TRIAGE),
                      finding=record["finding"], obligation=assurance_id)
+    if "blocks" in record:
+        _text(record["blocks"], "blocks", limit=bound("finding", "blocks"), obligation=assurance_id)
+        if record["triage"] == "advisory":
+            raise refuse("obligation_invalid", "malformed", "an advisory carries no blocks; retain required linked findings",
+                         finding=record["finding"], obligation=assurance_id)
     if record["severity"] in ("blocker", "major") and record["triage"] == "advisory":
         if "reason" not in record:
             raise refuse("obligation_invalid", "downgrade_unreasoned",
@@ -698,6 +848,8 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         entry = {"attempt": admission_id, "finding": record["finding"], "severity": record["severity"],
                  "triage": record["triage"], "summary": record["summary"],
                  "recorded_seq": state["seq"] + 1}
+        if "blocks" in record:
+            entry["blocks"] = record["blocks"]
         if "root_cause" in record:
             entry["root_cause"] = record["root_cause"]
         if "findings" in record:
@@ -706,13 +858,19 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         matching = [item for item in same_attempt if set(item.get("findings", [item["finding"]])) & set(ids)]
         if matching:
             prior = matching[0]
-            replay = {key: prior.get(key) for key in ("finding", "severity", "triage", "summary", "reason", "correction", "findings", "root_cause")}
+            replay = {key: prior.get(key) for key in ("finding", "severity", "triage", "summary", "reason", "correction", "findings", "root_cause", "blocks")}
             proposed = {key: record.get(key) for key in replay}
             proposed["findings"] = ids if "findings" in record else None
             if replay != proposed:
                 raise refuse("obligation_invalid", "receipt_conflict", "stored finding ids cannot be regrouped or changed",
                              finding=record["finding"], record="finding", obligation=assurance_id)
             continue
+        if record["triage"] == "required_correction" and "blocks" not in record:
+            raise refuse("obligation_invalid", "finding_unlinked", "a new required correction names what it blocks",
+                         finding=record["finding"], obligation=assurance_id,
+                         next_action="ask the reviewer for the outcome, requirement, PoD or policy link, or record an advisory "
+                                     "with the required downgrade reason; label substantive safety/privacy findings "
+                                     "policy:safety or policy:privacy rather than downgrading them for a missing label")
         if "reason" in record:
             entry["reason"] = record["reason"]
         known = {row.get("id") for row in listed}
