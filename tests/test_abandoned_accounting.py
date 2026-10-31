@@ -34,6 +34,9 @@ class AbandonedPort(FakePort):
                      for state in ('accepted', 'turn_unobserved')]]
         receipt.update(state='outcome_unknown', stage='turn_start_unobserved', turnStart='unobserved',
                        prompt={'requestId': REQUEST, 'stages': ['input_accepted']}, effects=effects)
+        if getattr(self, 'null_launch', False):
+            receipt['launch'] = {key: {name: None for name in ('agent', 'model', 'effort')}
+                                 for key in ('requested', 'effective')}
         self.workers[dispatch].update(state='start_unknown', effects=effects)
         raw = json.dumps({'ok': True, 'result': {**receipt, 'mutation': {'requestId': REQUEST}},
                           '_meta': {'runtimeId': self.runtime}}).encode()
@@ -50,6 +53,8 @@ class AbandonedPort(FakePort):
         item = self.workers[dispatch]
         result = shown['result']
         result['worker'].update(stage=item['state'], effects=deepcopy(item['effects']))
+        if getattr(self, 'null_launch', False) and item['state'] in ('start_unknown', 'abandoned'):
+            result['worker']['startOptions']['launch'] = deepcopy(self.request_receipt['launch'])
         if item['state'] == 'abandoned':
             result['dispatch'].update(lastFailure='abandoned', capabilityRevokedAt='2026-10-01T12:00:00Z',
                                       completedAt='2026-10-01T12:00:00Z', lastHeartbeatAt=None)
@@ -288,6 +293,37 @@ class AbandonedAccountingTests(AbandonedFixture):
                        observation={'receipt': receipt}, retry_request=None, reference=receipt)
         with self.assertRaises(PodError) as caught: self.account(admission)
         self.assertEqual(caught.exception.code, 'native_abandoned_unverified')
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_actual_worktree_must_join_original_placement_before_accounting(self):
+        admission = self.held()
+        self.port.placement['branch'] = 'different-branch'
+        with self.assertRaises(PodError) as caught: self.account(admission)
+        self.assertEqual(caught.exception.code, 'worktree_binding_changed')
+        self.assertEqual(read(self.project, 'objective')['admissions'][admission['admission_id']]['state'], 'unresolved')
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_reused_terminal_null_launch_keeps_prior_effective_route_with_provenance(self):
+        prior = self.start()['admission']
+        self.port.workers['dispatch-1']['outcome'] = 'succeeded'
+        self.discard(prior)
+        port = AbandonedPort()
+        port.placement = self.port.placement
+        port.workers = deepcopy(self.port.workers)
+        port.workers['dispatch-1']['effects'] = []
+        port.null_launch = True
+        self.port = port
+        with self.assertRaises(PodError) as caught:
+            self.start('followup', frozen=self.frozen(), reuse_of=prior['admission_id'])
+        self.assertEqual(caught.exception.code, 'native_start_unsettled')
+        admission = next(row for row in read(self.project, 'objective')['admissions'].values()
+                         if row['task_id'] == 'followup')
+        self.port.workers['dispatch-2'].update(state='abandoned', outcome='failed')
+        row = self.account(admission)['admission']
+        self.assertEqual(row['route_decision']['effective'], prior['route_decision']['effective'])
+        self.assertEqual(row['effective_evidence']['inherited']['admission'], prior['admission_id'])
+        self.assertEqual(row['effective_evidence']['inherited']['terminal'], prior['native_binding']['terminalHandle'])
+        self.assertFalse(row['route_decision']['effective_unknown'])
         self.assertEqual(len(self.port.starts), 1)
 
 

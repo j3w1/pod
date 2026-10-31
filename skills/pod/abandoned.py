@@ -163,7 +163,7 @@ def _observations(project: Path, objective: str, admission: dict, request: str) 
 
 def recover(project: Path, objective: str, *, owner: str, admission: dict, reason: str, port) -> dict:
     """Account one existing request using reads only; never replay worker-start."""
-    from .operations import (_check_retry_placement, _identity_from_show, _known_request_conflict,
+    from .operations import (_check_native_placement, _check_retry_placement, _identity_from_show, _known_request_conflict,
                              _observe_start, _receipt_from_request_show, _retry_parent_link,
                              _reuse_effective_evidence, _valid_request_uuid)
     bounded_text(reason, name="abandoned_reason", limit=1024)
@@ -199,6 +199,12 @@ def recover(project: Path, objective: str, *, owner: str, admission: dict, reaso
     shown = port.show_worker(dispatch)
     binding = _identity_from_show(shown, admission, dispatch)
     _check_retry_placement(port, binding, admission)
+    placement = admission["recovery"].get("placement_binding")
+    if not isinstance(placement, dict):
+        _refuse("Original placement evidence is missing")
+    observed = _check_native_placement(port, "id:" + binding["worktreeId"], placement)
+    if observed["runtime"] != admission["runtime"]:
+        _refuse("Actual abandoned worktree belongs to another runtime")
     fence = current_fence(shown, admission, binding)
     for row in receipts:
         if not _input_unobserved(row, binding["terminalHandle"]):

@@ -9055,7 +9055,8 @@
       ],
       "offline_test": [
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_exact_accounting_frees_only_logical_slot_and_keeps_unknown_resources_and_history",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_internal_original_admission_contract_reaches_accounting_and_rejects_changed_packet"
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_internal_original_admission_contract_reaches_accounting_and_rejects_changed_packet",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_reused_terminal_null_launch_keeps_prior_effective_route_with_provenance"
       ],
       "status": "NOT_RUN"
     },
@@ -9070,7 +9071,8 @@
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_any_immutable_observed_start_blocks_accounting_even_with_unobserved_latest_read",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_observed_or_missing_original_receipt_and_request_conflict_refuse",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_missing_or_conflicting_fence_remains_unresolved",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_native_identity_conflicts_keep_existing_guards"
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_native_identity_conflicts_keep_existing_guards",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_actual_worktree_must_join_original_placement_before_accounting"
       ],
       "status": "NOT_RUN"
     },
