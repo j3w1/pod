@@ -1471,6 +1471,48 @@ def _closure_preservation(project: Path, objective: str, state: dict, ctx: dict)
     return ids
 
 
+_WITHDRAWAL_ONLY_FIELDS = {"seq", "obligations", "update", "close", "revision_authority"}
+_SETTLED_PROOF = ("state", "evidence", "receipts", "acceptances", "reuse", "withdrawal", "renewal")
+
+
+def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict, dispositions: list,
+                     verified_delivery: dict | None) -> bool:
+    """R201: the closing write's only change withdraws every remaining live obligation.
+
+    It records no delivery, disposition, acceptance, reuse, rebind, renewal, proposal or governance change, keeps
+    the candidate and criteria, adds no row and leaves every satisfied, withdrawn or renewed row in its state. The
+    kernel still validates each withdrawal's authority, and the write is checked again after it."""
+    from .obligations import TERMINAL, expand_update
+    if (verified_delivery is not None or prior_map.get("delivery") is not None or dispositions
+            or set(proposed) - _WITHDRAWAL_ONLY_FIELDS
+            or core.get("candidate") != previous.get("candidate")
+            or core.get("criteria") != previous.get("criteria")):
+        return False
+    try:
+        rows = expand_update(prior_map, proposed).get("obligations")
+    except PodError:
+        return False
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return False
+    named = {row.get("id"): row for row in rows}
+    prior = {row["id"]: row for row in prior_map["obligations"]}
+    if len(named) != len(rows) or set(named) - set(prior):
+        return False
+    live = [key for key, row in prior.items() if row["state"] not in TERMINAL]
+    return bool(live) and all(
+        named.get(key, row).get("state") == (row["state"] if row["state"] in TERMINAL else "withdrawn")
+        for key, row in prior.items())
+
+
+def _settled_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
+    """R201 after the kernel: no row was added and every settled row keeps its recorded proof."""
+    from .obligations import TERMINAL
+    prior = {row["id"]: row for row in prior_map["obligations"]}
+    return all(row["id"] in prior and (prior[row["id"]]["state"] not in TERMINAL
+                                       or all(row.get(key) == prior[row["id"]].get(key) for key in _SETTLED_PROOF))
+               for row in map_state["obligations"])
+
+
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict, issue_revision=None) -> tuple[dict, dict | None]:
@@ -1482,6 +1524,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     derived_adoption = None
     adopted_observation = None
     delivery_request = proposed.pop("delivery", None)
+    withdrawal_refusal = None
     if proposed or prior_map is not None:
         refresh = proposed.get("governance_refresh") is True
         verified_delivery = None
@@ -1494,6 +1537,9 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             verified_delivery = verify_delivery(project, objective, prior_map, record_id,
                                                 seq=prior_map["seq"] + 1)
         kept = None
+        withdrawing = (prior_map is not None and not refresh and proposed.get("close") is True
+                       and not prior_map.get("closure")
+                       and _withdrawal_only(prior_map, proposed, core, previous, dispositions, verified_delivery))
         if prior_map is not None and not refresh:
             current_map = prior_map if verified_delivery is None else {**prior_map, "delivery": verified_delivery}
             from .governance import completion_governance
@@ -1506,7 +1552,15 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                              and all(core.get(key) == previous.get(key) for key in core
                                      if key not in {"schema", "native_refs", "policy_revision"}))
             if closing or delivery_only:
-                kept, unchanged = completion_governance(project, current_map, checkpoint=True, state=state)
+                try:
+                    kept, unchanged = completion_governance(project, current_map, checkpoint=True, state=state)
+                except PodError as exc:
+                    from .governance import withdrawal_closure_baseline
+                    kept = (withdrawal_closure_baseline(project, current_map)
+                            if exc.code == "governance_changed" and withdrawing else None)
+                    if kept is None:
+                        raise
+                    unchanged, withdrawal_refusal = None, exc
             else:
                 unchanged = require_governance_current(project, current_map, checkpoint=True)
             if unchanged is not None:
@@ -1589,6 +1643,11 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             _facts(ticks, source, live["body"], mapping_check=checked)
             ctx["pod_mapping_facts"], ctx["pod_mapping_read"] = ticks["facts"], ticks["read"]
         ctx["governance_refresh"] = refresh
+        if withdrawing:
+            # R201: satisfied rows are retained history that this closure does not rely on.
+            from .obligations import settled_proof
+            ctx["settled_history"] = {row["id"]: settled_proof(row) for row in prior_map["obligations"]
+                                      if row["state"] == "satisfied"}
         if kept is not None:
             ctx["governance_kept"] = kept
         ctx["derived_adoption"] = derived_adoption
@@ -1630,6 +1689,9 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                 # Today's refusal stands, naming why no row could be preserved (C11).
                 exc.detail = {**exc.detail, "closure_preservation": ctx["closure_preservation"]}
             raise
+        if withdrawal_refusal is not None and not _settled_rows_unchanged(prior_map, map_state):
+            # R201 keeps the baseline only while the closure relies on no new or changed proof.
+            raise withdrawal_refusal
         from .standing import checkpoint_times
         checkpoint_times(state, prior_map, map_state)
         if verified_delivery is not None:

@@ -1496,8 +1496,7 @@ def _withdrawal(ob: dict, user: bool, authority: dict | None, *, stored: bool = 
                and bool(ob.get("source", {}).get("gone"))
                or by == "coordinator" and ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance"))
     if not allowed:
-        raise refuse("obligation_invalid", "withdrawal_unauthorized",
-                     "withdrawal by allowed: user_direct, project_policy, coordinator; current authority does not permit withdrawal", obligation=ob["id"])
+        raise _withdrawal_refusal(ob, by, user, actor_kind)
     result = {"by": by, "reason": record["reason"]}
     if by in ("user_direct", "agent_decision"):
         result["instruction"] = authority["instruction"]
@@ -1514,6 +1513,40 @@ def _withdrawal(ob: dict, user: bool, authority: dict | None, *, stored: bool = 
     return result
 
 
+_WITHDRAWAL_FORMS = ("allowed: by user_direct or agent_decision with this write's top-level revision_authority "
+                     "(provenance user_direct for a person's instruction; agent_decision with channel agent_session "
+                     "when the decision policy lets any agent change scope; or a verified decision_request), "
+                     "by project_policy for a project_policy obligation whose cited text is gone, "
+                     "by coordinator for the coordinator's own subgoal or assurance")
+
+
+def _withdrawal_refusal(ob: dict, by: Any, user: bool, actor_kind: str) -> PodError:
+    """Name what is missing or mismatched and the accepted shape; authorization itself is unchanged."""
+    own = ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance")
+    gone = ob["provenance"] == "project_policy" and bool(ob.get("source", {}).get("gone"))
+    authority_shape = ('add one top-level revision_authority to this write, {"provenance": "agent_decision", '
+                       '"channel": "agent_session", "instruction": "<the scope change>"} (or provenance user_direct '
+                       'for a person\'s instruction, or a verified decision_request), and give each withdrawal only '
+                       '{"by": "agent_decision" (or "user_direct" with a person\'s authority), "reason": "<why>"}')
+    if by in ("user_direct", "agent_decision") and not user:
+        problem = (f"withdrawal by {by} needs this write's revision_authority, but the write has no top-level "
+                   "revision_authority; a channel or instruction inside the withdrawal row is not authority")
+        action = authority_shape
+    elif by in ("user_direct", "agent_decision"):
+        expected = "agent_decision" if actor_kind == "agent" else "user_direct"
+        problem = (f"withdrawal by {by} does not match this write's revision_authority, which is "
+                   + ("an agent's decision" if actor_kind == "agent" else "a person's decision"))
+        action = f'withdraw with {{"by": "{expected}", "reason": "<why>"}} under the same revision_authority'
+    else:
+        problem = (f"withdrawal by {by} does not apply to {ob['id']}, a {ob['kind']} with provenance {ob['provenance']}"
+                   + (" whose cited text is still present" if ob["provenance"] == "project_policy" and not gone else ""))
+        action = ('withdraw it with {"by": "coordinator", "reason": "<why>"}' if own
+                  else 'withdraw it with {"by": "project_policy", "reason": "<why>"}' if gone
+                  else authority_shape)
+    return refuse("obligation_invalid", "withdrawal_unauthorized", f"{problem}; {_WITHDRAWAL_FORMS}",
+                  next_action=action, obligation=ob["id"])
+
+
 @input_record("external")
 def _external_record(ob: dict) -> dict:
     external = _exact(ob["external"], fields("external"), required("external"), "external",
@@ -1528,6 +1561,19 @@ def _external_record(ob: dict) -> dict:
 def _external_text(ob: dict, field: str) -> None:
     _text(ob["external"][field], field, code="obligation_unaccounted", detail="external_invalid",
           limit=bound("external", field), obligation=ob["id"])
+
+
+def settled_proof(ob: dict) -> dict:
+    """The recorded proof of a settled row, compared exactly by R201's withdrawal-only closure."""
+    return deepcopy({key: ob.get(key) for key in ("state", "evidence", "receipts", "acceptances", "reuse")})
+
+
+def retained_history_row(ob: dict, ctx: dict) -> bool:
+    """R201: in a withdrawal-only closing write, a satisfied row with exactly its prior recorded proof is history
+    the closure does not rely on, so its evidence need not be currently valid. Every other write and row keeps
+    the R41/R83 currency check."""
+    history = ctx.get("settled_history") or {}
+    return ob["id"] in history and history[ob["id"]] == settled_proof(ob)
 
 
 def _restate_action(ctx: dict) -> str:
@@ -1613,7 +1659,7 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
     from .assurance import invalidation
     invalid = [invalidation(ob, ctx, gov, corrections=open_corrections.get(ob["id"], []),
                             cause=(reuse_failures or {}).get(ob["id"])) for ob in rows.values()
-               if ob["state"] == "satisfied"
+               if ob["state"] == "satisfied" and not retained_history_row(ob, ctx)
                and (ob["id"] in open_corrections or ob["id"] in (reuse_failures or {}) or not evidence_valid(ob, ctx, gov))]
     if invalid:
         eligible = [item["id"] for item in rows.values() if item.get("receipts")
@@ -1899,7 +1945,8 @@ def p5_assurance_binding(state: dict, ctx: dict) -> list[str]:
     gov = bound_governance_digest(state)
     found = [f"{ob['id']} is satisfied without a bound review attempt"
             for ob in state["obligations"]
-            if ob["kind"] == "assurance" and ob["state"] == "satisfied" and not evidence_valid(ob, ctx, gov)]
+            if ob["kind"] == "assurance" and ob["state"] == "satisfied" and not retained_history_row(ob, ctx)
+            and not evidence_valid(ob, ctx, gov)]
     found += [f"{ob['id']} is reopened while its accepted review remains bound"
               for ob in state["obligations"]
               if ob["state"] not in TERMINAL and ob.get("executor") not in _outstanding(ctx)

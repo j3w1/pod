@@ -1,0 +1,17 @@
+{
+  "note": "Sanitized from a real superseded objective record (Pod 0.21.25). Only the relationships that reproduce the closure loop are kept: row ids, kinds, provenance, states and parents, the policy assurance's cited governance file, the shared worktree's later move inside the review's scope, the one-line governance change, and the refusals seen on the unchanged code. Paths, digests, runtime identities, owner words and private text are removed.",
+  "criteria": ["PoD#1", "PoD#2", "PoD#3"],
+  "rows": [
+    {"id": "P1", "kind": "criterion", "provenance": "objective", "ref": "PoD#1", "state": "satisfied"},
+    {"id": "P3", "kind": "criterion", "provenance": "objective", "ref": "PoD#3", "state": "blocked_external"},
+    {"id": "AUDIT", "kind": "assurance", "provenance": "project_policy", "parent": "P3", "cites": "AGENTS.md", "state": "satisfied", "proof": "review"},
+    {"id": "P2-current", "kind": "criterion", "provenance": "objective", "ref": "PoD#2", "state": "satisfied"}
+  ],
+  "worktree_change": {"path": "src/old.py", "why": "the coordinator's worktree was shared and later held another objective's commit, changing files inside the review's scope"},
+  "governance_change": {"path": "AGENTS.md", "changed_lines": 1},
+  "closing_write": {"withdraw": ["P3"], "by": "agent_decision", "decision_policy": "hands_off", "close": true},
+  "before_fix": {
+    "closing_write": {"code": "governance_changed"},
+    "governance_refresh": {"code": "obligation_unaccounted", "detail": "evidence_invalidated", "obligation": "AUDIT", "classification": "binding change"}
+  }
+}

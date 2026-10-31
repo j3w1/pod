@@ -1,0 +1,24 @@
+{
+  "note": "Sanitized from a real refused withdrawal (Pod 0.21.25) and the accepted retry shape. Only the write shape and the refusal are kept: the withdrawal rows carry by agent_decision with channel and instruction inside each row and no top-level revision_authority. Paths, runtime identities, owner words and private text are removed; reasons are placeholders.",
+  "refused_write": {
+    "update": {
+      "P1": {"state": "withdrawn", "withdrawal": {"by": "agent_decision", "channel": "agent_session",
+             "reason": "Superseded by a plain pull request; withdrawn, not delivered.",
+             "instruction": "Superseded by a plain pull request; withdrawn, not delivered."}}
+    }
+  },
+  "before_fix": {
+    "code": "obligation_invalid",
+    "detail": "withdrawal_unauthorized",
+    "message": "withdrawal by allowed: user_direct, project_policy, coordinator; current authority does not permit withdrawal",
+    "next_action": "correct the obligation's provenance, parent, check or citation"
+  },
+  "accepted_write": {
+    "revision_authority": {"provenance": "agent_decision", "channel": "agent_session",
+                           "instruction": "Superseded by a plain pull request; withdrawn, not delivered."},
+    "update": {
+      "P1": {"state": "withdrawn", "withdrawal": {"by": "agent_decision",
+             "reason": "Superseded by a plain pull request; withdrawn, not delivered."}}
+    }
+  }
+}
