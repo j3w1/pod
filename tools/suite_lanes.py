@@ -918,7 +918,7 @@ def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:
             raise Finding("REFRESH invalid timing interpreter: use complete unmodified logs")
         environments.setdefault(environment, []).append(body)
     if set(environments) == {""}:
-        return _validated_environment(bodies)  # Legacy unnamed logs: one environment, as before.
+        return _validated_environment(bodies)  # Earlier unnamed logs: one environment, as before.
     if "" in environments:
         raise Finding("REFRESH mixes shares with and without an interpreter: use one complete run")
     missing = [name for name in REQUIRED_PYTHONS if name not in environments]

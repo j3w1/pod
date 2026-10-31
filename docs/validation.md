@@ -104,7 +104,7 @@ necessarily slow test from its pull-request run with `python tools/suite_lanes.p
 and commit the manifest; `refresh` reads only that run's log lines. Each timing line names its
 interpreter; when a run holds several, `refresh` checks each interpreter's run for completeness and
 consistency by itself (a mixture of named and unnamed shares, differing identities or a named run missing
-either 3.13 or 3.14 refuses; unnamed legacy logs keep their single-environment path) and records the Python 3.13 shares only, so the second interpreter never duplicates a test or
+either 3.13 or 3.14 refuses; earlier unnamed logs keep their single-environment path) and records the Python 3.13 shares only, so the second interpreter never duplicates a test or
 mixes into the calibration. Split a growing table into
 named group methods (`tests.common.GroupedTable`) before any method nears the ceiling. When
 `check` projects a share over its target, raise that lane's shards in the manifest and add the
