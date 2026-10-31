@@ -33,7 +33,7 @@ def baseline_status() -> types.ModuleType:
 
 
 # Additive status fields; every earlier field and render line is compared unchanged.
-READINESS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization",
+READINESS = ("readiness", "wake", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization",
              "route_holds", "route_holds_truncated", "route_settlements", "route_settlements_truncated", "route_settlement_authority",
              "decision_policy", "tool_permissions", "waiting_decisions", "needs_you", "setup_question")
 
