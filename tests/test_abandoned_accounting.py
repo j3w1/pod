@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -871,6 +872,61 @@ class AbandonedRealRecordTests(AbandonedFixture):
             shown['terminal_closed'] = forged
             self.assertEqual(current_claim(shown)['process'], 'unverifiable')
 
+    def test_an_exact_forged_or_stale_proof_never_survives_a_fresh_read_that_finds_the_terminal(self):
+        from pod.abandoned import attach_closure, closure_target, current_claim, exit_source
+        from pod.errors import PodError
+        self.held(null_launch=True)
+        handle, incarnation = closure_target(self.real())
+        exact = {'source': 'terminal_closed', 'handle': handle, 'incarnation': incarnation}
+        present = [{'handle': handle, 'incarnationId': incarnation}]
+        forged = self.real()
+        forged['terminal_closed'] = dict(exact)  # exactly what a caller or an earlier read could write
+        self.assertEqual(current_claim(forged)['process'], 'unverifiable')
+        for name, inventory, carried in (('the terminal is present', lambda: present, False),
+                                         ('a carrier is present', lambda: [], True),
+                                         ('the carrier scan is unknown', lambda: [], None),
+                                         ('the inventory is incomplete', lambda: None, False)):
+            with self.subTest(name):
+                shown = self.real()
+                shown['terminal_closed'] = dict(exact)
+                attach_closure(shown, inventory=inventory, carriers=lambda handle, carried=carried: carried)
+                self.assertNotIn('terminal_closed', shown)
+                self.assertEqual((current_claim(shown)['process'], exit_source(shown)), ('unverifiable', 'process_exited'))
+        # The same observation read again after the terminal returned, or after a read failed, holds again.
+        shared = self.real()
+        attach_closure(shared, inventory=lambda: [], carriers=lambda handle: False)
+        self.assertIsNone(current_claim(shared))
+        attach_closure(shared, inventory=lambda: present, carriers=lambda handle: True)
+        self.assertIsNotNone(current_claim(shared))
+        attach_closure(shared, inventory=lambda: [], carriers=lambda handle: False)
+        self.assertIsNone(current_claim(shared))
+
+        def unreadable():
+            raise PodError('unsupported_orca_read', 'unreadable')
+        attach_closure(shared, inventory=unreadable, carriers=lambda handle: False)
+        self.assertIsNotNone(current_claim(shared))
+
+    def test_a_proof_in_the_native_observation_is_ignored_by_the_production_port(self):
+        from pod.operations import OrcaPort, _assignment_evidence
+        row = self.accounted()[1]['admission']
+        raw = self.real()
+        handle = raw['result']['worker']['agentTerminalHandle']
+        raw['terminal_closed'] = {'source': 'terminal_closed', 'handle': handle, 'incarnation': 'incarnation-267'}
+        present = [{'handle': handle, 'incarnationId': 'incarnation-267'}]
+        with patch('pod.operations.worker_show', return_value=raw), \
+                patch('pod.orca.terminal_inventory', return_value=present), \
+                patch('pod.orca.handle_carriers', return_value=True):
+            fresh = OrcaPort(self.project).show_worker('dispatch-1')
+        evidence = _assignment_evidence(fresh, row)
+        self.assertEqual((evidence['settled'], evidence['claim']['process']), (False, 'unverifiable'))
+        raw = self.real()
+        with patch('pod.operations.worker_show', return_value=raw), \
+                patch('pod.orca.terminal_inventory', return_value=[]), \
+                patch('pod.orca.handle_carriers', return_value=False):
+            fresh = OrcaPort(self.project).show_worker('dispatch-1')
+        evidence = _assignment_evidence(fresh, row)
+        self.assertEqual((evidence['settled'], evidence['claim']), (True, None))
+
     def test_a_closed_terminal_proves_nothing_for_an_ineligible_attempt(self):
         from pod.abandoned import attach_closure, closure_target, current_claim
         self.held(null_launch=True)
@@ -937,19 +993,41 @@ class TerminalReadTests(unittest.TestCase):
             self.assertIsNone(handle_carriers('term-1', proc))
             os.rmdir(Path(proc) / '13' / 'environ')
             (Path(proc) / '13' / 'environ').write_bytes(b'')
-            with patch('builtins.open', side_effect=PermissionError):  # a non-dumpable helper is skipped
+            with patch('builtins.open', side_effect=PermissionError(errno.EACCES, 'denied')):  # non-dumpable helper
                 self.assertIs(handle_carriers('term-1', proc), False)
         self.assertIsNone(handle_carriers('term-1', '/nonexistent-proc'))
 
     def test_the_terminal_inventory_must_be_complete_to_count(self):
         from pod import orca
         rows = [{'handle': 'term-a', 'incarnationId': 'i'}]
+        unidentifiable = ({}, {'handle': 'term-other'}, {'incarnationId': 'other-incarnation'},
+                          {'handle': '', 'incarnationId': 'i'}, {'handle': 'term-a', 'incarnationId': None},
+                          {'handle': 7, 'incarnationId': 'i'})
         for result, expected in (({'terminals': rows, 'truncated': False}, rows),
                                  ({'terminals': rows, 'truncated': True}, None),
                                  ({'terminals': rows}, None), ({'terminals': ['x'], 'truncated': False}, None),
+                                 ({'terminals': rows, 'truncated': False, 'totalCount': 2}, None),
+                                 *(({'terminals': [*rows, row], 'truncated': False}, None) for row in unidentifiable),
                                  ({'truncated': False}, None)):
             with patch.object(orca, '_read', return_value={'runtime': 'r', 'result': result}):
                 self.assertEqual(orca.terminal_inventory(), expected)
+
+
+    def test_an_unreadable_owner_or_a_permission_error_other_than_eacces_leaves_the_carrier_scan_unknown(self):
+        from pod.orca import handle_carriers
+        with tempfile.TemporaryDirectory() as proc:
+            (Path(proc) / '10').mkdir()
+            (Path(proc) / '10' / 'environ').write_bytes(b'ORCA_TERMINAL_HANDLE=other')
+            self.assertIs(handle_carriers('term-1', proc), False)
+            with patch('builtins.open', side_effect=PermissionError(errno.EPERM, 'not permitted')):
+                self.assertIsNone(handle_carriers('term-1', proc))
+            with patch('builtins.open', side_effect=OSError(errno.EIO, 'io')):
+                self.assertIsNone(handle_carriers('term-1', proc))
+            for code in (errno.EACCES, errno.EPERM, errno.EIO):  # the owner cannot be classified
+                with patch('pod.orca.os.stat', side_effect=PermissionError(code, 'owner')):
+                    self.assertIsNone(handle_carriers('term-1', proc))
+            with patch('pod.orca.os.stat', side_effect=FileNotFoundError):  # vanished before it was looked at
+                self.assertIs(handle_carriers('term-1', proc), False)
 
 
 class AbandonedReadinessTests(AbandonedFixture):

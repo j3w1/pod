@@ -225,12 +225,19 @@ def closure_target(shown: dict) -> tuple[str, str] | None:
     return handle, incarnation.rsplit(":", 1)[1]
 
 
+class _Closure(dict):
+    """A proof only `attach_closure` makes: a plain dict, however it is spelled, is never accepted."""
+
+
 def attach_closure(shown: dict, inventory=None, carriers=None) -> dict:
     """Read, for an eligible attempt, whether its exact terminal incarnation is gone from Orca's records
     and no live process carries its handle; attach that proof to the readback when both hold.
 
-    The proof is Pod's own observation at read time. Anything unreadable or present leaves the claim.
+    The proof is Pod's own observation at this read. Any proof already on the observation, whether the
+    caller's or an earlier read's, is discarded first, so a terminal or carrier that is present, or a read
+    that fails, always leaves the claim.
     """
+    shown.pop("terminal_closed", None)
     target = closure_target(shown)
     if target is None:
         return shown
@@ -246,14 +253,14 @@ def attach_closure(shown: dict, inventory=None, carriers=None) -> dict:
     if (rows is None or carried is not False
             or any(row.get("handle") == handle or row.get("incarnationId") == incarnation for row in rows)):
         return shown
-    shown["terminal_closed"] = {"source": "terminal_closed", "handle": handle, "incarnation": incarnation}
+    shown["terminal_closed"] = _Closure(source="terminal_closed", handle=handle, incarnation=incarnation)
     return shown
 
 
 def _closed(shown: dict) -> bool:
     """The attached proof names this attempt's own terminal and incarnation."""
-    target = closure_target(shown)
-    return target is not None and shown.get("terminal_closed") == {
+    target, proof = closure_target(shown), shown.get("terminal_closed")
+    return target is not None and isinstance(proof, _Closure) and proof == {
         "source": "terminal_closed", "handle": target[0], "incarnation": target[1]}
 
 

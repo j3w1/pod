@@ -9310,7 +9310,10 @@
         "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_a_closed_terminal_proves_nothing_for_an_ineligible_attempt",
         "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_closed_terminal_repeats_idempotently_and_a_returning_terminal_holds_again",
         "tests.test_abandoned_accounting.TerminalReadTests.test_handle_carriers_reads_same_user_environments_and_fails_closed_when_one_is_unreadable",
-        "tests.test_abandoned_accounting.TerminalReadTests.test_the_terminal_inventory_must_be_complete_to_count"
+        "tests.test_abandoned_accounting.TerminalReadTests.test_the_terminal_inventory_must_be_complete_to_count",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_an_exact_forged_or_stale_proof_never_survives_a_fresh_read_that_finds_the_terminal",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_a_proof_in_the_native_observation_is_ignored_by_the_production_port",
+        "tests.test_abandoned_accounting.TerminalReadTests.test_an_unreadable_owner_or_a_permission_error_other_than_eacces_leaves_the_carrier_scan_unknown"
       ],
       "status": "NOT_RUN"
     }
