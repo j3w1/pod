@@ -415,6 +415,10 @@ class OrcaPort:
         from .abandoned import attach_closure
         return attach_closure(worker_show(dispatch))
 
+    def read_screen(self, handle: str) -> list[str] | None:
+        from .orca import terminal_screen
+        return terminal_screen(handle)
+
 
 def _valid_request_uuid(value: object) -> str:
     if not isinstance(value, str):
@@ -1391,6 +1395,28 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   issue_port=None, accompanying: dict | None = None,
                   retry_of: str | None = None, retry_after: str | None = None,
                   abandoned_reason: str | None = None) -> dict:
+    """One admission, then the delivery step: one safe automatic retry or the receiver's diagnosis (R2)."""
+    native_port = port or OrcaPort(project)
+    arguments = dict(project=project, objective=objective, owner=owner, run=run, task=task,
+                     plan_revision=plan_revision, frozen_packet=frozen_packet, worktree=worktree,
+                     port=native_port, issue_port=issue_port)
+    result = _guarded_start(**arguments, reuse_of=reuse_of, accompanying=accompanying, retry_of=retry_of,
+                            retry_after=retry_after, abandoned_reason=abandoned_reason)
+    row = result.get("admission")
+    if abandoned_reason is not None or not isinstance(row, dict) or row.get("state") != "bound":
+        return result
+    from .delivery import follow_up
+    delivery = follow_up(project, objective, admission=row, port=native_port, state=read(project, objective),
+                         relaunch=lambda parent: guarded_start(**arguments, retry_of=parent))
+    return {**result, "delivery": delivery} if delivery is not None else result
+
+
+def _guarded_start(project: Path, objective: str, *, owner: str, run: str, task: str,
+                   plan_revision: str, frozen_packet: dict, worktree: str = "current",
+                   reuse_of: str | None = None, port: NativePort | None = None,
+                   issue_port=None, accompanying: dict | None = None,
+                   retry_of: str | None = None, retry_after: str | None = None,
+                   abandoned_reason: str | None = None) -> dict:
     """Packet, recovery, issue, placement, serialized boundary, then one native start."""
     from .issue_revision import refuse_alternate
     refuse_alternate(accompanying)

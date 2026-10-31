@@ -2316,6 +2316,18 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                              delegation="available")
         ctx["operation"] = "admission"
         admission_refusal(map_state, body, ctx, admission_id=admission_id)
+        if parent is not None:
+            from .obligations import admission_binding, packet_binding
+            shape = packet_binding(body)
+            if ((shape["serves"], shape["role"], shape["boundary"], admission_binding(body, {}, map_state)["sources"])
+                    != (parent["serves"], parent["role"], parent["boundary"], parent["binding"]["sources"])):
+                # Orca replays a same-Task retry with the Task's original spec and has no replacement-prompt flag, so
+                # an assignment that differs from the parent's (route and revisions may change) is not what would run.
+                action = ("restore the parent's assignment to retry it, or settle and discard the failed attempt and "
+                          "admit the changed assignment as its own Task")
+                raise PodError("assignment_changed", "A same-Task retry keeps the original assignment; this packet's "
+                               "obligations, role, boundary or sources differ from the retry parent's. Next: " + action,
+                               {"next_action": action})
         require_governance_current(project, map_state)
         snapshot = _reserve_route(project, checkpoint_value, body, state, requested, task_id,
                                   moment, projection, failures, reuse_of, native)

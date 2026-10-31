@@ -9622,6 +9622,111 @@
       ],
       "offline_test": null,
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A730",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_positive_no_input_failure_starts_exactly_one_retry_with_the_same_assignment",
+        "tests.test_delivery_retry.DeliveryTests.test_the_retry_is_the_same_attempt_as_an_explicit_retry_of"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A731",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_a_retry_that_also_fails_is_diagnosed_and_never_followed_by_a_third_start",
+        "tests.test_delivery_retry.DeliveryTests.test_diagnosis_echoes_only_bounded_native_tokens",
+        "tests.test_delivery_retry.DeliveryTests.test_the_second_failure_diagnosis_classifies_the_receiver_screen_and_keeps_no_text"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A732",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_a_visibly_blocked_start_is_diagnosed_at_once_and_never_re_instructed",
+        "tests.test_delivery_retry.DeliveryTests.test_a_receiver_parked_on_a_prompt_is_diagnosed_without_a_second_instruction",
+        "tests.test_delivery_retry.DeliveryTests.test_an_unreadable_screen_is_reported_as_unreadable",
+        "tests.test_delivery_retry.DeliveryTests.test_an_unrecognized_screen_is_reported_as_unrecognized"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A733",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_input_that_reached_the_receiver_is_not_proof_of_non_execution",
+        "tests.test_delivery_retry.DeliveryTests.test_an_unrecognized_failure_stage_is_not_a_positive_no_start",
+        "tests.test_delivery_retry.DeliveryTests.test_an_exit_that_is_not_proved_holds_the_retry",
+        "tests.test_delivery_retry.DeliveryTests.test_a_setup_still_running_is_not_proof_that_nothing_started",
+        "tests.test_delivery_retry.DeliveryTests.test_a_closed_terminal_effect_is_not_proof_that_nothing_started"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A734",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_a_changed_candidate_never_replays_the_old_assignment",
+        "tests.test_delivery_retry.DeliveryTests.test_a_changed_packet_for_the_same_attempt_is_refused",
+        "tests.test_delivery_retry.DeliveryTests.test_an_assignment_that_differs_from_the_retry_parent_is_refused_but_a_new_route_is_not"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A735",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_a_lost_acknowledgement_is_recovered_by_the_same_request_without_a_second_start",
+        "tests.test_delivery_retry.DeliveryTests.test_an_absent_request_is_not_proof_that_nothing_started",
+        "tests.test_delivery_retry.DeliveryTests.test_an_interrupted_retry_recovers_one_attempt"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A736",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_the_second_failure_diagnosis_classifies_the_receiver_screen_and_keeps_no_text",
+        "tests.test_delivery_retry.DeliveryTests.test_an_unreadable_screen_is_reported_as_unreadable",
+        "tests.test_delivery_retry.DeliveryTests.test_an_unrecognized_screen_is_reported_as_unrecognized",
+        "tests.test_delivery_retry.DeliveryTests.test_a_port_without_a_screen_read_yields_no_class"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A737",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery_retry.DeliveryTests.test_the_screen_read_has_one_exact_shape_and_accepts_only_that_terminals_screen"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
