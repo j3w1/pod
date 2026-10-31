@@ -1606,7 +1606,8 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                 # its diagnostic still accounts for every invalid satisfied row below.
                 break
     from .assurance import invalidation
-    invalid = [invalidation(ob, ctx, gov, corrections=open_corrections.get(ob["id"], [])) for ob in rows.values()
+    invalid = [invalidation(ob, ctx, gov, corrections=open_corrections.get(ob["id"], []),
+                            cause=(reuse_failures or {}).get(ob["id"])) for ob in rows.values()
                if ob["state"] == "satisfied"
                and (ob["id"] in open_corrections or ob["id"] in (reuse_failures or {}) or not evidence_valid(ob, ctx, gov))]
     if invalid:
@@ -2678,7 +2679,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
         lines.append(f"Flag       serialization: {flag['obligation']} sequenced behind {flag['holder']} "
                      f"since seq {flag['since_seq']}")
     for key in observed.get("churn", []):
-        lines.append(f"Flag       churn: {key} has {CHURN_THRESHOLD}+ settled admissions without satisfaction")
+        lines.append(f"Flag       churn: {key} has {CHURN_THRESHOLD}+ settled admissions without satisfaction; "
+                     "diagnose before another attempt (narrow the approach, repair the named defect or get specialist input); "
+                     "this blocks nothing")
     if observed.get("governance_stale"):
         lines.append("Flag       governance base moved; refresh before new admission")
     if state.get("delivery") is not None:

@@ -2709,7 +2709,7 @@
         "tests.test_issue41.RemainingProofTests.test_one_refusal_classifies_candidate_definition_binding_and_governance_failures",
         "tests.test_issue41.RemainingProofTests.test_report_expands_explicit_reuse_list_without_a_new_receipt",
         "tests.test_issue41.RemainingProofTests.test_ordinary_proof_scope_revision_invalidates_proof_and_restated_map_succeeds",
-        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_still_refuses_an_unreadable_delta",
+        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_ignores_an_unreadable_claimed_source",
         "tests.test_issue41_corrections.InvalidationCorrectionTests.test_all_invalid_satisfied_rows_include_correction_siblings_and_overflow",
         "tests.test_issue41_corrections.InvalidationCorrectionTests.test_report_collects_open_corrections_and_other_invalid_proof_atomically",
         "tests.test_issue41_corrections.InvalidationTableTests.test_satisfied_invalidation_table_accounts_for_every_ordinary_proof_state",
@@ -9210,6 +9210,89 @@
         "tests.test_installer_pin.PinnedPyYamlTests.test_a_wrong_hash_or_a_failed_build_refuses_with_a_clear_message",
         "tests.test_installer_pin.PinnedPyYamlTests.test_a_network_failure_or_another_pin_never_tries_a_source_build",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_ci_validates_the_skill_and_publishes_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A605",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_proportional_review.GoalScopedFindingTests.test_an_unlinked_required_finding_refuses_with_a_valid_next_action",
+        "tests.test_proportional_review.GoalScopedFindingTests.test_a_linked_finding_retains_its_goal_and_safety_stays_required",
+        "tests.test_proportional_review.GoalScopedFindingTests.test_an_advisory_carries_no_link_and_needs_its_downgrade_reason",
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_genuine_previous_reader_refuses_goal_links_without_rewriting"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A606",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_proportional_review.VersionOnlyBumpTests.test_a_version_only_bump_keeps_proof_for_a_repository_wide_scope",
+        "tests.test_proportional_review.VersionOnlyBumpTests.test_a_version_only_bump_keeps_a_repository_wide_review",
+        "tests.test_proportional_review.VersionOnlyBumpTests.test_a_scope_that_names_version_still_reopens",
+        "tests.test_proportional_review.VersionOnlyBumpTests.test_metadata_that_affects_behavior_or_installation_still_reopens"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A607",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_proportional_review.RealSourceTests.test_a_proposal_derives_from_the_evidence_candidate_not_the_callers_reuse_from",
+        "tests.test_proportional_review.RealSourceTests.test_a_wrong_source_refusal_names_the_predicate_and_a_valid_next_action",
+        "tests.test_proportional_review.RealSourceTests.test_a_touched_scope_proposes_fresh_evidence_never_the_same_reuse",
+        "tests.test_proportional_review.RealSourceTests.test_unreadable_or_unscoped_facts_stay_unknown",
+        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_ignores_an_unreadable_claimed_source",
+        "tests.test_issue41.RemainingProofTests.test_touched_scope_refusal_keeps_its_failed_predicate_through_the_checkpoint",
+        "tests.test_issue41.RemainingProofTests.test_report_refusal_keeps_the_wrong_source_and_the_recorded_candidate"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A608",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_proportional_review.ReviewProgressTests.test_repeated_review_without_progress_flags_a_diagnostic_and_blocks_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A609",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_verification_gaps.VerificationGapsTests.test_a_sentence_is_refused_precisely_and_never_counted_per_character",
+        "tests.test_verification_gaps.VerificationGapsTests.test_other_wrong_types_and_items_are_refused",
+        "tests.test_verification_gaps.VerificationGapsTests.test_genuine_gaps_and_the_empty_list_are_accepted_and_kept_as_given",
+        "tests.test_verification_gaps.VerificationGapsTests.test_a_stored_non_list_is_one_unresolved_requirement_never_none_or_hundreds"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A610",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_inventory.InventoryIntegrityTests.test_scenario_ids_are_unique_and_withdrawn_ids_are_never_reused_but_gaps_are_allowed",
+        "tests.test_inventory.InventoryIntegrityTests.test_spec_and_coverage_ids_are_complete",
+        "tests.test_inventory.InventoryIntegrityTests.test_requirement_scenario_references_resolve"
       ],
       "status": "NOT_RUN"
     }

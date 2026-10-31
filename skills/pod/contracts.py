@@ -144,7 +144,8 @@ TABLE = {
         **_MAP_FIELDS, "schema": choice((STATE_SCHEMAS["checkpoint"],)),
         "criteria": items(64, {"type": "text", "nonempty": True}), "candidate": _GIT,
         **{key: _ANY for key in ("plan_revision", "policy_revision", "assignments", "questions",
-                                  "verification_gaps", "next_safe_action", "route_decisions", "objective", "blocker", "remaining_gates")},
+                                  "next_safe_action", "route_decisions", "objective", "blocker", "remaining_gates")},
+        "verification_gaps": items(64, text(1024)),
         "objective_source": {"type": "object", "form": "bound issue source"},
         "issue_revision_data": record("issue revision data"),
         "native_refs": items(32, {"type": "object", "form": "runId and runtime text"}),
@@ -324,6 +325,7 @@ TABLE["standing authorization"] = definition({
 TABLE["finding"] = definition({
     "finding": ident(), "severity": choice(SEVERITIES), "triage": choice(TRIAGE),
     "summary": text(512),
+    "blocks": {**text(128), "validated_when": "new required_correction (the outcome, requirement, PoD or policy it blocks); refused on advisory"},
     "reason": {**text(1024), "validated_when": "blocker or major finding downgraded to advisory"},
     "root_cause": text(512),
     "findings": {**items(8, record("group member")), "min_items": 1},

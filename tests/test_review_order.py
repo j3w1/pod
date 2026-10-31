@@ -33,7 +33,7 @@ class ReviewOrderBoundaryTests(ProductionCase):
         packet = self.packet(["A"], role="review")
         admission = self.start("find-defect", packet)["admission"]
         self.settle(admission)
-        finding = {"summary": "repair required", "triage": "required_correction", "correction": "K"}
+        finding = {"summary": "repair required", "triage": "required_correction", "blocks": "outcome", "correction": "K"}
         if grouped:
             finding["findings"] = [{"finding": "F1", "severity": "major"}, {"finding": "F2", "severity": "minor"}]
         else:
@@ -162,7 +162,7 @@ class ReviewOrderBoundaryTests(ProductionCase):
 class ReviewSequenceTests(unittest.TestCase):
     def fixture(self, *, admitted=76, reported=77, resolved=75, recorded=70):
         ob = {"id": "A", "kind": "assurance", "state": "satisfied",
-              "findings": [{"finding": "F", "triage": "required_correction", "correction": "K",
+              "findings": [{"finding": "F", "triage": "required_correction", "blocks": "outcome", "correction": "K",
                             "recorded_seq": recorded, "resolved_seq": resolved}]}
         binding = {"policy_revision": "r", "environment": "fixture", "dependencies": [], "sources": [],
                    "definitions": {"A": definition_id(ob)}}
