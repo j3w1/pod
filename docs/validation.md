@@ -32,7 +32,7 @@ fabricate compatibility to make a result pass.
 
 | Check | Command or evidence | What it proves |
 | --- | --- | --- |
-| Unit and incident suite | `PYTHONPATH=skills python tools/suite_lanes.py run` | Current behavior in disposable fixtures; every discovered test once, in its lane. `python -m unittest discover -s tests -v` is the equivalent serial run. |
+| Unit and incident suite | `PYTHONPATH=skills python tools/isolate.py -- python tools/suite_lanes.py run` | Current behavior in disposable fixtures; every discovered test once, in its lane, with the home directory, credentials and other checkouts absent before discovery. `python -m unittest discover -s tests -v` is the equivalent serial run. |
 | Suite lanes | `PYTHONPATH=skills python tools/suite_lanes.py check` | Each test has one lane, tests the timing heuristic flags are classified, recorded entries name real tests, incident modules yield tests and every lane fits its target. |
 | Explicit incidents | `PYTHONPATH=skills python -m unittest discover -s tests/incidents -t . -v` | Incident cases are discovered. |
 | Compile and whitespace | `python -m compileall -q skills tests tools`; `git diff --check $(git hash-object -t tree /dev/null) HEAD` | Syntax and whole-candidate whitespace. |
@@ -163,7 +163,12 @@ templates serving authoring and revision; contributor checks live here.
 ## Containment and live boundary
 
 Run broad gates with fresh process-scoped `POD_STATE_HOME`, `POD_CONFIG_HOME` and
-`POD_CACHE_HOME` in disposable task storage. Test fixtures clear these locally and
+`POD_CACHE_HOME` in disposable task storage. Every test process starts with disposable homes,
+a scrubbed Git environment and no credential-looking variables (`tests/boundary.py`), which
+stops an inherited `GIT_DIR` from sending a fixture to a real repository. Where a local run must
+not reach the home directory, credentials or other checkouts, wrap the whole command with
+`python tools/isolate.py -- COMMAND` (bubblewrap, read-only checkout, environment allowlist, also
+for bubblewrap itself); hosted CI launches its test lanes that way. Test fixtures clear these locally and
 restore them. Installer trials use a scrubbed fresh temporary HOME with every
 base-directory variable contained or unset: XDG config/data/state/cache homes,
 CODEX_HOME, CLAUDE_CONFIG_DIR, ZDOTDIR and Pod overrides. PATH excludes real launchers.
