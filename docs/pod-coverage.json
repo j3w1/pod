@@ -242,7 +242,7 @@
         "tests.test_native_retry.RetryAdmissionTests.test_same_coordinator_run_may_serve_another_explicit_objective",
         "tests.test_native_retry.RetryAdmissionTests.test_retry_rechecks_native_authority_and_authorized_placement",
         "tests.test_retry_no_start.NoStartTests.test_settled_cancelled_native_dispatch_remains_ineligible",
-        "tests.test_retry_review.RetryReviewTests.test_fresh_review_retry_qualifies_only_its_own_completed_verdict",
+        "tests.test_retry_review.RetryReviewTests.test_fresh_review_attempt_qualifies_only_its_own_completed_verdict",
         "tests.test_retry_review.RetryReviewTests.test_retry_requires_positive_exit_and_known_released_resources",
         "tests.test_retry_review.RetryReviewTests.test_retry_rejects_wrong_role_serves_and_foreign_parent",
         "tests.test_retry_review.RetryReviewTests.test_retry_uses_current_route_eligibility_and_pin",
@@ -1702,9 +1702,9 @@
         "tests.test_obligations.AssuranceTests.test_label_needs_bound_non_withdrawn_assurance",
         "tests.test_kernel_boundaries.CapacityAndReviewTests.test_review_report_is_immutable_and_a_fresh_settled_attempt_can_qualify",
         "tests.test_review_scope_reconciliation.ScopeReconciliationTests.test_first_scope_mismatch_requires_reconciliation_and_withholds_binding",
-        "tests.test_retry_review.RetryReviewTests.test_fresh_review_retry_qualifies_only_its_own_completed_verdict",
+        "tests.test_retry_review.RetryReviewTests.test_fresh_review_attempt_qualifies_only_its_own_completed_verdict",
         "tests.test_retry_review.RetryReviewTests.test_old_blocked_report_and_incomplete_proof_cannot_be_promoted",
-        "tests.test_retry_review.RetryReviewTests.test_retry_report_rejects_old_packet_dispatch_and_candidate"
+        "tests.test_retry_review.RetryReviewTests.test_new_review_report_rejects_old_packet_dispatch_and_candidate"
       ],
       "status": "NOT_RUN"
     },
@@ -9689,7 +9689,8 @@
         "tests.test_delivery_retry.DeliveryTests.test_an_assignment_that_differs_from_the_retry_parent_is_refused_but_a_new_route_is_not",
         "tests.test_delivery_retry.DeliveryTests.test_a_retry_with_changed_actions_or_report_contract_is_refused_without_a_start",
         "tests.test_delivery_retry.DeliveryTests.test_a_retry_with_a_newly_frozen_candidate_is_refused_without_a_start",
-        "tests.test_delivery_retry.DeliveryTests.test_a_parent_admitted_before_the_digest_still_refuses_a_changed_candidate_or_boundary"
+        "tests.test_delivery_retry.DeliveryTests.test_a_parent_admitted_before_the_digest_is_retried_only_as_its_identical_packet",
+        "tests.test_retry_review.RetryReviewTests.test_retry_of_a_review_on_a_newer_candidate_is_refused_without_a_start"
       ],
       "status": "NOT_RUN"
     },

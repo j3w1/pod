@@ -346,17 +346,20 @@ class DeliveryTests(unittest.TestCase):
                           'candidate': 'candidate-2', **(self.restated() or {})})
         self.refused_retry(parent, packet({**dict(self.frozen()['body']), 'candidate': 'candidate-2'}))
 
-    def test_a_parent_admitted_before_the_digest_still_refuses_a_changed_candidate_or_boundary(self):
+    def test_a_parent_admitted_before_the_digest_is_retried_only_as_its_identical_packet(self):
         from pod.ledger import _path, _write
         from pod.records import packet
         parent = self.failed_first('readiness', 'ok')
         state = read(self.project, 'objective')
         state['admissions'][parent['admission_id']]['recovery'].pop('assignment')
-        _write(_path(self.project, "objective"), state, native={'runtime': 'runtime'})
+        _write(_path(self.project, 'objective'), state, native={'runtime': 'runtime'})
         body = dict(self.frozen()['body'])
         self.refused_retry(parent, packet({**body, 'boundary': {'paths': ['other.txt'], 'surfaces': []}}))
-        rerouted = self.frozen(route={**support.ROUTE, 'model': 'gpt-6-luna'})
-        self.assertEqual(self.explicit_retry(parent, rerouted)['status'], 'bound')
+        self.refused_retry(parent, packet({**body, 'actions': ['edit', 'delete']}))
+        self.refused_retry(parent, packet({**body, 'report_contract': 'a different contract'}))
+        self.refused_retry(parent, self.frozen(route={**support.ROUTE, 'model': 'gpt-6-luna'}))  # Equality unprovable.
+        self.assertEqual(self.explicit_retry(parent, self.frozen())['status'], 'bound')
+        self.assertEqual(self.starts(), 2)
 
     def test_the_screen_read_has_one_exact_shape_and_accepts_only_that_terminals_screen(self):
         from unittest import mock
