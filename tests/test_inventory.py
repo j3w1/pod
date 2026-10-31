@@ -517,19 +517,18 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         # `linux` is the status check the main branch ruleset requires. It always reports and
         # passes only when every lane share and every check passed, so it is never skipped.
         jobs = workflow["jobs"]
-        self.assertEqual(list(jobs), ["tests", "checks", "linux"])
+        self.assertEqual(list(jobs), ["python", "tests", "checks", "linux"])
         linux = jobs["linux"]
-        self.assertEqual((linux["name"], linux["if"], set(linux["needs"])), ("linux", "always()", {"tests", "checks"}))
+        self.assertEqual((linux["name"], linux["if"], set(linux["needs"])),
+                         ("linux", "always()", {"python", "tests", "checks"}))
         self.assertIn("all(.[]; .result == \"success\")", "\n".join(step.get("run", "") for step in linux["steps"]))
         # The matrix runs exactly the lane shares the manifest plans, with CI's strict flags.
         strategy = jobs["tests"]["strategy"]
         self.assertIs(strategy["fail-fast"], False)
         lanes = json.loads((self.root / "tests" / "suite_lanes.json").read_text())["lanes"]
-        # Each share runs once on every supported interpreter: the same lanes and shards on 3.13 and 3.14.
-        self.assertEqual(sorted((row["python"], row["lane"], row["shard"], row["of"])
-                                for row in strategy["matrix"]["include"]),
-                         sorted((python, lane, shard, config["shards"]) for python in ("3.13", "3.14")
-                                for lane, config in lanes.items() for shard in range(1, config["shards"] + 1)))
+        self.assertEqual(sorted((row["lane"], row["shard"], row["of"]) for row in strategy["matrix"]["include"]),
+                         sorted((lane, shard, config["shards"]) for lane, config in lanes.items()
+                                for shard in range(1, config["shards"] + 1)))
         share = next(step["run"] for step in jobs["tests"]["steps"] if "suite_lanes.py run" in step.get("run", ""))
         for flag in ("--lane", "--shard", "--of", "--strict", "--forbid-skips"):
             self.assertIn(flag, share)

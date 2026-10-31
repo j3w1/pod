@@ -57,19 +57,33 @@ class ManifestTests(unittest.TestCase):
         self.assertLessEqual(value["lanes"]["parallel"]["shards"], value["budgets"]["max_parallel_shards"])
         self.assertEqual(sl.dump_manifest(value), (ROOT / "tests" / "suite_lanes.json").read_text())
         import re
-        rows = re.findall(r'\{python: "([\d.]+)", lane: (\w+), shard: (\d+), of: (\d+)\}',
+        rows = re.findall(r"\{lane: (\w+), shard: (\d+), of: (\d+)\}",
                           (ROOT / ".github/workflows/ci.yml").read_text())
-        # Every lane share runs once on each supported interpreter, with identical lanes and shards.
-        expected = [(python, lane, str(shard), str(config["shards"]))
-                    for python in ("3.13", "3.14")
+        expected = [(lane, str(shard), str(config["shards"]))
                     for lane, config in value["lanes"].items() for shard in range(1, config["shards"] + 1)]
         self.assertEqual(sorted(rows), sorted(expected))
 
-    def test_the_hosted_workflow_keeps_strict_forbid_skips_on_every_interpreter_row(self):
+    def test_the_hosted_workflow_resolves_one_stable_python_once_and_runs_every_job_on_it(self):
+        import re
         text = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertIn('python-version: ${{ matrix.python }}', text)
-        self.assertIn('--strict --forbid-skips', text)
-        self.assertEqual(text.count('--strict --forbid-skips'), 1)
+        # Resolved once, from the stable selector, never a prerelease or a pinned minor.
+        self.assertEqual(text.count('python-version: "3.x"'), 1)
+        self.assertEqual(text.count("check-latest: true"), 1)
+        self.assertIn("allow-prereleases: false", text)
+        self.assertEqual(re.findall(r'python-version: (.*)', text),
+                         ['"3.x"'] + ["${{ needs.python.outputs.version }}"] * 2)
+        self.assertNotRegex(text, r"matrix\.python|python: \"")
+        self.assertNotRegex(text, r"3\.1\d")
+        # Every consumer needs the resolution job, and the strict flags stay on the one lane step.
+        self.assertEqual(text.count("needs: python"), 2)
+        self.assertIn("needs: [python, tests, checks]", text)
+        self.assertEqual(text.count("--strict --forbid-skips"), 1)
+
+    def test_timing_evidence_records_the_interpreter_and_one_run_uses_one_interpreter(self):
+        import platform
+        lines = sl.timing_lines(lane="serial", shard=1, of=1, workers=1, digest="d", results={},
+                                manifest=manifest(), wall=1.0, skips=0, fixture_errors=0)
+        self.assertEqual(sl.parse_timings(lines[0])[0]["python"], platform.python_version())
 
 
 
@@ -346,50 +360,21 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(bodies[0]["fast"], {"count": 1, "seconds": 0.2})
         self.assertEqual((bodies[0]["planned"], bodies[0]["ran"]), (234, 233))
 
-    def test_a_two_interpreter_run_refreshes_from_the_primary_and_checks_both_environments(self):
-        legs = [dict(body, python=python) for python in ("3.13", "3.14") for body in measured_bodies()]
-        log = "\n".join(sl.MARKER + json.dumps(body) for body in legs)
-        bodies = sl.parse_timings(log)
-        self.assertEqual({body["python"] for body in bodies}, {"3.13", "3.14"})
-        primary = sl.validated_legs(bodies)
-        self.assertEqual({parts[1]["python"] for parts in primary.values()}, {"3.13"})
-        merged, _ = sl.merge_timings(manifest(), bodies)
-        self.assertEqual(sl.manifest_problems(merged), [])
-        # A second interpreter with other timings is no conflict; its accounting is still enforced.
-        slower = [dict(body, wall=body["wall"] + 1) if body["python"] == "3.14" else body for body in bodies]
-        sl.validated_legs(slower)
-        incomplete = [body for body in bodies if not (body["python"] == "3.14" and body["lane"] == "serial")]
-        with self.assertRaisesRegex(sl.Finding, "missing legs"):
-            sl.validated_legs(incomplete)
-        short = [dict(body, ran=body["ran"] - 1) if body["python"] == "3.14" else body for body in bodies]
-        with self.assertRaisesRegex(sl.Finding, "unsuccessful"):
-            sl.validated_legs(short)
-        # Within one environment a conflicting duplicate part still refuses.
-        duplicate = bodies + [dict(bodies[0], wall=bodies[0]["wall"] + 1)]
-        with self.assertRaisesRegex(sl.Finding, "conflicting duplicate"):
-            sl.validated_legs(duplicate)
-        # Mixed identity, mixed presence and a missing primary refuse.
-        with self.assertRaisesRegex(sl.Finding, "disagree"):
-            sl.validated_legs([dict(body, sha="other") if body["python"] == "3.14" else body for body in bodies])
-        with self.assertRaisesRegex(sl.Finding, "with and without"):
-            sl.validated_legs(bodies + [dict(measured_bodies()[0])])
-        # A named run must prove every required interpreter: dropping an entire environment refuses.
-        only = lambda python: [dict(body, python=python) for body in measured_bodies()]
-        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter.*3.13"):
-            sl.validated_legs(only("3.14"))
-        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter.*3.14"):
-            sl.validated_legs(only("3.13"))
-        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter"):
-            sl.merge_timings(manifest(), only("3.14"))
-        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter.*3.13"):
-            sl.validated_legs(only("3.14") + only("3.15"))
-        with self.assertRaisesRegex(sl.Finding, "invalid timing interpreter"):
-            sl.validated_legs([dict(body, python="three") for body in measured_bodies()])
-        earlier = measured_bodies()
-        self.assertEqual(len(sl.validated_legs(earlier)), len(sl.validated_legs(earlier)))
-        lines = sl.timing_lines(lane="serial", shard=1, of=1, workers=1, digest="d", results={},
-                                manifest=manifest(), wall=1.0, skips=0, fixture_errors=0)
-        self.assertEqual(sl.parse_timings(lines[0])[0]["python"], "%d.%d" % sys.version_info[:2])
+    def test_a_refresh_run_must_have_one_interpreter_and_earlier_unnamed_logs_still_refresh(self):
+        earlier = sl.validated_legs(measured_bodies())
+        named = [dict(body, python="3.99.1") for body in measured_bodies()]
+        self.assertEqual(len(sl.validated_legs(named)), len(earlier))
+        self.assertEqual({parts[1]["python"] for parts in sl.validated_legs(named).values()}, {"3.99.1"})
+        self.assertEqual(sl.manifest_problems(sl.merge_timings(manifest(), named)[0]), [])
+        # No interpreter is preferred: whichever one ran is the one recorded.
+        other = [dict(body, python="4.0.0") for body in measured_bodies()]
+        self.assertEqual(sl.manifest_problems(sl.merge_timings(manifest(), other)[0]), [])
+        for mixed in ([dict(body, python="4.0.0") if body["lane"] == "serial" else body for body in named],
+                      [dict(body, python="") if body["lane"] == "serial" else body for body in named]):
+            with self.assertRaisesRegex(sl.Finding, "interpreter"):
+                sl.validated_legs(mixed)
+        with self.assertRaisesRegex(sl.Finding, "invalid or unsuccessful"):
+            sl.validated_legs([dict(body, python=3.14) for body in measured_bodies()])
 
     def test_merge_records_slow_tests_drops_fast_ones_and_ignores_noise(self):
         value = manifest(lanes={"parallel": {"shards": 1, "workers": 2, "target_seconds": 180},

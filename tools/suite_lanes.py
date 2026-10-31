@@ -23,6 +23,7 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
 import re
 import signal
 import subprocess
@@ -39,8 +40,6 @@ if sys.path and Path(sys.path[0] or ".").resolve() == Path(__file__).resolve().p
 SCHEMA = "suite-lanes/v1"
 TIMINGS_SCHEMA = "suite-lanes-timings/v1"
 MARKER = "POD_TEST_TIMINGS "
-PRIMARY_PYTHON = "3.13"  # The interpreter whose durations and calibration `refresh` records.
-REQUIRED_PYTHONS = ("3.13", "3.14")  # Every named run proves each of these, complete by itself.
 LANES = ("parallel", "serial", "installer")
 HARNESS = {"tests.pty_harness": "serial", "tests.install_support": "installer"}
 PRECEDENCE = ("serial", "installer")
@@ -726,8 +725,7 @@ def timing_lines(*, lane: str, shard: int, of: int, workers: int, digest: str, r
     lines = []
     for part in range(parts):
         body = {"schema": TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "workers": workers,
-                "cpus": os.cpu_count(), "python": "%d.%d" % sys.version_info[:2],
-                "sha": os.environ.get("GITHUB_SHA", ""),
+                "cpus": os.cpu_count(), "python": platform.python_version(), "sha": os.environ.get("GITHUB_SHA", ""),
                 "run_id": os.environ.get("GITHUB_RUN_ID", ""), "plan": digest,
                 "part": part + 1, "parts": parts, "planned": len(results), "ran": ran, "skips": skips,
                 "fixture_errors": fixture_errors, "clean": clean, "wall": round(wall, 1),
@@ -903,38 +901,9 @@ def parse_timings(text: str) -> list[dict]:
 
 
 def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:
-    """Validate every interpreter's complete run; calibrate from the primary interpreter's legs only.
-
-    A matrix run repeats each share per interpreter. Each environment must be complete and consistent
-    by itself, the environments must agree on plan, commit and run, and a mixture of shares with and
-    without an interpreter is refused. Only the primary's durations feed the manifest.
-    """
+    """Validate a complete single run before allowing any duration or calibration update."""
     if not bodies:
         raise Finding("REFRESH found no POD_TEST_TIMINGS lines: name a finished suite-lanes CI run")
-    environments: dict[str, list[dict]] = {}
-    for body in bodies:
-        environment = body.get("python", "") if isinstance(body, dict) else ""
-        if not isinstance(environment, str) or environment and not re.fullmatch(r"\d+\.\d+", environment):
-            raise Finding("REFRESH invalid timing interpreter: use complete unmodified logs")
-        environments.setdefault(environment, []).append(body)
-    if set(environments) == {""}:
-        return _validated_environment(bodies)  # Earlier unnamed logs: one environment, as before.
-    if "" in environments:
-        raise Finding("REFRESH mixes shares with and without an interpreter: use one complete run")
-    missing = [name for name in REQUIRED_PYTHONS if name not in environments]
-    if missing:
-        raise Finding(f"REFRESH named timing lines lack the required interpreter(s) {', '.join(missing)}: "
-                      f"refresh from a run in which every interpreter ({', '.join(REQUIRED_PYTHONS)}) finished")
-    checked = {name: _validated_environment(group) for name, group in environments.items()}
-    identities = {(body["plan"], body["sha"], body.get("run_id", "")) for body in bodies}
-    if len(identities) != 1:
-        raise Finding("REFRESH legs disagree on the plan digest, SHA or run identity: "
-                      "refresh from a single run of one commit")
-    return checked[PRIMARY_PYTHON]
-
-
-def _validated_environment(bodies: list[dict]) -> dict[tuple, dict]:
-    """Validate a complete single-environment run before allowing any duration or calibration update."""
     legs: dict[tuple, dict] = {}
     identities, calibrated = set(), set()
     for body in bodies:
@@ -944,6 +913,7 @@ def _validated_environment(bodies: list[dict]) -> dict[tuple, dict]:
                 or body["shard"] > body["of"] or body["part"] > body["parts"]
                 or not isinstance(body.get("plan"), str) or not body["plan"]
                 or not isinstance(body.get("sha"), str)
+                or not isinstance(body.get("python", ""), str)
                 or not isinstance(body.get("run_id", ""), str)
                 or body.get("run_id", "") != "" and not body["run_id"].isascii()
                 or body.get("run_id", "") != "" and not body["run_id"].isdecimal()
@@ -968,15 +938,15 @@ def _validated_environment(bodies: list[dict]) -> dict[tuple, dict]:
             raise Finding("REFRESH planned worker measurement needs a finite positive denominator, finite ratio "
                           "and clean worker completion")
         calibrated.add(has_planned)
-        identities.add((body["plan"], body["sha"], body.get("run_id", "")))
+        identities.add((body["plan"], body["sha"], body.get("run_id", ""), body.get("python", "")))
         key = (body["lane"], body["shard"], body["of"])
         parts = legs.setdefault(key, {})
         if body["part"] in parts and parts[body["part"]] != body:
             raise Finding("REFRESH conflicting duplicate timing part")
         parts[body["part"]] = body
     if len(identities) != 1:
-        raise Finding("REFRESH legs disagree on the plan digest, SHA or run identity: "
-                      "refresh from a single run of one commit")
+        raise Finding("REFRESH legs disagree on the plan digest, SHA, run identity or interpreter: "
+                      "refresh from a single run of one commit on one interpreter")
     if len(calibrated) != 1:
         raise Finding("REFRESH mixed planned-worker telemetry: use one complete run")
     seen = set()

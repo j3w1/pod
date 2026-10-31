@@ -80,9 +80,10 @@ class AbandonedFixture(unittest.TestCase):
     discard = support.AdmissionTests.discard
     start = support.AdmissionTests.start
 
-    def held(self):
+    def held(self, null_launch=False):
         port = AbandonedPort()
         port.placement = self.port.placement
+        port.null_launch = null_launch
         self.port = port
         with self.assertRaises(PodError) as caught:
             self.start()
@@ -115,6 +116,10 @@ class AbandonedFixture(unittest.TestCase):
         port.placement = self.port.placement
         port.normal_start = True
         self.port = port
+
+    def outstanding(self, row):
+        native = self.port.read_native('owner', authority_runs=('run',), assignments=(row,))
+        return logical_projection(self.project, native, objective='objective')
 
     def account(self, admission, reason='Account this fenced nonsuccess; execution remains unknown'):
         return recover_admission(self.project, 'objective', owner='owner',
@@ -162,10 +167,6 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.discard(row, 'No accepted output; native resources remain user-requested retained')
         self.port.normal_start = True
         self.assertEqual(self.start('next-task', frozen=self.frozen())['status'], 'bound')
-
-    def outstanding(self, row):
-        native = self.port.read_native('owner', authority_runs=('run',), assignments=(row,))
-        return logical_projection(self.project, native, objective='objective')
 
     def test_never_started_attempt_is_never_recorded_as_started_exited_or_successful(self):
         admission = self.held()
@@ -295,29 +296,33 @@ class AbandonedAccountingTests(AbandonedFixture):
             refuse_held_claim(projection, self.elsewhere(projection, 'x' * 300))
         refuse_held_claim(projection, self.elsewhere(projection, 'x' * 128))
 
-    def test_effects_past_the_bound_fail_closed_and_hold_the_whole_repository(self):
-        from pod.abandoned import MAX_PENDING_EFFECTS, refuse_held_claim
-        projection = self.held_effects([self.push(f'origin/other-{index}') for index in range(MAX_PENDING_EFFECTS + 6)]
-                                       + [self.push('origin/main')])
-        self.assertEqual(projection['outstanding'][0]['hold']['effects'][-1]['kind'], 'unknown')
-        with self.assertRaises(PodError):
-            refuse_held_claim(projection, self.elsewhere(projection, 'feature'))
-
-    def test_the_same_target_name_in_another_repository_is_independent(self):
+    def test_a_repository_ref_is_independent_across_repositories_but_a_shared_target_is_not(self):
         from pod.abandoned import refuse_held_claim
-        hold = {'worktree': 'w', 'repo_key': 'repo-a', 'branch': 'feature', 'path': '/work/a', 'paths': [],
-                'surfaces': [], 'process': 'exited',
-                'effects': [{'kind': 'push', 'id': 'origin/main', 'state': 'pending'}]}
-        held = {'outstanding': [{'admission_id': 'a', 'hold': hold}]}
-        with self.assertRaises(PodError):
-            refuse_held_claim(held, {'repo_key': 'repo-a', 'path': '/work/b', 'branch': 'main'})
-        refuse_held_claim(held, {'repo_key': 'repo-b', 'path': '/work/b', 'branch': 'main'})
+
+        def hold(repo, *effects):
+            return {'outstanding': [{'admission_id': 'a', 'hold': {
+                'worktree': 'w', 'repo_key': repo, 'branch': 'feature', 'path': '/work/a', 'paths': [],
+                'surfaces': [], 'process': 'exited', 'effects': list(effects)}}]}
+
+        def refused(held, repo, branch='main'):
+            with self.assertRaises(PodError) as caught:
+                refuse_held_claim(held, {'repo_key': repo, 'path': '/work/b', 'branch': branch})
+            self.assertEqual(caught.exception.code, 'abandoned_claim_held')
+
+        ref = hold('repo-a', {'kind': 'push', 'id': 'origin/main', 'state': 'pending'})
+        refused(ref, 'repo-a')
+        refuse_held_claim(ref, {'repo_key': 'repo-b', 'path': '/work/b', 'branch': 'main'})
+        refuse_held_claim(ref, {'repo_key': 'repo-a', 'path': '/work/b', 'branch': 'feature-2'})
         # An unknown repository on either side cannot establish independence.
-        with self.assertRaises(PodError):
-            refuse_held_claim(held, {'repo_key': None, 'path': '/work/b', 'branch': 'main'})
-        with self.assertRaises(PodError):
-            refuse_held_claim({'outstanding': [{'admission_id': 'a', 'hold': {**hold, 'repo_key': None}}]},
-                              {'repo_key': 'repo-b', 'path': '/work/b', 'branch': 'main'})
+        refused(ref, None)
+        refused(hold(None, {'kind': 'push', 'id': 'origin/main', 'state': 'pending'}), 'repo-b')
+        # A deployment or any other target is not a ref of the source repository: its identity is shared.
+        shared = hold('repo-a', {'kind': 'cloud_deployment', 'id': 'shared-production', 'state': 'pending'})
+        refused(shared, 'repo-a', 'shared-production')
+        refused(shared, 'repo-b', 'shared-production')
+        refused(shared, 'repo-b', 'unrelated')
+        # No identity at all cannot be shown independent either.
+        refused(hold('repo-a', {'kind': 'push', 'id': None, 'state': None}), 'repo-b')
 
     def test_held_abandoned_reviewer_on_the_exact_candidate_still_blocks_validation(self):
         from pod.governor import _active
@@ -715,6 +720,117 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.assertEqual(row['effective_evidence']['inherited']['terminal'], prior['native_binding']['terminalHandle'])
         self.assertFalse(row['route_decision']['effective_unknown'])
         self.assertEqual(len(self.port.starts), 1)
+
+
+REAL_267 = Path(__file__).parent / 'fixtures' / 'ce-267' / 'worker-show-abandoned.json'
+
+
+class AbandonedRealRecordTests(AbandonedFixture):
+    """A sanitized copy of the Orca read of the real CE #267 attempt, joined to a harness admission by identity.
+
+    The record keeps Orca's own shape: a reused terminal, setup not applicable, an accepted but unobserved
+    input, a retained terminal and an unverifiable process.
+    """
+
+    def real(self, verdict=None, extra=()):
+        item = self.port.workers['dispatch-1']
+        text = REAL_267.read_text()
+        for real, ours in (('repo-267::/work/repo/task-267', item['worktree']), ('ctx_267_origin', 'dispatch-0'),
+                           ('ctx_267', 'dispatch-1'), ('run_267', item['run']), ('task_267', item['task']),
+                           ('term_267', item['terminal']), ('runtime-267', self.port.runtime)):
+            text = text.replace(real, ours)
+        shown = {'runtime': self.port.runtime, 'result': json.loads(text)['result']}
+        if verdict is not None:
+            shown['result']['projection']['liveness'] = {'verdict': verdict, 'reason': 'test'}
+        shown['result']['worker']['effects'].extend(extra)
+        return shown
+
+    def accounted(self, verdict=None, extra=()):
+        admission = self.held(null_launch=True)
+        shown = self.real(verdict, extra)
+        with patch.object(self.port, 'show_worker', return_value=shown):
+            result = self.account(admission)
+            return admission, result, self.outstanding(result['admission'])
+
+    def test_real_record_setup_not_applicable_and_reused_terminal_are_not_pending_effects(self):
+        from pod.abandoned import current_claim
+        self.held(null_launch=True)
+        shown = self.real()
+        self.assertEqual([(row['kind'], row.get('action'), row.get('state')) for row in shown['result']['worker']['effects']
+                          if row['kind'] in ('setup', 'terminal')],
+                         [('setup', 'not_applicable', 'not_applicable'), ('terminal', 'reused', None)])
+        self.assertEqual(current_claim(shown), {'process': 'unverifiable', 'effects': []})
+        self.assertIsNone(current_claim(self.real('exited')))
+
+    def test_real_record_with_an_unverifiable_process_is_unknown_execution_and_stays_held(self):
+        admission, result, held = self.accounted()
+        row = result['admission']
+        self.assertEqual(row['abandoned_accounting']['classification'], 'abandoned_no_observed_start')
+        self.assertEqual((result['release'], held['outstanding_ids']), (None, [admission['admission_id']]))
+        self.assertEqual((held['outstanding'][0]['hold']['process'], held['outstanding'][0]['hold']['effects']),
+                         ('unverifiable', []))
+        self.assertNotIn(row['state'], STARTED_STATES)
+
+    def test_real_record_with_a_live_worker_keeps_its_worktree_held_and_leaves_an_independent_one_usable(self):
+        from pod.abandoned import refuse_held_claim
+        admission = self.held(null_launch=True)
+        for verdict in ('alive', 'live', 'unverifiable'):
+            with self.subTest(verdict=verdict), patch.object(self.port, 'show_worker', return_value=self.real(verdict)):
+                result = self.account(admission)
+                held = self.outstanding(result['admission'])
+                self.assertEqual((result['release'], held['outstanding_ids']), (None, [admission['admission_id']]))
+                hold = held['outstanding'][0]['hold']
+                with self.assertRaises(PodError) as caught:
+                    refuse_held_claim(held, {'repo_key': hold['repo_key'], 'path': hold['path'], 'branch': 'other'})
+                self.assertEqual(caught.exception.code, 'abandoned_claim_held')
+                refuse_held_claim(held, {'repo_key': hold['repo_key'], 'path': '/work/other', 'branch': 'other'})
+
+    def test_real_record_with_positive_exit_settles_releases_and_frees_the_repository(self):
+        from pod.abandoned import refuse_held_claim
+        admission, result, held = self.accounted('exited')
+        self.assertEqual((result['release'], result['hold'], held['outstanding_ids']), ('process_exited', None, []))
+        self.assertEqual(result['admission']['abandoned_accounting']['execution'], 'unknown')
+        self.assertNotIn(result['admission']['state'], STARTED_STATES)
+        self.assertIsNone(result['admission'].get('report'))
+        refuse_held_claim(held, {'repo_key': None, 'path': '/work/other', 'branch': 'independent'})
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_real_record_observed_start_is_distinguished_from_unknown_by_its_own_facts(self):
+        from pod.abandoned import observed_start
+        self.held(null_launch=True)
+        self.assertEqual(observed_start(self.real()), {})
+        observed = self.real()
+        observed['result']['dispatch']['lastHeartbeatAt'] = '2026-10-30T22:20:00.000Z'
+        self.assertEqual(observed_start(observed), {'lastHeartbeatAt': '2026-10-30T22:20:00.000Z'})
+
+    def test_real_record_with_an_unresolved_external_effect_stays_protected_after_exit(self):
+        from pod.abandoned import refuse_held_claim
+        from pod.abandoned import current_claim
+        deploy = {'kind': 'cloud_deployment', 'id': 'shared-production', 'action': 'started', 'state': 'pending'}
+        admission, result, held = self.accounted('exited', [deploy])
+        self.assertEqual((result['release'], held['outstanding_ids']), (None, [admission['admission_id']]))
+        self.assertEqual(held['outstanding'][0]['hold']['effects'],
+                         [{'kind': 'cloud_deployment', 'id': 'shared-production', 'state': 'pending'}])
+        for repo in (held['outstanding'][0]['hold']['repo_key'], 'another-repo'):
+            with self.assertRaises(PodError):
+                refuse_held_claim(held, {'repo_key': repo, 'path': '/work/other', 'branch': 'independent'})
+        # A setup that is still running or failed is unresolved too; only a resolved one is history.
+        for state in ('running', 'failed'):
+            setup = self.real('exited')
+            setup['result']['worker']['effects'][1].update(action='run', state=state)
+            self.assertEqual(current_claim(setup)['effects'], [{'kind': 'setup', 'id': None, 'state': state}])
+
+    def test_real_record_repeated_recovery_never_duplicates_execution_and_a_later_live_read_holds_again(self):
+        admission = self.held(null_launch=True)
+        with patch.object(self.port, 'show_worker', return_value=self.real('exited')):
+            first = self.account(admission)
+            again = self.account(admission)
+            self.assertEqual(again['admission']['abandoned_accounting'], first['admission']['abandoned_accounting'])
+            self.assertEqual((again['release'], self.outstanding(again['admission'])['outstanding_ids']),
+                             ('process_exited', []))
+        self.assertEqual(len(self.port.starts), 1)
+        with patch.object(self.port, 'show_worker', return_value=self.real('alive')):
+            self.assertEqual(self.outstanding(again['admission'])['outstanding_ids'], [admission['admission_id']])
 
 
 class AbandonedReadinessTests(AbandonedFixture):

@@ -5,7 +5,7 @@ Pod's one-shot installer downloads the current `main` source, validates the `ski
 ## Prerequisites
 
 - Linux and a non-root user.
-- Python 3.13 or newer with `venv`, `ensurepip`, and curses. On Debian-derived systems, the matching `python3.13-venv` package may be needed. A user-managed Python such as `uv python install 3.13` also works when it is the `python3` found on PATH.
+- The latest stable CPython as `python3` on PATH, with `venv`, `ensurepip`, and curses. The installer uses that `python3` and refuses a prerelease or a missing module; it never falls back to another interpreter. On Debian-derived systems the matching `venv` package may be needed. Provision the interpreter through the host's approved runtime provisioning, not through the installer.
 - Node and `npx`, plus curl or wget.
 - Network access to `raw.githubusercontent.com` for the bootstrap script, `codeload.github.com` for source, PyPI for the pinned PyYAML wheel, and npm for `skills@1.7.0`.
 - Orca and an authenticated Codex or Claude Code session for live delegation. Installation itself does not require them to be running.

@@ -494,13 +494,13 @@ def _reconcilable_copy(canonical: Path, receipt: dict | None, source_bundle: Pat
 def _preflight(stage: Path, paths: dict[str, Path], template: bytes) -> None:
     if platform.system() != "Linux" or os.geteuid() == 0:
         raise InstallError(1, "Run as a non-root user on Linux")
-    if sys.version_info < (3, 13):
-        raise InstallError(1, "Python 3.13+ is required; install it, then rerun the installer")
+    if sys.version_info.releaselevel != "final":
+        raise InstallError(1, "A stable CPython (not a prerelease) is required; install the latest stable one, then rerun the installer")
     try:
         import ensurepip  # noqa: F401
         import curses  # noqa: F401
     except ImportError as exc:
-        raise InstallError(1, "Python venv/ensurepip/curses is required (on Debian, install python3.13-venv)") from exc
+        raise InstallError(1, "Python venv/ensurepip/curses is required (on Debian, install the matching python3 venv package)") from exc
     if shutil.which("npx") is None or shutil.which("node") is None:
         raise InstallError(1, "Node and npx are required")
     source_bundle = stage / "skills/pod"

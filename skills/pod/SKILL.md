@@ -2,7 +2,7 @@
 name: pod
 description: Use when the user invokes Pod ($pod or /pod) to deliver an objective or GitHub issue through supervised Orca workers, or to continue, check or close a Pod objective.
 license: MIT
-compatibility: Linux, Python 3.13+, installer-managed PyYAML and Orca.
+compatibility: Linux, the latest stable CPython, installer-managed PyYAML and Orca.
 metadata:
   source: https://github.com/j3w1/pod
 ---

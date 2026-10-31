@@ -158,9 +158,6 @@ def _owners(ownership: dict, binding: dict) -> tuple:
     return (binding["dispatchId"], None) if released else (binding["dispatchId"],)
 
 
-_BENIGN_EFFECTS = ("worktree", "dispatch_input")
-
-
 def is_abandoned(shown: dict) -> bool:
     result = shown.get("result") if isinstance(shown, dict) else None
     worker = result.get("worker") if isinstance(result, dict) else None
@@ -169,29 +166,38 @@ def is_abandoned(shown: dict) -> bool:
             or isinstance(dispatch, dict) and dispatch.get("lastFailure") == "abandoned")
 
 
-MAX_PENDING_EFFECTS = 64
+# Orca's own observations that leave nothing unresolved once the exact process verdict is known: the
+# worktree and the accepted input are accounted elsewhere, a setup that did not run or finished holds
+# nothing, and a created or reused terminal is the process the verdict already speaks for.
+_RESOLVED_SETUP = ("not_applicable", "skipped", "completed")
+_TERMINAL_ACTIONS = ("created", "reused")
+
+
+def _harmless(row: dict) -> bool:
+    kind = row.get("kind")
+    if kind in ("worktree", "dispatch_input"):
+        return True
+    if kind == "setup":
+        return (row.get("state") or row.get("action")) in _RESOLVED_SETUP
+    return kind == "terminal" and row.get("action") in _TERMINAL_ACTIONS
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _pending_effects(worker: dict) -> list[dict]:
-    """Effects beyond the worktree and the accepted input, with full identities.
+    """Effects Orca reports that are not yet resolved, with their full identities.
 
-    Nothing is truncated: an identity is compared in full. Only a count past the bound is not listed;
-    that overflow is recorded as one effect of unknown identity, which holds the whole repository.
+    An effects list that cannot be read is itself unresolved.
     """
     effects = worker.get("effects")
     if not isinstance(effects, list):
         return [{"kind": "unknown", "id": None, "state": None}]
-    pending = []
-    for row in effects:
-        if isinstance(row, dict) and row.get("kind") in _BENIGN_EFFECTS:
-            continue
-        row = row if isinstance(row, dict) else {}
-        pending.append({"kind": row["kind"] if isinstance(row.get("kind"), str) and row["kind"] else "unknown",
-                        "id": row["id"] if isinstance(row.get("id"), str) and row["id"] else None,
-                        "state": row["state"] if isinstance(row.get("state"), str) and row["state"] else None})
-    if len(pending) > MAX_PENDING_EFFECTS:
-        pending = pending[:MAX_PENDING_EFFECTS] + [{"kind": "unknown", "id": None, "state": None}]
-    return pending
+    return [{"kind": _text(row.get("kind")) or "unknown", "id": _text(row.get("id")),
+             "state": _text(row.get("state")) or _text(row.get("action"))}
+            for row in (row if isinstance(row, dict) else {} for row in effects)
+            if not _harmless(row)]
 
 
 def current_claim(shown: dict) -> dict | None:
@@ -215,12 +221,7 @@ def current_claim(shown: dict) -> dict | None:
     effects = _pending_effects(worker)
     if verdict == "exited" and not effects:
         return None
-    return {"process": verdict if isinstance(verdict, str) and verdict else "unknown", "effects": effects}
-
-
-def release_evidence(shown: dict) -> str | None:
-    """`process_exited` when the fresh claim is gone, else None."""
-    return "process_exited" if is_abandoned(shown) and current_claim(shown) is None else None
+    return {"process": _text(verdict) or "unknown", "effects": effects}
 
 
 def hold_scope(admission: dict, claim: dict | None = None) -> dict:
@@ -237,20 +238,21 @@ def hold_scope(admission: dict, claim: dict | None = None) -> dict:
 
 
 def _effect_conflicts(hold: dict, placement: dict) -> bool:
-    """A pending effect blocks an assignment in its repository that may touch its target.
+    """A pending effect blocks an assignment that may touch its target.
 
-    The repository is part of the key: the same target name elsewhere is independent, but an unknown
-    repository on either side cannot establish independence. An effect of unknown identity holds the
-    whole repository.
+    A `push` names a ref of its own repository, as the Governor's action kinds define it: the same ref
+    name in another repository is independent, an unknown repository is not. Any other pending effect, or
+    one with no identity, names a target no placement can prove it is independent of, so it holds every
+    assignment until Orca reports it resolved.
     """
     held_repo, repo = hold.get("repo_key"), placement.get("repo_key")
-    if held_repo is not None and repo is not None and held_repo != repo:
-        return False
     branch = placement.get("branch")
     for effect in hold.get("effects") or []:
         ident = effect.get("id")
-        if effect.get("kind") == "unknown" or not isinstance(ident, str):
+        if effect.get("kind") != "push" or not isinstance(ident, str):
             return True
+        if held_repo is not None and repo is not None and held_repo != repo:
+            continue
         if branch is not None and branch in (ident, ident.split("/", 1)[-1]):
             return True
     return False

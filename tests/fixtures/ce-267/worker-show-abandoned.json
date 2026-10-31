@@ -1,0 +1,209 @@
+{
+ "_about": "Sanitized copy of the Orca worker-show read of the abandoned CE #267 implementer attempt (one terminal reused, setup not applicable, process verdict unverifiable, retained at user request). Identifiers are placeholders; fields and relationships are unchanged.",
+ "result": {
+  "dispatch": {
+   "id": "ctx_267",
+   "runId": "run_267",
+   "taskId": "task_267",
+   "task_id": "task_267",
+   "contractVersion": 1,
+   "assigneeHandle": "term_267",
+   "assigneePaneKey": "tab-267:leaf-267",
+   "processIncarnation": "repo-267::/work/repo/task-267@@pty-267:incarnation-267",
+   "capabilityRevokedAt": "2026-10-30T22:23:10.708Z",
+   "retryOfDispatchId": null,
+   "creatorDispatchId": null,
+   "hostScope": {
+    "kind": "local",
+    "hostId": "local"
+   },
+   "status": "failed",
+   "failureCount": 0,
+   "lastFailure": "abandoned",
+   "terminationReason": null,
+   "depth": 1,
+   "dispatchedAt": "2026-10-30 22:16:19",
+   "completedAt": "2026-10-30T22:23:10.708Z",
+   "createdAt": "2026-10-30 22:16:19",
+   "lastHeartbeatAt": null
+  },
+  "worker": {
+   "dispatchId": "ctx_267",
+   "runtimeEpoch": "runtime-267",
+   "state": "abandoned",
+   "stage": "abandoned",
+   "worktreeId": "repo-267::/work/repo/task-267",
+   "agentTerminalHandle": "term_267",
+   "setupState": "not_applicable",
+   "effects": [
+    {
+     "kind": "worktree",
+     "action": "reused",
+     "id": "repo-267::/work/repo/task-267"
+    },
+    {
+     "kind": "setup",
+     "action": "not_applicable",
+     "state": "not_applicable"
+    },
+    {
+     "kind": "terminal",
+     "role": "agent",
+     "action": "reused",
+     "id": "term_267"
+    },
+    {
+     "kind": "dispatch_input",
+     "role": "agent",
+     "id": "term_267",
+     "state": "accepted"
+    },
+    {
+     "kind": "dispatch_input",
+     "role": "agent",
+     "id": "term_267",
+     "state": "turn_unobserved"
+    }
+   ],
+   "residualResources": [],
+   "startOptions": {
+    "worktree": "current",
+    "mode": {
+     "mode": "terminal",
+     "preferred": "terminal",
+     "reason": "user_default",
+     "detail": "Started a terminal agent worker, the default for new agent tabs in your settings."
+    },
+    "resolvedWorktreeId": "repo-267::/work/repo/task-267",
+    "name": null,
+    "repo": null,
+    "baseBranch": null,
+    "terminal": "term_267",
+    "agent": null,
+    "launch": {
+     "requested": {
+      "agent": null,
+      "model": null,
+      "effort": null
+     },
+     "effective": {
+      "agent": null,
+      "model": null,
+      "effort": null
+     }
+    },
+    "timeoutMs": 60000,
+    "setup": "not_applicable",
+    "setupSource": "existing_worktree"
+   },
+   "lastError": "Dispatch input was written and submitted, but the agent's turn start could not be verified during observation (up to 30s). This is unverifiable, not proof the worker is dead: the agent may still be starting, may be wedged (for example waiting on network), or may be holding the task unsent in its composer. If the worker recovers and reports, this Dispatch settles normally. Abandoned by an unidentified caller.",
+   "createdAt": "2026-10-30 22:16:19",
+   "updatedAt": "2026-10-30T22:23:10.708Z"
+  },
+  "projection": {
+   "id": "ctx_267",
+   "dispatchId": "ctx_267",
+   "taskId": "task_267",
+   "runId": "run_267",
+   "role": "worker",
+   "parent": null,
+   "provider": {
+    "id": "claude",
+    "model": null
+   },
+   "host": {
+    "kind": "local",
+    "id": "local"
+   },
+   "workspace": {
+    "id": "repo-267::/work/repo/task-267",
+    "kind": "folder_or_worktree"
+   },
+   "stage": {
+    "worker": "abandoned",
+    "dispatch": "failed",
+    "detail": "abandoned",
+    "activity": "unknown"
+   },
+   "outcome": "failed",
+   "liveness": {
+    "verdict": "unverifiable",
+    "reason": "stale_status",
+    "observedAt": 1793401656234
+   },
+   "evidence": {
+    "durable": true,
+    "liveStatus": "stale",
+    "lastObservedAt": 1793401656234
+   },
+   "resource": {
+    "state": "owned",
+    "id": "wtr_267",
+    "ownerDispatchId": "ctx_267",
+    "releaseState": "retained",
+    "terminalState": "retained"
+   },
+   "nextAction": {
+    "kind": "release",
+    "argv": [
+     "orchestration",
+     "worker-release",
+     "--dispatch",
+     "ctx_267"
+    ]
+   },
+   "attention": {
+    "categories": [
+     "failure",
+     "interruption",
+     "stale"
+    ],
+    "requiresAction": true
+   }
+  },
+  "terminal": {
+   "handle": "term_267",
+   "ptyId": "repo-267::/work/repo/task-267@@pty-267",
+   "incarnationId": "incarnation-267",
+   "orphaned": false,
+   "worktreeId": "repo-267::/work/repo/task-267",
+   "worktreePath": "/work/repo/task-267",
+   "branch": "refs/heads/orca/request-delivery",
+   "tabId": "tab-267",
+   "leafId": "leaf-267",
+   "connected": true,
+   "writable": true,
+   "executionHostId": "local",
+   "agentIdentity": "claude",
+   "paneRuntimeId": -1,
+   "rendererGraphEpoch": 0,
+   "agentWait": null
+  },
+  "observation": {
+   "status": "live",
+   "exactWorker": true,
+   "agentWait": null
+  },
+  "terminalResource": {
+   "id": "wtr_267",
+   "ownershipState": "owned",
+   "releaseState": "retained",
+   "retainedReason": "user_requested",
+   "terminalHandle": "term_267",
+   "worktreeId": "repo-267::/work/repo/task-267",
+   "endpointId": "runtime-267",
+   "endpointIncarnation": "repo-267::/work/repo/task-267@@pty-267:incarnation-267",
+   "originDispatchId": "ctx_267_origin",
+   "ownerDispatchId": "ctx_267",
+   "releaseRequestedAt": null,
+   "releaseCompletedAt": null,
+   "releaseError": null,
+   "recoveryAttemptCount": 0,
+   "lastRecoveryAt": null,
+   "archive": {
+    "source": null,
+    "status": null
+   }
+  }
+ }
+}

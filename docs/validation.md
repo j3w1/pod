@@ -18,7 +18,7 @@ records an assignment outcome, not acceptance of the objective.
 | Terminal behavior | Required PTY suite, frame/size checks and affected visual snapshots. |
 | Installation or bundle inventory | Installer and copied-bundle tests in scrubbed disposable homes, including `tests.test_bundle_install`. |
 | Admission, assurance or closure governance | The preceding installed mechanism's independent final audit, with affected policy and production-boundary evidence. Candidate self-hosting evidence is separate. |
-| Admission, authority, persistence, recovery or test-isolation correction | Focused affected tests and boundary regressions locally, then the full suite once in hosted CI on Python 3.13 and 3.14 (the `tests` matrix of `ci.yml`, every lane share on each interpreter, `--strict --forbid-skips`). No local dual-interpreter heavy run is required; a source change after a hosted result needs a fresh result on the new head. |
+| Admission, authority, persistence, recovery or test-isolation correction | Focused affected tests and boundary regressions locally, then the full suite once in hosted CI on the latest stable CPython (the `tests` matrix of `ci.yml`, every lane share once, `--strict --forbid-skips`). No local full suite and no second interpreter is required; a source change after a hosted result needs a fresh result on the new head. |
 | Milestone | A root `VERSION` bump defines a milestone: all local gates below, except that the full-suite result of a change in the class above comes from hosted CI rather than a local run; then separate hosted, review, live and acceptance evidence as required. |
 
 Use cheap discriminating checks early and focused checks during development.
@@ -45,7 +45,7 @@ fabricate compatibility to make a result pass.
 | Installer/copied bundle | `PYTHONPATH=skills python -m unittest tests.test_installer tests.test_bundle_install -v` | Shell entrypoints, interruption/recovery, parity and an independent placed bundle. |
 | Disposable installer | `POD_INSTALL_SOURCE=file://… sh install.sh` in scrubbed temporary home; `--installed` parity and launcher checks | Dependencies, both skills, receipt, preferences, PATH and update. |
 | SHA-pinned public install | Fetch `install.sh` from `raw.githubusercontent.com` at candidate SHA and matching `codeload.github.com` tarball in hosted CI | Public endpoints serve the candidate. |
-| Hosted Linux | Every lane share of the `tests` matrix on each supported interpreter (Python 3.13 and 3.14) and the `checks` job (Python 3.13) for PRs and `main`; the required `linux` job always reports and passes only when all of them passed | Exact-commit hosted result. |
+| Hosted Linux | Every lane share of the `tests` matrix and the `checks` job for PRs and `main`, all on the one latest stable CPython that the `python` job resolves once per run (`actions/setup-python` selector `3.x`, `check-latest: true`, no prereleases) and passes as the exact version to every job and shard; the required `linux` job always reports and passes only when all of them passed | Exact-commit hosted result. |
 | Independent audit | Fresh reviewer, exact candidate and reproducible unprimed evidence | Findings and review proof under project governance. |
 | Live core/delegation | Codex and Claude Code separately on Linux with disposable objectives | Native launch/effective route, supervision, request recovery, continuation, Delivery and release. |
 | Public-source reads | One bounded real refresh in disposable `POD_CACHE_HOME`; manually compare representative rows, units and profile labels | Per-source availability and parser limits; a cached fetch is not fresh proof. |
@@ -101,11 +101,9 @@ again alone confirms it (up to five per share, ceiling breaches and new slow tes
 that, those two fail unconfirmed and drift only warns);
 it also fails beyond twice its lane target. These limits govern the suite's own runtime, not product performance. Record a
 necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`
-and commit the manifest; `refresh` reads only that run's log lines. Each timing line names its
-interpreter; when a run holds several, `refresh` checks each interpreter's run for completeness and
-consistency by itself (a mixture of named and unnamed shares, differing identities or a named run missing
-either 3.13 or 3.14 refuses; earlier unnamed logs keep their single-environment path) and records the Python 3.13 shares only, so the second interpreter never duplicates a test or
-mixes into the calibration. Split a growing table into
+and commit the manifest; `refresh` reads only that run's log lines. Each timing line records the exact
+interpreter version that ran it, and `refresh` requires the whole run to have used one; earlier logs
+without a version keep their own evidence, and no interpreter is preferred for calibration. Split a growing table into
 named group methods (`tests.common.GroupedTable`) before any method nears the ceiling. When
 `check` projects a share over its target, raise that lane's shards in the manifest and add the
 matching `ci.yml` rows, up to `max_parallel_shards` for parallel. Raw largest-worker overload remains

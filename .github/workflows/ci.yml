@@ -20,31 +20,40 @@ env:
   DO_NOT_TRACK: "1"
 
 jobs:
+  python:
+    # Resolve the latest stable CPython once; every job and shard runs exactly this version.
+    name: python
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.setup.outputs.python-version }}
+    steps:
+      - id: setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          check-latest: true
+          allow-prereleases: false
+      - run: python --version
+
   tests:
-    name: tests (py ${{ matrix.python }} ${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }})
+    name: tests (${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }})
+    needs: python
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # One row per lane share and supported interpreter; tests/suite_lanes.json names the same shards.
+        # One row per lane share, each run once; tests/suite_lanes.json names the same shards.
         include:
-          - {python: "3.13", lane: parallel, shard: 1, of: 6}
-          - {python: "3.13", lane: parallel, shard: 2, of: 6}
-          - {python: "3.13", lane: parallel, shard: 3, of: 6}
-          - {python: "3.13", lane: parallel, shard: 4, of: 6}
-          - {python: "3.13", lane: parallel, shard: 5, of: 6}
-          - {python: "3.13", lane: parallel, shard: 6, of: 6}
-          - {python: "3.13", lane: serial, shard: 1, of: 1}
-          - {python: "3.13", lane: installer, shard: 1, of: 1}
-          - {python: "3.14", lane: parallel, shard: 1, of: 6}
-          - {python: "3.14", lane: parallel, shard: 2, of: 6}
-          - {python: "3.14", lane: parallel, shard: 3, of: 6}
-          - {python: "3.14", lane: parallel, shard: 4, of: 6}
-          - {python: "3.14", lane: parallel, shard: 5, of: 6}
-          - {python: "3.14", lane: parallel, shard: 6, of: 6}
-          - {python: "3.14", lane: serial, shard: 1, of: 1}
-          - {python: "3.14", lane: installer, shard: 1, of: 1}
+          - {lane: parallel, shard: 1, of: 6}
+          - {lane: parallel, shard: 2, of: 6}
+          - {lane: parallel, shard: 3, of: 6}
+          - {lane: parallel, shard: 4, of: 6}
+          - {lane: parallel, shard: 5, of: 6}
+          - {lane: parallel, shard: 6, of: 6}
+          - {lane: serial, shard: 1, of: 1}
+          - {lane: installer, shard: 1, of: 1}
     env:
       PYTHONPATH: skills
       LANE: ${{ matrix.lane }}
@@ -56,7 +65,9 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ needs.python.outputs.version }}
+      - name: The resolved interpreter is the one running
+        run: test "$(python -c 'import platform; print(platform.python_version())')" = "${{ needs.python.outputs.version }}"
       - name: Install zsh for shell and terminal tests
         if: matrix.lane != 'parallel'
         run: |
@@ -71,6 +82,7 @@ jobs:
 
   checks:
     name: checks
+    needs: python
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -79,7 +91,9 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ needs.python.outputs.version }}
+      - name: The resolved interpreter is the one running
+        run: test "$(python -c 'import platform; print(platform.python_version())')" = "${{ needs.python.outputs.version }}"
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -187,7 +201,7 @@ jobs:
 
   linux:
     name: linux
-    needs: [tests, checks]
+    needs: [python, tests, checks]
     # Always reports, so the required check is never a skipped one; it passes only when every
     # lane share and every check passed.
     if: always()

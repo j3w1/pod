@@ -9136,8 +9136,7 @@
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_pending_effect_target_is_a_claim_across_worktrees_and_an_unrelated_one_is_not",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_the_seventeenth_held_effect_is_held_like_the_first",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_long_held_target_is_compared_in_full_never_truncated",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_effects_past_the_bound_fail_closed_and_hold_the_whole_repository",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_the_same_target_name_in_another_repository_is_independent",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_repository_ref_is_independent_across_repositories_but_a_shared_target_is_not",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_live_process_settles_but_the_hold_remains",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_abandoned_attempt_without_observed_start_evidence_is_refused_and_ordinary_failure_binds",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_wrong_identity_or_another_attempts_result_is_refused",
@@ -9145,7 +9144,14 @@
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_repeated_recovery_is_idempotent_and_takes_no_extra_slot",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_independent_scope_is_usable_while_the_same_scope_stays_held",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_retained_reused_resource_is_not_treated_as_released",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_relevant_external_effect_still_blocks_after_the_agent_exits"
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_relevant_external_effect_still_blocks_after_the_agent_exits",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_setup_not_applicable_and_reused_terminal_are_not_pending_effects",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_an_unverifiable_process_is_unknown_execution_and_stays_held",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_a_live_worker_keeps_its_worktree_held_and_leaves_an_independent_one_usable",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_positive_exit_settles_releases_and_frees_the_repository",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_observed_start_is_distinguished_from_unknown_by_its_own_facts",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_with_an_unresolved_external_effect_stays_protected_after_exit",
+        "tests.test_abandoned_accounting.AbandonedRealRecordTests.test_real_record_repeated_recovery_never_duplicates_execution_and_a_later_live_read_holds_again"
       ],
       "status": "NOT_RUN"
     },
@@ -9194,7 +9200,11 @@
         "hosted_ci"
       ],
       "offline_test": [
-        "tests.test_suite_lanes.RefreshTests.test_a_two_interpreter_run_refreshes_from_the_primary_and_checks_both_environments",
+        "tests.test_suite_lanes.ManifestTests.test_the_hosted_workflow_resolves_one_stable_python_once_and_runs_every_job_on_it",
+        "tests.test_suite_lanes.ManifestTests.test_timing_evidence_records_the_interpreter_and_one_run_uses_one_interpreter",
+        "tests.test_suite_lanes.RefreshTests.test_a_refresh_run_must_have_one_interpreter_and_earlier_unnamed_logs_still_refresh",
+        "tests.test_installer.InstallerTests.test_preflight_refusals_half_pipe_and_no_profile_mutation",
+        "tests.test_bundle_install.CopiedBundleTests.test_prerelease_interpreter_fails_before_package_or_yaml_import",
         "tests.test_inventory.ExecutionSpecDocumentationTests.test_ci_validates_the_skill_and_publishes_nothing"
       ],
       "status": "NOT_RUN"
