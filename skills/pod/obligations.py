@@ -2022,8 +2022,6 @@ def validate_map_record(state: dict) -> None:
     if not isinstance(proposals, list):
         raise refuse("obligation_invalid", "malformed", "persisted proposals are a bounded list", record="persisted map")
     parsed = [_proposal(row) for row in proposals]
-    if sum(row["status"] == "open" and row["source"] != "reviewer_advisory" for row in parsed) > MAX_PROPOSALS:
-        raise refuse("obligation_invalid", "malformed", "current open proposals exceed the current-work bound", record="persisted map")
     if len({row["id"] for row in parsed}) != len(parsed):
         raise refuse("obligation_invalid", "malformed", "persisted proposal ids are unique", record="persisted map")
     if value["coordinator_slot"] is not None:

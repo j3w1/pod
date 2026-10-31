@@ -108,3 +108,25 @@ class RetainedFindingTests(unittest.TestCase):
         context["map_state"]["proposals"] = []
         reserve_capacity(assurance, context, seq=301)
         self.assertEqual(assurance, before)
+
+
+class ProposalHistoryTests(ProductionCase):
+    def test_out_of_scope_proposals_grow_without_adoption_and_keep_the_write_bound(self):
+        from pod.ledger import read
+        from tests.common import authority_files
+        self.intake()
+        def proposals(start, count):
+            return [{"id": f"P{n}", "source": "worker_report", "origin_ref": "synthetic-report",
+                     "summary": f"out-of-scope observation {n}", "status": "open"}
+                    for n in range(start, start + count)]
+        self.write(proposals=proposals(0, 64))
+        self.write(proposals=proposals(0, 128))
+        retained = read(self.project, "objective")["checkpoint"]["proposals"]
+        self.assertEqual(len(retained), 128)
+        self.assertTrue(all(row["status"] == "open" for row in retained))
+        root = objective_root(self.project, "objective")
+        before = authority_files(root)
+        with self.assertRaises(PodError) as caught:
+            self.write(proposals=proposals(0, 193))
+        self.assertIn("one write adds at most 64 proposals", str(caught.exception))
+        self.assertEqual(authority_files(root), before)

@@ -76,8 +76,8 @@ _GIT = {"type": "text", "form": "resolvable Git commit object id (40 or 64 lower
 _DIGEST = {"type": "text", "pattern": r"[0-9a-f]{64}\Z", "max_length": 64}
 _MAP_FIELDS = {
     "seq": {"type": "integer", "minimum": 1}, "obligations": {**items(512, record("obligation")), "max_live": 128, "bound_purpose": "request entries; stored history has no lifetime row ceiling"},
-    "proposals": {"type": "list", "items": record("proposal"), "max_new": 64, "max_open": 64,
-                  "bound_purpose": "new proposals per operation; current open work excludes reviewer advisories"}, "governance": record("governance"),
+    "proposals": {"type": "list", "items": record("proposal"), "max_new": 64,
+                  "bound_purpose": "new proposals per operation; out-of-scope proposal history has no lifetime quota"}, "governance": record("governance"),
     "governance_refresh": {"type": "boolean"}, "revision_authority": record("revision authority"),
     "reopen": {"type": "boolean"}, "close": {"type": "boolean"}, "rebind": {"type": "list"},
     "dispositions": items(16, record("disposition")), "delivery": {"type": "object"},

@@ -9398,7 +9398,8 @@
       "offline_test": [
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_verifying_review_advisories_cross_64_open_proposals_without_scope_adoption",
         "tests.test_assurance_capacity.AssuranceCapacityTests.test_unresolved_required_findings_still_reserve_the_next_report_in_full",
-        "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining"
+        "tests.test_assurance_capacity.AssuranceCapacityTests.test_report_33_refuses_even_with_32_history_slots_remaining",
+        "tests.test_storage_migration.ProposalHistoryTests.test_out_of_scope_proposals_grow_without_adoption_and_keep_the_write_bound"
       ],
       "status": "NOT_RUN"
     },
