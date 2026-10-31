@@ -13,9 +13,10 @@ from pod import config
 from pod.abandoned import attach_closure
 from pod.errors import PodError
 from pod.governance import _independent_governance, governance_observation
-from pod.ledger import read
+from pod.ledger import checkpoint, objective_root, read
 from pod.operations import _assignment_evidence
 from pod.worker_tabs import project
+from tests import test_delivery as delivery
 from tests.decision_policy_support import LOCAL, PERSON
 from tests.kernel_support import USER, KernelCase, git, governance_commit
 
@@ -153,6 +154,74 @@ class RebasedCandidateGovernanceTests(KernelCase):
             _independent_governance(self.project, observed, self.patch, {"worker": {"result": {"head": middle}}},
                                     established=established)
         self.assertEqual(caught.exception.detail["referent"]["reason"], "candidate_policy_target")
+
+
+class DeliveryBookkeepingRowTests(KernelCase):
+    """After a delivery already inside the bound base, other merges change governance (R202): bookkeeping may
+    change a remaining row's state, referent and evidence only."""
+
+    prepare_result = delivery.VerifiedDeliveryTests.prepare_result
+    move_target = delivery.VerifiedDeliveryTests.move_target
+    commit = governance_commit
+    external = {"party": "third_party", "need": "acceptance", "unblocks_when": "accepted"}
+
+    def intake(self, *rows, **fields):
+        return self.write([self.criterion(),
+                           self.sub("R", state="blocked_external", boundary={"paths": ["src"], "surfaces": []},
+                                    external=dict(self.external)),
+                           {"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+                            "check": "review src", "scope": {"paths": ["src"], "surfaces": []},
+                            "question": "is src correct?", "candidate": self.candidate, "existing_evidence": "unit",
+                            "insufficiency": "review needed", "state": "blocked_external",
+                            "external": dict(self.external)}], governance={"base_ref": "target"})
+
+    def setUp(self):
+        super().setUp()
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        self.prepare_result()
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        self.write(rows)
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        self.move_target()
+        self.write(self.stored())  # an unchanged-source checkpoint adopts a base holding the delivery
+        self.bound = read(self.project, "objective")["checkpoint"]["governance"]
+        self.target = self.move_target("AGENTS.md")
+
+    def record(self):
+        return (objective_root(self.project, "objective") / "context.json").read_bytes()
+
+    def update(self, changes):
+        seq = read(self.project, "objective")["checkpoint"]["seq"] + 1
+        return checkpoint(self.project, "objective", owner="owner", value=self.core(update=changes, seq=seq),
+                          native={"runtime": "runtime", "delegation": "available"})
+
+    def refused_both_ways(self, key, change):
+        before = self.record()
+        rows = self.stored()
+        row = next(item for item in rows if item["id"] == key)
+        row.update(change)
+        for name, call in (("full rows", lambda: self.write(rows)), ("update", lambda: self.update({key: change}))):
+            with self.subTest(name):
+                self.refused("governance_changed", "governance_changed", call)
+                self.assertEqual(self.record(), before)
+
+    def test_external_evidence_for_a_remaining_row_keeps_the_baseline(self):
+        rows = self.stored()
+        rows[1].pop("external")
+        rows[1].update(state="satisfied", evidence=[self.proof("R")])
+        kept = self.write(rows)
+        self.assertEqual(kept["checkpoint"]["governance"], self.bound)
+        self.assertFalse(kept["governance_adoption"]["adopted"])
+        self.assertEqual(kept["checkpoint"]["obligations"][1]["state"], "satisfied")
+
+    def test_row_level_reuse_is_not_bookkeeping(self):
+        self.refused_both_ways("R", {"state": "satisfied", "evidence": [self.proof("R")],
+                                     "reuse": {"from": self.candidate}})
+
+    def test_an_assurance_candidate_change_is_not_bookkeeping(self):
+        self.refused_both_ways("A", {"candidate": self.target})
 
 
 class ClosedWorkerTabTests(unittest.TestCase):

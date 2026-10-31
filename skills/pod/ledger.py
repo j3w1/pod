@@ -1539,6 +1539,9 @@ def _settled_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
 
 # R202: post-delivery bookkeeping records acceptance, external evidence, questions, next action or closure.
 _BOOKKEEPING_FIELDS = {"seq", "obligations", "update", "acceptances", "close", "governance", "revision_authority"}
+# The fields a remaining row may change as bookkeeping: its state, that state's referent and its evidence. Every
+# other field, including row-level reuse and an assurance's candidate, stays as recorded.
+_BOOKKEEPING_CHANGES = {"state", "executor", "wait", "external", "withdrawal", "evidence", "receipts"}
 
 
 def _delivery_bookkeeping(prior_map: dict, proposed: dict, core: dict, previous: dict, dispositions: list,
@@ -1577,19 +1580,31 @@ def _delivery_bookkeeping(prior_map: dict, proposed: dict, core: dict, previous:
             return False
     except (KeyError, TypeError, ValueError, PodError):
         return False
-    return all(row == prior[key] or row == restated[key] for key, row in named.items()
-               if prior[key]["state"] in TERMINAL)
+    for key, row in named.items():
+        if prior[key]["state"] in TERMINAL:
+            if row != prior[key] and row != restated[key]:
+                return False
+        elif any(row.get(field) != prior[key].get(field) and row.get(field) != restated[key].get(field)
+                 for field in set(row) - _BOOKKEEPING_CHANGES - {"id"}):
+            return False
+    return True
 
 
 def _bookkeeping_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
-    """R202 after the kernel: the same rows in order, settled rows byte-identical, live definitions unchanged."""
+    """R202 after the kernel: the same rows in order, settled rows byte-identical, and a remaining row changed
+    only in its state, state referent and evidence."""
     from .obligations import TERMINAL
     prior = {row["id"]: row for row in prior_map["obligations"]}
     if [row["id"] for row in map_state["obligations"]] != list(prior):
         return False
-    return all(row == prior[row["id"]] if prior[row["id"]]["state"] in TERMINAL
-               else row.get("definition") == prior[row["id"]].get("definition")
-               for row in map_state["obligations"])
+    for row in map_state["obligations"]:
+        old = prior[row["id"]]
+        if old["state"] in TERMINAL:
+            if row != old:
+                return False
+        elif any(row.get(key) != old.get(key) for key in set(row) | set(old) if key not in _BOOKKEEPING_CHANGES):
+            return False
+    return True
 
 
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,

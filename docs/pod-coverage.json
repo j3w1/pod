@@ -9841,7 +9841,8 @@
       "offline_test": [
         "tests.test_delivery.VerifiedDeliveryTests.test_bookkeeping_after_a_delivery_inside_the_base_keeps_it_and_new_work_names_the_refresh",
         "tests.test_delivery.VerifiedDeliveryTests.test_target_moved_after_verified_result_holds_future_work",
-        "tests.test_governance_adoption.DeliveredAdoptionTests.test_source_changing_exact_delivery_keeps_exemption_but_later_merge_refuses"
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_source_changing_exact_delivery_keeps_exemption_but_later_merge_refuses",
+        "tests.test_governance_reapproval.DeliveryBookkeepingRowTests.test_external_evidence_for_a_remaining_row_keeps_the_baseline"
       ],
       "status": "NOT_RUN"
     },
@@ -9855,7 +9856,10 @@
         "tests.test_delivery.VerifiedDeliveryTests.test_bookkeeping_after_a_delivery_inside_the_base_keeps_it_and_new_work_names_the_refresh",
         "tests.test_delivery.VerifiedDeliveryTests.test_mixed_delivery_and_work_update_still_requires_governance_currency",
         "tests.test_delivery.VerifiedDeliveryTests.test_a_later_snapshot_decision_ends_the_old_delivery_exception",
-        "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_record_and_replay_at_unchanged_later_target_pass"
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_record_and_replay_at_unchanged_later_target_pass",
+        "tests.test_governance_reapproval.DeliveryBookkeepingRowTests.test_row_level_reuse_is_not_bookkeeping",
+        "tests.test_governance_reapproval.DeliveryBookkeepingRowTests.test_an_assurance_candidate_change_is_not_bookkeeping",
+        "tests.test_evidence_closure.DeliveryClosesTests.test_the_closing_checkpoint_after_its_merge_needs_no_owner_decision"
       ],
       "status": "NOT_RUN"
     }

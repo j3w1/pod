@@ -402,9 +402,14 @@ class DeliveryClosesTests(unittest.TestCase):
         git(case.project, "add", "CLAUDE.md")
         git(case.project, "commit", "-qm", "later policy")
         git(case.project, "update-ref", "refs/remotes/origin/target", git(case.project, "rev-parse", "HEAD"))
-        # The exemption is narrow: an ordinary write still asks for the owner's snapshot decision.
+        # A bookkeeping-only write keeps the delivered baseline and adopts nothing (R202).
+        kept = case.op("checkpoint", value=case.core(obligations=case.stored()))
+        self.assertFalse(kept["governance_adoption"]["adopted"])
+        self.assertEqual(read(case.project, "objective")["checkpoint"]["governance"], bound)
+        # The exemption is narrow: new work (here a new candidate) is still refused without a write.
         before = (root / "context.json").read_bytes()
-        refused = case.refusal("checkpoint", value=case.core(obligations=case.stored()))
+        refused = case.refusal("checkpoint", value=case.core(obligations=case.stored(),
+                                                             candidate=git(case.project, "rev-parse", "HEAD")))
         self.assertEqual(refused.code, "governance_changed")
         self.assertEqual((root / "context.json").read_bytes(), before)
         closed = case.op("checkpoint", value=case.core(obligations=rows, close=True))
