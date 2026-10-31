@@ -253,8 +253,21 @@ class WakeStatusTests(KernelCase):
     """The production status path: wake ownership follows the existing question, settlement and finalization facts."""
 
     def wake(self, **options):
-        with patch("pod.orca.terminal_activity", return_value=600_000):
+        with patch("pod.cli.terminal_activity", return_value=600_000):
             return selection.StatusSelectionTests.status(self, "--objective", "objective", **options)["wake"]
+
+    def test_status_makes_no_terminal_read_unless_the_caller_supplies_one(self):
+        from pod.status import status
+        self.intake(questions=[question()])
+        with patch("pod.orca.terminal_activity", side_effect=AssertionError("native read")), \
+             patch("pod.cli.worker_rows", return_value={"runtime": "runtime", "scope": {"source": "flag", "run": "run"},
+                                                        "workers": [], "complete": True}):
+            observed = status(self.project, "run", objective="objective",
+                              current_run_fn=lambda: {"run": {"id": "run"}, "runtime": "runtime"},
+                              worker_rows_fn=lambda _: {"runtime": "runtime", "scope": {"source": "flag", "run": "run"},
+                                                        "workers": [], "complete": True})
+        self.assertEqual((observed["wake"]["state"], observed["wake"]["coordinator_quiet_seconds"]),
+                         ("owned_work", None))
 
     def test_a_pending_question_is_an_awaited_reply_for_a_quiet_coordinator(self):
         self.intake(questions=[question()])

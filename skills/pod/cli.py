@@ -17,7 +17,7 @@ from .catalog import SCHEMA as CATALOG_SCHEMA, format_latency, format_usd, load 
 from .config import load as load_config, personal_path, read_yaml, write_defaults
 from .errors import PodError
 from .ledger import context_root_for_run, state_inventory
-from .orca import contract, current_run, message_route, worker_rows
+from .orca import contract, current_run, message_route, terminal_activity, worker_rows
 from .placement import inspect as inspect_placements, skills_cli_entry
 from .selection import active_constraints
 from .term import clean
@@ -391,7 +391,8 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
         return continue_command(project, args.objective)
     if args.command == "status":
         return _status(project, args.run, objective=args.objective,
-                       current_run_fn=current_run, worker_rows_fn=worker_rows)
+                       current_run_fn=current_run, worker_rows_fn=worker_rows,
+                       terminal_activity_fn=terminal_activity)
     if args.command == "update":
         raise PodError("update_route", "Update must run through the installer entrypoint")
     raise PodError("unknown_command", "Unsupported public command")

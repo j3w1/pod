@@ -223,7 +223,7 @@ def status_block(run: str | None, owner: str | None, *, assignments: int, awaite
              "unconsumed_reports": unconsumed_reports, "unknown_replies": unknown}
     if not assignments and not awaited_replies:
         return {"state": "not_needed", "owned": owned, "wait": "not_needed", "next_action": None}
-    quiet = (activity_fn or orca.terminal_activity)(owner) if owner else None
+    quiet = activity_fn(owner) if activity_fn is not None and owner else None
     seconds = None if quiet is None else quiet // 1000
     parked = seconds is not None and seconds >= IDLE_SECONDS
     block = {"state": "quiet_with_owned_work" if parked else "owned_work", "owned": owned, "wait": "unknown",

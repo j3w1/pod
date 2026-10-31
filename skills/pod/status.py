@@ -283,7 +283,7 @@ def _objective_details(state: dict, view: dict | None, workers: dict, failure: d
 
 
 def status(project: Path, run: str | None, *, objective: str | None = None, current_run_fn=current_run,
-           worker_rows_fn=worker_rows) -> dict:
+           worker_rows_fn=worker_rows, terminal_activity_fn=None) -> dict:
     preferences = load_config(project)
     running = running_identity()
     result = {"schema": "pod-cli/v5", "status": "selection_required", "run": run,
@@ -542,7 +542,8 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
             [row for row in (result.get("waiting_decisions") or {}).get("items") or []
              if row.get("source") == "objective"],
             closed=bool(checkpoint.get("closure")))
-        result["wake"] = wake_block(run, state.get("owner"), **owned)
+        # The coordinator terminal's output age is one extra native read, taken only when the caller supplies it.
+        result["wake"] = wake_block(run, state.get("owner"), activity_fn=terminal_activity_fn, **owned)
         from .worker_tabs import rows as tab_rows
         result["worker_tabs"] = ((view or {}).get("worker_tabs") if view is not None else None)
         if result["worker_tabs"] is None:
