@@ -220,6 +220,15 @@ class IsolateTests(unittest.TestCase):
             for path in (checkout, gitdir.resolve(), common.resolve(), extra):
                 self.assertTrue(self.bound(argv, path), path)
 
+    def test_bubblewrap_itself_starts_with_the_allowlisted_environment(self):
+        caller = {"PATH": "/usr/bin", "GH_TOKEN": "t", "ORCA_HOOK": "h", "POD_CANARY_TOKEN": "c", "LC_ALL": "C"}
+        with patch.object(isolate.shutil, "which", return_value="/usr/bin/bwrap"), \
+                patch.object(isolate.subprocess, "run") as started:
+            isolate.launch(["true"], env=caller)
+        argv, options = started.call_args.args[0], started.call_args.kwargs
+        self.assertEqual(argv[0], "/usr/bin/bwrap")
+        self.assertEqual(set(options["env"]), {"PATH", "LC_ALL", "HOME", "TMPDIR"})
+
 
 if __name__ == "__main__":
     unittest.main()
