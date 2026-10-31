@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import shutil
 
 from pod import config
 from pod.errors import PodError
@@ -151,6 +152,47 @@ class WithdrawalOnlyBoundaryTests(SupersededClosureCase):
         error = self.refused_unchanged(rows, close=True, revision_authority=LOCAL)
         self.assertEqual(error.code, "governance_changed")
 
+    def test_a_rewritten_satisfied_criterion_check_keeps_ordinary_checks(self):
+        # Review F1: old proof cannot carry a changed definition through the exemption.
+        self.rewritten((("P1", {"check": "A new outcome the recorded evidence never checked"}),))
+
+    def test_a_rewritten_satisfied_assurance_question_or_scope_keeps_ordinary_checks(self):
+        self.rewritten((("A", {"question": "A new review question never put to the reviewer"}),
+                        ("A", {"scope": {"paths": ["src", "docs"]}})))
+
+    def rewritten(self, changes):
+        root = objective_root(self.project, "objective")
+        saved = self.root / "saved-record"
+        shutil.copytree(root, saved)
+
+        def restore():
+            # Each case starts from the same record, even if an earlier case was wrongly accepted.
+            shutil.rmtree(root); shutil.copytree(saved, root)
+        for key, change in changes:
+            with self.subTest(form="full", row=key, field=list(change)):
+                rows = self.withdrawn("P3")
+                next(row for row in rows if row["id"] == key).update(change)
+                try:
+                    error = self.refused_unchanged(rows, close=True, revision_authority=LOCAL)
+                    self.assertEqual(error.code, "governance_changed")
+                finally:
+                    restore()
+            with self.subTest(form="update", row=key, field=list(change)):
+                seq = read(self.project, "objective")["checkpoint"]["seq"] + 1
+                update = {"P3": {"state": "withdrawn", "withdrawal": {"by": "agent_decision", "reason": "superseded"}},
+                          key: dict(change)}
+                before = self.record()
+                try:
+                    with self.assertRaises(PodError) as caught:
+                        checkpoint(self.project, "objective", owner="owner",
+                                   value=self.core(seq=seq, update=update, close=True, revision_authority=LOCAL),
+                                   native={"runtime": "runtime", "delegation": "available"})
+                    after = self.record()
+                finally:
+                    restore()
+                self.assertEqual(caught.exception.code, "governance_changed")
+                self.assertEqual(after, before)
+
     def test_withdrawal_closure_still_needs_valid_withdrawal_authority(self):
         error = self.refused_unchanged(self.withdrawn("P3"), close=True)
         self.assertEqual((error.code, error.detail["detail"]), ("obligation_invalid", "withdrawal_unauthorized"))
@@ -208,3 +250,14 @@ class WithdrawalAuthorityRefusalTests(KernelCase):
                 self.send({"update": {"P1": {"state": "withdrawn", "withdrawal": {"by": by, "reason": "superseded"}}}})
             self.assertIn("does not apply to P1, a criterion with provenance objective", str(caught.exception))
             self.assertIn("revision_authority", caught.exception.detail["next_action"])
+
+    def test_an_unsupported_withdrawal_kind_is_named_without_its_value(self):
+        # Review F2 / R99: a refused caller value is never echoed.
+        sentinel = "FIELD-VALUE-IS-PRIVATE"
+        with self.assertRaises(PodError) as caught:
+            self.send({"update": {"P1": {"state": "withdrawn", "withdrawal": {"by": sentinel, "reason": "superseded"}}}})
+        self.assertEqual(caught.exception.detail["detail"], "withdrawal_unauthorized")
+        self.assertNotIn(sentinel, str(caught.exception))
+        self.assertNotIn(sentinel, json.dumps(caught.exception.detail))
+        self.assertIn("withdrawal.by", str(caught.exception))
+        self.assertIn("revision_authority", caught.exception.detail["next_action"])

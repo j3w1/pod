@@ -1537,6 +1537,10 @@ def _withdrawal_refusal(ob: dict, by: Any, user: bool, actor_kind: str) -> PodEr
         problem = (f"withdrawal by {by} does not match this write's revision_authority, which is "
                    + ("an agent's decision" if actor_kind == "agent" else "a person's decision"))
         action = f'withdraw with {{"by": "{expected}", "reason": "<why>"}} under the same revision_authority'
+    elif by not in ("project_policy", "coordinator"):
+        # R99: an unsupported value is named by its field, never echoed.
+        problem = "withdrawal.by is not an allowed value"
+        action = authority_shape
     else:
         problem = (f"withdrawal by {by} does not apply to {ob['id']}, a {ob['kind']} with provenance {ob['provenance']}"
                    + (" whose cited text is still present" if ob["provenance"] == "project_policy" and not gone else ""))
@@ -1565,7 +1569,7 @@ def _external_text(ob: dict, field: str) -> None:
 
 def settled_proof(ob: dict) -> dict:
     """The recorded proof of a settled row, compared exactly by R201's withdrawal-only closure."""
-    return deepcopy({key: ob.get(key) for key in ("state", "evidence", "receipts", "acceptances", "reuse")})
+    return deepcopy({key: ob.get(key) for key in ("state", "definition", "evidence", "receipts", "acceptances", "reuse")})
 
 
 def retained_history_row(ob: dict, ctx: dict) -> bool:

@@ -1473,6 +1473,7 @@ def _closure_preservation(project: Path, objective: str, state: dict, ctx: dict)
 
 _WITHDRAWAL_ONLY_FIELDS = {"seq", "obligations", "update", "close", "revision_authority"}
 _SETTLED_PROOF = ("state", "evidence", "receipts", "acceptances", "reuse", "withdrawal", "renewal")
+_WITHDRAWAL_CHANGES = {"state", "executor", "wait", "external", "withdrawal", "renewal", "evidence", "reuse"}
 
 
 def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict, dispositions: list,
@@ -1480,7 +1481,8 @@ def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict
     """R201: the closing write's only change withdraws every remaining live obligation.
 
     It records no delivery, disposition, acceptance, reuse, rebind, renewal, proposal or governance change, keeps
-    the candidate and criteria, adds no row and leaves every satisfied, withdrawn or renewed row in its state. The
+    the candidate, criteria and every row definition, adds no row and leaves every satisfied, withdrawn or renewed
+    row in its state. The
     kernel still validates each withdrawal's authority, and the write is checked again after it."""
     from .obligations import TERMINAL, expand_update
     if (verified_delivery is not None or prior_map.get("delivery") is not None or dispositions
@@ -1498,6 +1500,12 @@ def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict
     prior = {row["id"]: row for row in prior_map["obligations"]}
     if len(named) != len(rows) or set(named) - set(prior):
         return False
+    from .obligations import definition_id
+    try:
+        if any(definition_id(row) != prior[key]["definition"] for key, row in named.items()):
+            return False
+    except (KeyError, TypeError, ValueError, PodError):
+        return False
     live = [key for key, row in prior.items() if row["state"] not in TERMINAL]
     return bool(live) and all(
         named.get(key, row).get("state") == (row["state"] if row["state"] in TERMINAL else "withdrawn")
@@ -1505,12 +1513,21 @@ def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict
 
 
 def _settled_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
-    """R201 after the kernel: no row was added and every settled row keeps its recorded proof."""
+    """R201 after the kernel: no row was added, no definition changed, every settled row keeps its recorded
+    proof, and every live row changed only by becoming withdrawn."""
     from .obligations import TERMINAL
     prior = {row["id"]: row for row in prior_map["obligations"]}
-    return all(row["id"] in prior and (prior[row["id"]]["state"] not in TERMINAL
-                                       or all(row.get(key) == prior[row["id"]].get(key) for key in _SETTLED_PROOF))
-               for row in map_state["obligations"])
+    for row in map_state["obligations"]:
+        old = prior.get(row["id"])
+        if old is None or row.get("definition") != old.get("definition"):
+            return False
+        if old["state"] in TERMINAL:
+            if any(row.get(key) != old.get(key) for key in _SETTLED_PROOF):
+                return False
+        elif row["state"] != "withdrawn" or any(row.get(key) != old.get(key) for key in set(row) | set(old)
+                                                  if key not in _WITHDRAWAL_CHANGES):
+            return False
+    return True
 
 
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
