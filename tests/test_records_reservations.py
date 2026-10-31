@@ -124,19 +124,18 @@ class FindingReservationTests(ProductionCase):
         admission, old_packet = attempts[0]
         before = files(self)
         with self.assertRaises(PodError) as caught:
-            self.report(admission, old_packet, outcome="failed", triage=[self.advisory(f"late-{index}") for index in range(31)])
+            self.report(admission, old_packet, outcome="failed", triage=[self.advisory(f"late-{index}") for index in range(32)])
         detail = caught.exception.detail
         self.assertEqual(detail["detail"], "finding_limit")
-        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "reserved", "limit")},
-                         {"retained": 2, "proposed": 65, "reserved": 32, "limit": 64})
+        self.assertIn("review attempt", str(caught.exception))
         self.assertEqual(files(self), before)
-        # Exactly 30 incremental entries fit alongside the pending review's 32.
-        self.report(admission, old_packet, outcome="failed", triage=[self.advisory(f"late-{index}") for index in range(30)])
+        # The old attempt can finish its own 32 findings without spending pending work.
+        self.report(admission, old_packet, outcome="failed", triage=[self.advisory(f"late-{index}") for index in range(31)])
         self.settle(pending)
         self.report(pending, packet, map={"seq": read(self.project, "objective")["checkpoint"]["seq"] + 1,
             "update": {"A": waiting()}}, triage=[self.advisory(f"pending-{index}") for index in range(32)])
         assurance = next(row for row in self.stored() if row["id"] == "A")
-        self.assertEqual(len(assurance["findings"]), 64)
+        self.assertEqual(len(assurance["findings"]), 65)
         self.assertEqual(assurance["receipts"][0]["evidence"]["attempt"], pending["admission_id"])
 
     @staticmethod

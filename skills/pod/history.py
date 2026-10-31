@@ -904,7 +904,7 @@ def load_admission_facts(path, *, include_admissions=True):
                 _fail("history_invalid", "Current abandonment marker is malformed")
             rows[key]["abandoned_accounting"] = {field: plain(accounting[field])
                 for field in ("classification", "execution") if field in accounting}
-    result.update(admissions=rows, complete=True)
+    result.update(admissions=rows, complete=location is not None)
     if location is None:
         result["errors"] = [{"code": "objective_placement_unknown"}]
     return result

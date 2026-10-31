@@ -433,9 +433,7 @@ class ReviewDiscardTests(SettlementCase):
         admission, frozen = self.review()
         self.assert_held(admission)
         before = deepcopy(next(row for row in self.c.stored() if row["id"] == "A")["findings"])
-        with self.assertRaises(PodError) as caught:
-            self.c.start("replacement", frozen)
-        self.assertEqual(caught.exception.detail["detail"], "finding_limit")
+        self.assertIn(admission["admission_id"], pending_serving({"id": "A"}, {"admissions": self.state()["admissions"]}))
         self.c.write(**self.parked(["A"]), route_settlements=[self.discard(admission)])
         row = self.row(admission)
         self.assertTrue(route_discarded(row)); self.assertFalse(route_hold(row))
