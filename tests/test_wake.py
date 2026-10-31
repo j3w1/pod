@@ -1,8 +1,6 @@
 import json
-import os
 from pathlib import Path
 import subprocess
-import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -67,11 +65,6 @@ def bound(run=RUN):
 
 class WakeTests(unittest.TestCase):
     def setUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        env = patch.dict(os.environ, {"POD_STATE_HOME": str(Path(directory.name) / "state")})
-        env.start()
-        self.addCleanup(env.stop)
         self.mail = FakeMailbox()
 
     def arm(self, **options):
@@ -84,7 +77,7 @@ class WakeTests(unittest.TestCase):
         self.mail.before_wait = lambda: self.mail.send()
         result = self.arm()
         self.assertEqual(result["status"], "events")
-        self.assertTrue(result["armed"])
+        self.assertTrue(result["waited"])
         self.assertEqual([event["kind"] for event in result["events"]], ["completion"])
         self.assertEqual(len(self.waits()), 1)
         self.assertEqual(self.mail.calls[0]["wait_ms"], None)
@@ -92,9 +85,8 @@ class WakeTests(unittest.TestCase):
     def test_mail_pending_before_the_wait_is_returned_without_arming_one(self):
         self.mail.send()
         result = self.arm()
-        self.assertEqual((result["status"], result["armed"]), ("events", False))
+        self.assertEqual((result["status"], result["waited"]), ("events", False))
         self.assertEqual(self.waits(), [])
-        self.assertIsNone(wake.armed_lease(RUN))
 
     def test_a_duplicate_is_delivered_once(self):
         self.mail.send(id_="msg_a")
@@ -123,7 +115,7 @@ class WakeTests(unittest.TestCase):
         self.assertEqual((again["delivery"], again["events"]), (first["delivery"], first["events"]))
         self.assertEqual(self.waits(), [])
         resumed = self.arm(ack=again["delivery"], timeout_ms=5)
-        self.assertEqual((resumed["status"], resumed["armed"]), ("timeout", True))
+        self.assertEqual((resumed["status"], resumed["waited"]), ("timeout", True))
         self.assertEqual(resumed["ack"]["status"], "applied")
         self.assertEqual(self.mail.pending, [])
         self.assertEqual(self.mail.calls[-2]["ack"], first["delivery"])
@@ -140,12 +132,11 @@ class WakeTests(unittest.TestCase):
         result = self.arm()
         self.assertEqual(result["status"], "disconnected")
         self.assertEqual(result["events"], [])
-        self.assertIsNone(wake.armed_lease(RUN))
 
     def test_a_fenced_coordinator_stops_before_waiting(self):
         self.mail.refuse["check"] = "consumer_fenced"
         result = self.arm()
-        self.assertEqual((result["status"], result["armed"]), ("fenced", False))
+        self.assertEqual((result["status"], result["waited"]), ("fenced", False))
         self.assertEqual(self.waits(), [])
 
     def test_a_repeated_acknowledgement_reads_what_is_pending_now(self):
@@ -171,11 +162,11 @@ class WakeTests(unittest.TestCase):
 
     def test_every_message_type_wakes_and_each_is_classified(self):
         for type_, outcome in (("worker_done", "succeeded"), ("worker_done", "failed"), ("worker_done", None),
-                               ("decision", None), ("escalation", None), ("heartbeat", None), ("custom", None)):
+                               ("decision", None), ("escalation", None), ("heartbeat", None), ("status", None), ("custom", None)):
             self.mail.send(type_=type_, dispatch=f"d_{len(self.mail.pending)}", outcome=outcome)
         kinds = [event["kind"] for event in self.arm()["events"]]
         self.assertEqual(kinds, ["completion", "failure", "completion_unproven", "decision", "question",
-                                 "informational", "other"])
+                                 "informational", "message", "message"])
 
     def test_a_rejected_settlement_is_not_a_completion(self):
         self.mail.pending.append({"id": "msg_r", "type": "worker_done", "subject": "Rejected worker_done: x",
@@ -187,37 +178,18 @@ class WakeTests(unittest.TestCase):
                          [("msg_r", "lifecycle_rejected"), ("msg_ok", "completion")])
         self.assertEqual(result["duplicates"], [])
 
-    def test_the_armed_wait_is_visible_only_while_waiting(self):
-        seen = []
-        self.mail.before_wait = lambda: seen.append(wake.armed_lease(RUN))
-        self.mail.wait_result = {"timed_out": True}
-        self.arm()
-        self.assertEqual(len(seen), 1)
-        self.assertEqual(seen[0]["pid"], os.getpid())
-        self.assertIsNone(wake.armed_lease(RUN))
-
-    def test_a_lease_of_a_dead_or_recycled_process_does_not_count(self):
-        path = wake._write_lease(RUN, 2 ** 50)
-        self.assertIsNotNone(wake.armed_lease(RUN))
-        record = json.loads(path.read_text())
-        path.write_text(json.dumps({**record, "start": "0"}))
-        self.assertIsNone(wake.armed_lease(RUN))
-        path.write_text(json.dumps({**record, "deadline_ms": 1}))
-        self.assertIsNone(wake.armed_lease(RUN))
-
-    def test_status_flags_an_idle_coordinator_that_owns_work_without_an_armed_wait(self):
-        no_lease = lambda run: None
-        block = lambda **owned: wake.status_block(RUN, "term_c", lease_fn=no_lease, **owned)
+    def test_status_reports_a_quiet_coordinator_that_owns_work_and_never_invents_an_armed_flag(self):
+        block = lambda **owned: wake.status_block(RUN, "term_c", **owned)
         self.assertEqual(block(assignments=0, awaited_replies=0, activity_fn=lambda h: 10 ** 9)["state"], "not_needed")
         for owned in ({"assignments": 1, "awaited_replies": 0}, {"assignments": 0, "awaited_replies": 1}):
-            idle = block(**owned, activity_fn=lambda h: 300_000)
-            self.assertEqual((idle["state"], idle["coordinator_quiet_seconds"]), ("idle_unarmed", 300))
-            self.assertIn("pod wake --run " + RUN, idle["next_action"])
-            self.assertEqual(block(**owned, activity_fn=lambda h: 5_000)["state"], "unarmed")
-            self.assertEqual(block(**owned, activity_fn=lambda h: None)["state"], "unarmed")
-        armed = wake.status_block(RUN, "term_c", assignments=1, awaited_replies=0, lease_fn=lambda run: {"pid": 1},
-                                  activity_fn=lambda h: 10 ** 9)
-        self.assertEqual((armed["state"], armed["armed"]), ("armed", True))
+            quiet = block(**owned, activity_fn=lambda h: 300_000)
+            self.assertEqual((quiet["state"], quiet["coordinator_quiet_seconds"], quiet["wait"]),
+                             ("quiet_with_owned_work", 300, "unknown"))
+            self.assertIn("pod wake --run " + RUN, quiet["next_action"])
+            for activity in (5_000, None):
+                active = block(**owned, activity_fn=lambda h, a=activity: a)
+                self.assertEqual((active["state"], active["wait"], active["next_action"]), ("owned_work", "unknown", None))
+        self.assertNotIn("armed", json.dumps(block(assignments=1, awaited_replies=0, activity_fn=lambda h: 1)))
 
 
 class MailboxCheckTests(unittest.TestCase):

@@ -9103,9 +9103,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_wake.WakeTests.test_status_flags_an_idle_coordinator_that_owns_work_without_an_armed_wait",
-        "tests.test_wake.WakeTests.test_the_armed_wait_is_visible_only_while_waiting",
-        "tests.test_wake.WakeTests.test_a_lease_of_a_dead_or_recycled_process_does_not_count"
+        "tests.test_wake.WakeTests.test_status_reports_a_quiet_coordinator_that_owns_work_and_never_invents_an_armed_flag"
       ],
       "status": "NOT_RUN"
     },
