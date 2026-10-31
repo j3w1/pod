@@ -44,6 +44,13 @@ else:
     test.assertEqual(before, {item: item.read_bytes() for item in path.parent.rglob("*") if item.is_file()})
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class VerifiedReaderTests(MachineCase, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -82,6 +89,7 @@ else:
                 self.assertEqual(earlier[name], current[name])
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class VerifiedContainerReaderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

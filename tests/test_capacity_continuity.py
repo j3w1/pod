@@ -20,16 +20,65 @@ from tests.issue41_support import ProductionCase
 
 
 class HealthyCapacityTests(unittest.TestCase):
-    def setUp(self):
+    def build_fixture(self):
         self.case = ProductionCase()
         self.case.setUp()
         self.addCleanup(self.case.doCleanups)
-        self.case.intake()
+        self.case.intake(self.case.sub("ARCHIVED"))
+        # Ten genuinely consumed/dispositioned synthetic implementation results
+        # become old-candidate history after a normal candidate move. Per-row
+        # references have enough overhead for a bulk successor to provide real
+        # relief; irreducible live padding alone must never make a successor.
+        for index in range(10):
+            frozen = self.case.packet(["ARCHIVED"])
+            admission = self.case.start(f"settled-history-{index}", frozen)["admission"]
+            self.case.settle(admission)
+            self.case.report(admission, frozen, map={"seq": read(self.case.project, "objective")["checkpoint"]["seq"] + 1,
+                "update": {"ARCHIVED": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}}})
+            self.case.write(dispositions=[{"admission": admission["admission_id"],
+                "discarded": True, "reason": "synthetic settled result retained"}])
+        self.case.move()
+        self.case.write(seq=read(self.case.project, "objective")["checkpoint"]["seq"] + 1, update={"ARCHIVED": {"state": "withdrawn", "withdrawal": {"by": "coordinator", "reason": "synthetic history setup complete"}}})
         self.case.write(remaining_gates=["synthetic current required gate " + "x" * 6000])
         self.project = self.case.project
         self.path = direct_root(self.project, "objective") / "context.json"
         self.before = _read(self.path)
+        self.initial_starts = len(self.case.port.starts)
         self.limits = Limits(context_bytes=self.path.stat().st_size * 8 // 7)
+
+    @classmethod
+    def setUpClass(cls):
+        # Build native-fixture history once, outside each fast test's timing.
+        cls.prepared = cls()
+        cls.prepared.build_fixture()
+        cls.addClassCleanup(cls.prepared.doCleanups)
+        sample = cls.prepared
+        cls.saved_files = {path.relative_to(sample.path.parent.parent): path.read_bytes()
+                           for path in sample.path.parent.parent.rglob("*") if path.is_file()}
+        cls.saved_port = deepcopy(sample.case.port.__dict__)
+        cls.saved_current = deepcopy(sample.case.current)
+        cls.saved_remote = deepcopy(sample.case.remote.__dict__)
+        cls.saved_candidate = sample.case.candidate
+
+    def setUp(self):
+        import shutil
+        sample = self.prepared
+        self.case, self.project, self.path = sample.case, sample.project, sample.path
+        self.before, self.limits = deepcopy(sample.before), sample.limits
+        self.initial_starts = sample.initial_starts
+        root = self.path.parent.parent
+        shutil.rmtree(root)
+        for relative, data in self.saved_files.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.case.port.__dict__.clear()
+        self.case.port.__dict__.update(deepcopy(self.saved_port))
+        self.case.current.clear()
+        self.case.current.update(deepcopy(self.saved_current))
+        self.case.remote.__dict__.clear()
+        self.case.remote.__dict__.update(deepcopy(self.saved_remote))
+        self.case.candidate = self.saved_candidate
 
     def continue_once(self):
         with using_limits(self.limits):
@@ -49,7 +98,7 @@ class HealthyCapacityTests(unittest.TestCase):
         self.assertFalse(parent["checkpoint"].get("closure"))
         self.assertEqual(verify(self.project, successor, child), "objective")
         self.assertEqual(self.case.current, {"id": "run", "coordinator_handle": "owner", "consumer_generation": 1})
-        self.assertEqual(self.case.port.starts, [])
+        self.assertEqual(len(self.case.port.starts), self.initial_starts)
 
     def test_explicit_descendant_runs_normal_checkpoint_with_original_logical_root(self):
         successor = self.continue_once()
@@ -77,7 +126,7 @@ class HealthyCapacityTests(unittest.TestCase):
         result = resume(self.project, "objective", "owner")
         self.assertEqual(result["successor"], successor)
         self.assertEqual(set(self.path.parent.parent.iterdir()), directories)
-        self.assertEqual(self.case.port.starts, [])
+        self.assertEqual(len(self.case.port.starts), self.initial_starts)
 
     def test_wrong_owner_or_native_generation_holds_before_any_reservation(self):
         for wrong_owner in (True, False):
@@ -131,18 +180,43 @@ class HealthyCapacityTests(unittest.TestCase):
         self.assertEqual(held["code"], "capacity_no_material_relief")
         self.assertNotIn(CONTINUED, read(self.project, successor))
 
+    def test_material_writes_at_irreducible_pressure_do_not_cascade(self):
+        case = ProductionCase()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.intake()
+        case.write(remaining_gates=["synthetic irreducible live dependency " + "x" * 6000])
+        path = direct_root(case.project, "objective") / "context.json"
+        limits = Limits(context_bytes=path.stat().st_size * 8 // 7)
+        directories = set(path.parent.parent.iterdir())
+        with using_limits(limits):
+            for number in range(3):
+                result = case.write(next_safe_action=f"material source continuation {number}",
+                                    remaining_gates=["synthetic irreducible live dependency " + "x" * 6000])
+                self.assertEqual(result["capacity_continuity"]["status"], "held")
+                self.assertEqual(result["capacity_continuity"]["code"], "capacity_no_material_relief")
+                state = read(case.project, "objective")
+                self.assertNotIn(PENDING, state)
+                self.assertNotIn(CONTINUED, state)
+                self.assertEqual(set(path.parent.parent.iterdir()), directories)
+
     def test_preflight_capacity_failure_does_not_publish_a_reservation(self):
-        with using_limits(Limits(context_bytes=self.path.stat().st_size)), self.assertRaises(PodError) as caught:
-            maybe(self.project, "objective", "owner")
-        self.assertEqual(caught.exception.code, "record_too_large")
-        self.assertEqual(read(self.project, "objective"), self.before)
+        from pod.util import encoded
+        # Only irreducible protected live data, no settled references to group.
+        state = deepcopy(self.before)
+        state["admissions"] = {}
+        self.path.write_bytes(encoded(state, compact=True))
+        with using_limits(Limits(context_bytes=self.path.stat().st_size)):
+            held = maybe(self.project, "objective", "owner")
+        self.assertEqual(held["code"], "capacity_no_material_relief")
+        self.assertEqual(read(self.project, "objective"), state)
 
     def test_pending_native_identity_is_not_translated_into_a_new_goal(self):
         with patch("pod.capacity._native_guard", side_effect=PodError("capacity_native_pending", "synthetic unknown start")):
             with using_limits(self.limits), self.assertRaises(PodError):
                 maybe(self.project, "objective", "owner")
         self.assertNotIn(PENDING, read(self.project, "objective"))
-        self.assertEqual(self.case.port.starts, [])
+        self.assertEqual(len(self.case.port.starts), self.initial_starts)
 
     def test_original_admission_and_packet_report_consume_through_verified_descendant(self):
         frozen = self.case.packet(["O1"])
@@ -168,7 +242,7 @@ class HealthyCapacityTests(unittest.TestCase):
         self.assertEqual(actual["objective"], "objective")
         self.assertEqual(actual["native_binding"], admission["native_binding"])
         self.assertEqual(actual["report"]["outcome"], "succeeded")
-        self.assertEqual(len(self.case.port.starts), 1)
+        self.assertEqual(len(self.case.port.starts), self.initial_starts + 1)
 
     def test_missing_predecessor_is_not_an_adoption_or_ownership_grant(self):
         successor = self.continue_once()
@@ -320,7 +394,7 @@ class HealthyCapacityTests(unittest.TestCase):
         completed = [item for item in outcomes if item.get("status") == "continued"]
         self.assertEqual(len(completed), 1)
         self.assertEqual(read(self.project, "objective")[CONTINUED]["successor"], completed[0]["successor"])
-        self.assertEqual(self.case.port.starts, [])
+        self.assertEqual(len(self.case.port.starts), self.initial_starts)
 
     def test_pending_governor_effect_and_counters_are_preserved_without_submission(self):
         from pod.governor import _read_journal

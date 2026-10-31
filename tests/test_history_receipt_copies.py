@@ -46,6 +46,13 @@ def satisfied_rows(state):
     return state
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class ReceiptCopyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -152,6 +159,7 @@ def copies(physical):
             for index, receipt in enumerate(row.get("receipts", [])) if is_reference(receipt)}
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class LiveShapeTests(unittest.TestCase):
     """The incident's shape through production entries: corrections satisfied with REUSE whose receipts
     copy their proof, near the limit in the preceding mechanism's shape, then a pending report."""
@@ -231,7 +239,9 @@ class LiveShapeTests(unittest.TestCase):
                 row.update(state="satisfied", evidence=[case.proof("O1")])
         case.write(rows)
         case.write(case.stored(), close=True)
-        cls.closed_inline = json.loads(path.read_bytes())
+        from tests.history_support import inline_settled_work
+        cls.closed_inline = inline_settled_work(json.loads(path.read_bytes()), _read(path))
+        atomic_json(path, cls.closed_inline, limit=CONTEXT_LIMIT, compact=True)
 
         def facts():
             from pod.ledger import _validate_context, closed_snapshot_context, map_of
@@ -293,12 +303,13 @@ class LiveShapeTests(unittest.TestCase):
         self.assertEqual(self.compacted["proposed_bytes"], len(encoded(self.closed_compacted, compact=True)))
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class LaterWriteTests(unittest.TestCase):
     """After the copies move, later writes hydrate them: restatement, REUSE, renewal and leaving satisfied."""
 
     @classmethod
     def setUpClass(cls):
-        from pod.history import COMPACT_AT
+        from pod.history import compact_at
         from pod.ledger import _read, _write, objective_root, read
         from tests.issue41_support import ProductionCase
         from tests import test_records_boundaries as renewal
@@ -339,7 +350,7 @@ class LaterWriteTests(unittest.TestCase):
         case.write(None, seq=seq() + 1, update={"A": {"state": "satisfied", "evidence": [{"attempt": cls.review}]}})
         # Pad above the unchanged trigger so every later write compacts; well below the limit.
         state = _read(path)
-        state["source_rejections"] = {"synthetic-padding": "x" * COMPACT_AT}
+        state["source_rejections"] = {"synthetic-padding": "x" * compact_at()}
         _write(path, state)
         cls.moved = snapshot()
         case.write(case.stored())

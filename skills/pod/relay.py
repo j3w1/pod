@@ -897,6 +897,8 @@ def stamp_decision(value: dict) -> None:
 
 def publish_decision(path: Path, proposed: dict, publish) -> None:
     """The publication callback executes while config authority is still locked."""
+    from .limits import require_current
+    require_current()  # Refuse stale limits before consuming a decision receipt.
     capability = current_decision()
     if capability is None:
         publish()

@@ -946,8 +946,8 @@ recorded coordinator's terminal for writes; any nonempty reader id for show), `a
 A write returns `standing_authorization` (the projection), the stored `decision` or
 `answer` row and the `context_revision`. A relayed `activate`, `revoke` or `answer`
 is written only after the verifier confirms it. A full record refuses
-`standing_authorization_full` (an activation at 31 or more decisions) or
-`responder_answers_full` (16 answers), without a write. Stale verified standing
+`standing_authorization_full` (an activation at 8191 or more retained decisions) or
+`responder_answers_full` (8192 retained answers), without a write. Stale verified standing
 decisions refuse `standing_authorization_stale` before receipt consumption (R136),
 with reason `reopen_time_unavailable` when a reopen predates the first record and
 its time is missing. Authentic, exactly bound future-dated activations refuse

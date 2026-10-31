@@ -88,3 +88,12 @@ A healthy public successor keeps the original logical work and native Run but ha
 its own public state and genuinely current authority; it is not an actor restart,
 loss claim or proof of installation. Unsupported peer consumers remain unavailable
 until their normal compatibility contract admits the exact representation.
+
+R87 storage compatibility: the first ordinary publication that places whole governance
+history, grouped settled admissions or settled Governor data writes
+`pod-history-refs/v2`. Pod0.21.21 and earlier readers cannot read that representation;
+they must safely refuse without rewriting it. Rollback and pinned peer consumers
+therefore require a version supporting v2 once such a publication occurs. Existing
+v1 records remain supported. Qualify every actual consumer and coordinate the
+normal installation window before changing the installed bundle; source fixtures
+are not proof of that live compatibility.

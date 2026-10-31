@@ -21,6 +21,13 @@ from tests.issue41_support import ProductionCase
 from tests.test_runtime_continuity import ContinuityCase
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class ReusedReceiptCapacityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -191,6 +198,7 @@ class ReusedReceiptCapacityTests(unittest.TestCase):
         self.broken_history((("redirected", "history_unsafe"), ("incomplete", "history_invalid")))
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class HistoryScanTests(KernelCase):
     @classmethod
     def setUpClass(cls):
@@ -283,7 +291,8 @@ class HistoryScanTests(KernelCase):
         self.arrange()
         from pod.succession import _require_fit
         before = {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()}
-        with patch("pod.succession._carried_journal", return_value=({"revision": 0}, False)):
+        from pod.governor import _empty_journal
+        with patch("pod.succession._carried_journal", return_value=(_empty_journal(), False)):
             _require_fit(self.project, "successor", "synthetic-capacity", self.state, [], at="synthetic-time",
                          records={"predecessor's record": self.state}, linked=False)
         self.assertEqual(before, {p: p.read_bytes() for p in self.path.parent.rglob("*") if p.is_file()})
@@ -292,7 +301,8 @@ class HistoryScanTests(KernelCase):
         self.arrange()
         from pod.succession import _require_fit
         candidates = {row["candidate"] for row in self.state["admissions"].values()}
-        future = {"revision": 0, "actions": [{"decision": "ALLOW", "outcome": "pending", "action": {"candidate": c}}
+        from pod.governor import _empty_journal
+        future = {**_empty_journal(), "actions": [{"decision": "ALLOW", "outcome": "pending", "action": {"candidate": c}}
                                              for c in candidates]}
         with patch("pod.succession._carried_journal", return_value=(future, True)):
             with self.assertRaises(PodError) as caught:
@@ -313,6 +323,8 @@ class HistoryScanTests(KernelCase):
     def test_warning_before_trigger_describes_compaction_conditionally(self):
         self.path = objective_root(self.project, "synthetic-capacity") / "context.json"
         state = synthetic_state(count=1)
+        state["admissions"] = {}
+        state["checkpoint"]["governance_history"] = {"candidates": [], "decisions": []}
         state["source_rejections"] = {"synthetic-unsettled": "x" * (WARN_AT - size(state) + 1000)}
         _write(self.path, state)
         before = self.path.read_bytes()
@@ -322,10 +334,11 @@ class HistoryScanTests(KernelCase):
         self.assertNotIn("history", json.loads(before))
         _write(self.path, _read(self.path))
         self.assertNotIn("history", json.loads(self.path.read_bytes()))
-        self.assertIn("327680", block["next_action"])
-        self.assertIn("once", block["next_action"])
+        self.assertIn("settle governed effects", block["next_action"])
+        self.assertIn("source_rejections", block["next_action"])
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class PublicHistoryProjectionTests(ProductionCase):
     def compact_current(self):
         path = objective_root(self.project, "objective") / "context.json"
@@ -447,6 +460,7 @@ class PublicHistoryProjectionTests(ProductionCase):
         self.assertEqual((after["state"], after["request_uuid"]), (prior["state"], prior["request_uuid"]))
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class HistoryContinuityTests(ContinuityCase):
     def test_proven_runtime_rebind_keeps_archived_decision_and_candidate_values(self):
         from tests.kernel_support import git

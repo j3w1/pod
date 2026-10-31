@@ -16,6 +16,67 @@ from tests.test_history_current_reviews import current_reviews
 
 
 class SettledHistoryLimitsTests(unittest.TestCase):
+    def test_bulk_preserves_interleaved_live_and_settled_admission_order(self):
+        state = review_state()
+        physical, chunks = compact(state, protected_admissions=["attempt-001"], bulk_history=True)
+        self.assertEqual(list(hydrate(physical, chunks.__getitem__)["admissions"]), list(state["admissions"]))
+        for order in (["attempt-001"] * len(state["admissions"]), list(state["admissions"])[1:]):
+            changed = deepcopy(physical)
+            changed["history"]["admission_order"] = order
+            with self.assertRaises(PodError) as caught:
+                hydrate(changed, chunks.__getitem__)
+            self.assertEqual(caught.exception.code, "history_integrity")
+
+    def test_implicit_legacy_failed_current_protection_cannot_be_relaxed(self):
+        from pod.ledger import _read, _write, objective_root
+        from tests.issue41_support import ProductionCase
+        case = ProductionCase()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.intake()
+        path = objective_root(case.project, "objective") / "context.json"
+        state = _read(path)
+        state["checkpoint"].pop("history_policy")  # Supported pre-R174 undeclared shape.
+        _write(path, state)
+        before = path.read_bytes()
+        with self.assertRaises(PodError) as caught:
+            case.write(history_policy={"keep_failed_current_candidate_reviews": False,
+                                       "source": "synthetic unverified applicability text"})
+        self.assertEqual(caught.exception.code, "history_policy_locked")
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_governance_soft_counts_refuse_below_equal_above_without_patching_hard_limits(self):
+        from pod.governance import _require_history_capacity
+        for limit in (1, 2, 4):
+            with using_limits(Limits(governance_history=limit)):
+                for count in (limit - 1, limit, limit + 1):
+                    history = {"candidates": [f"c{i}" for i in range(count)], "decisions": []}
+                    with self.subTest(limit=limit, count=count):
+                        if count <= limit:
+                            _require_history_capacity(history, writing=True)
+                        else:
+                            with self.assertRaises(PodError) as caught:
+                                _require_history_capacity(history, writing=True)
+                            self.assertEqual(caught.exception.detail["referent"]["limit"], limit)
+                            self.assertEqual(caught.exception.detail["referent"]["counts"]["candidate"], count)
+
+    def test_publication_governance_soft_count_includes_protected_old_candidates(self):
+        from pod.history import prepare_context
+        state = _empty()
+        state["checkpoint"] = {"candidate": "current", "seq": 3,
+                               "governance_history": {"candidates": ["old1", "old2", "current"], "decisions": []}}
+        journal = {"actions": [{"decision": "ALLOW", "outcome": "UNKNOWN", "action": {"candidate": key}}
+                               for key in ("old1", "old2")]}
+        with tempfile.TemporaryDirectory() as directory, using_limits(Limits(governance_history=2)):
+            path = Path(directory) / "context.json"
+            with self.assertRaises(PodError) as caught:
+                prepare_context(path, state, journal=journal)
+            self.assertEqual(caught.exception.detail["referent"]["counts"]["candidate"], 3)
+            self.assertFalse(path.exists())
+            journal["actions"].pop()
+            physical, chunks = prepare_context(path, state, journal=journal)
+            self.assertEqual(hydrate(physical, chunks.__getitem__), state)
+
     def test_settled_decisions_questions_and_constraints_move_but_current_controls_stay(self):
         state = _empty()
         state["constraints"] = [{"id": "inactive", "active": False, "text": "x" * 1000},

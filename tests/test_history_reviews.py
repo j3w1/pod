@@ -64,6 +64,13 @@ def correction_of(state, key):
     return next(ob for ob in state["checkpoint"]["obligations"] if ob["id"] == finding["correction"])
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class ReviewEligibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -190,6 +197,7 @@ class ReviewEligibilityTests(unittest.TestCase):
             self.assertEqual(record["admissions"], self.state["admissions"])
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class ReconciliationEligibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -245,6 +253,7 @@ PREVIOUS = "c6891428e3d65dc6b72806168c5125d657dc79a9"
 WAITING = {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class LiveShapeTests(unittest.TestCase):
     """The incident's shape through production entries: superseded failed and partial reviews whose
     findings became resolved corrections, then a pending current-candidate report near the limit."""
@@ -350,7 +359,9 @@ class LiveShapeTests(unittest.TestCase):
                 row.update(state="satisfied", evidence=[case.proof("O1")])
         case.write(rows)
         case.write(case.stored(), close=True)
-        cls.closed_inline = json.loads(path.read_bytes())
+        from tests.history_support import inline_settled_work
+        cls.closed_inline = inline_settled_work(json.loads(path.read_bytes()), _read(path))
+        atomic_json(path, cls.closed_inline, limit=CONTEXT_LIMIT, compact=True)
 
         def facts():
             from pod.ledger import closed_snapshot_context, map_of
@@ -425,6 +436,7 @@ class LiveShapeTests(unittest.TestCase):
         self.assertEqual(self.replayed_bytes, encoded(self.closed_compacted, compact=True))
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class RenewedAssuranceTests(unittest.TestCase):
     """An owner withdraws the correction after the assurance renewed, freezing its finding."""
 

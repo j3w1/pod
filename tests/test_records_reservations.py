@@ -8,6 +8,7 @@ from pod.ledger import objective_root, read
 from tests.issue41_support import ProductionCase
 from tests import test_records_boundaries as renewal
 from tests.test_records_corrections import files, waiting
+from tests.history_support import configured_context_case
 
 
 class ReceiptReservationTests(unittest.TestCase):
@@ -84,9 +85,9 @@ class ReceiptReservationTests(unittest.TestCase):
                 patch = {"evidence": [{"attempt": "padding-last"}]}
                 if state != "running":
                     patch.update(waiting())
-                if state == "consumed-failure":
-                    self.write(patch)  # Failed consumption releases the unused receipt.
-                    self.assertEqual(len(next(row for row in self.case.stored() if row["id"] == "A")["receipts"]), 64)
+                if state.startswith("consumed"):
+                    self.write(patch)  # Any consumed result releases its live reservation; history remains.
+                    self.assertEqual(len(next(row for row in self.case.stored() if row["id"] == "A")["receipts"]), 65 if state == "consumed-success" else 64)
                 else:
                     with self.assertRaises(PodError) as caught:
                         self.write(patch)
@@ -110,14 +111,28 @@ class ReceiptReservationTests(unittest.TestCase):
 
 
 class AcceptedRenewalAdviceTests(ProductionCase):
-    def test_receipt_refusal_uses_accepted_coordinator_slot(self):
+    @classmethod
+    def setUpClass(cls):
+        cls.prepared = cls()
+        ProductionCase.setUp(cls.prepared)
+        cls.addClassCleanup(cls.prepared.doCleanups)
+        cls.prepared.prepare_receipts()
+
+    def setUp(self):
+        self.__dict__.update({key: value for key, value in self.prepared.__dict__.items()
+                              if key not in ("_cleanups", "_outcome", "_testMethodName", "_testMethodDoc")})
+
+    def prepare_receipts(self):
         self.intake(self.sub("S"))
         proof = self.proof("S")
-        for start in range(0, 64, 16):
+        for start in range(0, 1024, 16):
             patch = {"evidence": [{**proof, "reference": f"retained-{index}"} for index in range(start, start + 16)]}
             if start == 48:
                 patch["state"] = "satisfied"
             self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, update={"S": patch})
+
+    def test_receipt_refusal_uses_accepted_coordinator_slot(self):
+        proof = self.proof("S")
         before = files(self)
         with self.assertRaises(PodError) as caught:
             self.write(seq=read(self.project, "objective")["checkpoint"]["seq"] + 1, update={
@@ -135,6 +150,7 @@ class AcceptedRenewalAdviceTests(ProductionCase):
         self.assertEqual(rows["S2"]["wait"], waiting()["wait"])
 
 
+@configured_context_case(512 * 1024, findings=64)
 class FindingReservationTests(ProductionCase):
     def test_incremental_old_report_cannot_take_a_pending_reviews_finding_budget(self):
         renewal.RenewalAssuranceTests.policy(self)

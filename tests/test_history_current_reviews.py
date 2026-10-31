@@ -36,6 +36,13 @@ def served(state, key):
                 if ob["id"] == state["admissions"][key]["serves"][0])
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class CurrentReviewEligibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -165,6 +172,7 @@ PREVIOUS = "4830f22427029ff78c69b5fb4042da486b056534"
 WAITING = {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class CurrentReviewProductionTests(unittest.TestCase):
     """Production entries on one candidate, including admission, reads, later writes and closed replay."""
 
@@ -250,7 +258,9 @@ class CurrentReviewProductionTests(unittest.TestCase):
                 row.update(state="satisfied", evidence=[case.proof("O1")])
         case.write(rows)
         case.write(case.stored(), close=True)
-        cls.closed_inline = json.loads(path.read_bytes())
+        from tests.history_support import inline_settled_work
+        cls.closed_inline = inline_settled_work(json.loads(path.read_bytes()), _read(path))
+        atomic_json(path, cls.closed_inline, limit=CONTEXT_LIMIT, compact=True)
 
         def facts():
             state = _read(path)

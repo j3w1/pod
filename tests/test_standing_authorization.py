@@ -2075,6 +2075,9 @@ class StandingGuidanceTests(unittest.TestCase):
         self.assertIn("run the Governor again (or `show` to check standing state)", text)
 
 
+LEGACY_MAXIMUM_ROW_ANSWERS = 16  # retained verified maximum-row incident control, not a product cap.
+
+
 class StandingCapacityTests(StandingCase):
     MOMENT = datetime(2030, 1, 1, tzinfo=timezone.utc)
     QUESTION = "q" * 512
@@ -2137,7 +2140,7 @@ class StandingCapacityTests(StandingCase):
         for _ in range(31):
             cls.maximum_decision(cls.prepared)
         cls.prepared.case.write(cls.prepared.case.stored(), questions=[cls.QUESTION])
-        for index in range(1, standing.MAX_ANSWERS + 1):
+        for index in range(1, LEGACY_MAXIMUM_ROW_ANSWERS + 1):
             cls.maximum_answer(cls.prepared, index)
         cls.context_bytes = _path(cls.prepared.project, "objective").read_bytes()
 
@@ -2147,29 +2150,40 @@ class StandingCapacityTests(StandingCase):
                               if key not in ("_cleanups", "_outcome", "_testMethodName", "_testMethodDoc")})
         _path(self.project, "objective").write_bytes(self.context_bytes)
 
-    def test_activation_reserves_last_slot_so_revoke_always_fits(self):
+    def test_shipped_retained_limit_reserves_revoke_and_old_31_count_is_not_live(self):
         self.assertEqual(len(read(self.project, "objective")["standing_authorization"]["decisions"]), 31)
-        with patch.object(standing, "HARD_DECISION_HISTORY", 32):
-            self.refusal("standing_authorization_full", self.activate)
-            revoked = self.maximum_decision(self, "revoke")
-            self.assertEqual((revoked["decision"]["id"], revoked["standing_authorization"]["state"]), ("Y32", "revoked"))
-            self.refusal("standing_authorization_full", self.activate)
+        revoked = self.maximum_decision(self, "revoke")
+        self.assertEqual((revoked["decision"]["id"], revoked["standing_authorization"]["state"]), ("Y32", "revoked"))
+        self.maximum_decision(self)
+        # Exact shipped safety routine, not patched constants or claimed owner decisions.
+        near = {"decisions": [None] * (standing.HARD_DECISION_HISTORY - 1), "answers": []}
+        standing._require_history_room(near, "revoke")
+        with self.assertRaises(PodError) as caught:
+            standing._require_history_room(near, "activate")
+        self.assertEqual(caught.exception.code, "standing_authorization_full")
+        near["decisions"].append(None)
+        with self.assertRaises(PodError):
+            standing._require_history_room(near, "revoke")
 
-    def test_full_maximum_size_verified_answers_fit_and_next_refuses_without_write(self):
-        self.assertEqual(self.operation("show")["standing_authorization"]["responder_decisions"]["total"], standing.MAX_ANSWERS)
-        self.control(changes={"single_use": "one-past-answer-cap"})
-        with patch.object(standing, "HARD_ANSWER_HISTORY", standing.MAX_ANSWERS):
-            self.refusal("responder_answers_full", self.operation, "answer", answer={**ANSWER, "question": self.QUESTION})
+    def test_shipped_answer_limit_and_earlier_maximum_size_answers_remain_distinct(self):
+        self.assertEqual(self.operation("show")["standing_authorization"]["responder_decisions"]["total"], LEGACY_MAXIMUM_ROW_ANSWERS)
+        self.maximum_answer(self, LEGACY_MAXIMUM_ROW_ANSWERS + 1)
         context = read(self.project, "objective")
         self.assertEqual([row["id"] for row in context["standing_authorization"]["answers"]],
-                         [f"A{index}" for index in range(1, standing.MAX_ANSWERS + 1)])
+                         [f"A{index}" for index in range(1, LEGACY_MAXIMUM_ROW_ANSWERS + 2)])
+        near = {"decisions": [], "answers": [None] * (standing.HARD_ANSWER_HISTORY - 1)}
+        standing._require_history_room(near, "answer")
+        near["answers"].append(None)
+        with self.assertRaises(PodError) as caught:
+            standing._require_history_room(near, "answer")
+        self.assertEqual(caught.exception.code, "responder_answers_full")
 
     def test_worst_case_record_leaves_headroom_for_checkpoint_and_closure_report(self):
         from pod.history import CONTEXT_LIMIT
         self.maximum_decision(self, "revoke")
         context = read(self.project, "objective")
         record = context["standing_authorization"]
-        maximum_rows = 32 * standing.MAX_DECISION_BYTES + standing.MAX_ANSWERS * standing.MAX_ANSWER_BYTES
+        maximum_rows = 32 * standing.MAX_DECISION_BYTES + LEGACY_MAXIMUM_ROW_ANSWERS * standing.MAX_ANSWER_BYTES
         self.assertEqual(sum(len(encoded(row, compact=True)) for row in [*record["decisions"], *record["answers"]]), maximum_rows)
         self.assertLessEqual(len(encoded(record, compact=True)), maximum_rows + 256)
         self.assertLessEqual(maximum_rows, CONTEXT_LIMIT // 2)

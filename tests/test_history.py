@@ -22,6 +22,13 @@ def size(value):
 from tests.history_support import synthetic_state
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class SidecarTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -171,16 +178,16 @@ class SidecarTests(unittest.TestCase):
         self.assertEqual(report_projection(second, ctx()), report_projection(restored["checkpoint"], ctx()))
         self.assertEqual(second["closure"], restored["checkpoint"]["closure"])
 
-    def test_sixty_four_receipt_logical_limit_refuses_sixty_fifth(self):
+    def test_retained_receipt_safety_limit_refuses_next_unknown_copy(self):
         from pod.assurance import _stamp_evidence
         from tests.test_obligations import ctx, proof
-        receipts = [{"evidence": proof("O1", "c0", reference=f"proof-{i}"), "accepted_seq": 1} for i in range(64)]
+        receipts = [{"evidence": proof("O1", "c0", reference=f"proof-{i}"), "accepted_seq": 1} for i in range(1024)]
         state = _empty()
         ob = {"id": "O1", "kind": "criterion", "evidence": [], "receipts": receipts}
         state["checkpoint"] = {"candidate": "c1", "obligations": [ob]}
         record, chunks = compact(state, force=True)
         restored = hydrate(record, chunks.__getitem__)["checkpoint"]["obligations"][0]
-        self.assertEqual(len(restored["receipts"]), 64)
+        self.assertEqual(len(restored["receipts"]), 1024)
         for prior in (ob, restored):
             new = {**deepcopy(prior), "evidence": [proof("O1", reference="sixty-fifth")]}
             with self.assertRaises(PodError) as caught:
@@ -293,6 +300,7 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class HistoryIntegrityTests(unittest.TestCase):
     def test_pointer_shaped_user_evidence_is_never_expanded(self):
         state = _empty()

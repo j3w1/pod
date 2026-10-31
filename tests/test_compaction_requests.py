@@ -16,6 +16,13 @@ from tests.history_support import synthetic_state
 from tests.kernel_support import KernelCase
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class CompactionRequestTests(KernelCase):
     @classmethod
     def setUpClass(cls):
@@ -348,6 +355,7 @@ class CompactionRequestTests(KernelCase):
         self.assert_compacted(self.requested())
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class OverLimitGuidanceTests(KernelCase):
     """Every over-limit refusal names the lead's request step and never an owner decision (PoD#4)."""
 

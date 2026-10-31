@@ -134,7 +134,7 @@ class CopiedBundleTests(unittest.TestCase):
             self.assertEqual(accepted.returncode,0,accepted.stdout+accepted.stderr)
             self.assertEqual(json.loads(accepted.stdout)['status'],'ok')
             oversized=run(skill,['internal','project-context','--input','-'],
-                          home=home,cwd=work,input_text=' '* (128*1024+1))
+                          home=home,cwd=work,input_text=' '* (512*1024+1))
             self.assertEqual(oversized.returncode,1)
             self.assertEqual(json.loads(oversized.stdout)['error']['code'],'record_too_large')
             path_form=run(skill,['internal','project-context','--input','/dev/stdin'],

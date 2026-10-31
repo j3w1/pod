@@ -105,6 +105,28 @@ class ConfiguredLimitsTests(unittest.TestCase):
         with configured():
             self.assertEqual(current().record_bytes, 8192)
 
+    def test_new_personal_file_during_default_operation_is_rechecked(self):
+        self.path.unlink()
+        output = self.root / "record.json"
+        with configured():
+            self.document["limits"] = {"record_bytes": 64}
+            self.save()
+            with self.assertRaises(PodError) as caught:
+                atomic_json(output, {"value": "bounded"})
+            self.assertEqual(caught.exception.code, "limits_changed")
+        self.assertFalse(output.exists())
+
+    def test_limits_recheck_precedes_decision_receipt_consumption(self):
+        from pod.relay import publish_decision
+        output = self.root / "context.json"
+        with configured(), patch("pod.relay.current_decision", side_effect=AssertionError("receipt touched")):
+            self.document["limits"] = {"record_bytes": 64}
+            self.save()
+            with self.assertRaises(PodError) as caught:
+                publish_decision(output, {}, lambda: self.fail("stale publication"))
+            self.assertEqual(caught.exception.code, "limits_changed")
+        self.assertFalse(output.exists())
+
     def test_request_and_write_boundaries_use_the_same_snapshot(self):
         self.document["limits"] = {"record_bytes": 64}
         self.save()

@@ -75,6 +75,12 @@ def current() -> Limits:
     return _CURRENT.get() or DEFAULT_LIMITS
 
 
+def _unavailable(code, path):
+    raise PodError(code, f"Personal limits are unavailable ({code}): {path}",
+                   {"path": str(path), "next_action":
+                    f"Read and preserve {path}; correct its {code} configuration error before mutation"})
+
+
 @contextmanager
 def using_limits(limits: Limits):
     if not isinstance(limits, Limits):
@@ -96,15 +102,15 @@ def configured(project=None, *, strict=True):
     """
     if _CURRENT.get() is not None:
         if strict and _CONFIG_ERROR.get() is not None:
-            raise PodError(_CONFIG_ERROR.get(), "Personal limits are unavailable; preserve and correct the configuration")
+            _unavailable(_CONFIG_ERROR.get(), _CONFIG_PATH.get())
         yield current()
         return
     from .config import load
     snapshot = load(project)
     if strict and snapshot["limits_status"] == "unavailable":
         error = snapshot["errors"][0] if snapshot["errors"] else {"code": "invalid_limits"}
-        raise PodError(error["code"], "Personal limits are unavailable; preserve and correct the configuration")
-    token = _CONFIG_PATH.set(Path(snapshot["path"]) if snapshot["limits_status"] == "validated" else None)
+        _unavailable(error["code"], snapshot["path"])
+    token = _CONFIG_PATH.set(Path(snapshot["path"]))
     error_token = _CONFIG_ERROR.set(snapshot["errors"][0]["code"] if snapshot["limits_status"] == "unavailable" and snapshot["errors"] else None)
     try:
         with using_limits(parse_limits(snapshot["limits"])) as limits:
@@ -122,6 +128,8 @@ def require_current():
     from .config import _read_bytes, _decode, SCHEMA, V1_SCHEMA
     raw = _read_bytes(path)
     document = _decode(raw) if raw is not None else None
+    if document is None and current() == DEFAULT_LIMITS:
+        return
     if (not isinstance(document, dict) or document.get("schema") not in (SCHEMA, V1_SCHEMA)
             or parse_limits(document.get("limits", {})) != current()):
         raise PodError("limits_changed", "Personal limits changed during this operation; read current configuration before retrying")

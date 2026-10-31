@@ -450,21 +450,29 @@ def _history_limit() -> int:
     return current_limits().governance_history
 
 
-def _require_history_capacity(history: dict, *, writing=False) -> None:
+def _require_history_capacity(history: dict, *, writing=False, live_counts=None) -> None:
     counts = {"candidate": len(history["candidates"]),
               "owner decision": sum(row.get("provenance") != "derived" for row in history["decisions"])}
-    # Accepted snapshots are settled provenance. The newest snapshot is the live
-    # policy/candidate; complete hydrated history retains a separate safety bound.
     safety = HARD_LIMITS["governance_history"]
     full = [kind for kind, count in counts.items() if count > safety]
-    if writing:
-        full.extend(kind for kind, count in counts.items() if min(count, 1) > _history_limit())
     if full:
         raise PodError("governance_unavailable", "Governance history is full; retained evidence cannot be evicted",
                        {"detail": "governance_history_full",
                         "next_action": "preserve the objective and report its " + " and ".join(full)
                                        + " history capacity; retained evidence cannot be evicted or replaced",
                         "referent": {"limit": safety, "counts": counts}})
+    if writing:
+        # The publication planner supplies fresh native/Governor protection
+        # joins. Without those facts, conservatively charge every retained row.
+        live = counts if live_counts is None else live_counts
+        exceeded = [kind for kind, count in live.items() if count > _history_limit()]
+        if exceeded:
+            raise PodError("governance_unavailable", "Live governance exceeds its configured soft ceiling",
+                           {"detail": "governance_history_full",
+                            "next_action": "preserve retained evidence; settle the protected "
+                                           + " and ".join(exceeded) + " dependencies before writing",
+                            "referent": {"dimension": "live_governance_history",
+                                         "limit": _history_limit(), "counts": live}})
 
 
 def _governance_history(prior: dict | None) -> dict:
@@ -544,7 +552,9 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
             history["decisions"].append({"seq": map_state["seq"], **decision})
     if derived_adoption is not None:
         history["decisions"].append({"seq": map_state["seq"], **derived_adoption})
-    _require_history_capacity(history, writing=True)
+    # Live soft capacity needs the complete state and fresh protection joins;
+    # prepare_context checks it before publishing any chunk or replacement.
+    _require_history_capacity(history)
     map_state["governance_history"] = history
 
 

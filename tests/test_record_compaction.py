@@ -15,6 +15,13 @@ from tests.history_support import synthetic_state, size
 from tests.kernel_support import KernelCase
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class RecordCompactionTests(KernelCase):
     @classmethod
     def setUpClass(cls):
@@ -65,9 +72,9 @@ class RecordCompactionTests(KernelCase):
     def test_detection_has_exact_facts_plain_question_and_no_writes(self):
         before = self.arrange()
         files = self.files()
-        with self.assertRaises(PodError) as caught:
-            _read(self.path)
-        self.assertEqual(caught.exception.code, "record_too_large")
+        # The read safety ceiling is independent of the configured live-write
+        # soft size. This old over-soft fixture must remain readable.
+        self.assertEqual(_read(self.path), self.state)
         result = self.operate()
         self.assertEqual(result["status"], "compaction_available")
         self.assertEqual(result["facts"]["input_sha256"], _sha(before))
@@ -338,14 +345,15 @@ class RecordCompactionTests(KernelCase):
         self.assertIsInstance(detected["next_action"], str)
         decision = self.unoffered_decision(detected)
         before = path.read_bytes()
+        logical_before = _read(path)
         files = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
         result = run("record-compaction", {**request, "decision": decision})
         self.assertEqual((result["status"], result["written"]), ("unchanged", False))
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual({p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}, files)
-        self.assertNotIn("history", json.loads(before))
+        self.assertEqual(_read(path), logical_before)
 
-    def test_automatic_and_retirement_compaction_keep_short_candidates_inline(self):
+    def test_automatic_and_retirement_grouping_preserves_short_candidate_values(self):
         from pod.ledger import read
         self.intake()
         state = read(self.project, "objective")
@@ -357,7 +365,9 @@ class RecordCompactionTests(KernelCase):
                 # Trigger ordinary compaction without adding movable rows.
                 logical["source_rejections"] = {"synthetic-unsettled": "x" * 328000}
                 record, chunks = prepare_context(path, logical, purpose=purpose)
-                self.assertEqual((record, chunks), (logical, {}))
+                from pod.history import hydrate
+                self.assertEqual(hydrate(record, chunks.__getitem__), logical)
+                self.assertLessEqual(len(encoded(record, compact=True)), len(encoded(logical, compact=True)))
 
     def test_metadata_overhead_cannot_make_forced_compaction_larger(self):
         from pod.ledger import read

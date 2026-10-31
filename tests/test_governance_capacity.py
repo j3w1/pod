@@ -78,13 +78,12 @@ class LongAdoptionTests(unittest.TestCase):
         self.assertEqual(restored, self.state)
         validate_map_record(restored["checkpoint"])
 
-    def test_owner_bound_still_refuses_after_eighty_derived_adoptions(self):
+    def test_settled_owner_history_frees_live_slots_after_eighty_derived_adoptions(self):
         self.assertIsNone(self.refusal)
-        self.assertEqual(self.owner_count, 64)
-        self.assertEqual(self.owner_refusal[0], "governance_unavailable")
-        self.assertEqual(self.owner_refusal[1]["detail"], "governance_history_full")
-        self.assertIn("owner", self.owner_refusal[1]["next_action"])
-        self.assertTrue(self.bound_unchanged)
+        self.assertEqual(self.owner_count, 65)
+        self.assertIsNone(self.owner_refusal)
+        self.assertEqual(len(self.state["checkpoint"]["governance_history"]["decisions"]), 80)
+
 
 
 class GovernanceCapacityTests(KernelCase):
@@ -102,12 +101,12 @@ class GovernanceCapacityTests(KernelCase):
         # Synthetic count-bound control: otherwise valid immutable owner decisions.
         first = checkpoint["governance_history"]["decisions"][0]
         checkpoint["governance_history"]["decisions"] = [
-            {**first, "instruction": f"Owner snapshot decision {index}"} for index in range(64)]
+            {**first, "instruction": f"Owner snapshot decision {index}"} for index in range(8192)]
         path = objective_root(self.project, "objective") / "context.json"
         path.write_bytes(encoded(state, compact=True))
         return state, path
 
-    def test_sixty_fifth_owner_decision_refuses_checkpoint_and_closure_without_write(self):
+    def test_hard_owner_history_refuses_checkpoint_and_closure_without_write(self):
         state, path = self.full_owner_history()
         validate_map_record(state["checkpoint"])
         before = path.read_bytes()
@@ -125,7 +124,7 @@ class GovernanceCapacityTests(KernelCase):
         if section == "owner":
             history["decisions"].append({**history["decisions"][-1], "instruction": "Overflow decision"})
         else:
-            history["candidates"] = [f"{index + 1:040x}" for index in range(65)]
+            history["candidates"] = [f"{index + 1:040x}" for index in range(8193)]
         before = encoded(state, compact=True)
         path.write_bytes(before)
         for operation in (lambda: _validate_context(deepcopy(state)),

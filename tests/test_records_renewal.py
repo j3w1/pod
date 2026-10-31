@@ -201,7 +201,7 @@ class RowAndHistoryTests(unittest.TestCase):
 
     def test_live_and_total_bounds_are_separate(self):
         row_bounds([{"state": "waiting"}] * 128 + [{"state": "withdrawn"}] * 384)
-        for rows, name in (([{"state": "waiting"}] * 129, "live_rows"), ([{"state": "withdrawn"}] * 513, "hydrated_total")):
+        for rows, name in (([{"state": "waiting"}] * 129, "live_rows"), ([{"state": "withdrawn"}] * 8193, "hydrated_total")):
             with self.subTest(name=name), self.assertRaises(PodError) as caught:
                 row_bounds(rows)
             self.assertEqual(caught.exception.detail["referent"]["bound"], name)
@@ -214,7 +214,8 @@ class RowAndHistoryTests(unittest.TestCase):
         self.assertEqual((detail["bound"], detail["request_entries"], detail["hydrated_total"], detail["live"]), ("live_rows", 1, 129, 129))
         with self.assertRaises(PodError) as caught:
             accept_write(full, {"obligations": [{"state": "withdrawn"}] * 513}, ctx())
-        self.assertEqual(caught.exception.detail["referent"]["bound"], "request_entries")
+        self.assertEqual(caught.exception.code, "obligation_invalid")
+        self.assertIn("512", str(caught.exception))
         with self.assertRaises(PodError):
             accept_write(full, {"seq": 2, "update": {f"S{i}": {} for i in range(129)}}, ctx())
 
@@ -222,7 +223,7 @@ class RowAndHistoryTests(unittest.TestCase):
         from pod.contracts import bound
         from pod.obligations import _structure
         from pod.pod_ticks import empty, validate
-        self.assertEqual(bound("obligation", "receipts", "max_items"), 64)
+        self.assertEqual(bound("obligation", "receipts", "max_items"), 1024)
         self.assertEqual(bound("obligation", "evidence", "max_items"), 16)
         with self.assertRaises(PodError):
             _structure(criterion(evidence=[proof("O1")] * 17))
@@ -244,14 +245,15 @@ class RowAndHistoryTests(unittest.TestCase):
         self.assertEqual(len(full["obligations"]), 512)
         kept = accept_write(full, {"obligations": restatable_rows(full)}, ctx())
         self.assertEqual(kept["obligations"], full["obligations"])
-        for patch, bound_name in (({"W384": ob("W384", "withdrawn", withdrawal={"by": "coordinator", "reason": "terminal"})}, "hydrated_total"),
-                                  ({"S128": ob("S128")}, "hydrated_total")):
-            with self.subTest(bound_name=bound_name), self.assertRaises(PodError) as caught:
-                accept_write(full, {"seq": full["seq"] + 1, "update": patch}, ctx())
-            detail = caught.exception.detail["referent"]
-            self.assertEqual(detail["bound"], bound_name)
-            self.assertEqual(detail["request_entries"], 1)
-            self.assertEqual(detail["hydrated_total"], 513)
+        # A 513th terminal row now fits the retained-history safety bound;
+        # it does not spend another live slot or discard omitted history.
+        extra = accept_write(full, {"seq": full["seq"] + 1, "update": {
+            "W384": ob("W384", "withdrawn", withdrawal={"by": "coordinator", "reason": "terminal"})}}, ctx())
+        self.assertEqual(len(extra["obligations"]), 513)
+        self.assertEqual(extra["obligations"][:-1], full["obligations"])
+        with self.assertRaises(PodError) as caught:
+            accept_write(extra, {"seq": extra["seq"] + 1, "update": {"S128": ob("S128")}}, ctx())
+        self.assertEqual(caught.exception.detail["referent"]["bound"], "live_rows")
 
     def test_previous_reader_refuses_renewed_state_and_larger_counts_without_rewrite(self):
         first = accept_write(None, intake(ob("S")), ctx())
@@ -263,7 +265,7 @@ class RowAndHistoryTests(unittest.TestCase):
             self.assertFalse(result["accepted"])
             self.assertTrue(result["unchanged"])
 
-    def test_terminal_rows_and_unresolved_findings_archive_whole_values(self):
+    def test_terminal_history_moves_but_live_unresolved_findings_stay_inline(self):
         first = accept_write(None, intake(ob("S")), ctx())
         renewed = accept_write(first, {"renew": [{"id": "O1", "as": "O2"}]}, ctx())
         logical = _empty(); logical["checkpoint"] = {"schema": "pod-checkpoint/v3", **renewed}
@@ -276,7 +278,7 @@ class RowAndHistoryTests(unittest.TestCase):
             ob("K", kind="correction", parent="A")])
         record, chunks = compact(logical, force=True)
         self.assertTrue(is_reference(record["checkpoint"]["obligations"][0]))
-        self.assertTrue(is_reference(next(row for row in record["checkpoint"]["obligations"] if row.get("id") == "A")["findings"][0]))
+        self.assertFalse(is_reference(next(row for row in record["checkpoint"]["obligations"] if row.get("id") == "A")["findings"][0]))
         self.assertEqual(hydrate(record, chunks.__getitem__), logical)
         old = previous_history_call(self.previous, record, chunks=chunks, context={key: value for key, value in ctx().items() if not callable(value)})
         self.assertFalse(old["accepted"])

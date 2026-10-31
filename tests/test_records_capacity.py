@@ -18,6 +18,11 @@ def size(value):
     return len(encoded(value, compact=True))
 
 
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+
+
+@configured_context_case(CONTEXT_LIMIT, findings=64)
 class RecordsCapacityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

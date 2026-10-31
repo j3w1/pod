@@ -2,8 +2,31 @@
 from copy import deepcopy
 import json
 
+from pod.limits import Limits, using_limits
+
 from pod.ledger import _empty, _validate_context
 from pod.util import digest, encoded
+
+
+def configured_context_case(ceiling, **other_limits):
+    """Keep retained incident fixtures at their explicit supported soft size.
+
+    This uses the shipped limits API, without patching product constants. Default
+    2 MiB behaviour is covered separately by the limits integration tests.
+    """
+    def decorate(case):
+        prepare = case.setUpClass
+
+        @classmethod
+        def set_up(current):
+            limits = using_limits(Limits(context_bytes=ceiling, **other_limits))
+            limits.__enter__()
+            current.addClassCleanup(limits.__exit__, None, None, None)
+            prepare()
+
+        case.setUpClass = set_up
+        return case
+    return decorate
 
 
 def size(value):
@@ -81,4 +104,19 @@ def inline_copies(physical, logical):
             evidence = receipt.get("evidence") or {}
             if evidence.get("candidate") == current or json.dumps(evidence, sort_keys=True) in selected:
                 new["receipts"][index] = deepcopy(receipt)
+    return shaped
+
+
+def inline_settled_work(physical, logical):
+    """Reconstruct a supported preceding physical layout for maintenance trials.
+
+    Logical values and authority stay identical. Ordinary current writes already
+    place these settled values, so a trial must explicitly retain its old layout.
+    """
+    shaped = inline_copies(physical, logical)
+    shaped["admissions"] = deepcopy(logical["admissions"])
+    shaped.pop("settled_admissions", None)
+    metadata = shaped.get("history", {})
+    metadata.pop("admission_order", None)
+    metadata.get("placement_counts", {}).pop("admissions", None)
     return shaped

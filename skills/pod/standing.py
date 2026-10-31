@@ -20,10 +20,18 @@ from .limits import HARD_MAP_HISTORY
 
 # One current decision is live. Complete accepted decisions/answers are retained
 # under an independent finite safety ceiling rather than consuming live slots.
-MAX_DECISIONS = 32
-MAX_ANSWERS = 16
 HARD_DECISION_HISTORY = HARD_MAP_HISTORY
 HARD_ANSWER_HISTORY = HARD_MAP_HISTORY
+
+
+def _require_history_room(record, action):
+    """Retained-history safety only; callers still validate all authority facts."""
+    if action == "answer":
+        if len(record["answers"]) >= HARD_ANSWER_HISTORY:
+            raise PodError("responder_answers_full", "Responder answer history is full")
+    elif (len(record["decisions"]) >= HARD_DECISION_HISTORY
+          or action == "activate" and len(record["decisions"]) >= HARD_DECISION_HISTORY - 1):
+        raise PodError("standing_authorization_full", "Standing decision history is full; nothing is evicted")
 MAX_DECISION_BYTES = TABLE["standing decision"]["stored_max_bytes"]
 MAX_ANSWER_BYTES = TABLE["responder answer"]["stored_max_bytes"]
 _STORED_DECISION = {"id", "operation", "utc", "seq", "binding", "exclusions", "relay_verification", "decision_effect"}
@@ -322,9 +330,7 @@ def _generic_operate(project, objective, owner, action, decision, *, now=None):
         _row_fit(row)
         _fresh(context, row)
         capability.order_at = decision_time(row)
-        if (len(record["decisions"]) >= HARD_DECISION_HISTORY
-                or action == "activate" and len(record["decisions"]) >= HARD_DECISION_HISTORY - 1):
-            raise PodError("standing_authorization_full", "Standing decision history is full; nothing is evicted")
+        _require_history_room(record, action)
         if action == "activate" and source is not None:
             checked, live = issue_recheck_live(project, source)
             if checked["status"] != "current" or live is None:
@@ -654,8 +660,7 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
             if verdict is None:
                 verdict = _verify(project, objective, context, answer["relay"]["reference"], "answer",
                                   {key: answer[key] for key in ("question", "text")})
-            if len(record["answers"]) >= HARD_ANSWER_HISTORY:
-                raise PodError("responder_answers_full", "Responder answer history is full")
+            _require_history_room(record, action)
             row = _answer_row(answer, verdict, index=len(record["answers"]) + 1, utc=_timestamp(moment),
                               under=record["decisions"][-1]["id"])
             _row_fit(row, answer=True)
@@ -681,8 +686,7 @@ def operate(request: dict, *, now: datetime | None = None) -> dict:
                         from .relay import check_use
                         check_use(project, verdict, refuse=True)
                     raise
-            if action == "activate" and len(record["decisions"]) >= HARD_DECISION_HISTORY - 1:
-                raise PodError("standing_authorization_full", "Standing owner-decision history is full")
+            _require_history_room(record, action)
             _raise_barrier(record, decision_time(row))
             if created and action == "activate" and decision["channel"] == "relayed":
                 # The never-record exception covers only this first activation: the

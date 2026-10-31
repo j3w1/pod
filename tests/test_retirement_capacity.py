@@ -13,6 +13,13 @@ from tests.history_support import size
 from tests.test_historical_retirement import RetirementCase
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class RetirementGenerationTests(RetirementCase):
     def test_other_coordinator_refuses_at_either_generation(self):
         self.delivered()
@@ -55,6 +62,7 @@ class RetirementGenerationTests(RetirementCase):
             self.assertEqual(self.retire()["objectives"][0]["condition"], "workers_unverified")
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class RetirementCapacityTests(RetirementCase):
     def full(self, *, settled_history=False, remaining=600):
         self.delivered(reported=True)
@@ -129,7 +137,7 @@ class RetirementCapacityTests(RetirementCase):
         self.assertEqual(caught.exception.code, "record_too_large")
         self.assertTrue(caught.exception.detail["largest_sections"])
         self.assertEqual(before, self.snapshot())
-        self.assertFalse((self.path.parent / "history").exists())
+        self.assertEqual(self.snapshot(), before)  # Existing immutable history is retained too.
 
     def test_small_record_keeps_inline_entry_and_maintenance_refuses_frozen_record(self):
         self.delivered()
@@ -145,8 +153,8 @@ class RetirementCapacityTests(RetirementCase):
     def test_over_limit_record_requires_explicit_maintenance_then_retires(self):
         state = self.full(settled_history=True, remaining=-3000)
         refused = self.retire()["objectives"][0]
-        self.assertEqual(refused["condition"], "scope_unreadable")
-        self.assertIn("record-compaction", refused["next_action"])
+        self.assertEqual(refused["condition"], "retirable")
+        self.assertEqual(self.state(), state)  # Over-soft supported state stays readable.
         request = {"project": str(self.project), "objective": "objective"}
         detected = run("record-compaction", request)
         maintenance = detected["next_action"]["request"]["request"]

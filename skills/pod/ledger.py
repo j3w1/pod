@@ -1394,7 +1394,7 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
         if type(policy["keep_failed_current_candidate_reviews"]) is not bool:
             raise PodError("invalid_history_policy", "History protection must be a boolean")
         bounded_text(policy["source"], name="history policy source", limit=512)
-        if ((previous or {}).get("history_policy", {}).get("keep_failed_current_candidate_reviews") is True
+        if (previous and previous.get("history_policy", {}).get("keep_failed_current_candidate_reviews", True) is True
                 and policy["keep_failed_current_candidate_reviews"] is False):
             raise PodError("history_policy_locked", "A recorded source protection is not relaxed by ordinary metadata or capacity continuity")
     proposed = {key: value[key] for key in MAP_INPUT if key in value}

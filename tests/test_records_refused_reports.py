@@ -4,6 +4,7 @@ import shutil
 import unittest
 
 from pod.assurance import pending_serving
+from tests.history_support import configured_context_case
 from pod.errors import PodError
 from pod.ledger import objective_root, read
 from tests.issue41_support import ProductionCase
@@ -11,6 +12,7 @@ from tests import test_records_boundaries as renewal
 from tests.test_records_corrections import files, waiting
 
 
+@configured_context_case(512 * 1024, findings=64)
 class RefusedReportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

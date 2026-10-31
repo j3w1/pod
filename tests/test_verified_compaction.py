@@ -28,6 +28,12 @@ PRECEDING = "438dde67737a68c6f1f175f11ed9c2d00c857e71"
 WAITING = {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
 class CompactionCase(KernelCase):
     """Shared builders only; importing this base discovers no unrelated tests."""
 
@@ -97,6 +103,7 @@ class CompactionCase(KernelCase):
         self.assertEqual(self.files(), before)
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class VerifiedCompactionTests(CompactionCase):
     def test_saved_agent_vouch_compacts_without_a_recorded_question_losslessly(self):
         decision, _ = self.prepared()
@@ -170,7 +177,8 @@ class VerifiedCompactionTests(CompactionCase):
         def bounded(path, state, raw, record, chunks, capability, receipts):
             records.append(record)
             # Exercise the real size check on the complete prepared record.
-            with patch.object(history, "CONTEXT_LIMIT", len(encoded(record, compact=True)) - 1):
+            from pod.limits import Limits, using_limits
+            with using_limits(Limits(context_bytes=len(encoded(record, compact=True)) - 1)):
                 return original(path, state, raw, record, chunks, capability, receipts)
         with patch.object(history, "_publish_compaction_decision", side_effect=bounded), self.assertRaises(PodError) as caught:
             self.operate(decision=decision)
@@ -214,6 +222,7 @@ class VerifiedCompactionTests(CompactionCase):
         self.assertEqual(self.uses(), uses)
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class MaintenanceReaderTests(CompactionCase):
     @classmethod
     def setUpClass(cls):
@@ -234,11 +243,17 @@ class MaintenanceReaderTests(CompactionCase):
             cwd=self.previous, env={**os.environ, "PYTHONPATH": str(self.previous / "skills"),
                                    "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True, timeout=10)
 
-    def assert_preceding_readable(self):
+    def assert_preceding_reader_disposition(self):
         before = self.files()
         result = self.preceding("from pathlib import Path; import sys; from pod.ledger import _read; from pod.util import digest; print(digest(_read(Path(sys.argv[1]))))")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), digest(self.state))
+        physical = json.loads(self.path.read_bytes())
+        if physical.get("history", {}).get("schema") == "pod-history-refs/v2":
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("history_invalid", result.stderr)
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), digest(self.state))
+        self.assertEqual(_read(self.path), self.state)
         self.assertEqual(self.files(), before)
 
     def ordinary(self, role):
@@ -247,20 +262,20 @@ class MaintenanceReaderTests(CompactionCase):
         self.assertTrue(any(history.is_reference(row) for row in json.loads(self.path.read_bytes())["admissions"].values()))
         self.assertNotIn("decision_channels", json.loads(self.path.read_bytes())["history"])
         self.assertEqual(_read(self.path), self.state)
-        self.assert_preceding_readable()
+        self.assert_preceding_reader_disposition()
 
-    def test_coordinator_request_does_not_upgrade_an_older_record(self):
+    def test_coordinator_request_preserves_logical_record_and_safe_reader_floor(self):
         self.ordinary("coordinator")
 
-    def test_project_lead_request_does_not_upgrade_an_older_record(self):
+    def test_project_lead_request_preserves_logical_record_and_safe_reader_floor(self):
         self.ordinary("project_lead")
 
-    def test_session_compaction_keeps_exact_three_field_receipt_and_reader_floor(self):
+    def test_session_compaction_keeps_exact_three_field_receipt_and_safe_reader_floor(self):
         result = self.operate(decision=self.decision(PERSON))
         self.assertEqual((result["status"], result["written"]), ("compacted", True))
         self.assertEqual(set(self.receipts()[0]["authority"]), {"provenance", "instruction", "channel"})
         self.assertNotIn("decision_channels", json.loads(self.path.read_bytes())["history"])
-        self.assert_preceding_readable()
+        self.assert_preceding_reader_disposition()
 
     def test_genuine_preceding_writer_receipt_reads_without_conversion(self):
         value = {"project": str(self.project), "objective": "synthetic-capacity", "decision": self.decision(PERSON)}
@@ -358,6 +373,7 @@ def withdraw(case):
         "by": "agent_decision", "reason": "Exact scoped correction withdrawal"}}}, revision_authority=RELAY)
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class AgentWithdrawalHistoryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

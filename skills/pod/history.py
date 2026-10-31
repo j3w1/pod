@@ -257,12 +257,47 @@ def compact(logical_state, *, protected_admissions=(), force=False,
     target = record.get("checkpoint") or {}
     logical_rows = {row["id"]: row for row in checkpoint.get("obligations", [])
                     if isinstance(row, dict) and isinstance(row.get("id"), str)}
+
+    def receipt_movable(ob, receipt):
+        evidence = receipt.get("evidence") or {}
+        candidate = evidence.get("candidate")
+        if protect_receipts or not candidate or candidate in protected_candidates:
+            return False
+        selected = evidence in ob.get("evidence", [])
+        satisfied = ob.get("state") == "satisfied"
+        if not satisfied and (candidate == current or selected):
+            return False
+        consumed = "reported_seq" in receipt or "accepted_seq" in receipt
+        if ob.get("kind") == "assurance" and satisfied and selected:
+            attempt = evidence.get("attempt")
+            return (consumed and isinstance(attempt, str)
+                    and attempt in logical_state.get("admissions", {})
+                    and attempt not in protected
+                    and receipt.get("reuse") in (None, ob.get("reuse")))
+        if ob.get("kind") == "assurance":
+            return (candidate != current and receipt.get("reuse") is None
+                    and evidence.get("attempt") in movable and consumed)
+        return evidence.get("status") == "PASS" and "accepted_seq" in receipt
+
     for index, (old_ob, new_ob) in enumerate(zip(checkpoint.get("obligations", []), target.get("obligations", []))):
         serving_held = any(key in protected and old_ob.get("id") in row.get("serves", [])
                            for key, row in logical_state.get("admissions", {}).items())
-        satisfied_settled = (old_ob.get("state") == "satisfied" and not protect_receipts
-                             and current not in protected_candidates and not serving_held)
-        if old_ob.get("state") in ("withdrawn", "renewed") or satisfied_settled:
+        # Moving the enclosing row must not evade any nested proof veto. Keep
+        # selected evidence inline; its separately accepted receipt may move.
+        nested = [*old_ob.get("evidence", []),
+                  *(item.get("evidence", {}) for item in old_ob.get("receipts", []))]
+        nested_held = any(item.get("candidate") in protected_candidates
+                          or item.get("attempt") in protected for item in nested)
+        # A renewed/withdrawn row is frozen history, including its original
+        # unknown observations. They remain unknown after hydration; fresh
+        # native/Governor dependencies still veto moving that entire row.
+        terminal = old_ob.get("state") in ("withdrawn", "renewed")
+        whole_settled = (not serving_held and not protect_receipts and not nested_held
+                        and (terminal or old_ob.get("state") == "satisfied"
+                             and not old_ob.get("evidence")
+                             and all(receipt_movable(old_ob, item)
+                                     for item in old_ob.get("receipts", []))))
+        if whole_settled:
             target["obligations"][index] = reference(old_ob)
             continue
         if old_ob.get("kind") == "assurance" and old_ob.get("findings") and type(checkpoint.get("seq")) is int:
@@ -276,27 +311,8 @@ def compact(logical_state, *, protected_admissions=(), force=False,
                 for finding_index, finding in enumerate(old_ob["findings"]):
                     if live_finding_count([finding], {"map_state": checkpoint}) == 0:
                         new_ob["findings"][finding_index] = reference(finding)
-        selected = {json.dumps(item, sort_keys=True) for item in old_ob.get("evidence", [])}
-        satisfied = old_ob.get("state") == "satisfied"
         for index, receipt in enumerate(old_ob.get("receipts", [])):
-            evidence = receipt.get("evidence") or {}
-            candidate = evidence.get("candidate")
-            copy = json.dumps(evidence, sort_keys=True) in selected
-            if protect_receipts or candidate in protected_candidates or not candidate:
-                continue
-            consumed = "reported_seq" in receipt or "accepted_seq" in receipt
-            if old_ob.get("kind") == "assurance" and satisfied and copy:
-                attempt = evidence.get("attempt")
-                eligible = (consumed and isinstance(attempt, str) and attempt in logical_state.get("admissions", {})
-                            and attempt not in protected
-                            and receipt.get("reuse") in (None, old_ob.get("reuse")))
-            elif old_ob.get("kind") == "assurance":
-                eligible = evidence.get("attempt") in movable and consumed
-            else:
-                # Outcome is preserved verbatim; only a kernel acceptance settles
-                # the retained copy. Unknown/unaccepted work remains inline.
-                eligible = "accepted_seq" in receipt
-            if eligible:
+            if receipt_movable(old_ob, receipt):
                 new_ob["receipts"][index] = reference(receipt)
     old_history = checkpoint.get("governance_history") or {}
     for field in ("candidates", "decisions"):
@@ -337,6 +353,8 @@ def compact(logical_state, *, protected_admissions=(), force=False,
         record["history"] = dict(FORMAT_V2 if extended else FORMAT)
         if placement_counts:
             record["history"]["placement_counts"] = placement_counts
+        if archived:
+            record["history"]["admission_order"] = list(logical_state["admissions"])
     if maintenance:
         record.setdefault("history", dict(FORMAT))["maintenance"] = _reference(list(maintenance), chunks)
         if any("decision_binding" in row.get("authority", {}) for row in maintenance):
@@ -495,7 +513,7 @@ def _hydrate(record, loader):
         return state, maintenance
     metadata = state.pop("history", None)
     if metadata is not None:
-        if (not isinstance(metadata, dict) or set(metadata) - {"schema", "maintenance", "decision_channels", "placement_counts"}
+        if (not isinstance(metadata, dict) or set(metadata) - {"schema", "maintenance", "decision_channels", "placement_counts", "admission_order"}
                 or metadata.get("schema") not in (FORMAT["schema"], FORMAT_V2["schema"])
                 or "decision_channels" in metadata and metadata["decision_channels"] != 5):
             _fail("history_invalid", "Unsupported history reference format")
@@ -533,6 +551,14 @@ def _hydrate(record, loader):
         state["admissions"] = {**archived, **state["admissions"]}
         if metadata.get("placement_counts", {}).get("admissions") != len(archived):
             _fail("history_integrity", "Bulk placement count differs from verified history")
+    order = (metadata or {}).get("admission_order")
+    if order is not None:
+        admissions = state.get("admissions", {})
+        if (archived is None or not isinstance(order, list)
+                or any(not isinstance(key, str) for key in order)
+                or len(order) != len(admissions) or set(order) != set(admissions)):
+            _fail("history_integrity", "Bulk admission order differs from verified history")
+        state["admissions"] = {key: admissions[key] for key in order}
     governance = (state.get("checkpoint") or {}).get("governance_history") or {}
     if (metadata is not None and metadata["schema"] == FORMAT["schema"]
             and any(is_reference(governance.get(field)) for field in ("candidates", "decisions"))):
@@ -843,6 +869,21 @@ def prepare_context(path, state, *, purpose="ordinary", native=None, protected=(
     if receipts is None:
         receipts = _load(path)[1] if path.exists() else []
     keep, hold_receipts = protections(path, state, native=native, protected=protected, journal=journal)
+    checkpoint = state.get("checkpoint") or {}
+    history = checkpoint.get("governance_history")
+    if history:
+        from .governance import _require_history_capacity
+        candidates = {checkpoint.get("candidate"), *(hold_receipts or ())}
+        candidates.update(state["admissions"][key].get("candidate") for key in keep)
+        pending_seq = [state["admissions"][key].get("admitted_seq", 0) for key in keep]
+        floor = min(pending_seq) if pending_seq else checkpoint.get("seq", 0)
+        decisions = history["decisions"]
+        live = {"candidate": sum(value in candidates for value in history["candidates"]),
+                "owner decision": sum(row.get("provenance") != "derived"
+                                      and (index == len(decisions) - 1 or row["seq"] >= floor)
+                                      for index, row in enumerate(decisions))}
+        _require_history_capacity(history, writing=True,
+                                  live_counts=live if hold_receipts is not None else None)
     kwargs = {"protected_admissions": keep, "protect_receipts": hold_receipts is None,
               "protected_candidates": hold_receipts or (), "maintenance": receipts,
               "force": force or purpose == "retirement", "current_bytes": current, "require_fit": require_fit,
@@ -1017,7 +1058,7 @@ def record_compaction(project, objective, *, request=None, decision=None):
                   "reclaimable_bytes": max(0, len(raw) - len(_bytes(record)))}
         if not useful:
             result["largest_sections"] = largest_sections(state)
-            result["next_action"] = (_settlement_action(result["largest_sections"]) if len(raw) >= WARN_AT else
+            result["next_action"] = (_settlement_action(result["largest_sections"]) if len(raw) >= warning_at() else
                                      "Continue through the existing objective operations; no settled history currently "
                                      "reduces this record after the maintenance receipt allowance.")
             return result

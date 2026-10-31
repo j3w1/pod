@@ -26,9 +26,9 @@ class ReceiptBoundaryTests(unittest.TestCase):
         # Seed retained observations in four bounded checkpoint writes. They are
         # deliberately not proof; only the first and overflowing reports cross
         # the native review boundary. This keeps the shared fixture cheap.
-        for start in range(0, 63, 16):
+        for start in range(0, 64, 16):
             case.write(seq=_read(cls.path)["checkpoint"]["seq"] + 1, update={"A": {
-                "evidence": [{"attempt": f"retained-{index}"} for index in range(start, min(start + 16, 63))]}})
+                "evidence": [{"attempt": f"retained-{index}"} for index in range(start, min(start + 16, 64))]}})
         state = _read(cls.path)
         case.write(seq=state["checkpoint"]["seq"] + 1, update={"A": {"evidence": [{"attempt": admission["admission_id"]}]}})
         cls.replay_count = len(next(row for row in case.stored() if row["id"] == "A")["receipts"])
@@ -44,15 +44,12 @@ class ReceiptBoundaryTests(unittest.TestCase):
         except PodError as exc:
             cls.checkpoint_refusal = exc
         else:
-            raise AssertionError("65th checkpoint receipt was accepted")
+            raise AssertionError("65th live checkpoint receipt was accepted")
         cls.checkpoint_atomic = cls.files() == cls.before
-        try:
-            case.report(cls.admission, cls.frozen, map=cls.map)
-        except PodError as exc:
-            cls.refusal = exc
-        else:
-            raise AssertionError("65th report receipt was accepted")
-        cls.unchanged = cls.files() == cls.before
+        # Consuming the genuinely settled result produces retained history,
+        # not a 65th live receipt. The preceding checkpoint still refused above.
+        cls.consumed = case.report(cls.admission, cls.frozen, map=cls.map)
+        cls.unchanged = False
         # Preceding overcommitment still refuses without discarding the review.
         before = cls.files()
         try:
@@ -65,7 +62,6 @@ class ReceiptBoundaryTests(unittest.TestCase):
         cls.discard_atomic = cls.files() == before
         # Failed consumption adds no receipt; it releases the pending result,
         # permitting mechanical renewal without claiming passing proof.
-        case.report(cls.admission, cls.frozen, outcome="failed", map=cls.map)
         case.write(renew=renew)
         cls.renewed = _read(cls.path)
         print("records_receipts=" + json.dumps({"retained": 64, "proposed": 65, "limit": 64, "replay_count": cls.replay_count,
@@ -79,15 +75,16 @@ class ReceiptBoundaryTests(unittest.TestCase):
     def files(cls):
         return {str(path.relative_to(cls.path.parent)): path.read_bytes() for path in cls.path.parent.rglob("*") if path.is_file() and path.name != ".lock"}
 
-    def test_65th_report_refuses_atomically_with_exact_renewal_request(self):
-        detail = self.refusal.detail
+    def test_unconsumed_checkpoint_refuses_but_consumed_report_frees_its_slot(self):
+        detail = self.checkpoint_refusal.detail
         self.assertEqual(detail["detail"], "receipt_limit")
-        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "limit")}, {"retained": 64, "proposed": 65, "limit": 64})
-        self.assertEqual(detail["next_action"]["renew"][0]["id"], "A")
-        self.assertTrue(self.unchanged)
-        self.assertEqual(self.checkpoint_refusal.detail["detail"], "receipt_limit")
+        self.assertEqual({key: detail["referent"][key] for key in ("retained", "proposed", "limit")},
+                         {"retained": 64, "proposed": 66, "limit": 64})
+        self.assertEqual(detail["referent"]["admission"], self.admission["admission_id"])
+        self.assertIn("consum", str(detail["next_action"]).lower())
         self.assertTrue(self.checkpoint_atomic)
-        self.assertEqual(self.replay_count, 64)
+        self.assertTrue(self.consumed["settled"])
+        self.assertEqual(self.replay_count, 65)
 
     def test_historical_review_cannot_be_discarded(self):
         self.assertEqual(self.discard_refusal.detail["detail"], "disposition_invalid")
@@ -96,9 +93,9 @@ class ReceiptBoundaryTests(unittest.TestCase):
     def test_consumption_then_renewal_keeps_history_without_replacement_proof(self):
         row = self.renewed["admissions"][self.admission["admission_id"]]
         self.assertIsNone(row["disposition"])
-        self.assertEqual(row["report"]["outcome"], "failed")
+        self.assertEqual(row["report"]["outcome"], "succeeded")
         rows = {row["id"]: row for row in self.renewed["checkpoint"]["obligations"]}
-        self.assertEqual(len(rows["A"]["receipts"]), 64)
+        self.assertEqual(len(rows["A"]["receipts"]), 66)
         self.assertEqual(rows["A2"]["receipts"], [])
         self.assertEqual(rows["A2"]["state"], "waiting")
         before = self.files()

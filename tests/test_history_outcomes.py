@@ -45,6 +45,13 @@ def implementation_state():
     return state
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class ImplementationOutcomeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -54,7 +61,9 @@ class ImplementationOutcomeTests(unittest.TestCase):
         self.assertEqual(size(self.state), COMPACT_AT)
         below = deepcopy(self.state)
         below["source_rejections"]["synthetic-padding"] = below["source_rejections"]["synthetic-padding"][:-1]
-        self.assertEqual(compact(below), (below, {}))
+        placed, parts = compact(below)
+        self.assertTrue(parts)
+        self.assertEqual(hydrate(placed, parts.__getitem__), below)
         record, chunks = compact(self.state)
         self.assertTrue(all(is_reference(row) for row in record["admissions"].values()))
         restored = hydrate(record, chunks.__getitem__)
@@ -131,6 +140,7 @@ class ImplementationOutcomeTests(unittest.TestCase):
             self.assertEqual(record["admissions"], self.state["admissions"])
 
 
+@configured_context_case(CONTEXT_LIMIT)
 class ImplementationCapacityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

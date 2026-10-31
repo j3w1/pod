@@ -97,17 +97,18 @@ class GovernanceHistoryTests(boundaries.KernelCase):
         self.assertEqual(read(self.project, "objective")["checkpoint"]["governance_history"], history)
         self.assertEqual(self.authorize(self.candidate)["checkpoint"]["governance_history"], history)
 
-    def test_candidate_history_limit_preserves_the_previous_checkpoint(self):
-        with patch("pod.ledger.MAX_GOVERNANCE_HISTORY", 2):
+    def test_configured_candidate_soft_limit_excludes_settled_snapshots(self):
+        from pod.limits import Limits, using_limits
+        with using_limits(Limits(governance_history=2)):
             self.intake()
+            original = self.candidate
             self.candidate = self.commit("README.md", "one\n", "one")
             self.write(self.stored())
-            before = read(self.project, "objective")
+            first = self.candidate
             self.candidate = self.commit("README.md", "two\n", "two")
-            with self.assertRaises(PodError) as caught:
-                self.write(self.stored())
-            self.assertEqual(caught.exception.detail["detail"], "governance_history_full")
-            self.assertEqual(read(self.project, "objective"), before)
+            self.write(self.stored())
+            self.assertEqual(read(self.project, "objective")["checkpoint"]["governance_history"]["candidates"],
+                             [original, first, self.candidate])
 
     def test_unresolvable_candidate_is_refused_before_intake_or_history_mutation(self):
         self.candidate = "pending-candidate"

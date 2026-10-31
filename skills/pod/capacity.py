@@ -294,6 +294,13 @@ def maybe(project, objective, owner, *, request_bytes=0):
     if (physical < 7 * context_limit() // 8
             and request_bytes < 7 * current_limits().record_bytes // 8 and not finding_pressure):
         return {"status": "not_due"}
+    # A public id cannot shorten a single input or resolve an open finding.
+    # Refuse those dimensions before reserving a descendant, even after a
+    # material write. Changing identity must provide actual capacity relief.
+    if request_bytes >= 7 * current_limits().record_bytes // 8 or finding_pressure:
+        return {"status": "held", "code": "capacity_no_material_relief",
+                "dimension": "live_findings" if finding_pressure else "request_bytes",
+                "next_action": "preserve this objective; resolve live findings or reduce the irreducible request"}
     if CHILD in prior:
         plan = prior[CHILD]["plan"]
         parent = _read(project, plan["predecessor"])
@@ -314,6 +321,28 @@ def maybe(project, objective, owner, *, request_bytes=0):
     if depth > current_limits().successor_chain:
         return {"status": "held", "code": "capacity_chain_limit", "limit": current_limits().successor_chain}
     successor = root[:192] + "-capacity-" + str(depth) + "-" + digest({"objective": objective, "state": prior})[:12]
+    native = _native_guard(project, prior, owner)
+    plan = {"root": root, "predecessor": objective, "successor": successor, "depth": depth,
+            "source_revision": prior["revision"], "source_sha256": digest(prior),
+            "at": datetime.now(timezone.utc).isoformat()}
+    # Capacity recovery must itself fit before publishing its reservation.
+    from .history import prepare_context, compact_journal
+    from .governor import _read_journal
+    from .util import encoded
+    child = deepcopy(prior)
+    child["checkpoint"]["objective"] = successor
+    child[CHILD] = {"schema": SCHEMA, "phase": "preparing", "plan": plan,
+                    "standing_floor": len(prior.get("standing_authorization", {}).get("decisions", [])),
+                    "work_objectives": prior.get(CHILD, {}).get("work_objectives", []) + [objective]}
+    planned, _chunks = prepare_context(direct_root(project, successor) / "context.json",
+                                       child, native=native, bulk_history=True, require_fit=False)
+    planned_bytes = len(encoded(planned, compact=True))
+    watermark = 7 * context_limit() // 8
+    if planned_bytes >= min(physical, watermark):
+        return {"status": "held", "code": "capacity_no_material_relief",
+                "dimension": "context_bytes", "current_bytes": physical,
+                "proposed_bytes": planned_bytes, "watermark_bytes": watermark,
+                "next_action": "preserve this objective; settle protected live work before a capacity successor"}
     paths = sorted({direct_root(project, name) / "context.json" for name in (root, objective, successor)})
     with ExitStack() as locks:
         for path in paths:
@@ -324,18 +353,6 @@ def maybe(project, objective, owner, *, request_bytes=0):
         native = _native_guard(project, prior, owner)
         if _read(project, successor) is not None:
             raise _error("capacity_child_conflict", "The deterministic successor is already recorded")
-        plan = {"root": root, "predecessor": objective, "successor": successor, "depth": depth,
-                "source_revision": prior["revision"], "source_sha256": digest(prior),
-                "at": datetime.now(timezone.utc).isoformat()}
-        # Capacity recovery must itself fit before publishing its reservation.
-        from .history import prepare_context, compact_journal
-        from .governor import _read_journal
-        from .util import encoded
-        child = deepcopy(prior)
-        child["checkpoint"]["objective"] = successor
-        child[CHILD] = {"schema": SCHEMA, "phase": "preparing", "plan": plan,
-                        "standing_floor": len(prior.get("standing_authorization", {}).get("decisions", [])),
-                        "work_objectives": prior.get(CHILD, {}).get("work_objectives", []) + [objective]}
         reserved = {**deepcopy(prior), PENDING: plan}
         fenced = {**deepcopy(prior), CONTINUED: plan}
         for candidate_path, candidate in ((parent_dir / "context.json", reserved),

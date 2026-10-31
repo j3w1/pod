@@ -9,6 +9,13 @@ from tests.issue41_support import ProductionCase
 from tests.history_support import size
 
 
+# These retained incident controls explicitly select the preceding 512 KiB soft size.
+from tests.history_support import configured_context_case
+CONTEXT_LIMIT = 512 * 1024
+COMPACT_AT = 5 * CONTEXT_LIMIT // 8
+WARN_AT = CONTEXT_LIMIT // 2
+
+@configured_context_case(CONTEXT_LIMIT)
 class LongObjectiveTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
