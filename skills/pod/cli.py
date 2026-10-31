@@ -73,6 +73,14 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--delivered", action="store_true",
                         help="with --list: prove each open objective's delivery (reads Orca and GitHub)")
     status.add_argument("--json", action="store_true")
+    admission = sub.add_parser("admission", help="read current claims and exact candidate proof")
+    for name in ("repository", "objective", "candidate", "worktree", "branch", "target", "target-commit", "expect"):
+        admission.add_argument("--" + name)
+    admission.add_argument("--effect", action="append", default=[])
+    admission.add_argument("--known-repository", action="append", default=[],
+                           help="CE-owned repository path used to prove earlier record attribution")
+    admission.add_argument("--timeout", type=float, default=10.0)
+    admission.add_argument("--json", action="store_true")
     sweep = sub.add_parser("sweep", help="close every provably delivered open objective by evidence")
     sweep.add_argument("--repository", metavar="PATH", action="append",
                        help="a repository to sweep (repeatable; default: here)")
@@ -360,6 +368,12 @@ def _models(project: Path, action: str | None, *, check: bool = False,
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
+    if args.command == "admission":
+        from .admission import query
+        return query(project, repository=args.repository, objective=args.objective, candidate=args.candidate,
+                     worktree=args.worktree, branch=args.branch, target=args.target,
+                     target_commit=args.target_commit, effects=args.effect, expect=args.expect, timeout=args.timeout,
+                     known_repositories=args.known_repository)
     if args.command == "policy":
         return _policy_command(args, project)
     if args.command == "tool":
@@ -464,6 +478,8 @@ def _print_observation_status(report: dict) -> None:
 
 
 def _exit_code(args: argparse.Namespace, result: dict) -> int:
+    if args.command == "admission" and result.get("schema") == "pod-admission-query/v1":
+        return 0  # A factual answer, including scoped uncertainty, is not authorization.
     if args.command in ("policy", "tool"):
         return 1 if result["status"] == "blocked" else 0
     if "projection" in result:
@@ -599,6 +615,9 @@ def main(argv: list[str] | None = None) -> int:
         for row in result["state"].get("superseded", []):
             print(f"Superseded objective {row['objective'] or row['record']}: "
                   f"{', '.join(row['schemas'])} (blocked, not converted)")
+    elif args.command == "admission":
+        from .admission import render
+        render(result)
     elif args.command == "status" and args.list_objectives:
         from .listing import render as render_list
         render_list(result)

@@ -519,6 +519,7 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod config edit` | Opens the personal YAML in `$VISUAL` or `$EDITOR`, validates afterward, retains invalid edits and reports them. |
 | `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments (active, settled, or unverified when the exact native read fails), runtime rebinds, succession, gates, progress, blockers and next action, and the `readiness` answer (R114) first. Shared Runs require explicit selection. |
 | `pod status --list [--repository PATH \| --worktree PATH] [--delivered] [--json]` | List every objective recorded for a repository or worktree (R108) from Pod's own state, without Orca, each with its record-only readiness label. `--delivered` adds read-only delivery proof for open rows (R148). Exit 0 for `listed` or `absent`. |
+| `pod admission --repository PATH [--objective ID --candidate SHA] [--json]` | Read current claims and exact candidate proof with scoped unknowns and effect-boundary recheck identity (R185). |
 | `pod sweep [--repository PATH]... [--objective NAME]... [--json]` | Close every proved delivered open objective by evidence (R148); no terminal or Run binding needed. |
 | `pod doctor [--json]` | Read-only installation, registry, preference, route summary, observation cache, runtime capability, message route (R111) and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
@@ -1047,3 +1048,148 @@ Display proposes a decision-needed mark only for a known person wait. Synthetic 
 - <a id="a573"></a>**A573** — Missing, opaque, unsupported or truncated old question facts remain unknown/partial and cannot claim no wait; status remains read-only and retains readiness/finalization facts.
 - <a id="a578"></a>**A578** — New decision and model-rule summaries contain no original request words, private decision/verifier evidence, host-specific roles, personal paths, runtime identifiers or secret values; existing native-reference status fields keep their meanings and synthetic fixtures remain separately identified.
 - <a id="a579"></a>**A579** — The installed router keeps its five headings, one unique trigger for every reference and no reference-to-reference links; recurring decision guidance owns its detailed rules once.
+
+### R185 — Read relevant admission facts without granting authorization
+
+Type: B,I · Scenarios: [A670](#a670), [A671](#a671), [A672](#a672), [A673](#a673)
+
+`pod admission --repository PATH [--objective ID --candidate SHA] [--worktree PATH]
+[--branch NAME] [--target REF --target-commit SHA] [--effect GOVERNOR_ID]...
+[--known-repository PATH]... [--expect SNAPSHOT] [--timeout SECONDS] [--json]`
+returns `pod-admission-query/v1`. Pod reports facts; CE alone authorizes admission.
+`authorization` is always false. Neither exit zero, `observed`, a proof status nor
+a snapshot grants permission. CE joins its own authority, capacity, leases,
+resource ownership and candidate proof, and repeats these reads under its existing
+serialized effect boundary. CE's leaf-store lock performs only its atomic record
+checks; it does not hold native I/O inside that lock.
+
+`scope.path` binds the resolved repository path; `scope.repo_key` binds its Git
+common-directory identity. `scope.repository` is only the repository display name,
+never a filesystem path. `scope.selection` identifies the requested worktree, branch, target and canonical
+effect identities. `claims` contains possible intersections with that scope:
+recorded objective/unit ownership, possibly active native writers/resources, and
+ALLOW Governor actions still pending or UNKNOWN. `conflicts` reports factual
+intersections, not an authorization verdict. CE reconciles positively identified
+same-owner resource reuse through its own current task/lease/caller binding;
+foreign or unknown ownership remains protected. Without selectors the query
+reports the repository's recorded/current facts rather than a proposed action.
+
+Ownership rows separate `recorded_owner` and `recorded_native_refs` from
+`owner_observations`, the exact current Run coordinator/generation/runtime joined
+to the native terminal's live identity and workspace. `owner_identity_matches`
+requires positive agreement; a stored Run reference alone is insufficient. Several
+retained purposes may share one positively observed owner. A matching current
+owner makes an old runtime reference a disclosed `recorded_runtime_changes` fact,
+not unknown current ownership. It does not rebind Pod write authority or validate
+old candidate evidence. Unobserved open-record identity changes, exact binding
+mismatches and current possibly live workers remain scoped uncertainties.
+
+Effects use the existing Governor `_effects` predicate: intrinsic identities such
+as `workflow:ci.yml`, declared effects and admitted policy-mapped triggers. Durable
+`row.effects` is preserved alongside `action.effects`; missing declarations remain
+missing, never fabricated as an empty declaration. Each claim returns `effects`
+as a canonical identity list or null when its actual effects are unknown. Effects
+are compared across repository attribution: a foreign source can still affect a
+shared target. Requested effect reads inspect foreign current journals without
+hydrating their report/evidence histories. An unknown effect names its action and
+requires actual effect readback/reconciliation. The W1-owned current-claim reader
+alone interprets abandoned workers' native effects, on fresh exact worker reads.
+An unavailable reader or unresolved canonical native effect identity is a specific
+uncertainty, never guessed clearance or a replacement effect vocabulary.
+
+The query reads bounded primary facts, current Governor journals, a paginated
+native all-Run inventory, and a complete native terminal ownership inventory.
+The latter includes sessions outside supervised workers. A completed context-only
+Dispatch with no supervised resource is not itself a current native resource
+claim: its terminal's current ownership is read separately, without inferring
+process exit. Native resource release alone does not prove exit. A bound caller's
+exact-Run fallback cannot certify all-Run coverage. Worker identity, host coverage,
+pagination, runtime changes and explicit completeness remain checked.
+
+Foreign exclusion requires repository/objective attribution consistent with the
+record key. `--known-repository` paths come from CE's authoritative registry and
+permit earlier record-key attribution without migration. Captured placement facts
+also retain attribution. A mismatched name alone never proves a foreign record.
+Unattributed records remain explicit uncertainty. A structurally closed record
+with no admissions (including no hidden admission references), no outstanding
+Governor effect, unchanged primary/journal, and a separate complete all-Run
+inventory has no current logical Pod claim: its attribution gap is disclosed
+without vetoing independent current work. Closed records with admissions or effects
+are still inspected. Existing native actors are inventoried independently.
+
+Full context/status proof runs only for the selected exact candidate. Unrelated
+retained receipts, findings and reports are not hydrated. Whole admission references
+in the preceding format require bounded claim-header inspection; a foreign
+admission record is opened only when native resource facts identify an actual
+possible conflict requiring its accepted placement scope. Accepted worktree,
+branch and repository placement is kept separate from current native liveness.
+Known preceding checkpoint/admission formats expose only their existing typed
+ownership/binding metadata, marked `current_contract: false`; this never makes
+their objective writable or supplies current candidate proof. Unsupported or
+missing required fields remain uncertainty. W3 owns explicit source-preserving
+attribution normalization; this read never mutates live records.
+
+`proof.purpose` is `candidate_proof`. Its status reports exact-candidate recorded
+assurance, evidence, verification gaps and native validity. `objective_unfinished`
+and `objective_complete` separately describe closure: future merge/delivery rows
+are not circular prerequisites for candidate proof. Missing review, invalidated
+evidence, genuine verification gaps, unresolved required findings and outstanding
+material work still withhold candidate proof. CE applies its own required
+pre-merge proof contract rather than equating this status with permission.
+
+`unknowns` names each specific relevant fact, source record/resource, scope and
+concrete `reconciliation` path. `complete` concerns the requested factual scope;
+`repository_complete` separately reports broader inventory completeness.
+`unrelated_unknowns` carries counts by cause and unique record/resource references,
+with an explicit diagnostic query for full detail; repeated scopes and repair text
+stay off the admission path.
+unknown relevance itself remains in `unknowns`. `native_resources_complete` reports
+current native terminal inventory coverage. Missing, corrupt or changing relevant
+facts never become absence. No namespace-wide lifetime record-count ceiling is
+applied: discovery iterates entries under the request deadline. Per-primary/chunk read
+bounds, current-claim/output protections and bounded native pages still protect
+one query. Timeout defaults to 10 seconds and accepts at most 30.
+
+Git target aliases such as `origin/main` and `refs/remotes/origin/main` are
+normalized before factual matching. Selection retains the requested spelling;
+the observed target returns its canonical ref, requested ref and object identity.
+
+The snapshot binds relevant current claim/effect identities, positive observed
+owners/resources, selected proof generation, request selectors and target object
+identity. Inert finished records, unrelated retained-history rewrites and proved
+foreign churn do not change it. CE reruns the same selectors with `--expect` and
+the expected target commit under its effect serialization, then revalidates CE
+capacity/scope/proof/epoch/lease records before its atomic transition. A changed
+candidate, current claim, resource or target remains an observed conflict or
+uncertainty; no lock or permission receipt is created by Pod. Claims are ordered
+canonically so presentation order does not change the token. Every successfully rendered factual JSON answer exits zero, including blocked
+and unknown answers. Invalid invocation or unusable execution remains nonzero.
+CE always parses the factual status and scope; zero is never permission.
+
+- <a id="a670"></a>**A670** — Unrelated finished evidence and more than 1,024 foreign records cause no full status hydration or lifetime cliff; file, chunk, journal and native reads are counted. Detailed proof is limited to the selected exact candidate, separately from future objective closure.
+- <a id="a671"></a>**A671** — Closed or archived work still exposes a possibly active writer; complete terminal ownership finds unregistered sessions. Governor intrinsic, declared, admitted mapped and unknown effects retain their real meanings, including shared effects from another repository.
+- <a id="a672"></a>**A672** — Missing, malformed, incomplete, changing or unavailable relevant facts produce specific scoped uncertainty and reconciliation. Complete native inventory prevents non-current runtime references from becoming permanent vetoes; positive current-owner observations distinguish retained purposes from foreign owners without inventing authority.
+- <a id="a673"></a>**A673** — Target, candidate, claim or resource changes fail the serialized recheck. Explicitly unrelated uncertainty stays disclosed without blocking independent work. Candidate proof, current owner identity, objective completion and CE permission remain distinct through CLI and CE consumer tests.
+
+#### Admission storage read contract
+
+W2's reader and W3's writer share `pod-admission-facts/v1` through
+`history.load_admission_facts(path, include_admissions=...)`. Attribution-only reads
+return exact physical `generation {revision, sha256}`, `context` metadata, `phase`,
+`attribution_complete`, null admissions and incomplete claim enumeration. The
+optional source-proven `attribution {status, repository, repo_key, objective, basis}`
+is bound to the same current authority and record key. A matching requested key
+proves membership without requiring a coordinator placement; safe exclusion needs
+an independently proved foreign key. A missing placement is reported separately.
+Full current-claim reads retain admission role/runtime/Run/Task/native binding,
+request UUID, boundary/candidate, accepted `recovery.placement_binding` and W1's
+accounting marker, excluding report bodies and old receipt/findings payloads.
+
+`governor.load_admission_effects(path)` returns `pod-admission-effects/v1`, exact
+physical generation, current units/branch ownership and every pending/UNKNOWN
+ALLOW action. Both durable `row.effects` and declared `action.effects` preserve
+null versus explicit empty values. Missing/corrupt required metadata is an error;
+settled action history is excluded. Existing context and Governor writers remain
+the sole atomic authorities. There is no second writable claim index. The bounded
+preceding primary/journal readers remain usable before storage APIs are installed;
+full audit and explicit migration are separate operations.

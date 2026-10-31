@@ -9295,6 +9295,102 @@
         "tests.test_inventory.InventoryIntegrityTests.test_requirement_scenario_references_resolve"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A670",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.AdmissionQueryTests.test_finished_history_does_not_hydrate_unrelated_receipts",
+        "tests.test_admission_query.AdmissionQueryTests.test_proof_reads_only_selected_exact_candidate",
+        "tests.test_admission_query.CandidateProofTests.test_exact_proof_is_ready_and_changed_candidate_cannot_reuse_it",
+        "tests.test_admission_query.CandidateProofTests.test_missing_required_evidence_and_unverified_native_stay_unready",
+        "tests.test_admission_query.AttributionReadTests.test_foreign_finished_records_load_zero_chunks_and_one_native_inventory",
+        "tests.test_admission_query.AttributionReadTests.test_unrelated_finished_primary_reencoding_preserves_claim_generation",
+        "tests.test_admission_query.FactsContractTests.test_versioned_storage_projection_does_not_load_full_context",
+        "tests.test_admission_query.FactsContractTests.test_effect_projection_avoids_full_journal_history",
+        "tests.test_admission_query.AttributionReadTests.test_more_than_1024_foreign_records_has_no_history_cliff",
+        "tests.test_admission_query.CandidateProofTests.test_premerge_proof_does_not_require_future_objective_closure"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A671",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.AdmissionQueryTests.test_closed_record_keeps_hidden_native_writer_conflict",
+        "tests.test_admission_query.AdmissionQueryTests.test_archived_admission_binding_is_checked_without_loading_other_history",
+        "tests.test_admission_query.AdmissionQueryTests.test_new_native_run_without_a_pod_admission_conflicts_by_branch",
+        "tests.test_admission_query.AdmissionQueryTests.test_effect_inventory_includes_pending_and_unknown_but_not_deferred",
+        "tests.test_admission_query.ReviewCorrectionTests.test_governor_intrinsic_and_declared_effects_are_both_visible",
+        "tests.test_admission_query.ReviewCorrectionTests.test_foreign_source_cannot_hide_a_shared_effect",
+        "tests.test_admission_query.ReviewCorrectionTests.test_manual_native_terminal_is_a_current_writer_without_a_pod_admission",
+        "tests.test_admission_query.ReviewCorrectionTests.test_settled_unsupervised_dispatch_uses_current_terminal_ownership",
+        "tests.test_admission_query.ReviewCorrectionTests.test_owner_observation_joins_run_and_live_terminal"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A672",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.AdmissionQueryTests.test_unreadable_and_unattributed_are_scoped_unknowns",
+        "tests.test_admission_query.AdmissionQueryTests.test_unsupported_schema_is_a_scoped_unknown",
+        "tests.test_admission_query.AdmissionQueryTests.test_incomplete_inventory_never_proves_absence",
+        "tests.test_admission_query.AdmissionQueryTests.test_incomplete_native_inventory_never_becomes_empty",
+        "tests.test_admission_query.AdmissionQueryTests.test_native_scope_pages_and_replay_are_verified",
+        "tests.test_admission_query.AdmissionQueryTests.test_unreadable_journal_and_changed_record_are_unknown",
+        "tests.test_admission_query.AdmissionQueryTests.test_concurrent_inventory_addition_and_symlink_are_unknown",
+        "tests.test_admission_query.AdmissionQueryTests.test_query_deadline_cuts_off_record_reads_as_unknown",
+        "tests.test_admission_query.AdmissionQueryTests.test_bound_native_inventory_reports_coverage_without_history_reads",
+        "tests.test_admission_query.AttributionReadTests.test_wrong_record_key_is_unknown_instead_of_foreign",
+        "tests.test_admission_query.FactsContractTests.test_incomplete_or_changed_claim_generation_is_unknown",
+        "tests.test_admission_query.ReviewCorrectionTests.test_closed_stale_runtime_has_no_permanent_unknown",
+        "tests.test_admission_query.ReviewCorrectionTests.test_open_stale_runtime_remains_scoped_uncertainty",
+        "tests.test_admission_query.ReviewCorrectionTests.test_current_mapped_effects_and_unknown_effects_are_distinct",
+        "tests.test_admission_query.ReviewCorrectionTests.test_malformed_effect_projection_is_a_scoped_error",
+        "tests.test_admission_query.ReviewCorrectionTests.test_terminal_reader_requires_complete_inventory_and_strips_preview",
+        "tests.test_admission_query.ReviewCorrectionTests.test_positive_owner_identity_does_not_invent_a_different_writer_per_purpose",
+        "tests.test_admission_query.ReviewCorrectionTests.test_abandoned_effects_are_interpreted_by_shared_reader_and_stay_material",
+        "tests.test_admission_query.ReviewCorrectionTests.test_missing_shared_reader_does_not_hide_possible_cross_repository_effect",
+        "tests.test_admission_query.ReviewCorrectionTests.test_known_previous_binding_metadata_does_not_upgrade_candidate_proof",
+        "tests.test_admission_query.ReviewCorrectionTests.test_closed_without_admissions_or_effects_keeps_attribution_gap_disclosed",
+        "tests.test_admission_query.ReviewCorrectionTests.test_foreign_placement_scope_requires_exact_current_native_identity"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A673",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.AdmissionQueryTests.test_changed_merge_target_is_detected_on_recheck",
+        "tests.test_admission_query.AdmissionQueryTests.test_cli_json_and_text_are_read_only",
+        "tests.test_admission_query.AdmissionQueryTests.test_snapshot_recheck_detects_new_ownership_claim",
+        "tests.test_admission_query.AttributionReadTests.test_unrelated_record_creation_and_history_churn_do_not_restart_query",
+        "tests.test_admission_query.AttributionReadTests.test_new_finished_record_without_current_claim_preserves_snapshot",
+        "tests.test_admission_query.ReviewCorrectionTests.test_recorded_mapping_survives_current_policy_changes",
+        "tests.test_admission_query.ReviewCorrectionTests.test_unrelated_process_uncertainty_is_disclosed_without_veto",
+        "tests.test_admission_query.ReviewCorrectionTests.test_known_repository_keys_attribute_missing_worktree_without_migration",
+        "tests.test_admission_query.ReviewCorrectionTests.test_successful_fact_read_exits_zero_for_intersections_and_uncertainty",
+        "tests.test_admission_query.ReviewCorrectionTests.test_git_target_aliases_identify_the_same_pending_target_update",
+        "tests.test_admission_query.ReviewCorrectionTests.test_unrelated_diagnostics_are_counts_and_unique_resource_references"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
