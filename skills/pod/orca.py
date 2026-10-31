@@ -564,7 +564,7 @@ def terminal_identity(handle: str) -> dict:
             "cause": cause["kind"] if exited else None}
 
 
-# R173: the one native mailbox call a coordinator's wake uses. `check` consumes (a consuming read replays its batch
+# R190: the one native mailbox call a coordinator's wake uses. `check` consumes (a consuming read replays its batch
 # until acknowledged), so it is not a plain read; Pod passes only the shapes below and never `--peek`, `--types`,
 # `--from` or a Dispatch/terminal override.
 MAILBOX_GRACE_SECONDS = 30

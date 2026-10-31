@@ -271,7 +271,7 @@ class RowAndHistoryTests(unittest.TestCase):
         by_id(renewed, "O1")["receipts"] = [{"evidence": {"reference": "synthetic", "result": "x" * 2000}}]
         renewed["obligations"].extend([
             ob("A", kind="assurance", scope={"paths": []}, candidate="c1", question="q", existing_evidence="none", insufficiency="review",
-               findings=[{"recorded_seq": 2, "triage": "required_correction", "summary": "x" * 512,
+               findings=[{"recorded_seq": 2, "triage": "required_correction", "blocks": "outcome", "summary": "x" * 512,
                           "attempt": "synthetic", "finding": "F", "severity": "major", "correction": "K"}]),
             ob("K", kind="correction", parent="A")])
         record, chunks = compact(logical, force=True)

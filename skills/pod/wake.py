@@ -1,4 +1,4 @@
-"""Coordinator wake (R173): recheck pending mail, arm exactly one native wait, classify what wakes the coordinator.
+"""Coordinator wake (R190): recheck pending mail, arm exactly one native wait, classify what wakes the coordinator.
 
 Orca owns the mailbox, its FIFO batches, replay until acknowledgement and consumer fencing. This module adds no queue,
 no event log and no polling: one call makes one pending-mail check and at most one native wait."""

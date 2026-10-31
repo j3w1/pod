@@ -10,7 +10,7 @@ from pod.errors import PodError
 from pod.history import CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
 from pod.util import encoded
 from tests.history_support import inline_copies, size, synthetic_state
-from tests.records_support import start_before_review_guard
+from tests.records_support import start_before_review_guard, report_before_goal_links
 
 
 OLD = f"{1:040x}"
@@ -186,9 +186,10 @@ class LiveShapeTests(unittest.TestCase):
             update = {"A": WAITING, **{key: {"kind": "correction", "provenance": "coordinator", "parent": "A",
                                              "check": f"repair {key}", "proof_scope": ["src"], **WAITING}
                                        for key in corrections}}
-            triage = [{"finding": f"F{index}", "severity": "major", "triage": "required_correction",
+            triage = [{"finding": f"F{index}", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                        "correction": key, "summary": f"repair {key}"} for index, key in enumerate(corrections)]
-            case.report(admission, frozen, outcome=result, map={"seq": seq() + 1, "update": update}, triage=triage)
+            report_before_goal_links(case, admission, frozen, outcome=result,
+                                     map={"seq": seq() + 1, "update": update}, triage=triage)
             return admission["admission_id"]
 
         corrections = [f"K{index}" for index in range(12)]
@@ -320,7 +321,7 @@ class LaterWriteTests(unittest.TestCase):
         case.report(admission, frozen, outcome="failed", map={"seq": seq() + 1, "update": {"A": WAITING, **{
             key: {"kind": "correction", "provenance": "coordinator", "parent": "A", "check": f"repair {key}",
                   "proof_scope": ["src"], **WAITING} for key in corrections}}},
-            triage=[{"finding": f"F{index}", "severity": "major", "triage": "required_correction",
+            triage=[{"finding": f"F{index}", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                      "correction": key, "summary": f"repair {key}"} for index, key in enumerate(corrections)])
         case.write(None, seq=seq() + 1, update={key: {"state": "satisfied", "evidence": [case.proof(key)]}
                                                 for key in corrections})

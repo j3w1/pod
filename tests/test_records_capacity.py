@@ -47,7 +47,7 @@ class RecordsCapacityTests(unittest.TestCase):
             start, stop = ((0, 32) if group == 0 else (32, 53) if group == 1 else (53, 53))
             corrections = {f"K{index}": {"kind": "correction", "provenance": "coordinator", "parent": "A", "state": "waiting",
                 "check": "repair the retained finding", "wait": {"class": "sequenced", "referent": "O1"}} for index in range(start, stop)}
-            findings = [{"finding": f"F{index}", "severity": "major", "triage": "required_correction", "correction": f"K{index}",
+            findings = [{"finding": f"F{index}", "severity": "major", "triage": "required_correction", "blocks": "outcome", "correction": f"K{index}",
                          "summary": "synthetic required finding " + "f" * 145} for index in range(start, stop)]
             case.report(admission, frozen, map={"seq": state["checkpoint"]["seq"] + 1, "update": {"A": {"state": "waiting",
                 "wait": {"class": "sequenced", "referent": "O1"}, "evidence": [{"attempt": key} for key in attempts]}, **corrections}}, triage=findings)
@@ -121,7 +121,7 @@ class RecordsCapacityTests(unittest.TestCase):
                           "wait": {"class": "sequenced", "referent": "O1"}}
             request_map = {"seq": state["checkpoint"]["seq"] + 1, "update": {served: {"state": "blocked_external", "external": {
                 "party": "provider", "need": "fixture review slot", "unblocks_when": "available"}}, key: correction}}
-            findings = [{"finding": f"new-{group}-{index}", "severity": "major", "triage": "required_correction", "correction": key,
+            findings = [{"finding": f"new-{group}-{index}", "severity": "major", "triage": "required_correction", "blocks": "outcome", "correction": key,
                          "summary": "genuine report consumption in the synthetic capacity fixture"} for index in range(3 if group == 0 else 1)]
             request_size = request_bytes(request_map, findings)
             case.report(admission, frozen, map=request_map, triage=findings)

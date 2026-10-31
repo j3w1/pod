@@ -1119,12 +1119,16 @@ def _check_readiness(checkpoint: dict, unit: dict | None, candidate_id: str | No
                 _warn(warnings, "preflight_unconfigured", "no local preflight is configured in waste_governor.preflight")
         else:
             _warn(warnings, "context_unbound", "the candidate binds a commit only; prepare the unit for context binding")
-    gaps = checkpoint.get("verification_gaps") or []
-    if gaps:
+    gaps = checkpoint.get("verification_gaps", [])
+    # Only a genuine list can be empty: any other stored value (null, false, 0, "", {} or text) is one unresolved
+    # requirement, never none and never one gap per character.
+    count, shape = ((len(gaps), "") if isinstance(gaps, list) else
+                    (1, "; the stored value is not a list of gaps, rewrite it as one item per gap"))
+    if count:
         if purpose == "release":
-            _reason(reasons, "correctness", "verification_gaps", f"{len(gaps)} verification gap(s) remain")
+            _reason(reasons, "correctness", "verification_gaps", f"{count} verification gap(s) remain{shape}")
         else:
-            _warn(warnings, "verification_gaps", f"{len(gaps)} verification gap(s) remain in the checkpoint")
+            _warn(warnings, "verification_gaps", f"{count} verification gap(s) remain in the checkpoint{shape}")
 
 
 

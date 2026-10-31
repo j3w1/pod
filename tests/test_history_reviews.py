@@ -10,7 +10,7 @@ from pod.errors import PodError
 from pod.history import COMPACT_AT, CONTEXT_LIMIT, compact, hydrate, is_reference, prepare_context
 from pod.util import digest, encoded
 from tests.history_support import inline_copies, size, synthetic_state
-from tests.records_support import start_before_review_guard
+from tests.records_support import start_before_review_guard, report_before_goal_links
 
 
 OUTCOMES = ("succeeded", "partial", "failed", "blocked", "uncertain")
@@ -49,7 +49,7 @@ def review_state():
         correction = f"K{index}"
         checkpoint["obligations"].append(satisfied(correction, served["id"]))
         served["findings"] += [
-            {"attempt": key, "finding": "F1", "severity": "major", "triage": "required_correction",
+            {"attempt": key, "finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
              "summary": "repair required", "correction": correction, "recorded_seq": 4, "resolved_seq": 5},
             {"attempt": key, "finding": "F2", "severity": "minor", "triage": "advisory",
              "summary": "kept as a proposal", "proposal": f"adv-{index}", "recorded_seq": 4}]
@@ -139,7 +139,7 @@ class ReviewEligibilityTests(unittest.TestCase):
         state["checkpoint"]["obligations"].append({"id": "KL", "kind": "correction", "provenance": "coordinator",
             "parent": served["id"], "state": "waiting", "check": "repair a later finding", "evidence": [], "receipts": []})
         served["findings"].append({"attempt": "attempt-001", "finding": "F3", "severity": "major",
-            "triage": "required_correction", "summary": "triaged later", "correction": "KL", "recorded_seq": 9})
+            "triage": "required_correction", "blocks": "outcome", "summary": "triaged later", "correction": "KL", "recorded_seq": 9})
         record, _ = compact(state, trigger_bytes=0)
         self.assertEqual(record["admissions"]["attempt-001"], state["admissions"]["attempt-001"])
         self.assertTrue(is_reference(record["admissions"]["attempt-002"]))
@@ -280,10 +280,11 @@ class LiveShapeTests(unittest.TestCase):
             if correction:
                 update[correction] = {"kind": "correction", "provenance": "coordinator", "parent": "A",
                                       "check": f"repair {correction}", "proof_scope": ["src"], **WAITING}
-                triage = [{"finding": "F1", "severity": "major", "triage": "required_correction",
+                triage = [{"finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                            "correction": correction, "summary": "repair required"},
                           {"finding": "F2", "severity": "minor", "triage": "advisory", "summary": "noted"}]
-            case.report(admission, frozen, outcome=result, map={"seq": seq() + 1, "update": update}, triage=triage)
+            report_before_goal_links(case, admission, frozen, outcome=result,
+                                     map={"seq": seq() + 1, "update": update}, triage=triage)
             return admission["admission_id"]
 
         def resolve(*keys):
@@ -437,7 +438,7 @@ class RenewedAssuranceTests(unittest.TestCase):
         case.report(admission, frozen, outcome="failed", map={"seq": seq() + 1, "update": {"A": WAITING, "K": {
             "kind": "correction", "provenance": "coordinator", "parent": "A", "check": "repair the defect",
             "proof_scope": ["src"], **WAITING}}}, triage=[{"finding": "F1", "severity": "major",
-            "triage": "required_correction", "correction": "K", "summary": "repair required"}])
+            "triage": "required_correction", "blocks": "outcome", "correction": "K", "summary": "repair required"}])
         case.write(renew=[{"id": "A", "as": "A2"}])
         case.write(seq=seq() + 1, update={"K": {"state": "withdrawn", "withdrawal": {"by": "user_direct",
                    "reason": "owner waiver"}}}, revision_authority={"provenance": "user_direct", "instruction": "Waive K"})

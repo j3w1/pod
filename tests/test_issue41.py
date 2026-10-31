@@ -169,8 +169,8 @@ class FindingBoundaryTests(ProductionCase):
         rows = self.stored(); rows[1].pop("executor"); rows[1].update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
         rows.append({"id":"C", "kind":"correction", "provenance":"coordinator", "parent":"A", "check":"fix", "state":"waiting", "wait":{"class":"sequenced", "referent":"O1"}})
         self.report(admission, frozen, map={"obligations": rows}, triage=[
-          {"finding":"F1", "severity":"major", "triage":"required_correction", "summary":"root", "correction":"C"},
-          {"finding":"F2", "severity":"minor", "triage":"required_correction", "summary":"sibling", "correction":"C"}])
+          {"finding":"F1", "severity":"major", "triage":"required_correction", "blocks": "outcome", "summary":"root", "correction":"C"},
+          {"finding":"F2", "severity":"minor", "triage":"required_correction", "blocks": "outcome", "summary":"sibling", "correction":"C"}])
         rows = self.stored(); c = next(row for row in rows if row["id"] == "C")
         self.assertEqual(c["finding"]["findings"], ["F1", "F2"]); self.assertEqual(c["finding"]["severity"], "major")
         c.pop("wait"); c.update(state="satisfied", evidence=[self.proof("C")]); self.write(rows)
@@ -514,7 +514,7 @@ class AdditionalFindingTests(FindingBoundaryTests):
     def test_findings_and_correction_id_bounds_refuse_without_eviction(self):
         frozen,admission=self.intake_review();rows=self.stored();rows[1].pop("executor");rows[1].update(state="waiting",wait={"class":"sequenced","referent":"O1"})
         rows.append({"id":"C","kind":"correction","provenance":"coordinator","parent":"A","check":"fix","state":"waiting","wait":{"class":"sequenced","referent":"O1"}})
-        findings=[{"finding":f"F{i}","severity":"minor","triage":"required_correction","summary":"shared predicate","correction":"C"} for i in range(9)]
+        findings=[{"finding":f"F{i}","severity":"minor","triage":"required_correction", "blocks": "outcome","summary":"shared predicate","correction":"C"} for i in range(9)]
         before=read(self.project,"objective")
         with self.assertRaises(PodError) as caught:self.report(admission,frozen,map={"obligations":rows},triage=findings)
         self.assertEqual(caught.exception.detail["detail"],"finding_limit");self.assertEqual(read(self.project,"objective"),before)
@@ -614,7 +614,7 @@ class RemainingProofTests(ProofBoundaryTests):
         entries={item["obligation"]:item for item in detail["referent"]["invalidations"]}
         self.assertEqual(detail["referent"]["remaining"],1)
         self.assertEqual(entries["O1"]["eligibility"],"eligible");self.assertEqual(entries["T"]["eligibility"],"touched")
-        self.assertEqual(entries["N"]["eligibility"],"no declared scope");self.assertEqual(entries["U"]["eligibility"],"delta unreadable")
+        self.assertEqual(entries["N"]["eligibility"],"no declared scope");self.assertEqual(entries["U"]["eligibility"],"eligible");self.assertIn("{from: "+self.base+"}",entries["U"]["correction"])
         self.assertEqual(entries["R"]["eligibility"],"touched");self.assertEqual(entries["D"]["classification"],"definition change")
         self.assertEqual(entries["B"]["classification"],"binding change");self.assertEqual(entries["G"]["classification"],"governance change")
         self.assertTrue(all(item["correction"] for item in entries.values()));self.assertEqual(read(self.project,"objective"),before)
@@ -640,12 +640,42 @@ class RemainingProofTests(ProofBoundaryTests):
         self.write(rows)
         self.assertEqual(self.stored()[0]["proof_scope"],["src"])
 
-    def test_empty_process_scope_still_refuses_an_unreadable_delta(self):
+    def test_empty_process_scope_ignores_an_unreadable_claimed_source(self):
         self.satisfied_rows();self.move("src/old.py")
         rows=self.stored();rows[1]["reuse"]={"from":"f"*40}
         with self.assertRaises(PodError) as caught:self.write(rows)
         s=next(item for item in caught.exception.detail["referent"]["invalidations"] if item["obligation"]=="S")
-        self.assertEqual(s["eligibility"],"delta unreadable")
+        # The proposal comes from the evidence's own candidate; an unreadable claimed source decides nothing.
+        self.assertEqual(s["eligibility"],"eligible");self.assertNotIn("f"*40,s["correction"])
+        self.assertEqual(s["reuse_failure"],{"predicate":"reuse_from_is_evidence_candidate","given":"f"*40,
+                                              "evidence_candidate":self.base})
+
+    def test_touched_scope_refusal_keeps_its_failed_predicate_through_the_checkpoint(self):
+        self.satisfied_rows();self.move("src/old.py")
+        rows=self.stored();next(row for row in rows if row["id"]=="T")["reuse"]={"from":self.base}
+        with self.assertRaises(PodError) as caught:self.write(rows)
+        t=next(item for item in caught.exception.detail["referent"]["invalidations"] if item["obligation"]=="T")
+        self.assertEqual((t["eligibility"],t["reuse_failure"]),("touched",{"predicate":"reuse_scope_untouched"}))
+        self.assertTrue(t["correction"].startswith("record fresh evidence for T"))
+
+    def test_report_refusal_keeps_the_wrong_source_and_the_recorded_candidate(self):
+        self.write([self.criterion(boundary={"paths":["src"]},proof_scope=["README.md"]),self.sub("S")],governance={"base_ref":"target"})
+        rows=self.stored();rows[0].pop("executor");rows[0].update(state="satisfied",evidence=[self.proof("O1")])
+        rows[1].pop("wait");rows[1].update(state="active",executor="coordinator");self.write(rows)
+        frozen=self.packet(["S"],role="investigate",resolves="which branch applies?",stop_condition="answer")
+        admission=self.start("investigate",frozen)["admission"]
+        self.move("src/old.py");rows=self.stored();rows[0].update(state="blocked_external",external={"party":"user","need":"input","unblocks_when":"supplied"});self.write(rows)
+        self.settle(admission)
+        before=read(self.project,"objective")
+        with self.assertRaises(PodError) as caught:
+            self.report(admission,frozen,map={"update":{
+                "O1":{"state":"satisfied"},"S":{"state":"blocked_external","external":{"party":"user","need":"input","unblocks_when":"supplied"}}},
+                "seq":before["checkpoint"]["seq"]+1,"reuse":{"from":"f"*40,"ids":["O1"]}})
+        entry=next(item for item in caught.exception.detail["referent"]["invalidations"] if item["obligation"]=="O1")
+        self.assertEqual(entry["reuse_failure"],{"predicate":"reuse_from_is_evidence_candidate","given":"f"*40,
+                                                  "evidence_candidate":self.base})
+        self.assertIn("{from: "+self.base+"}",entry["correction"])
+        self.assertEqual(read(self.project,"objective"),before)
 
 
 class RemainingDiagnosticsTests(ProductionCase):

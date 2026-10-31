@@ -27,7 +27,7 @@ class AssuranceCapacityTests(unittest.TestCase):
 
     @staticmethod
     def required(key):
-        return {"finding": key, "severity": "blocker", "triage": "required_correction",
+        return {"finding": key, "severity": "blocker", "triage": "required_correction", "blocks": "outcome",
                 "summary": f"original required defect {key}", "correction": key}
 
     @classmethod
@@ -236,10 +236,15 @@ class AssuranceCapacityTests(unittest.TestCase):
         self.assertEqual(self.files(), after)
         self.assertEqual(len(next(row for row in self.case.stored() if row["id"] == "A")["findings"]), 33)
 
-    def previous_read(self):
+    def previous_read(self, *, earlier_field_shape=False):
         from tests.test_history_regressions import previous_history_call
         from pod.ledger import kernel_context
         state = _read(self.path)
+        if earlier_field_shape:
+            # Synthetic earlier field shape isolates the old capacity rule. Genuine
+            # refusal of the goal link lives in its own test below.
+            for finding in next(row for row in state["checkpoint"]["obligations"] if row["id"] == "A")["findings"]:
+                finding.pop("blocks", None)
         bound = state["checkpoint"]["governance"]
         observed = kernel_context(self.case.project, "objective", state, None)["bound_governance"](bound)
         context = {"admissions": state["admissions"], "criteria": ["PoD#1"],
@@ -292,9 +297,22 @@ class AssuranceCapacityTests(unittest.TestCase):
     def test_genuine_previous_reader_keeps_32_record_meaning_unchanged(self):
         self.restore(32)
         before = self.files()
-        result = self.previous_read()
+        result = self.previous_read(earlier_field_shape=True)
         self.assertTrue(result["accepted"], result)
-        self.assertEqual(result["state"], _read(self.path))
+        expected = _read(self.path)
+        for finding in next(row for row in expected["checkpoint"]["obligations"] if row["id"] == "A")["findings"]:
+            finding.pop("blocks", None)
+        self.assertEqual(result["state"], expected)
+        self.assertTrue(result["unchanged"])
+        self.assertEqual(self.files(), before)
+
+    def test_genuine_previous_reader_refuses_goal_links_without_rewriting(self):
+        self.restore(32)
+        before = self.files()
+        result = self.previous_read()
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["code"], "obligation_invalid")
+        self.assertIn("blocks", result["message"])
         self.assertTrue(result["unchanged"])
         self.assertEqual(self.files(), before)
 

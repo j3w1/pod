@@ -1305,9 +1305,31 @@ def _map_refusal_context(exc: PodError, state: dict) -> PodError:
     return exc
 
 
+def _verification_gaps(gaps: object) -> None:
+    """Each remaining verification gap is its own text item; a wrong type is refused, never converted."""
+    limit, length = bound("checkpoint", "verification_gaps", "max_items"), 1024
+    problem = None
+    if not isinstance(gaps, list):
+        problem = f"got {type(gaps).__name__}, not a list"
+    elif len(gaps) > limit:
+        problem = f"got {len(gaps)} items, more than {limit}"
+    else:
+        for index, item in enumerate(gaps):
+            if not isinstance(item, str) or not item.strip() or len(item) > length or "\0" in item:
+                problem = f"item {index} is {type(item).__name__}, not nonempty text of at most {length} characters"
+                break
+    if problem:
+        from .obligations import refuse
+        raise refuse("invalid_checkpoint", "verification_gaps_invalid",
+                     "Checkpoint verification_gaps is a list of text items: " + problem,
+                     next_action="send each remaining verification gap as its own list item, or [] when none remain, then retry",
+                     record="checkpoint", field="verification_gaps",
+                     expected=f"list of at most {limit} nonempty text items, one remaining gap per item")
+
+
 @input_record("checkpoint")
 def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
-                      native: dict, previous: dict | None = None) -> tuple[dict, dict, list]:
+                      native: dict, previous: dict | None = None, *, stored: bool = False) -> tuple[dict, dict, list]:
     from .config import effective
     from .obligations import MAP_INPUT, MAP_STORED, refuse
     bounded_text(owner, name="owner")
@@ -1337,6 +1359,8 @@ def _checkpoint_input(project: Path, objective: str, owner: str, value: dict,
             or any(not isinstance(item, str) or not item for item in value["criteria"])
             or not isinstance(value["candidate"], str) or not value["candidate"]):
         raise PodError("invalid_checkpoint", "Checkpoint criteria and candidate are bounded text")
+    if not stored:
+        _verification_gaps(value["verification_gaps"])
     from .gitio import require_candidate
     try:
         require_candidate(project, value["candidate"])
@@ -1382,7 +1406,7 @@ def validate_checkpoint_snapshot(project: Path, state: dict) -> None:
     refs = _run_references(state)
     core = {key: item for key, item in value.items() if key not in stamps}
     _checkpoint_input(project, value.get("objective"), state.get("owner"), core,
-                      {"runtime": next(iter(refs.values()), None)})
+                      {"runtime": next(iter(refs.values()), None)}, stored=True)
     from .obligations import validate_map_record
     validate_map_record(value)
 

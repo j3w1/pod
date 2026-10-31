@@ -226,7 +226,11 @@ def validate_findings(ob: dict, rows: dict, *, seq: int, lineage=None) -> None:
     attempts = {}
     for raw in findings:
         required = {"attempt", "finding", "severity", "triage", "summary", "recorded_seq"}
-        row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq"}, required, "persisted finding", obligation=ob["id"])
+        row = _exact(raw, required | {"reason", "root_cause", "findings", "correction", "proposal", "resolved_seq", "blocks"}, required, "persisted finding", obligation=ob["id"])
+        if "blocks" in row:
+            _text(row["blocks"], "blocks", limit=bound("finding", "blocks"), obligation=ob["id"])
+            if row["triage"] != "required_correction":
+                raise refuse("obligation_invalid", "malformed", "only required corrections carry blocks", obligation=ob["id"])
         _text(row["attempt"], "attempt", limit=128, obligation=ob["id"])
         attempts[row["attempt"]] = attempts.get(row["attempt"], 0) + 1
         if attempts[row["attempt"]] > MAX_REPORT_FINDINGS:
@@ -438,12 +442,24 @@ def _reuse_record(source: str, target: str, definition: str, delta: list[str]) -
     return {"from": source, "to": target, "delta": delta[:256], "definition": definition}
 
 
+# Allocated when work integrates, so a scope covers it only by naming the file itself.
+VERSION_ALLOCATION = frozenset({"VERSION"})
+
+
 def _reuse_scope(ob: dict, delta: list[str]) -> tuple[str, list[str]]:
+    """Whether the Git delta touches the reviewed or declared scope.
+
+    A bump of the root `VERSION` alone is not a change to the reviewed work: a scope
+    that merely contains the repository root does not reopen for it. A scope naming
+    `VERSION`, and every other path including installation or behavior metadata,
+    still overlaps normally.
+    """
     from .obligations import overlap
     paths = ob.get("proof_scope", ob["scope"]["paths"] if ob["kind"] == "assurance" else ob["boundary"]["paths"])
     if not paths and "proof_scope" not in ob:
         return "no declared scope", []
-    touched = overlap({"paths": delta, "surfaces": []}, {"paths": paths, "surfaces": []})["paths"]
+    relevant = [path for path in delta if path not in VERSION_ALLOCATION or path in paths]
+    touched = overlap({"paths": relevant, "surfaces": []}, {"paths": paths, "surfaces": []})["paths"]
     return ("touched" if touched else "eligible"), touched
 
 
@@ -460,6 +476,27 @@ def reuse_eligibility(ob: dict, source: str, ctx: dict) -> tuple[str, list[str],
     return label, touched, delta
 
 
+def evidence_source(ob: dict) -> str | None:
+    """The one candidate the selected evidence was recorded against, else None.
+
+    REUSE moves that proof forward, so this is its only possible source. A caller's
+    `reuse.from` is a claim to check against it, never the thing to derive a proposal from.
+    """
+    candidates = {row.get("candidate") for row in ob.get("evidence", []) if isinstance(row, dict)}
+    only = next(iter(candidates)) if len(candidates) == 1 else None
+    return only if isinstance(only, str) else None
+
+
+def _reuse_next_action(ob: dict, source: str | None, label: str, touched: list[str]) -> str:
+    """A next step that is valid for the facts, never the request that was just refused."""
+    if label == "eligible" and source is not None:
+        return f"set reuse {{from: {source}}} on {ob['id']}"
+    detail = {"touched": "the Git delta touches its scope" + (f" ({', '.join(touched[:4])})" if touched else ""),
+              "no declared scope": "it declares no scope to compare against",
+              "delta unreadable": "the Git delta between the candidates is unreadable"}.get(label, "its recorded proof cannot be reused")
+    return f"record fresh evidence for {ob['id']}; {detail}"
+
+
 def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
     from .obligations import _exact, _text, definition_id, refuse
     if "reuse" not in ob:
@@ -468,10 +505,19 @@ def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
     source = _text(raw["from"], "reuse from", limit=128, obligation=ob["id"])
     current = ctx.get("candidate")
     previous = (prior or {}).get("reuse")
+    real = evidence_source(ob)
+    if real is not None and source != real:
+        label, touched, _ = reuse_eligibility(ob, real, ctx)
+        raise refuse("obligation_unaccounted", "evidence_invalidated",
+                     "REUSE source is not the candidate the evidence was recorded against",
+                     obligation=ob["id"], predicate="reuse_from_is_evidence_candidate", given=source,
+                     evidence_candidate=real, paths=",".join(touched[:8]),
+                     next_action=_reuse_next_action(ob, real, label, touched))
     label, touched, delta = reuse_eligibility(ob, source, ctx)
     if label != "eligible":
         raise refuse("obligation_unaccounted", "evidence_invalidated", "REUSE is unproven: " + label,
-                     obligation=ob["id"], paths=",".join(touched[:8]))
+                     obligation=ob["id"], predicate="reuse_scope_untouched", paths=",".join(touched[:8]),
+                     next_action=_reuse_next_action(ob, source, label, touched))
     record = _reuse_record(source, current, definition_id(ob), delta)
     if (isinstance(previous, dict) and previous.get("from") == source and previous.get("to") == current
             and previous.get("definition") == definition_id(ob) and previous != record):
@@ -525,7 +571,8 @@ def refuse_premature_review(ob: dict, ctx: dict) -> None:
                      "then admit the verifying review")
 
 
-def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None = None) -> dict:
+def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None = None,
+                 cause: PodError | None = None) -> dict:
     """Classify all invalid proof without changing a receipt or declaring REUSE."""
     from .obligations import definition_id
     rows = ob.get("evidence", [])
@@ -545,10 +592,13 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
         classification = "candidate-only"
     else:
         classification = "binding change"
-    source = ob.get("reuse", {}).get("from") or (rows[0].get("candidate") if rows else None)
-    label, touched, _ = reuse_eligibility(ob, source, ctx) if classification == "candidate-only" else ("ineligible", [], None)
+    # The proposal derives from the evidence's own candidate; the caller's reuse.from may be wrong.
+    source = evidence_source(ob)
+    label, touched, _ = (reuse_eligibility(ob, source, ctx) if classification == "candidate-only" and source is not None
+                         else ("ineligible", [], None))
     correction = (f"add reuse {{from: {source}}} to {ob['id']}" if label == "eligible"
-                  else f"record fresh evidence for {ob['id']}" + (" after governance refresh/rebind" if classification == "governance change" else ""))
+                  else f"record fresh evidence for {ob['id']}" + (" after governance refresh/rebind" if classification == "governance change" else "")
+                  + (f"; the Git delta from {source[:12]} touches its scope" if label == "touched" else ""))
     if classification == "ordering":
         correction = ("consume the fixer's report and satisfy the named corrections with proof; "
                       f"then admit and consume a fresh review before satisfying {ob['id']}")
@@ -556,8 +606,12 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
         label = "ineligible"
         correction = ("an assurance is satisfied only when its corrections are; resolve "
                       + ",".join(corrections[:8]) + f"; record fresh evidence for {ob['id']}")
+    # The failed REUSE predicate and the compared candidates survive aggregation, bounded.
+    facts = ((cause.detail or {}).get("referent") or {}) if cause is not None else {}
+    reason = {key: str(facts[key])[:128] for key in ("predicate", "given", "evidence_candidate") if key in facts}
     return {"obligation": ob["id"], "classification": classification, "eligibility": label,
             "paths": touched[:8], "correction": correction,
+            **({"reuse_failure": reason} if reason else {}),
             **({"ordering": {"findings": ordering[:8], "remaining": max(0, len(ordering) - 8)}}
                if classification == "ordering" else {}),
             **({"corrections": corrections[:8], "remaining_corrections": max(0, len(corrections) - 8)} if corrections else {})}
@@ -645,6 +699,11 @@ def _finding_record(raw, assurance_id):
     if record["severity"] not in SEVERITIES or record["triage"] not in TRIAGE:
         raise refuse("obligation_invalid", "malformed", "severity allowed: " + ", ".join(SEVERITIES) + "; triage allowed: " + ", ".join(TRIAGE),
                      finding=record["finding"], obligation=assurance_id)
+    if "blocks" in record:
+        _text(record["blocks"], "blocks", limit=bound("finding", "blocks"), obligation=assurance_id)
+        if record["triage"] == "advisory":
+            raise refuse("obligation_invalid", "malformed", "an advisory carries no blocks; a required finding names what it blocks",
+                         finding=record["finding"], obligation=assurance_id)
     if record["severity"] in ("blocker", "major") and record["triage"] == "advisory":
         if "reason" not in record:
             raise refuse("obligation_invalid", "downgrade_unreasoned",
@@ -699,6 +758,8 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         entry = {"attempt": admission_id, "finding": record["finding"], "severity": record["severity"],
                  "triage": record["triage"], "summary": record["summary"],
                  "recorded_seq": state["seq"] + 1}
+        if "blocks" in record:
+            entry["blocks"] = record["blocks"]
         if "root_cause" in record:
             entry["root_cause"] = record["root_cause"]
         if "findings" in record:
@@ -707,13 +768,19 @@ def triage(state: dict, value: dict, findings: Any, proposals: Any, ctx: dict, *
         matching = [item for item in same_attempt if set(item.get("findings", [item["finding"]])) & set(ids)]
         if matching:
             prior = matching[0]
-            replay = {key: prior.get(key) for key in ("finding", "severity", "triage", "summary", "reason", "correction", "findings", "root_cause")}
+            replay = {key: prior.get(key) for key in ("finding", "severity", "triage", "summary", "reason", "correction", "findings", "root_cause", "blocks")}
             proposed = {key: record.get(key) for key in replay}
             proposed["findings"] = ids if "findings" in record else None
             if replay != proposed:
                 raise refuse("obligation_invalid", "receipt_conflict", "stored finding ids cannot be regrouped or changed",
                              finding=record["finding"], record="finding", obligation=assurance_id)
             continue
+        if record["triage"] == "required_correction" and "blocks" not in record:
+            raise refuse("obligation_invalid", "finding_unlinked", "a new required correction names what it blocks",
+                         finding=record["finding"], obligation=assurance_id,
+                         next_action="set blocks to the outcome, requirement, PoD or policy the defect prevents (the reviewer's summary "
+                                     "states why), or record an advisory with the required downgrade reason; a substantive safety or "
+                                     "privacy defect is blocks policy:safety or policy:privacy, never downgraded for a missing label")
         if "reason" in record:
             entry["reason"] = record["reason"]
         known = {row.get("id") for row in listed}

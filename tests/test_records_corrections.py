@@ -61,7 +61,7 @@ class CapacityPaddingTests(ProductionCase):
         self.report(admission, packet, map={"seq": state["checkpoint"]["seq"] + 1, "update": {
             "A": waiting(), "K": {"kind": "correction", "provenance": "coordinator", "parent": "A",
                 "check": "repair the reported defects", **waiting()}}}, triage=[{
-                "finding": f"real-{index}", "severity": "major", "triage": "required_correction",
+                "finding": f"real-{index}", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                 "summary": "real defect", "correction": "K"} for index in range(3)])
         assurance = next(row for row in self.stored() if row["id"] == "A")
         self.assertEqual((len(assurance["receipts"]), len(assurance["findings"])), (64, 3))
@@ -103,7 +103,7 @@ class AdmissionLineageTests(unittest.TestCase):
         case.report(admission, packet, map={"seq": read(case.project, "objective")["checkpoint"]["seq"] + 1,
             "update": {"A": waiting(), "K": {"kind": "correction", "provenance": "coordinator", "parent": "A",
                 "check": "repair", **waiting()}}}, triage=[{"finding": "F", "severity": "major",
-                "triage": "required_correction", "summary": "defect", "correction": "K"}])
+                "triage": "required_correction", "blocks": "outcome", "summary": "defect", "correction": "K"}])
         case.write(seq=read(case.project, "objective")["checkpoint"]["seq"] + 1,
                    update={"K": {"state": "satisfied", "evidence": [case.proof("K")]}})
         case.write(renew=[{"id": "A", "as": "A2"}])

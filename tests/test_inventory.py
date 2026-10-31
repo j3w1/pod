@@ -85,9 +85,9 @@ def spec_text(root: Path) -> str:
 
 def spec_inventory(root: Path):
     text = spec_text(root)
-    requirements = re.findall(r"^### (R\d{2,3}) — .*\n\nType: ([BHI,]+) · Scenarios: (.*)$",
+    requirements = re.findall(r"^### (R\d{2,}) — .*\n\nType: ([BHI,]+) · Scenarios: (.*)$",
                               text, flags=re.M)
-    scenarios = re.findall(r'^- <a id="(a\d{2,3})"></a>\*\*(A\d{2,3})\*\*',
+    scenarios = re.findall(r'^- <a id="(a\d{2,})"></a>\*\*(A\d{2,})\*\*',
                            text, flags=re.M)
     return requirements, scenarios
 
@@ -98,15 +98,13 @@ def assert_scenario_allocation(test, scenario_ids, withdrawn):
     reserved = []
     for row in withdrawn:
         test.assertEqual(set(row), {"id", "reason"})
-        test.assertRegex(row["id"], r"^A[0-9]{2,3}$")
+        test.assertRegex(row["id"], r"^A[0-9]{2,}$")
         test.assertIsInstance(row["reason"], str)
         test.assertTrue(row["reason"].strip())
         reserved.append(row["id"])
     test.assertEqual(len(set(reserved)), len(reserved))
+    test.assertEqual(len(set(scenario_ids)), len(scenario_ids), "active IDs are unique")
     test.assertFalse(set(reserved) & set(scenario_ids), "withdrawn IDs cannot be reused")
-    allocated = scenario_ids + reserved
-    test.assertEqual(sorted(allocated, key=lambda value: int(value[1:])),
-                     [f"A{number:02}" for number in range(1, len(allocated) + 1)])
 
 
 def markdown_anchors(text: str) -> set[str]:
@@ -155,8 +153,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         requirements, scenarios = spec_inventory(root)
         ids = [id for id, _, _ in requirements]
         scenario_ids = [id for _, id in scenarios]
-        self.assertEqual(sorted(ids, key=lambda id: int(id[1:])),
-                         [f"R{i:02}" for i in range(1, len(ids) + 1)])
+        self.assertEqual(len(set(ids)), len(ids), "requirement IDs are unique")
         assert_scenario_allocation(self, scenario_ids, coverage["withdrawn_scenarios"])
         self.assertEqual([anchor for anchor, id in scenarios], [id.lower() for id in scenario_ids])
         self.assertEqual(sorted(row["id"] for row in coverage["scenarios"]), sorted(scenario_ids))
@@ -167,12 +164,16 @@ class InventoryIntegrityTests(unittest.TestCase):
                 self.assertTrue(row["required_evidence"])
                 self.assertIn(row["status"], ("NOT_RUN", "PASS"))
 
-    def test_withdrawn_scenario_ids_preserve_allocation_and_never_reuse_or_fill_silent_gaps(self):
+    def test_scenario_ids_are_unique_and_withdrawn_ids_are_never_reused_but_gaps_are_allowed(self):
         withdrawn = [{"id": "A02", "reason": "requirement removed"}]
         assert_scenario_allocation(self, ["A01", "A03"], withdrawn)
-        for active, reserved in ((["A01", "A02", "A03"], withdrawn), (["A01", "A03"], []),
+        # Separate branches may allocate distinct, non-contiguous IDs; numbering is not a requirement.
+        assert_scenario_allocation(self, ["A01", "A07"], [])
+        assert_scenario_allocation(self, ["A594", "A597"], withdrawn)
+        for active, reserved in ((["A01", "A02", "A03"], withdrawn), (["A01", "A01"], []),
                                  (["A01", "A03"], withdrawn * 2),
-                                 (["A01", "A03"], [{"id": "A02", "reason": ""}])):
+                                 (["A01", "A03"], [{"id": "A02", "reason": ""}]),
+                                 (["A01", "A03"], [{"id": "A2", "reason": "malformed id"}])):
             with self.subTest(active=active, withdrawn=reserved), self.assertRaises(AssertionError):
                 assert_scenario_allocation(self, active, reserved)
 
@@ -183,7 +184,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         referenced = set()
         for requirement, _, refs in requirements:
             with self.subTest(requirement=requirement):
-                for ref in re.findall(r"\[(A\d{2,3})\]\([^)]*\)", refs):
+                for ref in re.findall(r"\[(A\d{2,})\]\([^)]*\)", refs):
                     self.assertIn(ref, scenarios)
                     referenced.add(ref)
         self.assertEqual(referenced, scenarios)
@@ -245,7 +246,7 @@ class InventoryIntegrityTests(unittest.TestCase):
         self.assertNotIn('<a id="a', index)
         homes = {}
         for path in models.glob("*.md"):
-            for requirement in re.findall(r"(?m)^### (R\d{2,3}) — ", path.read_text()):
+            for requirement in re.findall(r"(?m)^### (R\d{2,}) — ", path.read_text()):
                 homes.setdefault(requirement, []).append(path.name)
         for requirement, home in (("R09", "routing.md"), ("R15", "routing.md"), ("R101", "routing.md"),
                                   ("R10", "preferences.md"), ("R21", "preferences.md"),

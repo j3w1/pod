@@ -40,7 +40,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
                      "check": "repair the reported defect", "boundary": {"paths": ["src"]},
                      "state": "unassigned"})
         self.report(old, old_packet, map={"obligations": rows}, triage=[
-            {"finding": "blocker", "severity": "blocker", "triage": "required_correction",
+            {"finding": "blocker", "severity": "blocker", "triage": "required_correction", "blocks": "outcome",
              "summary": "real defect", "correction": "K0"}])
         self.assertEqual(self.label(), "WITHHELD")
         return old, accepted
@@ -160,7 +160,7 @@ class AssuranceHistoryTests(boundaries.KernelCase):
                      "check": "repair the reported defect", "boundary": {"paths": ["src"]},
                      "state": "unassigned"})
         self.report(blocker, blocker_packet, map={"obligations": rows}, triage=[
-            {"finding": "later", "severity": "blocker", "triage": "required_correction",
+            {"finding": "later", "severity": "blocker", "triage": "required_correction", "blocks": "outcome",
              "summary": "real defect", "correction": "K0"}])
         self.satisfy_correction()
         self.offer_old_proof(early)

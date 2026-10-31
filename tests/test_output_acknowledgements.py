@@ -329,6 +329,7 @@ class AcknowledgementBoundaryTests(unittest.TestCase):
                     else:
                         triage.update(finding="F1", severity="major")
                     if required:
+                        triage["blocks"] = "outcome"
                         triage["correction"] = "K"
                         rows.append({"id": "K", "kind": "correction", "provenance": "coordinator",
                                      "parent": "A", "check": "repair review concern", "state": "waiting",

@@ -132,7 +132,7 @@ class RenewalAssuranceTests(ProductionCase):
         correction = {"kind": "correction", "provenance": "coordinator", "parent": "A", "state": "waiting", "check": "fix the defect",
                       "wait": {"class": "sequenced", "referent": "O1"}}
         self.report(admission, frozen, map={"seq": state["seq"] + 1, "update": {"A": {"state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}}, "K": correction}},
-                    triage=[{"finding": "F", "severity": "major", "triage": "required_correction", "correction": "K", "summary": "repair required"}])
+                    triage=[{"finding": "F", "severity": "major", "triage": "required_correction", "blocks": "outcome", "correction": "K", "summary": "repair required"}])
         self.write(renew=[{"id": "A", "as": "A2"}])
         self.write(renew=[{"id": "K", "as": "K2"}])
         state = read(self.project, "objective")["checkpoint"]
