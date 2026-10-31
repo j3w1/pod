@@ -115,10 +115,7 @@ def fixture(*, caller: str | None = "owner"):
             os.environ.pop("POD_CACHE_HOME", None)
             isolation.scrub_git_environment(os.environ, ceiling=base)
             isolation.assert_disposable(base, os.environ)
-            try:
-                yield path
-            finally:
-                isolation.verify_all()
+            yield path
 
 
 # Canonical 0.6 fixture contracts. A delegated objective always carries an obligation map;

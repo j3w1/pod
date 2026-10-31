@@ -63,6 +63,7 @@ class CliTests(unittest.TestCase):
 
     def setUp(self):
         self.temp=fixture(); self.root=self.temp.__enter__(); self.addCleanup(self.temp.__exit__,None,None,None)
+        previous=os.getcwd(); os.chdir(self.root); self.addCleanup(os.chdir,previous)  # never this checkout's own config
         self.env=patch.dict(os.environ,{'HOME':str(self.root),'XDG_CONFIG_HOME':str(self.root/'config'),
                                      'XDG_DATA_HOME':str(self.root/'data'),
                                      'XDG_STATE_HOME':str(self.root/'state'),
