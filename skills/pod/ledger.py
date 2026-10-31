@@ -1890,6 +1890,17 @@ def admission_identity(*, objective: str, run_id: str, task_id: str,
     return digest(identity)
 
 
+# What a same-Task retry would replay: the work itself, never the launch choice (route, revisions) or placement.
+_ASSIGNMENT_FIELDS = ("objective", "responsibility", "criteria", "scope", "actions", "candidate", "context",
+                      "dependencies", "sources", "report_contract", "serves", "role", "boundary")
+
+
+def assignment_digest(body: dict) -> str:
+    """Identity of the work a packet assigns; equal across a retry that only changes the route."""
+    # A review retry is the one deliberate re-review of the then-current candidate after an attempt that gave no verdict.
+    return digest({key: body.get(key) for key in _ASSIGNMENT_FIELDS if key != "candidate" or body.get("role") != "review"})
+
+
 def retry_parent(state: dict, *, objective: str, owner: str, run_id: str,
                  task_id: str, retry_of: str) -> dict:
     """Resolve an owned admission, never a caller-supplied native Dispatch."""
@@ -2153,6 +2164,7 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
            "boundary_exceeded": [], "admitted_seq": new_map["seq"]}
     from .display import admission_facts
     row["display"] = admission_facts(state, body, worktree_path, placement_naming)
+    row["recovery"]["assignment"] = assignment_digest(body)
     if routing:
         row["recovery"]["routing_responsibility"] = body["responsibility"]
     if retry_of is not None:
@@ -2317,17 +2329,26 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
         ctx["operation"] = "admission"
         admission_refusal(map_state, body, ctx, admission_id=admission_id)
         if parent is not None:
-            from .obligations import admission_binding, packet_binding
-            shape = packet_binding(body)
-            if ((shape["serves"], shape["role"], shape["boundary"], admission_binding(body, {}, map_state)["sources"])
-                    != (parent["serves"], parent["role"], parent["boundary"], parent["binding"]["sources"])):
+            held = parent["recovery"].get("assignment")
+            if held is not None:
+                changed = held != assignment_digest(body)
+            else:  # A parent admitted before the digest existed: compare what its row keeps.
+                from .obligations import admission_binding, packet_binding
+                shape = packet_binding(body)
+                changed = ((shape["serves"], shape["role"], shape["boundary"],
+                            None if shape["role"] == "review" else body.get("candidate"),
+                            admission_binding(body, {}, map_state)["sources"])
+                           != (parent["serves"], parent["role"], parent["boundary"],
+                               None if parent["role"] == "review" else parent["candidate"],
+                               parent["binding"]["sources"]))
+            if changed:
                 # Orca replays a same-Task retry with the Task's original spec and has no replacement-prompt flag, so
                 # an assignment that differs from the parent's (route and revisions may change) is not what would run.
                 action = ("restore the parent's assignment to retry it, or settle and discard the failed attempt and "
                           "admit the changed assignment as its own Task")
                 raise PodError("assignment_changed", "A same-Task retry keeps the original assignment; this packet's "
-                               "obligations, role, boundary or sources differ from the retry parent's. Next: " + action,
-                               {"next_action": action})
+                               "candidate, scope, actions, report contract, obligations, role, boundary or sources "
+                               "differ from the retry parent's. Next: " + action, {"next_action": action})
         require_governance_current(project, map_state)
         snapshot = _reserve_route(project, checkpoint_value, body, state, requested, task_id,
                                   moment, projection, failures, reuse_of, native)

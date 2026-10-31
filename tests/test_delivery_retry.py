@@ -315,6 +315,49 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(explicit['status'], 'bound')
         self.assertEqual(self.starts(), 2)
 
+    def explicit_retry(self, parent, frozen):
+        return guarded_start(self.project, 'objective', owner='owner', run='run', task='task', plan_revision='plan',
+                             frozen_packet=frozen, worktree='current', port=self.port,
+                             retry_of=parent['admission_id'], accompanying=self.restated())
+
+    def refused_retry(self, parent, frozen):
+        starts = self.starts()
+        with self.assertRaises(PodError) as caught:
+            self.explicit_retry(parent, frozen)
+        self.assertEqual(caught.exception.code, 'assignment_changed')
+        self.assertEqual(self.starts(), starts)  # No native start was added.
+
+    def test_a_retry_with_changed_actions_or_report_contract_is_refused_without_a_start(self):
+        from pod.records import packet
+        parent = self.failed_first('readiness', 'ok')
+        body = dict(self.frozen()['body'])
+        self.refused_retry(parent, packet({**body, 'actions': ['edit', 'delete']}))
+        self.refused_retry(parent, packet({**body, 'report_contract': 'a different contract'}))
+        self.refused_retry(parent, packet({**body, 'scope': ['other.txt']}))
+
+    def test_a_retry_with_a_newly_frozen_candidate_is_refused_without_a_start(self):
+        from pod.ledger import checkpoint
+        from pod.records import packet
+        parent = self.failed_first('readiness', 'ok')
+        state = read(self.project, 'objective')
+        checkpoint(self.project, 'objective', owner='owner', native={'runtime': 'runtime'},
+                   value={**{key: value for key, value in state['checkpoint'].items()
+                             if key not in ('pod_version', 'bundle_digest', 'seq')},
+                          'candidate': 'candidate-2', **(self.restated() or {})})
+        self.refused_retry(parent, packet({**dict(self.frozen()['body']), 'candidate': 'candidate-2'}))
+
+    def test_a_parent_admitted_before_the_digest_still_refuses_a_changed_candidate_or_boundary(self):
+        from pod.ledger import _path, _write
+        from pod.records import packet
+        parent = self.failed_first('readiness', 'ok')
+        state = read(self.project, 'objective')
+        state['admissions'][parent['admission_id']]['recovery'].pop('assignment')
+        _write(_path(self.project, "objective"), state, native={'runtime': 'runtime'})
+        body = dict(self.frozen()['body'])
+        self.refused_retry(parent, packet({**body, 'boundary': {'paths': ['other.txt'], 'surfaces': []}}))
+        rerouted = self.frozen(route={**support.ROUTE, 'model': 'gpt-6-luna'})
+        self.assertEqual(self.explicit_retry(parent, rerouted)['status'], 'bound')
+
     def test_the_screen_read_has_one_exact_shape_and_accepts_only_that_terminals_screen(self):
         from unittest import mock
         from pod import orca

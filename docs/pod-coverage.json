@@ -9686,7 +9686,10 @@
       "offline_test": [
         "tests.test_delivery_retry.DeliveryTests.test_a_changed_candidate_never_replays_the_old_assignment",
         "tests.test_delivery_retry.DeliveryTests.test_a_changed_packet_for_the_same_attempt_is_refused",
-        "tests.test_delivery_retry.DeliveryTests.test_an_assignment_that_differs_from_the_retry_parent_is_refused_but_a_new_route_is_not"
+        "tests.test_delivery_retry.DeliveryTests.test_an_assignment_that_differs_from_the_retry_parent_is_refused_but_a_new_route_is_not",
+        "tests.test_delivery_retry.DeliveryTests.test_a_retry_with_changed_actions_or_report_contract_is_refused_without_a_start",
+        "tests.test_delivery_retry.DeliveryTests.test_a_retry_with_a_newly_frozen_candidate_is_refused_without_a_start",
+        "tests.test_delivery_retry.DeliveryTests.test_a_parent_admitted_before_the_digest_still_refuses_a_changed_candidate_or_boundary"
       ],
       "status": "NOT_RUN"
     },
