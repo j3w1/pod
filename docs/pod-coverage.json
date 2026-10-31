@@ -9252,7 +9252,9 @@
         "tests.test_proportional_review.RealSourceTests.test_a_wrong_source_refusal_names_the_predicate_and_a_valid_next_action",
         "tests.test_proportional_review.RealSourceTests.test_a_touched_scope_proposes_fresh_evidence_never_the_same_reuse",
         "tests.test_proportional_review.RealSourceTests.test_unreadable_or_unscoped_facts_stay_unknown",
-        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_ignores_an_unreadable_claimed_source"
+        "tests.test_issue41.RemainingProofTests.test_empty_process_scope_ignores_an_unreadable_claimed_source",
+        "tests.test_issue41.RemainingProofTests.test_touched_scope_refusal_keeps_its_failed_predicate_through_the_checkpoint",
+        "tests.test_issue41.RemainingProofTests.test_report_refusal_keeps_the_wrong_source_and_the_recorded_candidate"
       ],
       "status": "NOT_RUN"
     },

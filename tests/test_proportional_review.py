@@ -92,6 +92,8 @@ class RealSourceTests(unittest.TestCase):
         self.assertEqual(entry["eligibility"], "eligible")
         self.assertIn("{from: c1}", entry["correction"])
         self.assertNotIn("c0", entry["correction"])
+        self.assertEqual(entry["reuse_failure"], {"predicate": "reuse_from_is_evidence_candidate",
+                                                  "given": "c0", "evidence_candidate": "c1"})
         rows = rows_of(state)
         next(row for row in rows if row["id"] == "S")["reuse"] = {"from": "c1"}
         self.assertEqual(by_id(accept_write(state, write(state, rows), moved), "S")["reuse"]["from"], "c1")
@@ -126,6 +128,8 @@ class RealSourceTests(unittest.TestCase):
                         write(state, rows), moved)
         correction = error.detail["referent"]["invalidations"][0]["correction"]
         self.assertTrue(correction.startswith("record fresh evidence for S"))
+        self.assertEqual(error.detail["referent"]["invalidations"][0]["reuse_failure"],
+                         {"predicate": "reuse_scope_untouched"})
         self.assertNotIn("add reuse", correction)
 
     def test_unreadable_or_unscoped_facts_stay_unknown(self):

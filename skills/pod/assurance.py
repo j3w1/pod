@@ -571,7 +571,8 @@ def refuse_premature_review(ob: dict, ctx: dict) -> None:
                      "then admit the verifying review")
 
 
-def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None = None) -> dict:
+def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None = None,
+                 cause: PodError | None = None) -> dict:
     """Classify all invalid proof without changing a receipt or declaring REUSE."""
     from .obligations import definition_id
     rows = ob.get("evidence", [])
@@ -605,8 +606,12 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
         label = "ineligible"
         correction = ("an assurance is satisfied only when its corrections are; resolve "
                       + ",".join(corrections[:8]) + f"; record fresh evidence for {ob['id']}")
+    # The failed REUSE predicate and the compared candidates survive aggregation, bounded.
+    facts = ((cause.detail or {}).get("referent") or {}) if cause is not None else {}
+    reason = {key: str(facts[key])[:128] for key in ("predicate", "given", "evidence_candidate") if key in facts}
     return {"obligation": ob["id"], "classification": classification, "eligibility": label,
             "paths": touched[:8], "correction": correction,
+            **({"reuse_failure": reason} if reason else {}),
             **({"ordering": {"findings": ordering[:8], "remaining": max(0, len(ordering) - 8)}}
                if classification == "ordering" else {}),
             **({"corrections": corrections[:8], "remaining_corrections": max(0, len(corrections) - 8)} if corrections else {})}

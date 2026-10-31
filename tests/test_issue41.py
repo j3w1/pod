@@ -647,6 +647,35 @@ class RemainingProofTests(ProofBoundaryTests):
         s=next(item for item in caught.exception.detail["referent"]["invalidations"] if item["obligation"]=="S")
         # The proposal comes from the evidence's own candidate; an unreadable claimed source decides nothing.
         self.assertEqual(s["eligibility"],"eligible");self.assertNotIn("f"*40,s["correction"])
+        self.assertEqual(s["reuse_failure"],{"predicate":"reuse_from_is_evidence_candidate","given":"f"*40,
+                                              "evidence_candidate":self.base})
+
+    def test_touched_scope_refusal_keeps_its_failed_predicate_through_the_checkpoint(self):
+        self.satisfied_rows();self.move("src/old.py")
+        rows=self.stored();next(row for row in rows if row["id"]=="T")["reuse"]={"from":self.base}
+        with self.assertRaises(PodError) as caught:self.write(rows)
+        t=next(item for item in caught.exception.detail["referent"]["invalidations"] if item["obligation"]=="T")
+        self.assertEqual((t["eligibility"],t["reuse_failure"]),("touched",{"predicate":"reuse_scope_untouched"}))
+        self.assertTrue(t["correction"].startswith("record fresh evidence for T"))
+
+    def test_report_refusal_keeps_the_wrong_source_and_the_recorded_candidate(self):
+        self.write([self.criterion(boundary={"paths":["src"]},proof_scope=["README.md"]),self.sub("S")],governance={"base_ref":"target"})
+        rows=self.stored();rows[0].pop("executor");rows[0].update(state="satisfied",evidence=[self.proof("O1")])
+        rows[1].pop("wait");rows[1].update(state="active",executor="coordinator");self.write(rows)
+        frozen=self.packet(["S"],role="investigate",resolves="which branch applies?",stop_condition="answer")
+        admission=self.start("investigate",frozen)["admission"]
+        self.move("src/old.py");rows=self.stored();rows[0].update(state="blocked_external",external={"party":"user","need":"input","unblocks_when":"supplied"});self.write(rows)
+        self.settle(admission)
+        before=read(self.project,"objective")
+        with self.assertRaises(PodError) as caught:
+            self.report(admission,frozen,map={"update":{
+                "O1":{"state":"satisfied"},"S":{"state":"blocked_external","external":{"party":"user","need":"input","unblocks_when":"supplied"}}},
+                "seq":before["checkpoint"]["seq"]+1,"reuse":{"from":"f"*40,"ids":["O1"]}})
+        entry=next(item for item in caught.exception.detail["referent"]["invalidations"] if item["obligation"]=="O1")
+        self.assertEqual(entry["reuse_failure"],{"predicate":"reuse_from_is_evidence_candidate","given":"f"*40,
+                                                  "evidence_candidate":self.base})
+        self.assertIn("{from: "+self.base+"}",entry["correction"])
+        self.assertEqual(read(self.project,"objective"),before)
 
 
 class RemainingDiagnosticsTests(ProductionCase):
