@@ -16,7 +16,7 @@ from unittest.mock import patch
 from pod.errors import PodError
 from pod.internal import run as internal_run
 from pod.ledger import consume_report, logical_projection, objective_root, read, retry_parent
-from pod.operations import _binding_from_show, guarded_start, recover_admission
+from pod.operations import STARTED_STATES, _binding_from_show, guarded_start, recover_admission
 from tests import test_operations as support
 from tests.kernel_support import REQUEST, FakePort
 
@@ -59,13 +59,16 @@ class AbandonedPort(FakePort):
             result['dispatch'].update(lastFailure='abandoned', capabilityRevokedAt='2026-10-01T12:00:00Z',
                                       completedAt='2026-10-01T12:00:00Z', lastHeartbeatAt=None)
             result['projection']['stage'].update(worker='abandoned', detail='abandoned', activity='unknown')
-            result['projection'].update(liveness={'verdict': 'unverifiable', 'reason': 'missing_status'},
-                                       resource={'state': 'owned', 'ownerDispatchId': dispatch,
-                                                 'releaseState': 'retained', 'terminalState': 'retained'})
+            released = item.get('released', False)
+            result['projection'].update(
+                liveness=item.get('liveness', {'verdict': 'unverifiable', 'reason': 'missing_status'}),
+                resource={'state': 'released' if released else 'owned',
+                          'ownerDispatchId': None if released else dispatch,
+                          'releaseState': 'released' if released else 'retained', 'terminalState': 'retained'})
             result['terminalResource'] = {
-                'ownerDispatchId': dispatch, 'terminalHandle': item['terminal'],
-                'worktreeId': item['worktree'], 'ownershipState': 'owned',
-                'releaseState': 'retained', 'retainedReason': 'user_requested'}
+                'ownerDispatchId': None if released else dispatch, 'terminalHandle': item['terminal'],
+                'worktreeId': item['worktree'], 'ownershipState': 'released' if released else 'owned',
+                'releaseState': 'released' if released else 'retained', 'retainedReason': 'user_requested'}
         return shown
 
 
@@ -108,6 +111,7 @@ class AbandonedFixture(unittest.TestCase):
 class AbandonedAccountingTests(AbandonedFixture):
     def test_exact_accounting_frees_only_logical_slot_and_keeps_unknown_resources_and_history(self):
         admission = self.held()
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
         original = deepcopy(admission)
         ref = admission['recovery']['start_observations'][0]
         path = objective_root(self.project, 'objective') / 'native-start' / (ref + '.json')
@@ -134,6 +138,140 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.discard(row, 'No accepted output; native resources remain user-requested retained')
         self.port.normal_start = True
         self.assertEqual(self.start('next-task', frozen=self.frozen())['status'], 'bound')
+
+    def outstanding(self, row):
+        native = self.port.read_native('owner', authority_runs=('run',), assignments=(row,))
+        return logical_projection(self.project, native, objective='objective')
+
+    def test_never_started_attempt_is_never_recorded_as_started_exited_or_successful(self):
+        admission = self.held()
+        before = read(self.project, 'objective')
+        with self.assertRaises(PodError) as caught:
+            guarded_start(self.project, 'objective', owner='owner', run='run', task='never-started',
+                          frozen_packet=self.frozen(task='never-started'), plan_revision='plan',
+                          worktree='current', port=self.port, abandoned_reason='nothing exists to account')
+        self.assertEqual(caught.exception.code, 'unknown_admission')
+        self.assertEqual(read(self.project, 'objective'), before)
+        row = self.account(admission)['admission']
+        self.assertNotIn(self.port.show_worker('dispatch-1')['result']['worker']['state'], STARTED_STATES)
+        proof = row['abandoned_accounting']
+        self.assertEqual((proof['classification'], proof['execution']), ('abandoned_no_observed_start', 'unknown'))
+        self.assertEqual((row['report'], row['changed_paths'], row['disposition']), (None, None, None))
+        text = json.dumps(row).lower()
+        for claim in ('never_started', 'never started', 'exited', 'process_exited', 'succeeded'):
+            self.assertNotIn(claim, text)
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_unknown_start_with_exited_process_settles_and_releases_the_slot(self):
+        admission = self.held()
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        result = self.account(admission)
+        self.assertEqual((result['status'], result['release'], result['hold']), ('bound', 'process_exited', None))
+        self.assertEqual(result['admission']['abandoned_accounting']['execution'], 'unknown')
+        self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'], [])
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_unknown_start_with_released_resource_settles_and_releases_the_slot(self):
+        admission = self.held()
+        self.port.workers['dispatch-1'].update(released=True)
+        result = self.account(admission)
+        self.assertEqual((result['release'], result['hold']), ('resource_released', None))
+        self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'], [])
+
+    def test_unknown_start_with_live_process_settles_but_the_hold_remains(self):
+        admission = self.held()
+        for verdict in ('alive', 'unverifiable'):
+            self.port.workers['dispatch-1']['liveness'] = {'verdict': verdict, 'reason': 'test'}
+            result = self.account(admission)
+            row = result['admission']
+            self.assertEqual((result['status'], result['release']), ('bound', None))
+            self.assertEqual(row['abandoned_accounting']['execution'], 'unknown')
+            placement = admission['recovery']['placement_binding']
+            self.assertEqual(result['hold'], {'worktree': row['native_binding']['worktreeId'],
+                                              'branch': placement['branch'], 'path': placement['path']})
+            held = self.outstanding(row)
+            self.assertEqual(held['outstanding_ids'], [admission['admission_id']])
+            self.assertEqual(held['outstanding'][0]['hold'], result['hold'])
+            self.assertEqual(len(self.port.starts), 1)
+            # Exit evidence arrives later: the same record releases without another accounting or worker.
+            self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+            self.assertEqual(self.outstanding(row)['outstanding_ids'], [])
+            break
+
+    def test_observed_start_is_not_this_path_and_the_failed_path_applies(self):
+        self.port.normal_start = True
+        bound = self.start()['admission']
+        self.assertEqual(bound['state'], 'bound')
+        self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
+        before = read(self.project, 'objective')
+        with self.assertRaises(PodError) as caught:
+            self.account(bound)
+        self.assertEqual(caught.exception.code, 'native_abandoned_unverified')
+        self.assertEqual(read(self.project, 'objective'), before)
+        self.port.workers['dispatch-1'].update(state='failed', outcome='failed',
+                                               liveness={'verdict': 'exited', 'reason': 'terminal_closed'})
+        self.assertEqual(_binding_from_show(self.port.show_worker('dispatch-1'), bound, 'dispatch-1')['dispatchId'],
+                         'dispatch-1')
+        self.assertNotIn('abandoned_accounting', read(self.project, 'objective')['admissions'][bound['admission_id']])
+
+    def test_wrong_identity_or_another_attempts_result_is_refused(self):
+        admission = self.held()
+        self.port.workers['dispatch-1']['released'] = True
+        for change in (
+            lambda s: s['result']['projection']['resource'].update(ownerDispatchId='dispatch-9'),
+            lambda s: s['result']['terminalResource'].update(ownerDispatchId='dispatch-9'),
+            lambda s: s['result']['terminalResource'].update(terminalHandle='term-other'),
+            lambda s: s['result']['dispatch'].update(taskId='other-task'),
+            lambda s: s['result']['worker'].update(dispatchId='dispatch-9'),
+        ):
+            shown = self.port.show_worker('dispatch-1'); change(shown)
+            before = read(self.project, 'objective')
+            with patch.object(self.port, 'show_worker', return_value=shown), self.assertRaises(PodError):
+                self.account(admission)
+            self.assertEqual(read(self.project, 'objective'), before)
+        # A retained resource never loses its owner silently.
+        self.port.workers['dispatch-1']['released'] = False
+        self.refused(admission, lambda s: s['result']['projection']['resource'].update(ownerDispatchId=None))
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_stale_runtime_is_refused(self):
+        admission = self.held()
+        before = read(self.project, 'objective')
+        native = self.port.read_native('owner', authority_runs=('run',))
+        with patch.object(self.port, 'read_native', return_value={**native, 'runtime': 'old-runtime'}), \
+                self.assertRaises(PodError) as caught:
+            self.account(admission)
+        self.assertEqual(caught.exception.code, 'native_authority_unverified')
+        shown = self.port.show_worker('dispatch-1')
+        shown['runtime'] = 'old-runtime'
+        with patch.object(self.port, 'show_worker', return_value=shown), self.assertRaises(PodError) as caught:
+            self.account(admission)
+        self.assertEqual(caught.exception.code, 'native_identity_unverified')
+        self.assertEqual(read(self.project, 'objective'), before)
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_repeated_recovery_is_idempotent_and_takes_no_extra_slot(self):
+        admission = self.held()
+        first = self.account(admission)
+        self.assertIsNotNone(first['hold'])
+        for _ in range(3):
+            again = self.account(admission)
+            self.assertEqual(again['admission'], first['admission'])
+            self.assertEqual((again['action'], again['release'], again['hold']), ('reuse', None, first['hold']))
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        released = self.account(admission)
+        self.assertEqual((released['admission'], released['release'], released['hold']),
+                         (first['admission'], 'process_exited', None))
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'alive', 'reason': 'test'}
+        stored = read(self.project, 'objective')
+        self.assertEqual(len(stored['admissions']), 1)
+        self.assertEqual(self.outstanding(first['admission'])['outstanding_ids'], [admission['admission_id']])
+        with self.assertRaises(PodError) as caught:
+            self.account(admission, reason='A different reason must not overwrite the record')
+        self.assertEqual(caught.exception.code, 'admission_conflict')
+        self.assertEqual(read(self.project, 'objective'), stored)
+        self.assertEqual(len(self.port.starts), 1)
+        self.assertEqual(len(self.port.workers), 1)
 
     def test_normal_binding_and_report_cannot_promote_accounting_to_started_output(self):
         admission = self.held()
@@ -223,6 +361,7 @@ class AbandonedAccountingTests(AbandonedFixture):
 
     def test_accounting_cannot_integrate_or_reuse_unobserved_terminal(self):
         admission = self.held()
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
         row = self.account(admission)['admission']
         state = read(self.project, 'objective')
         value = {key: value for key, value in state['checkpoint'].items()
@@ -325,6 +464,63 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.assertEqual(row['effective_evidence']['inherited']['terminal'], prior['native_binding']['terminalHandle'])
         self.assertFalse(row['route_decision']['effective_unknown'])
         self.assertEqual(len(self.port.starts), 1)
+
+
+class AbandonedReadinessTests(AbandonedFixture):
+    """A settled non-success attempt with no live claim is history; a live or unknown claim still blocks."""
+
+    def accounted(self, liveness):
+        admission = self.held()
+        self.port.workers['dispatch-1']['liveness'] = liveness
+        row = self.account(admission)['admission']
+        from pod.ledger import update_admission
+        # An unknown effective route would veto readiness for an ordinary attempt.
+        update_admission(self.project, 'objective', owner='owner', admission_id=row['admission_id'],
+                         update=lambda value: value['route_decision'].update(effective_unknown=True))
+        return row
+
+    def evaluate(self, row):
+        from pod import governor
+        from pod.config import effective
+        native = self.port.read_native('owner', authority_runs=('run',), assignments=(row,))
+        projection = logical_projection(self.project, native, objective='objective')
+        verdict = governor._evaluate(
+            {'kind': 'validation_rerun', 'candidate': 'candidate', 'unit': 'default', 'target': 'origin/main',
+             'reason': 'readiness', 'effects': []},
+            read(self.project, 'objective'), {'units': {}, 'actions': [], 'counters': {}},
+            effective(self.project)['policy']['waste_governor'],
+            native_projection=projection, project=self.project, objective='objective')
+        return projection, {item['code'] for item in verdict['reasons']}, {item['code'] for item in verdict['warnings']}
+
+    def test_settled_non_success_with_no_live_claim_is_non_material_and_reported_as_history(self):
+        from pod import governor
+        row = self.accounted({'verdict': 'exited', 'reason': 'terminal_closed'})
+        projection, reasons, warnings = self.evaluate(row)
+        self.assertEqual(governor._active(projection), [])
+        self.assertNotIn('effective_unknown', reasons)
+        self.assertIn('abandoned_attempt_history', warnings)
+        finalization = governor.finalization(read(self.project, 'objective'), {'actions': []})
+        self.assertNotIn('report_consumption', finalization['remaining'])
+        self.assertEqual(finalization['history'], [row['admission_id']])
+
+    def test_live_or_unknown_process_claim_is_material(self):
+        from pod import governor
+        for verdict in ('alive', 'unverifiable'):
+            with self.subTest(verdict=verdict):
+                self.setUp()
+                row = self.accounted({'verdict': verdict, 'reason': 'test'})
+                projection, reasons, warnings = self.evaluate(row)
+                self.assertEqual(len(governor._active(projection)), 1)
+                self.assertIn('effective_unknown', reasons)
+                self.assertIn('integration_unsettled', reasons)
+                self.assertNotIn('abandoned_attempt_history', warnings)
+
+    def test_without_the_exact_native_read_nothing_is_history(self):
+        from pod import governor
+        row = self.accounted({'verdict': 'exited', 'reason': 'terminal_closed'})
+        self.assertEqual(governor._settled_abandoned(read(self.project, 'objective')['admissions'], None), set())
+        self.assertEqual(governor._settled_abandoned(read(self.project, 'objective')['admissions'],
+                                                    {'outstanding': [{'admission_id': row['admission_id']}]}), set())
 
 
 class AbandonedPrecedingReaderTests(AbandonedFixture):

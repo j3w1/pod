@@ -21,22 +21,30 @@ env:
 
 jobs:
   tests:
-    name: tests (${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }})
+    name: tests (py ${{ matrix.python }} ${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # One row per lane share; tests/suite_lanes.json names the same shards.
+        # One row per lane share and supported interpreter; tests/suite_lanes.json names the same shards.
         include:
-          - {lane: parallel, shard: 1, of: 6}
-          - {lane: parallel, shard: 2, of: 6}
-          - {lane: parallel, shard: 3, of: 6}
-          - {lane: parallel, shard: 4, of: 6}
-          - {lane: parallel, shard: 5, of: 6}
-          - {lane: parallel, shard: 6, of: 6}
-          - {lane: serial, shard: 1, of: 1}
-          - {lane: installer, shard: 1, of: 1}
+          - {python: "3.13", lane: parallel, shard: 1, of: 6}
+          - {python: "3.13", lane: parallel, shard: 2, of: 6}
+          - {python: "3.13", lane: parallel, shard: 3, of: 6}
+          - {python: "3.13", lane: parallel, shard: 4, of: 6}
+          - {python: "3.13", lane: parallel, shard: 5, of: 6}
+          - {python: "3.13", lane: parallel, shard: 6, of: 6}
+          - {python: "3.13", lane: serial, shard: 1, of: 1}
+          - {python: "3.13", lane: installer, shard: 1, of: 1}
+          - {python: "3.14", lane: parallel, shard: 1, of: 6}
+          - {python: "3.14", lane: parallel, shard: 2, of: 6}
+          - {python: "3.14", lane: parallel, shard: 3, of: 6}
+          - {python: "3.14", lane: parallel, shard: 4, of: 6}
+          - {python: "3.14", lane: parallel, shard: 5, of: 6}
+          - {python: "3.14", lane: parallel, shard: 6, of: 6}
+          - {python: "3.14", lane: serial, shard: 1, of: 1}
+          - {python: "3.14", lane: installer, shard: 1, of: 1}
     env:
       PYTHONPATH: skills
       LANE: ${{ matrix.lane }}
@@ -48,7 +56,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - name: Install zsh for shell and terminal tests
         if: matrix.lane != 'parallel'
         run: |

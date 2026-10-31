@@ -85,11 +85,12 @@ def current_fence(shown: dict, admission: dict, binding: dict) -> dict:
     workspace, ownership = projection.get("workspace"), projection.get("resource")
     if (workspace is not None and (not isinstance(workspace, dict)
                                   or workspace.get("id") != binding["worktreeId"])
-            or not isinstance(ownership, dict) or ownership.get("ownerDispatchId") != binding["dispatchId"]):
+            or not isinstance(ownership, dict)
+            or ownership.get("ownerDispatchId") not in _owners(ownership, binding)):
         _refuse("Current workspace or retained ownership contradicts the assignment")
     resource = result.get("terminalResource")
     if resource is not None and (not isinstance(resource, dict)
-            or resource.get("ownerDispatchId") != binding["dispatchId"]
+            or resource.get("ownerDispatchId") not in _owners(ownership, binding)
             or resource.get("terminalHandle") != binding["terminalHandle"]
             or resource.get("worktreeId") != binding["worktreeId"]
             or resource.get("releaseState") != ownership.get("releaseState")
@@ -100,6 +101,36 @@ def current_fence(shown: dict, admission: dict, binding: dict) -> dict:
     if recorded is not None and (not isinstance(recorded, dict) or recorded.get("fence") != fence):
         _refuse("Previously accounted native fence changed")
     return fence
+
+
+def _owners(ownership: dict, binding: dict) -> tuple:
+    """Only a released resource may have lost its named owner; a live one never joins another attempt."""
+    released = ownership.get("releaseState") == "released"
+    return (binding["dispatchId"], None) if released else (binding["dispatchId"],)
+
+
+def release_evidence(shown: dict) -> str | None:
+    """Native proof that nothing of this attempt can still run: the process exited or the resource was released.
+
+    `abandoned` fences the worker without claiming its process stopped, so settlement alone proves neither.
+    """
+    projection = shown["result"].get("projection")
+    projection = projection if isinstance(projection, dict) else {}
+    liveness, resource = projection.get("liveness"), projection.get("resource")
+    if isinstance(liveness, dict) and liveness.get("verdict") == "exited":
+        return "process_exited"
+    if (isinstance(resource, dict) and resource.get("state") == "released"
+            and resource.get("releaseState") == "released"):
+        return "resource_released"
+    return None
+
+
+def hold_scope(admission: dict) -> dict:
+    """What a retained, possibly-live attempt can still affect: its worktree and branch."""
+    placement = admission["recovery"].get("placement_binding")
+    placement = placement if isinstance(placement, dict) else {}
+    return {"worktree": admission["native_binding"]["worktreeId"], "branch": placement.get("branch"),
+            "path": placement.get("path")}
 
 
 def _unobserved_receipt(receipt: dict, admission: dict, request: str) -> str:
@@ -171,7 +202,8 @@ def recover(project: Path, objective: str, *, owner: str, admission: dict, reaso
     if previous is not None:
         if previous.get("reason") != reason:
             raise PodError("admission_conflict", "Abandoned accounting reason is immutable")
-        return {"status": admission["state"], "admission": admission, "action": "reuse"}
+        return {"status": admission["state"], "admission": admission, "action": "reuse",
+                **_current_hold(admission, port)}
     if (admission["state"] not in ("reserved", "unresolved") or _known_request_conflict(admission)
             or admission.get("report") is not None or admission.get("disposition") is not None
             or admission.get("changed_paths") is not None):
@@ -248,4 +280,21 @@ def recover(project: Path, objective: str, *, owner: str, admission: dict, reaso
 
     row = update_admission(project, objective, owner=owner, admission_id=admission["admission_id"],
                            update=apply, expected_runtime=admission["runtime"])
-    return {"status": row["state"], "admission": row, "action": "accounted_abandoned"}
+    return {"status": row["state"], "admission": row, "action": "accounted_abandoned",
+            **_hold_fields(row, release_evidence(shown))}
+
+
+def _hold_fields(row: dict, release: str | None) -> dict:
+    return {"release": release, "hold": None if release else hold_scope(row)}
+
+
+def _current_hold(admission: dict, port) -> dict:
+    """Repeating the accounting reads again; an unreadable or contradictory read keeps the hold."""
+    binding = admission["native_binding"]
+    try:
+        shown = port.show_worker(binding["dispatchId"])
+        current_fence(shown, admission, binding)
+        release = release_evidence(shown)
+    except PodError:
+        release = None
+    return _hold_fields(admission, release)

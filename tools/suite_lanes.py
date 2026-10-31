@@ -39,6 +39,7 @@ if sys.path and Path(sys.path[0] or ".").resolve() == Path(__file__).resolve().p
 SCHEMA = "suite-lanes/v1"
 TIMINGS_SCHEMA = "suite-lanes-timings/v1"
 MARKER = "POD_TEST_TIMINGS "
+PRIMARY_PYTHON = "3.13"  # The interpreter whose durations and calibration `refresh` records.
 LANES = ("parallel", "serial", "installer")
 HARNESS = {"tests.pty_harness": "serial", "tests.install_support": "installer"}
 PRECEDENCE = ("serial", "installer")
@@ -724,7 +725,8 @@ def timing_lines(*, lane: str, shard: int, of: int, workers: int, digest: str, r
     lines = []
     for part in range(parts):
         body = {"schema": TIMINGS_SCHEMA, "lane": lane, "shard": shard, "of": of, "workers": workers,
-                "cpus": os.cpu_count(), "sha": os.environ.get("GITHUB_SHA", ""),
+                "cpus": os.cpu_count(), "python": "%d.%d" % sys.version_info[:2],
+                "sha": os.environ.get("GITHUB_SHA", ""),
                 "run_id": os.environ.get("GITHUB_RUN_ID", ""), "plan": digest,
                 "part": part + 1, "parts": parts, "planned": len(results), "ran": ran, "skips": skips,
                 "fixture_errors": fixture_errors, "clean": clean, "wall": round(wall, 1),
@@ -896,7 +898,18 @@ def parse_timings(text: str) -> list[dict]:
             if not isinstance(body, dict) or body.get("schema") != TIMINGS_SCHEMA:
                 raise Finding("REFRESH unsupported POD_TEST_TIMINGS schema")
             bodies.append(body)
-    return bodies
+    return _one_interpreter(bodies)
+
+
+def _one_interpreter(bodies: list[dict]) -> list[dict]:
+    """A matrix run repeats every share per interpreter; record the primary's, never a mixture."""
+    versions = {body["python"] for body in bodies if isinstance(body.get("python"), str)}
+    if any(not isinstance(body.get("python", ""), str) for body in bodies) or len(versions) < 2:
+        return bodies
+    if PRIMARY_PYTHON not in versions:
+        raise Finding(f"REFRESH found several interpreters ({', '.join(sorted(versions))}) and no "
+                      f"{PRIMARY_PYTHON}: refresh from a run that includes the primary interpreter")
+    return [body for body in bodies if body.get("python") == PRIMARY_PYTHON]
 
 
 def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:

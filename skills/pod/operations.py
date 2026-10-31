@@ -118,13 +118,16 @@ def _assignment_evidence(shown: dict, admission: dict) -> dict:
             or worker.get("worktreeId") != binding["worktreeId"]):
         raise PodError("native_assignment_unverified", "Exact assignment identity differs")
     _check_retry_dispatch(dispatch, admission)
+    settled = _native_assignment_settled(shown)
     if "abandoned_accounting" in admission:
-        from .abandoned import current_fence
+        # A fence is not an exit: the logical slot frees only on native exit or release evidence.
+        from .abandoned import current_fence, release_evidence
         current_fence(shown, admission, binding)
+        settled = settled and release_evidence(shown) is not None
     return {"admission_id": admission["admission_id"], "runtime": shown["runtime"],
             "run_id": binding["runId"], "task_id": binding["taskId"],
             "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
-            "settled": _native_assignment_settled(shown),
+            "settled": settled,
             "retry_eligible": (_retry_eligible(shown)
                                and worker.get("agentTerminalHandle") == binding["terminalHandle"]),
             "placement": _placement_evidence(result, binding)}

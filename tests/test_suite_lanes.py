@@ -57,11 +57,19 @@ class ManifestTests(unittest.TestCase):
         self.assertLessEqual(value["lanes"]["parallel"]["shards"], value["budgets"]["max_parallel_shards"])
         self.assertEqual(sl.dump_manifest(value), (ROOT / "tests" / "suite_lanes.json").read_text())
         import re
-        rows = re.findall(r"\{lane: (\w+), shard: (\d+), of: (\d+)\}",
+        rows = re.findall(r'\{python: "([\d.]+)", lane: (\w+), shard: (\d+), of: (\d+)\}',
                           (ROOT / ".github/workflows/ci.yml").read_text())
-        expected = [(lane, str(shard), str(config["shards"]))
+        # Every lane share runs once on each supported interpreter, with identical lanes and shards.
+        expected = [(python, lane, str(shard), str(config["shards"]))
+                    for python in ("3.13", "3.14")
                     for lane, config in value["lanes"].items() for shard in range(1, config["shards"] + 1)]
         self.assertEqual(sorted(rows), sorted(expected))
+
+    def test_the_hosted_workflow_keeps_strict_forbid_skips_on_every_interpreter_row(self):
+        text = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn('python-version: ${{ matrix.python }}', text)
+        self.assertIn('--strict --forbid-skips', text)
+        self.assertEqual(text.count('--strict --forbid-skips'), 1)
 
 
 
@@ -337,6 +345,25 @@ class RefreshTests(unittest.TestCase):
         self.assertFalse({"tests.m.C.test_failed_slow", "tests.m.C.test_not_run"} & set(merged))
         self.assertEqual(bodies[0]["fast"], {"count": 1, "seconds": 0.2})
         self.assertEqual((bodies[0]["planned"], bodies[0]["ran"]), (234, 233))
+
+    def test_a_two_interpreter_run_refreshes_from_the_primary_interpreter_only(self):
+        legs = [dict(body, python=python) for python in ("3.13", "3.14") for body in measured_bodies()]
+        log = "\n".join(sl.MARKER + json.dumps(body) for body in legs)
+        kept = sl.parse_timings(log)
+        self.assertEqual({body["python"] for body in kept}, {"3.13"})
+        self.assertEqual(len(kept), len(legs) // 2)
+        sl.validated_legs(kept)  # Both interpreters together would repeat every test id.
+        with self.assertRaises(sl.Finding):
+            sl.validated_legs(legs)
+        earlier = [dict(body) for body in measured_bodies()]
+        self.assertEqual(len(sl.parse_timings("\n".join(sl.MARKER + json.dumps(body) for body in earlier))),
+                         len(earlier))
+        with self.assertRaisesRegex(sl.Finding, "no 3.13"):
+            sl.parse_timings("\n".join(sl.MARKER + json.dumps(dict(body, python=python))
+                                       for body in measured_bodies() for python in ("3.14", "3.15")))
+        lines = sl.timing_lines(lane="serial", shard=1, of=1, workers=1, digest="d", results={},
+                                manifest=manifest(), wall=1.0, skips=0, fixture_errors=0)
+        self.assertEqual(sl.parse_timings(lines[0])[0]["python"], "%d.%d" % sys.version_info[:2])
 
     def test_merge_records_slow_tests_drops_fast_ones_and_ignores_noise(self):
         value = manifest(lanes={"parallel": {"shards": 1, "workers": 2, "target_seconds": 180},

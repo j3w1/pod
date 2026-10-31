@@ -1893,10 +1893,14 @@ def logical_projection(project: Path, native: dict, *, objective: str,
         task = binding.get("taskId") if isinstance(binding, dict) else admission["task_id"]
         if tasks is not None and task not in tasks:
             continue
-        outstanding.append({**admission["request"], "objective": objective,
-                            "admission_id": admission_id, "task": task,
-                            "state": admission["state"], "role": admission["role"],
-                            "candidate": admission["candidate"]})
+        row = {**admission["request"], "objective": objective,
+               "admission_id": admission_id, "task": task,
+               "state": admission["state"], "role": admission["role"],
+               "candidate": admission["candidate"]}
+        if "abandoned_accounting" in admission and binding_valid(binding):
+            from .abandoned import hold_scope
+            row["hold"] = hold_scope(admission)
+        outstanding.append(row)
     return {"schema": "pod-logical-projection/v1", "runtime": native["runtime"],
             "authoritative": native.get("authoritative") is True,
             "owner": native.get("owner") if native.get("authoritative") is True else None,
