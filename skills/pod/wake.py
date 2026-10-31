@@ -16,6 +16,10 @@ MAX_WAIT_MS = 6 * 60 * 60 * 1000
 # A coordinator with owned work whose terminal produced no output for this long is a candidate for a missed wake.
 IDLE_SECONDS = 180
 EVENT_LIMIT = 50
+# What the coordinator must read before it acknowledges: the message text and payload, each bounded. Anything cut
+# is flagged, and the complete message stays readable with `orca orchestration check --run RUN --all --json`.
+BODY_LIMIT = 16 * 1024
+PAYLOAD_LIMIT = 16 * 1024
 SETTLE_TYPES = ("worker_done",)
 DECISION_TYPES = ("decision", "decision_relay", "decision_reply", "reply")
 QUESTION_TYPES = ("escalation", "question", "ask")
@@ -34,6 +38,21 @@ def _payload(message: dict) -> dict:
 
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _content(message: dict) -> dict:
+    """The native text and payload the coordinator acts on, bounded; nothing is dropped without a flag."""
+    body = message.get("body")
+    body = body if isinstance(body, str) else None
+    cut = body is not None and len(body) > BODY_LIMIT
+    raw = message.get("payload")
+    payload = _payload(message) if raw not in (None, "") else None
+    if payload is None and raw not in (None, ""):
+        payload = raw if isinstance(raw, (str, int, float, bool, list)) else None
+    oversized = payload is not None and len(json.dumps(payload, ensure_ascii=False, default=str)) > PAYLOAD_LIMIT
+    return {"body": body[:BODY_LIMIT] if cut else body, "payload": None if oversized else payload,
+            "truncated": [name for name, flag in (("body", cut), ("payload", oversized)) if flag],
+            "thread": _text(message.get("thread_id")), "priority": _text(message.get("priority"))}
 
 
 def classify(message: dict) -> dict:
@@ -64,7 +83,7 @@ def classify(message: dict) -> dict:
                                    "only through its verified route; acknowledge it with the next call.")
     return {"id": _text(message.get("id")), "type": kind_type, "kind": kind, "from": _text(message.get("from_handle")),
             "subject": _text(message.get("subject")), "dispatch": dispatch, "task": _text(payload.get("taskId")),
-            "outcome": outcome, "action": action}
+            "outcome": outcome, "action": action, **_content(message)}
 
 
 def events(messages: list) -> tuple[list[dict], list[dict]]:
@@ -84,7 +103,9 @@ def events(messages: list) -> tuple[list[dict], list[dict]]:
         if event["kind"] in ("completion", "failure", "completion_unproven") and event["dispatch"] is not None:
             first = settled.setdefault(event["dispatch"], event["id"])
             if first != event["id"]:
-                dropped.append({"id": event["id"], "duplicate_of": first, "reason": "second settlement report"})
+                dropped.append({"id": event["id"], "duplicate_of": first, "reason": "second settlement report",
+                                "subject": event["subject"], "outcome": event["outcome"],
+                                **_content(message)})
                 continue
         kept.append(event)
     return kept, dropped
@@ -94,6 +115,7 @@ def _result(run: str, status: str, *, waited: bool, delivery=None, replayed=Fals
             detail=None) -> dict:
     kept, dropped = events(list(messages))
     actionable = [event for event in kept if event["kind"] != "informational"]
+    cut = [event["id"] for event in kept if event["truncated"]]
     if status == "events":
         next_action = ("Process every event, then acknowledge delivery " + str(delivery)
                        + " with `pod wake --run " + run + " --ack " + str(delivery) + "`, which rechecks mail and arms the "
@@ -101,6 +123,10 @@ def _result(run: str, status: str, *, waited: bool, delivery=None, replayed=Fals
                        if actionable else "Only informational events: acknowledge with `pod wake --run " + run
                        + " --ack " + str(delivery) + "` if you still own work, otherwise `orca orchestration check --ack "
                        + str(delivery) + "`.")
+        if cut:
+            next_action = ("Message(s) " + ", ".join(str(i) for i in cut) + " were cut to the helper's bounds: read them "
+                           "in full with `orca orchestration check --run " + run + " --all --json` before you "
+                           "acknowledge. " + next_action)
     elif status == "timeout":
         next_action = ("The wait ended with no mail: a checkpoint, not a failure. If you still own work, arm one "
                        "new wait with `pod wake --run " + run + "`; after repeated empty waits inspect once with "
@@ -168,17 +194,36 @@ def arm(run: str, *, ack: str | None = None, timeout_ms: int = DEFAULT_WAIT_MS, 
     return _result(run, "timeout", waited=True, ack=acknowledged)
 
 
+def owned_work(assignments: dict, authority_waits: list, report_records: list, waits: list, *,
+               closed: bool) -> dict:
+    """What a coordinator still owns, from the status projections that already decide it.
+
+    Assignments are the outstanding and the unverified ones, plus any settled admission whose report or disposition
+    is still to be consumed (the finalization predicate), counted once per admission. Awaited replies are the
+    authority waits and every objective question not recorded as resolved; one with unknown resolution counts and
+    is reported separately as unknown, never as settled."""
+    if closed:
+        return {"assignments": 0, "awaited_replies": 0, "unconsumed_reports": 0, "unknown": 0}
+    keys = {row.get("admission") for row in (assignments.get("active") or []) + (assignments.get("unverified") or [])
+            if isinstance(row, dict)}
+    unconsumed = {row.get("record") for row in report_records if isinstance(row, dict)}
+    return {"assignments": len(keys | unconsumed), "unconsumed_reports": len(unconsumed - keys),
+            "awaited_replies": len(authority_waits) + len(waits),
+            "unknown": sum(1 for row in waits if "resolution" in (row.get("missing") or []))}
+
+
 def status_block(run: str | None, owner: str | None, *, assignments: int, awaited_replies: int,
-                 activity_fn=orca.terminal_activity) -> dict:
+                 unconsumed_reports: int = 0, unknown: int = 0, activity_fn=None) -> dict:
     """A coordinator that owns work and has gone quiet: a candidate for a missed wake, never a verdict.
 
     Owned work is an outstanding assignment (a live worker or a report not yet consumed) or an awaited reply. Orca
     exposes no queryable mailbox-wait state, so Pod reports the wait as unknown and invents no armed flag. A parked
     coordinator is quiet whether or not its wait is armed; the age is Orca's last output from the terminal."""
-    owned = {"assignments": assignments, "awaited_replies": awaited_replies}
+    owned = {"assignments": assignments, "awaited_replies": awaited_replies,
+             "unconsumed_reports": unconsumed_reports, "unknown_replies": unknown}
     if not assignments and not awaited_replies:
         return {"state": "not_needed", "owned": owned, "wait": "not_needed", "next_action": None}
-    quiet = activity_fn(owner) if owner else None
+    quiet = (activity_fn or orca.terminal_activity)(owner) if owner else None
     seconds = None if quiet is None else quiet // 1000
     parked = seconds is not None and seconds >= IDLE_SECONDS
     block = {"state": "quiet_with_owned_work" if parked else "owned_work", "owned": owned, "wait": "unknown",

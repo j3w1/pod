@@ -4,6 +4,10 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+from tests.kernel_support import KernelCase
+from tests.test_decision_visibility import question
+from tests import test_status_selection as selection
+
 from pod import wake
 from pod.errors import PodError
 from pod.orca import mailbox_check
@@ -178,6 +182,50 @@ class WakeTests(unittest.TestCase):
                          [("msg_r", "lifecycle_rejected"), ("msg_ok", "completion")])
         self.assertEqual(result["duplicates"], [])
 
+    def test_events_carry_the_native_text_and_payload_the_coordinator_must_act_on(self):
+        rows = [("status", "Correction", "Stop editing parser.py and preserve the uncommitted draft.",
+                 {"candidate": "c" * 40}),
+                ("question", "Choose", "Which base should the retry use?", {"choices": ["main", "release"]}),
+                ("decision", "Answer", "Use the release base.", {"verification": {"reference": "relay-1"}}),
+                ("worker_done", "Done", "Fixed two findings.", {"dispatchId": "d9", "taskId": "t9",
+                                                              "outcome": "succeeded", "reportPath": "/r/report.json"})]
+        for type_, subject, body, payload in rows:
+            self.mail.pending.append({"id": "msg_" + type_, "type": type_, "subject": subject, "body": body,
+                                      "payload": json.dumps(payload), "thread_id": "th1", "priority": "high"})
+        replay = [self.arm(), self.arm()]
+        self.assertTrue(replay[1]["replayed"])
+        for result in replay:
+            seen = {event["type"]: event for event in result["events"]}
+            for type_, subject, body, payload in rows:
+                event = seen[type_]
+                self.assertEqual((event["body"], event["subject"], event["thread"], event["priority"]),
+                                 (body, subject, "th1", "high"))
+                self.assertEqual({key: event["payload"][key] for key in payload}, payload)
+                self.assertEqual(event["truncated"], [])
+        self.assertEqual(seen["worker_done"]["kind"], "completion")
+
+    def test_content_over_the_bounds_is_flagged_and_never_silently_dropped(self):
+        self.mail.pending.append({"id": "msg_big", "type": "status", "subject": "Large",
+                                  "body": "x" * (wake.BODY_LIMIT + 1),
+                                  "payload": json.dumps({"blob": "y" * (wake.PAYLOAD_LIMIT + 1)})})
+        result = self.arm()
+        event = result["events"][0]
+        self.assertEqual(event["truncated"], ["body", "payload"])
+        self.assertEqual(len(event["body"]), wake.BODY_LIMIT)
+        self.assertIsNone(event["payload"])
+        self.assertIn("check --run " + RUN + " --all", result["next_action"])
+        self.assertLess(result["next_action"].index("--all"), result["next_action"].index("acknowledge delivery"))
+
+    def test_a_second_settlement_report_keeps_its_own_content(self):
+        self.mail.pending.append({"id": "msg_1", "type": "worker_done", "subject": "first", "body": "first body",
+                                  "payload": json.dumps({"dispatchId": "d1", "outcome": "succeeded"})})
+        self.mail.pending.append({"id": "msg_2", "type": "worker_done", "subject": "second", "body": "new finding",
+                                  "payload": json.dumps({"dispatchId": "d1", "outcome": "failed",
+                                                         "reportPath": "/r/2.json"})})
+        duplicate = self.arm()["duplicates"][0]
+        self.assertEqual((duplicate["body"], duplicate["outcome"], duplicate["payload"]["reportPath"]),
+                         ("new finding", "failed", "/r/2.json"))
+
     def test_status_reports_a_quiet_coordinator_that_owns_work_and_never_invents_an_armed_flag(self):
         block = lambda **owned: wake.status_block(RUN, "term_c", **owned)
         self.assertEqual(block(assignments=0, awaited_replies=0, activity_fn=lambda h: 10 ** 9)["state"], "not_needed")
@@ -190,6 +238,59 @@ class WakeTests(unittest.TestCase):
                 active = block(**owned, activity_fn=lambda h, a=activity: a)
                 self.assertEqual((active["state"], active["wait"], active["next_action"]), ("owned_work", "unknown", None))
         self.assertNotIn("armed", json.dumps(block(assignments=1, awaited_replies=0, activity_fn=lambda h: 1)))
+
+    def test_owned_work_counts_unconsumed_reports_unverified_assignments_and_unknown_replies_once(self):
+        assignments = {"active": [{"admission": "a1"}], "settled": [{"admission": "a2"}],
+                       "unverified": [{"admission": "a3"}]}
+        owned = wake.owned_work(assignments, [{"obligation": "O2"}], [{"record": "a2"}, {"record": "a1"}],
+                                [{"missing": []}, {"missing": ["resolution", "categories"]}], closed=False)
+        self.assertEqual(owned, {"assignments": 3, "unconsumed_reports": 1, "awaited_replies": 3, "unknown": 1})
+        self.assertEqual(wake.owned_work(assignments, [{}], [{"record": "a2"}], [{}], closed=True),
+                         {"assignments": 0, "awaited_replies": 0, "unconsumed_reports": 0, "unknown": 0})
+
+
+class WakeStatusTests(KernelCase):
+    """The production status path: wake ownership follows the existing question, settlement and finalization facts."""
+
+    def wake(self, **options):
+        with patch("pod.orca.terminal_activity", return_value=600_000):
+            return selection.StatusSelectionTests.status(self, "--objective", "objective", **options)["wake"]
+
+    def test_a_pending_question_is_an_awaited_reply_for_a_quiet_coordinator(self):
+        self.intake(questions=[question()])
+        pending = self.wake()
+        self.assertEqual((pending["state"], pending["wait"]), ("quiet_with_owned_work", "unknown"))
+        self.assertEqual((pending["owned"]["awaited_replies"], pending["owned"]["unknown_replies"]), (1, 0))
+        self.assertIn("pod wake --run run", pending["next_action"])
+
+    def test_resolved_questions_are_not_awaited_replies(self):
+        self.intake(questions=[question(state="answered"), question("second", state="resolved")])
+        resolved = self.wake()
+        self.assertEqual((resolved["state"], resolved["owned"]["awaited_replies"]), ("not_needed", 0))
+
+    def test_legacy_and_contradictory_questions_count_and_stay_unknown(self):
+        self.intake(questions=[{"id": "older", "text": "Decide", "choices": []}])
+        legacy = self.wake()
+        self.assertEqual((legacy["state"], legacy["owned"]["awaited_replies"], legacy["owned"]["unknown_replies"]),
+                         ("quiet_with_owned_work", 1, 1))
+
+    def test_a_settled_worker_whose_report_is_unconsumed_is_owned_until_consumed(self):
+        self.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+                     "check": "independent review", "scope": {"paths": ["src"]}, "question": "is src right?",
+                     "candidate": self.base, "existing_evidence": "tests", "insufficiency": "no review",
+                     "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}})
+        frozen = self.packet(["A"], role="review")
+        admission = self.start("review", frozen)["admission"]
+        self.settle(admission)
+        owned = self.wake()
+        self.assertEqual(owned["state"], "quiet_with_owned_work")
+        self.assertEqual(owned["owned"]["assignments"], 1)
+        rows = self.stored()
+        row = next(item for item in rows if item["id"] == "A")
+        row.pop("executor")
+        row.update(state="satisfied", evidence=[{"attempt": admission["admission_id"]}])
+        self.report(admission, frozen, map={"obligations": rows})
+        self.assertEqual(self.wake()["state"], "not_needed")
 
 
 class MailboxCheckTests(unittest.TestCase):

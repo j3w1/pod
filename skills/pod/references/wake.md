@@ -18,7 +18,7 @@ The helper does three things in one call. It confirms this terminal is the bound
 
 ## On wake
 
-The result is JSON with `status`:
+The result is JSON with `status`. Every event carries the message's subject, `body`, `payload`, `thread` and `priority`: that content, not the classification, is what you process. If an event lists `truncated`, read the full message with `orca orchestration check --run RUN --all --json` before you acknowledge; never acknowledge a message you have not read.
 
 - `events`: process every event, in order, before anything else. `delivery` names the batch. Its `events` are classified:
   - `completion` or `failure` (a `worker_done`): validate it against the expected active Dispatch, consume the report or record the failure through the recorded admission, and decide the settled terminal's reuse, retention or release. A `completion_unproven` has no outcome; read the worker before treating it as either.
@@ -38,7 +38,7 @@ If you lost your place, call `pod wake --run RUN` with no `--ack`. An unacknowle
 
 ## Status
 
-`pod status` shows `wake`. Orca exposes no queryable mailbox-wait state, so `wait` is always `unknown` and Pod keeps no armed flag. `quiet_with_owned_work` means the coordinator owns work and Orca last saw output from its terminal at least three minutes ago; a correctly parked coordinator looks the same, so this is a candidate for a missed wake and nothing more. A lead or supervisor whose events go unanswered sends it one `orca orchestration send`, reads its terminal, and has it run the helper.
+`pod status` shows `wake`; owned work is a live or unverified assignment, a settled worker whose report or disposition is not yet consumed, an authority wait, or a question not recorded as resolved (unknown counts, flagged unknown). Orca exposes no queryable mailbox-wait state, so `wait` is always `unknown` and Pod keeps no armed flag. `quiet_with_owned_work` means the coordinator owns work and Orca last saw output from its terminal at least three minutes ago; a correctly parked coordinator looks the same, so this is a candidate for a missed wake and nothing more. A lead or supervisor whose events go unanswered sends it one `orca orchestration send`, reads its terminal, and has it run the helper.
 
 ## What the runtime does and does not do
 

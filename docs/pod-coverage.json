@@ -9068,7 +9068,10 @@
         "tests.test_wake.WakeTests.test_a_duplicate_is_delivered_once",
         "tests.test_wake.WakeTests.test_second_settlement_report_for_one_dispatch_is_one_event",
         "tests.test_wake.WakeTests.test_a_rejected_settlement_is_not_a_completion",
-        "tests.test_wake.WakeTests.test_wake_after_compaction_replays_the_unacknowledged_batch_then_continues"
+        "tests.test_wake.WakeTests.test_wake_after_compaction_replays_the_unacknowledged_batch_then_continues",
+        "tests.test_wake.WakeTests.test_events_carry_the_native_text_and_payload_the_coordinator_must_act_on",
+        "tests.test_wake.WakeTests.test_content_over_the_bounds_is_flagged_and_never_silently_dropped",
+        "tests.test_wake.WakeTests.test_a_second_settlement_report_keeps_its_own_content"
       ],
       "status": "NOT_RUN"
     },
@@ -9103,7 +9106,12 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_wake.WakeTests.test_status_reports_a_quiet_coordinator_that_owns_work_and_never_invents_an_armed_flag"
+        "tests.test_wake.WakeTests.test_status_reports_a_quiet_coordinator_that_owns_work_and_never_invents_an_armed_flag",
+        "tests.test_wake.WakeTests.test_owned_work_counts_unconsumed_reports_unverified_assignments_and_unknown_replies_once",
+        "tests.test_wake.WakeStatusTests.test_a_pending_question_is_an_awaited_reply_for_a_quiet_coordinator",
+        "tests.test_wake.WakeStatusTests.test_resolved_questions_are_not_awaited_replies",
+        "tests.test_wake.WakeStatusTests.test_legacy_and_contradictory_questions_count_and_stay_unknown",
+        "tests.test_wake.WakeStatusTests.test_a_settled_worker_whose_report_is_unconsumed_is_owned_until_consumed"
       ],
       "status": "NOT_RUN"
     },

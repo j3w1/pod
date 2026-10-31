@@ -534,15 +534,15 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
         if failure is not None:
             result["native_settlement_failure"] = failure
         result.update(_objective_details(state, view, workers, failure))
-        from .wake import status_block as wake_block
-        open_work = not checkpoint.get("closure")
-        questions = result.get("recorded_questions", {}).get("items") or []
-        result["wake"] = wake_block(
-            run, state.get("owner"),
-            assignments=len(result["assignments"]["active"]) if open_work else 0,
-            awaited_replies=(len(result["gates"]["authority_waits"])
-                             + sum(1 for row in questions if isinstance(row, dict) and "resolution" not in row))
-            if open_work else 0)
+        from .wake import owned_work, status_block as wake_block
+        from .governor import finalization
+        owned = owned_work(
+            result["assignments"], result["gates"]["authority_waits"],
+            (finalization(state, {"actions": []})["records"].get("report_consumption") or []),
+            [row for row in (result.get("waiting_decisions") or {}).get("items") or []
+             if row.get("source") == "objective"],
+            closed=bool(checkpoint.get("closure")))
+        result["wake"] = wake_block(run, state.get("owner"), **owned)
         from .worker_tabs import rows as tab_rows
         result["worker_tabs"] = ((view or {}).get("worker_tabs") if view is not None else None)
         if result["worker_tabs"] is None:
