@@ -38,7 +38,9 @@ yet contain. That needs an exact snapshot decision for the observed canonical
 `base_ref` and full `base`, recorded as `revision_authority` from the decider the
 decision policy names for scope changes; the refusal says which applies. An honestly
 relayed snapshot decision remains relayed. The completion-bookkeeping exception above retains the
-trusted baseline and adopts no later policy.
+trusted baseline and adopts no later policy, and so does a checkpoint that only records post-delivery
+bookkeeping (acceptance, external evidence, questions, next action) with the same candidate, rows and
+settled proof.
 
 For an earlier merge row lacking `target_binding.commit`, retry the supported
 `governor-outcome PASS` with its exact provider `merge_commit` after fetching.

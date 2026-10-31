@@ -9810,8 +9810,9 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_delivery.VerifiedDeliveryTests.test_changed_governance_after_a_delivery_inside_the_base_names_the_ordinary_refresh",
-        "tests.test_delivery.VerifiedDeliveryTests.test_target_moved_after_verified_result_holds_future_work"
+        "tests.test_delivery.VerifiedDeliveryTests.test_bookkeeping_after_a_delivery_inside_the_base_keeps_it_and_new_work_names_the_refresh",
+        "tests.test_delivery.VerifiedDeliveryTests.test_target_moved_after_verified_result_holds_future_work",
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_target_holding_the_objectives_earlier_pull_request_needs_a_snapshot_decision"
       ],
       "status": "NOT_RUN"
     },
@@ -9828,6 +9829,33 @@
         "tests.test_governance_reapproval.ClosedWorkerTabTests.test_a_remote_host_or_another_terminal_gets_no_disconnected_row",
         "tests.test_governance_reapproval.ClosedWorkerTabTests.test_a_present_terminal_keeps_its_row",
         "tests.test_governance_reapproval.ClosedWorkerTabTests.test_a_stale_or_hand_written_proof_is_ignored"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A746",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery.VerifiedDeliveryTests.test_bookkeeping_after_a_delivery_inside_the_base_keeps_it_and_new_work_names_the_refresh",
+        "tests.test_delivery.VerifiedDeliveryTests.test_target_moved_after_verified_result_holds_future_work",
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_source_changing_exact_delivery_keeps_exemption_but_later_merge_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A747",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery.VerifiedDeliveryTests.test_bookkeeping_after_a_delivery_inside_the_base_keeps_it_and_new_work_names_the_refresh",
+        "tests.test_delivery.VerifiedDeliveryTests.test_mixed_delivery_and_work_update_still_requires_governance_currency",
+        "tests.test_delivery.VerifiedDeliveryTests.test_a_later_snapshot_decision_ends_the_old_delivery_exception",
+        "tests.test_governance_adoption.DeliveredAdoptionTests.test_delivery_record_and_replay_at_unchanged_later_target_pass"
       ],
       "status": "NOT_RUN"
     }

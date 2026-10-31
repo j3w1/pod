@@ -1537,6 +1537,61 @@ def _settled_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
     return True
 
 
+# R202: post-delivery bookkeeping records acceptance, external evidence, questions, next action or closure.
+_BOOKKEEPING_FIELDS = {"seq", "obligations", "update", "acceptances", "close", "governance", "revision_authority"}
+
+
+def _delivery_bookkeeping(prior_map: dict, proposed: dict, core: dict, previous: dict, dispositions: list,
+                          verified_delivery: dict | None) -> bool:
+    """R202: after a recorded delivery, the write changes only post-delivery bookkeeping.
+
+    It keeps the candidate, criteria, governance target and every row definition, adds or removes no row, and
+    leaves every satisfied, withdrawn or renewed row as recorded. It records no delivery, disposition,
+    refresh, rebind, reuse, renewal, reopening, proposal or route settlement. Remaining rows may take external
+    evidence, acceptance or a new state. The stored result is checked again after the kernel."""
+    from .obligations import TERMINAL, definition_id, expand_update, restatable_rows
+    delivery = prior_map.get("delivery")
+    declared = proposed.get("governance")
+    governance = prior_map["governance"]
+    if (delivery is None or prior_map.get("closure") or dispositions or verified_delivery is not None
+            or set(proposed) - _BOOKKEEPING_FIELDS
+            or declared is not None and (not isinstance(declared, dict)
+                                         or declared.get("base_ref", governance["base_ref"]) != governance["base_ref"]
+                                         or declared.get("exclude", governance["exclude"]) != governance["exclude"])
+            or core.get("candidate") != previous.get("candidate")
+            or core.get("criteria") != previous.get("criteria")):
+        return False
+    try:
+        rows = expand_update(prior_map, proposed).get("obligations", prior_map["obligations"])
+    except PodError:
+        return False
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return False
+    named = {row.get("id"): row for row in rows}
+    prior = {row["id"]: row for row in prior_map["obligations"]}
+    if len(named) != len(rows) or set(named) != set(prior):
+        return False
+    restated = {row["id"]: row for row in restatable_rows(prior_map, include_terminal=True)}
+    try:
+        if any(definition_id(row) != prior[key]["definition"] for key, row in named.items()):
+            return False
+    except (KeyError, TypeError, ValueError, PodError):
+        return False
+    return all(row == prior[key] or row == restated[key] for key, row in named.items()
+               if prior[key]["state"] in TERMINAL)
+
+
+def _bookkeeping_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
+    """R202 after the kernel: the same rows in order, settled rows byte-identical, live definitions unchanged."""
+    from .obligations import TERMINAL
+    prior = {row["id"]: row for row in prior_map["obligations"]}
+    if [row["id"] for row in map_state["obligations"]] != list(prior):
+        return False
+    return all(row == prior[row["id"]] if prior[row["id"]]["state"] in TERMINAL
+               else row.get("definition") == prior[row["id"]].get("definition")
+               for row in map_state["obligations"])
+
+
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict, issue_revision=None) -> tuple[dict, dict | None]:
@@ -1561,6 +1616,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             verified_delivery = verify_delivery(project, objective, prior_map, record_id,
                                                 seq=prior_map["seq"] + 1)
         kept = None
+        bookkeeping = False
         withdrawing = (prior_map is not None and not refresh and proposed.get("close") is True
                        and not prior_map.get("closure")
                        and _withdrawal_only(prior_map, proposed, core, previous, dispositions, verified_delivery))
@@ -1586,7 +1642,18 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                         raise
                     unchanged, withdrawal_refusal = None, exc
             else:
-                unchanged = require_governance_current(project, current_map, checkpoint=True)
+                try:
+                    unchanged = require_governance_current(project, current_map, checkpoint=True)
+                except PodError as exc:
+                    # R202: where currency refuses, post-delivery bookkeeping keeps the delivered baseline.
+                    from .governance import closure_keeps_baseline
+                    kept = (closure_keeps_baseline(project, current_map, state=state)
+                            if exc.code == "governance_changed"
+                            and _delivery_bookkeeping(prior_map, proposed, core, previous, dispositions,
+                                                      verified_delivery) else None)
+                    if kept is None:
+                        raise
+                    unchanged, bookkeeping = None, True
             if unchanged is not None:
                 adopted_observation, derived_adoption = unchanged
         if prior_map is None:
@@ -1627,11 +1694,22 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             and declared.get("base_ref") == observed.get("target_ref")
             and declared.get("base") == observed.get("commit"))
         if derived_adoption is None:
-            observed = _independent_governance(
-                project, observed, core["candidate"], state["admissions"],
-                established=(prior_map or {}).get("governance"),
-                previous_candidate=previous.get("candidate"),
-                known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized)
+            try:
+                observed = _independent_governance(
+                    project, observed, core["candidate"], state["admissions"],
+                    established=(prior_map or {}).get("governance"),
+                    previous_candidate=previous.get("candidate"),
+                    known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized)
+            except PodError as exc:
+                canonical = (proposed.get("governance") or {}).get("base_ref")
+                if (refresh and user_direct_revision(proposed.get("revision_authority")) and isinstance(declared, dict)
+                        and declared.get("base_ref") != canonical == observed.get("target_ref")):
+                    # A snapshot decision must name the canonical ref; say so instead of leaving the alias silent.
+                    hint = (f"the decision named {declared['base_ref']}, an alias; repeat it naming the canonical "
+                            f"base_ref {canonical}")
+                    exc.detail = {**(exc.detail or {}), "next_action": f"{hint}; {(exc.detail or {}).get('next_action')}"}
+                    exc.args = (f"{exc.args[0]} ({hint})", *exc.args[1:])
+                raise
         ctx = kernel_context(project, objective, state, authority.get("native"),
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
@@ -1716,6 +1794,11 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if withdrawal_refusal is not None and not _settled_rows_unchanged(prior_map, map_state):
             # R201 keeps the baseline only while the closure relies on no new or changed proof.
             raise withdrawal_refusal
+        if bookkeeping and not _bookkeeping_rows_unchanged(prior_map, map_state):
+            # R202 keeps the delivered baseline only for bookkeeping; anything else gets today's refusal.
+            require_governance_current(project, prior_map, checkpoint=True)
+            raise PodError("governance_changed", "The target moved; only post-delivery bookkeeping keeps the "
+                           "delivered baseline", {"detail": "governance_changed"})
         from .standing import checkpoint_times
         checkpoint_times(state, prior_map, map_state)
         if verified_delivery is not None:

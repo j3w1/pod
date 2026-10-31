@@ -741,6 +741,9 @@ def _github_completion(project: Path, map_state: dict, *, state: dict | None = N
 def closure_keeps_baseline(project: Path, map_state: dict, *, state: dict | None = None) -> dict | None:
     """Shared completion proof: unchanged target containing R93 or GitHub-proved delivery.
 
+    It serves closing writes and post-delivery bookkeeping (R202); a recorded delivery qualifies on its own
+    verified base or on a later bound base that already contains it.
+
     Callers still validate the entire write and finalization. This predicate adopts nothing, including when
     changed governance is at the exact delivered result. Unknown ancestry and default retargets grant nothing.
     """
@@ -750,8 +753,16 @@ def closure_keeps_baseline(project: Path, map_state: dict, *, state: dict | None
         return None
     if delivery is not None:
         validate_delivery_record(delivery)
-        if delivery["base"] != governance["base"] or delivery["target_ref"] != governance["base_ref"]:
+        if delivery["target_ref"] != governance["base_ref"]:
             return None
+        if delivery["base"] != governance["base"]:
+            # A later bound base that already contains the delivery (R202) qualifies only for a forward move with
+            # changed governance; unchanged sources keep their own adoption.
+            current = _resolve_commit(project, governance["base_ref"])
+            if (current is None or git_is_ancestor(project, delivery["result"], governance["base"]) is not True
+                    or git_is_ancestor(project, governance["base"], current) is not True
+                    or unchanged_governance(project, map_state) is not None):
+                return None
     if (governance.get("selection") == "default"
             and _symbolic_ref(project, "refs/remotes/origin/HEAD") != governance["base_ref"]):
         return None  # A changed default target is a retarget, never kept by closure.
@@ -903,8 +914,11 @@ def require_governance_current(project: Path, map_state: dict | None, *, checkpo
             message = ("the target moved after the recorded delivery, which is this objective's own work beyond its "
                        "bound base; adopting the new snapshot needs a snapshot decision")
             action = (f"obtain {SNAPSHOT_DECISION}, then write governance_refresh with that revision_authority and "
-                      "governance naming the exact canonical base_ref and base; a closing write that proves the "
-                      "delivery keeps the bound baseline instead (R154)")
+                      "governance naming the exact canonical base_ref and base")
+        if unchanged is None and git_is_ancestor(project, delivery["result"], current) is True:
+            action = ("a checkpoint that only records post-delivery bookkeeping (acceptance, external evidence, "
+                      "questions, next action or closure, with the same candidate, rows and settled proof) keeps the "
+                      "delivered baseline without a refresh (R202); for new work, " + action)
         raise refuse("governance_changed", "governance_changed", message,
                      next_action=action, recorded=delivery["result"][:12], current=current[:12])
     raise refuse("governance_changed", "governance_changed",

@@ -225,6 +225,11 @@ class DeliveredAdoptionTests(KernelCase):
         self.assertEqual(self.write(self.stored())["checkpoint"]["governance"]["base"], self.base)
         target = self.commit("README.md", "sibling work\n", "sibling")
         git(self.project, "update-ref", "refs/remotes/origin/target", target)
+        # Post-delivery bookkeeping keeps the delivered baseline (R202); new work still refuses.
+        kept = self.write(self.stored())
+        self.assertEqual((kept["checkpoint"]["governance"]["base"], kept["governance_adoption"]["adopted"]),
+                         (self.base, False))
+        self.candidate = self.commit("src/new.py", "new work\n", "new work")
         self.refused("governance_changed", "governance_changed", self.write, self.stored())
 
     def test_delivery_missing_from_new_target_refuses(self):

@@ -109,6 +109,11 @@ class RebasedCandidateGovernanceTests(KernelCase):
         git(self.project, "update-ref", TARGET, target)
         self.candidate = self.rebase_work(target, "VERSION")
         self.refused_without_snapshot_decision(target)
+        # A person's decision naming an alias is not the exact snapshot; the refusal names the canonical ref.
+        error = self.refused("governance_unavailable", "governance_unavailable", self.write, self.stored(),
+                             governance_refresh=True, governance={"base_ref": "origin/target", "base": target},
+                             revision_authority=USER)
+        self.assertIn(f"an alias; repeat it naming the canonical base_ref {TARGET}", error.detail["next_action"])
         # An exact snapshot decision adopts it: a person's, or under Hands-off the coordinator's own.
         self.assertEqual(self.adopt(target, LOCAL)["governance"]["base"], target)
 
