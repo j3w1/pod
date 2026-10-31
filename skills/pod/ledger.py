@@ -1472,8 +1472,8 @@ def _closure_preservation(project: Path, objective: str, state: dict, ctx: dict)
 
 
 _WITHDRAWAL_ONLY_FIELDS = {"seq", "obligations", "update", "close", "revision_authority"}
-_SETTLED_PROOF = ("state", "evidence", "receipts", "acceptances", "reuse", "withdrawal", "renewal")
-_WITHDRAWAL_CHANGES = {"state", "executor", "wait", "external", "withdrawal", "renewal", "evidence", "reuse"}
+# The fields a live row may change by becoming withdrawn; every other field stays byte-identical.
+_WITHDRAWAL_CHANGES = {"state", "executor", "wait", "external", "withdrawal"}
 
 
 def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict, dispositions: list,
@@ -1500,11 +1500,16 @@ def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict
     prior = {row["id"]: row for row in prior_map["obligations"]}
     if len(named) != len(rows) or set(named) - set(prior):
         return False
-    from .obligations import definition_id
+    from .obligations import definition_id, restatable_rows
+    restated = {row["id"]: row for row in restatable_rows(prior_map, include_terminal=True)}
     try:
         if any(definition_id(row) != prior[key]["definition"] for key, row in named.items()):
             return False
     except (KeyError, TypeError, ValueError, PodError):
+        return False
+    # A caller may send the stored row or its restatable form; either way only the transition may differ.
+    if any(row.get(field) != prior[key].get(field) and row.get(field) != restated[key].get(field)
+           for key, row in named.items() for field in set(row) - _WITHDRAWAL_CHANGES - {"id"}):
         return False
     live = [key for key, row in prior.items() if row["state"] not in TERMINAL]
     return bool(live) and all(
@@ -1513,16 +1518,18 @@ def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict
 
 
 def _settled_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
-    """R201 after the kernel: no row was added, no definition changed, every settled row keeps its recorded
-    proof, and every live row changed only by becoming withdrawn."""
+    """R201 after the kernel: the whole stored map differs from the prior one only by live rows becoming withdrawn.
+
+    Every satisfied, withdrawn or renewed row is byte-identical, candidate and proof included; a live row may
+    change only its state, its state referent and its withdrawal record; no row is added or removed."""
     from .obligations import TERMINAL
     prior = {row["id"]: row for row in prior_map["obligations"]}
+    if [row["id"] for row in map_state["obligations"]] != list(prior):
+        return False
     for row in map_state["obligations"]:
-        old = prior.get(row["id"])
-        if old is None or row.get("definition") != old.get("definition"):
-            return False
+        old = prior[row["id"]]
         if old["state"] in TERMINAL:
-            if any(row.get(key) != old.get(key) for key in _SETTLED_PROOF):
+            if row != old:
                 return False
         elif row["state"] != "withdrawn" or any(row.get(key) != old.get(key) for key in set(row) | set(old)
                                                   if key not in _WITHDRAWAL_CHANGES):

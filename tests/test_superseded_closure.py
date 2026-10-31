@@ -160,6 +160,10 @@ class WithdrawalOnlyBoundaryTests(SupersededClosureCase):
         self.rewritten((("A", {"question": "A new review question never put to the reviewer"}),
                         ("A", {"scope": {"paths": ["src", "docs"]}})))
 
+    def test_a_changed_satisfied_assurance_candidate_keeps_ordinary_checks(self):
+        # Review F1 recheck: a field outside the definition, such as the reviewed candidate, cannot change either.
+        self.rewritten((("A", {"candidate": self.target}),))
+
     def rewritten(self, changes):
         root = objective_root(self.project, "objective")
         saved = self.root / "saved-record"

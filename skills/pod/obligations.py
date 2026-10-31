@@ -1568,12 +1568,12 @@ def _external_text(ob: dict, field: str) -> None:
 
 
 def settled_proof(ob: dict) -> dict:
-    """The recorded proof of a settled row, compared exactly by R201's withdrawal-only closure."""
-    return deepcopy({key: ob.get(key) for key in ("state", "definition", "evidence", "receipts", "acceptances", "reuse")})
+    """The whole recorded row, compared exactly by R201's withdrawal-only closure."""
+    return deepcopy(ob)
 
 
 def retained_history_row(ob: dict, ctx: dict) -> bool:
-    """R201: in a withdrawal-only closing write, a satisfied row with exactly its prior recorded proof is history
+    """R201: in a withdrawal-only closing write, a satisfied row identical to its prior recorded row is history
     the closure does not rely on, so its evidence need not be currently valid. Every other write and row keeps
     the R41/R83 currency check."""
     history = ctx.get("settled_history") or {}
