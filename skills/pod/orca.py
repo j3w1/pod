@@ -537,6 +537,46 @@ def worker_show(dispatch: str) -> dict:
     return _read(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
 
 
+def terminal_inventory() -> list[dict] | None:
+    """Orca's complete live terminal records, or None when the read is not provably complete."""
+    result = _read(["terminal", "list", "--json"])["result"]
+    rows = result.get("terminals") if isinstance(result, dict) else None
+    if not isinstance(rows, list) or result.get("truncated") is not False \
+            or not all(isinstance(row, dict) for row in rows):
+        return None
+    return rows
+
+
+def handle_carriers(handle: str, proc: str = "/proc") -> bool | None:
+    """Whether a same-user process carries ORCA_TERMINAL_HANDLE=<handle>; None when that cannot be told.
+
+    Orca exports the handle to every process of a terminal. A process that vanishes during the scan is
+    gone. A same-user process whose environment the kernel refuses (EACCES) is a non-dumpable helper such
+    as systemd, a zombie or ssh-agent, never an agent, shell or tool the terminal ran; it is skipped. Any
+    other read failure leaves the answer unknown.
+    """
+    wanted = b"ORCA_TERMINAL_HANDLE=" + handle.encode()
+    uid = os.getuid()
+    try:
+        names = [name for name in os.listdir(proc) if name.isdecimal()]
+    except OSError:
+        return None
+    for name in names:
+        path = os.path.join(proc, name)
+        try:
+            if os.stat(path).st_uid != uid:
+                continue
+            with open(os.path.join(path, "environ"), "rb") as source:
+                environment = source.read().split(b"\0")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        except OSError:
+            return None
+        if wanted in environment:
+            return True
+    return False
+
+
 def terminal_identity(handle: str) -> dict:
     """Read only handle liveness; presentation and pane fields never leave this port."""
     try:

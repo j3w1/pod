@@ -17,18 +17,16 @@ def _refuse(detail: str) -> None:
     raise PodError("native_abandoned_unverified", detail + "; retain the original attempt and reconcile through Orca")
 
 
-_MODES = {"abandoned_no_observed_start": "unknown", "abandoned_observed_start": "observed"}
+CLASSIFICATIONS = ("abandoned_no_observed_start", "abandoned_observed_start")
 
 
 def validate(admission: dict) -> None:
     """The optional admission field also makes preceding readers refuse these semantics."""
     value = admission["abandoned_accounting"]
-    fields = {"classification", "execution", "recorded_by", "reason", "proof", "fence",
-              "native_abandoner", "native_abandon_reason", "previous_error", "observed_start"}
+    fields = {"classification", "recorded_by", "reason", "proof", "fence", "previous_error", "observed_start"}
     if (not isinstance(value, dict) or set(value) != fields
-            or _MODES.get(value["classification"]) != value["execution"]
-            or value["native_abandoner"] != "unknown" or value["native_abandon_reason"] != "unknown"
-            or (value["observed_start"] is None) != (value["execution"] == "unknown")
+            or value["classification"] not in CLASSIFICATIONS
+            or (value["observed_start"] is None) != (value["classification"] == "abandoned_no_observed_start")
             or value["observed_start"] is not None and not isinstance(value["observed_start"], dict)
             or not isinstance(value["proof"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["proof"])
             or value["proof"] not in admission["recovery"].get("start_observations", [])
@@ -200,12 +198,76 @@ def _pending_effects(worker: dict) -> list[dict]:
             if not _harmless(row)]
 
 
+def closure_target(shown: dict) -> tuple[str, str] | None:
+    """The terminal handle and incarnation of an abandoned attempt whose exit only Pod's own read can prove.
+
+    Orca never releases a reused or retained terminal, so it never reports such a process exited. That
+    applies only to a local attempt Orca still calls alive or unverifiable, with the terminal retained or
+    reused and no effect pending; anything else is judged by Orca's verdict alone.
+    """
+    if not is_abandoned(shown):
+        return None
+    result = shown["result"]
+    worker = result.get("worker") if isinstance(result.get("worker"), dict) else {}
+    dispatch = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
+    projection = result.get("projection") if isinstance(result.get("projection"), dict) else {}
+    resource = result.get("terminalResource") if isinstance(result.get("terminalResource"), dict) else {}
+    liveness = projection.get("liveness")
+    handle, incarnation = worker.get("agentTerminalHandle"), dispatch.get("processIncarnation")
+    kept = resource.get("releaseState") == "retained" or any(
+        isinstance(row, dict) and row.get("kind") == "terminal" and row.get("action") == "reused"
+        and row.get("id") == handle for row in worker.get("effects") or [])
+    if (not isinstance(handle, str) or not handle or not isinstance(incarnation, str) or ":" not in incarnation
+            or not incarnation.rsplit(":", 1)[1] or not kept or _pending_effects(worker)
+            or (liveness or {}).get("verdict") == "exited"
+            or (dispatch.get("hostScope") or {}).get("kind") != "local"):
+        return None
+    return handle, incarnation.rsplit(":", 1)[1]
+
+
+def attach_closure(shown: dict, inventory=None, carriers=None) -> dict:
+    """Read, for an eligible attempt, whether its exact terminal incarnation is gone from Orca's records
+    and no live process carries its handle; attach that proof to the readback when both hold.
+
+    The proof is Pod's own observation at read time. Anything unreadable or present leaves the claim.
+    """
+    target = closure_target(shown)
+    if target is None:
+        return shown
+    from . import orca
+    handle, incarnation = target
+    try:
+        rows = (inventory or orca.terminal_inventory)()
+        carried = (carriers or orca.handle_carriers)(handle)
+    except PodError as exc:
+        if exc.code == orca.DEADLINE_SPENT:
+            raise
+        return shown
+    if (rows is None or carried is not False
+            or any(row.get("handle") == handle or row.get("incarnationId") == incarnation for row in rows)):
+        return shown
+    shown["terminal_closed"] = {"source": "terminal_closed", "handle": handle, "incarnation": incarnation}
+    return shown
+
+
+def _closed(shown: dict) -> bool:
+    """The attached proof names this attempt's own terminal and incarnation."""
+    target = closure_target(shown)
+    return target is not None and shown.get("terminal_closed") == {
+        "source": "terminal_closed", "handle": target[0], "incarnation": target[1]}
+
+
+def exit_source(shown: dict) -> str:
+    """Where the exit evidence came from: Orca's own verdict, or Pod's read of the closed terminal."""
+    return "terminal_closed" if _closed(shown) else "process_exited"
+
+
 def current_claim(shown: dict) -> dict | None:
     """The fresh claim of an abandoned attempt, or None when it is not abandoned or nothing can still run.
 
     `abandoned` fences the worker without claiming its process stopped, so settlement proves nothing
-    about the claim. It is gone only when the native read positively reports the process exited and no
-    effect beyond the worktree and accepted input is left unresolved. A live, unverifiable, missing or
+    about the claim. It is gone only when the native read positively reports the process exited (or Pod's
+    own read shows the retained terminal closed, see `closure_target`) and no Orca effect is left unresolved. A live, unverifiable, missing or
     contradictory process verdict always keeps the claim, whatever the resource bookkeeping says: a
     released resource is not proof that the process stopped. This is the one decision every admission,
     readiness, retirement and succession boundary uses; it is derived from the current read, never from
@@ -219,7 +281,7 @@ def current_claim(shown: dict) -> dict | None:
     liveness = projection.get("liveness")
     verdict = liveness.get("verdict") if isinstance(liveness, dict) else None
     effects = _pending_effects(worker)
-    if verdict == "exited" and not effects:
+    if (verdict == "exited" or _closed(shown)) and not effects:
         return None
     return {"process": _text(verdict) or "unknown", "effects": effects}
 
@@ -441,9 +503,7 @@ def recover(project: Path, objective: str, *, owner: str, admission: dict, reaso
         was_bound = row["state"] == "bound"
         row["abandoned_accounting"] = {
             "classification": "abandoned_observed_start" if facts else "abandoned_no_observed_start",
-            "execution": "observed" if facts else "unknown",
             "recorded_by": owner, "reason": reason, "proof": proof, "fence": fence,
-            "native_abandoner": "unknown", "native_abandon_reason": "unknown",
             "previous_error": row["error"], "observed_start": facts or None}
         row["state"], row["native_binding"] = "bound", binding
         if was_bound:
@@ -466,7 +526,7 @@ def recover(project: Path, objective: str, *, owner: str, admission: dict, reaso
 
 def _hold_fields(row: dict, shown: dict) -> dict:
     claim = current_claim(shown)
-    return {"release": None if claim else "process_exited", "hold": hold_scope(row, claim) if claim else None}
+    return {"release": None if claim else exit_source(shown), "hold": hold_scope(row, claim) if claim else None}
 
 
 def _current_hold(admission: dict, port) -> dict:
