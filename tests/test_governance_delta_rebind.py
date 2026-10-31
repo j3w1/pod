@@ -257,6 +257,65 @@ class ScopedRowTests(KernelCase):
         self.assertEqual(entries["A"]["classification"], "binding change")
 
 
+class LinkScopeTests(KernelCase):
+    """A scope that reaches a changed governance file through a committed symlink is that file (review F1)."""
+
+    commit = governance_commit
+
+    def scoped(self, scope, links=()):
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        for name, target in links:
+            path = self.project / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to(target)
+        if links:
+            git(self.project, "add", "-A"); git(self.project, "commit", "-qm", "links")
+            self.base = self.candidate = git(self.project, "rev-parse", "HEAD")
+            git(self.project, "branch", "-f", "target", self.base)
+            git(self.project, "update-ref", "refs/remotes/origin/target", self.base)
+        self.write([self.criterion(), self.sub("L", proof_scope=[scope], boundary={"paths": [scope], "surfaces": []})],
+                   governance={"base_ref": "target"})
+        self.write(satisfy(self, self.stored()))
+        git(self.project, "switch", "-q", "target")
+        target = self.commit("AGENTS.md", AGENTS + ADDED, "governance change")
+        git(self.project, "update-ref", "refs/remotes/origin/target", target)
+        git(self.project, "switch", "-q", "main")
+        before = (objective_root(self.project, "objective") / "context.json").read_bytes()
+        try:
+            self.write(self.stored(), governance_refresh=True, governance=snapshot(self.project),
+                       revision_authority=LOCAL, rebind=["O1", "L"],
+                       governance_delta=governance_attestation(self.project, reason=REASON))
+        except PodError as exc:
+            self.assertEqual((objective_root(self.project, "objective") / "context.json").read_bytes(), before)
+            return exc
+        return None
+
+    def refused(self, scope, links, phrase):
+        error = self.scoped(scope, links)
+        self.assertIsNotNone(error, scope)
+        self.assertEqual((error.detail["detail"], error.detail["referent"]["obligation"]), ("rebind_refused", "L"))
+        self.assertIn(phrase, str(error))
+
+    def test_a_file_link_to_the_changed_source_refuses(self):
+        self.refused("rules-link", [("rules-link", "AGENTS.md")], "changed governance source AGENTS.md (through rules-link)")
+
+    def test_a_parent_directory_link_refuses(self):
+        self.refused("cfg/AGENTS.md", [("cfg", ".")], "changed governance source AGENTS.md (through cfg/AGENTS.md)")
+
+    def test_a_link_loop_refuses(self):
+        self.refused("loop-a", [("loop-a", "loop-b"), ("loop-b", "loop-a")], "does not resolve")
+
+    def test_an_over_long_chain_refuses(self):
+        chain = [(f"hop{index}", f"hop{index + 1}") for index in range(9)] + [("hop9", "AGENTS.md")]
+        self.refused("hop0", chain, "does not resolve")
+
+    def test_the_direct_spelling_still_refuses(self):
+        self.refused("./AGENTS.md", [("code-link", "src/old.py")], "changed governance source AGENTS.md")
+
+    def test_an_unrelated_link_rebinds(self):
+        self.assertIsNone(self.scoped("code-link", [("code-link", "src/old.py")]))
+
+
 class EarlierStepTests(KernelCase):
     """Proof bound under an earlier governance step that the record's own history names (its initial decision)."""
 

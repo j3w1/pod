@@ -9922,7 +9922,13 @@
         "tests.test_governance_delta_rebind.AttestedRebindTests.test_a_changed_row_definition_stays_invalid",
         "tests.test_governance_delta_rebind.ScopedRowTests.test_a_row_whose_scope_names_the_changed_source_refuses",
         "tests.test_governance_delta_rebind.ScopedRowTests.test_a_review_that_read_the_changed_source_rebinds_until_the_candidate_takes_it",
-        "tests.test_superseded_closure.WithdrawalOnlyClosureTests.test_refresh_route_still_requires_fresh_review_so_closure_does_not_use_it"
+        "tests.test_superseded_closure.WithdrawalOnlyClosureTests.test_refresh_route_still_requires_fresh_review_so_closure_does_not_use_it",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_file_link_to_the_changed_source_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_parent_directory_link_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_link_loop_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_an_over_long_chain_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_the_direct_spelling_still_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_an_unrelated_link_rebinds"
       ],
       "status": "NOT_RUN"
     },

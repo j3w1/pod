@@ -690,7 +690,8 @@ def _rebind_plan(prior_map: dict | None, value: dict, ctx: dict, refresh: bool, 
         attested = {"sources": _delta_order(raw["sources"]), "reason": reason}
     prior = bound_governance_digest(prior_map)
     resolve = ctx.get("governance_stamp_delta") or (lambda stamp: ctx.get("governance_delta") if stamp == prior else None)
-    return {"prior": prior, "gov": gov, "resolve": resolve, "attested": attested, "needed": {}, "earlier": set()}
+    return {"prior": prior, "gov": gov, "resolve": resolve, "attested": attested, "needed": {}, "earlier": set(),
+            "scope": ctx.get("governance_scope") or (lambda path: [path])}
 
 
 MAX_DELTA = 8  # refusal referents carry at most eight entries, so a declared delta can always be copied
@@ -728,7 +729,8 @@ def governance_context(ob: dict, changed: list[str]) -> bool:
 def rebind_blocker(ob: dict, evidence: list[dict], plan: dict) -> tuple[str | None, list[dict]]:
     """Why Pod can see that this row's proof cannot cross to the target governance, else the delta it crosses.
 
-    A scope that merely contains the repository root does not name a governance source.
+    A scope that merely contains the repository root does not name a governance source; a scope reaching one
+    through a committed symlink does.
     """
     crossed = []
     for stamp in {row.get("governance") for row in evidence} - {plan["gov"]}:
@@ -740,9 +742,16 @@ def rebind_blocker(ob: dict, evidence: list[dict], plan: dict) -> tuple[str | No
     changed = [entry["path"] for entry in crossed]
     if ".pod/config.yaml" in changed:
         return "Pod's own policy source .pod/config.yaml changed, which changes authority", []
-    named = [path for path in changed if any(_parts(scope) and _prefix(scope, path) for scope in _proof_paths(ob))]
-    if named:
-        return f"its own proof scope includes the changed governance source {named[0]}", []
+    for scope in _proof_paths(ob) if changed else []:
+        # A committed symlink, in any component, names what it resolves to in the trees involved.
+        names = plan["scope"](scope)
+        if names is None:
+            return (f"its proof scope path {scope} does not resolve within the repository in the bound base, target and "
+                    "candidate trees (an absolute, escaping, looping or over-long link)"), []
+        named = [path for path in changed for name in [scope, *names] if _parts(name) and _prefix(name, path)]
+        if named:
+            via = "" if all(name == scope for name in names) else f" (through {scope})"
+            return f"its own proof scope includes the changed governance source {named[0]}{via}", []
     return None, crossed
 
 

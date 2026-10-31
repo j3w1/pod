@@ -487,6 +487,74 @@ def governance_delta(project: Path, bound: list[dict], observed: dict, exclude: 
     return entries
 
 
+MAX_LINK_HOPS = 8
+
+
+def scope_resolver(project: Path, commits: list[str]):
+    """R203: what one declared scope path names in each immutable Git tree involved, following committed symlinks.
+
+    Each component, parents included, is resolved within the repository against each commit's own tree, with at
+    most MAX_LINK_HOPS link hops per path. Returns the resolved paths, or None when any tree is unreadable or a
+    link is absolute, leaves the repository, loops or exceeds the bound. Host paths are never read.
+    """
+    tables: dict[str, dict[str, str] | None] = {}
+    blobs: dict[str, str | None] = {}
+
+    def links(commit):
+        if commit not in tables:
+            listed = _git(project, ["ls-tree", "-r", "-z", "--full-tree", commit])
+            rows = None
+            if listed is not None and listed.returncode == 0:
+                rows = {}
+                for entry in listed.stdout.split("\0"):
+                    meta, _, name = entry.partition("\t")
+                    parts = meta.split()
+                    if len(parts) == 3 and parts[0] == "120000" and _OBJECT.fullmatch(parts[2]):
+                        rows[name] = parts[2]
+            tables[commit] = rows
+        return tables[commit]
+
+    def target(blob):
+        if blob not in blobs:
+            shown = _git(project, ["cat-file", "blob", blob])
+            blobs[blob] = shown.stdout if shown is not None and shown.returncode == 0 and len(shown.stdout) <= 4096 else None
+        return blobs[blob]
+
+    def resolve(path, commit):
+        rows = links(commit)
+        if rows is None:
+            return None
+        done, queue, hops = [], [part for part in path.split("/") if part not in ("", ".")], 0
+        while queue:
+            part = queue.pop(0)
+            if part == "..":
+                if not done:
+                    return None
+                done.pop()
+                continue
+            name = "/".join([*done, part])
+            if name in rows:
+                hops += 1
+                link = target(rows[name])
+                if hops > MAX_LINK_HOPS or link is None or link.startswith("/") or "\0" in link:
+                    return None
+                queue = [item for item in link.split("/") if item not in ("", ".")] + queue
+                continue
+            done.append(part)
+        return "/".join(done) or "."
+
+    def resolved(path):
+        found = []
+        for commit in dict.fromkeys(commits):
+            name = resolve(path, commit)
+            if name is None:
+                return None
+            if name not in found:
+                found.append(name)
+        return found
+    return resolved
+
+
 MAX_STAMP_BASES = 64
 
 

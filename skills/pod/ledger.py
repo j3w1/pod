@@ -1825,11 +1825,13 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         ctx["governance_refresh"] = refresh
         if refresh and prior_map is not None:
             # R203: Pod's own read of the changed governance sources a rebind would cross.
-            from .governance import stamp_resolver
+            from .governance import scope_resolver, stamp_resolver
             from .obligations import bound_governance_digest
             resolve = stamp_resolver(project, prior_map, observed)
+            trees = [row["base"] for row in prior_map["governance_sources"]] + [observed.get("commit"), core["candidate"]]
             ctx.update(governance_stamp_delta=resolve, governance_delta=resolve(bound_governance_digest(prior_map)),
-                       snapshot_decision=snapshot_authorized, rebind_outcome={})
+                       snapshot_decision=snapshot_authorized, rebind_outcome={},
+                       governance_scope=scope_resolver(project, [tree for tree in trees if isinstance(tree, str)]))
         if withdrawing:
             # R201: satisfied rows are retained history that this closure does not rely on.
             from .obligations import settled_proof
