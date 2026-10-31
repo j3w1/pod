@@ -9279,7 +9279,7 @@
         "tests.test_verification_gaps.VerificationGapsTests.test_a_sentence_is_refused_precisely_and_never_counted_per_character",
         "tests.test_verification_gaps.VerificationGapsTests.test_other_wrong_types_and_items_are_refused",
         "tests.test_verification_gaps.VerificationGapsTests.test_genuine_gaps_and_the_empty_list_are_accepted_and_kept_as_given",
-        "tests.test_verification_gaps.VerificationGapsTests.test_a_stored_legacy_sentence_is_one_unresolved_requirement_not_hundreds"
+        "tests.test_verification_gaps.VerificationGapsTests.test_a_stored_non_list_is_one_unresolved_requirement_never_none_or_hundreds"
       ],
       "status": "NOT_RUN"
     },

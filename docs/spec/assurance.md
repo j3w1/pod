@@ -164,9 +164,9 @@ Reuse compares the Git delta between the evidence's own candidate and the curren
 
 Type: B · Scenarios: [A609](#a609)
 
-A checkpoint's `verification_gaps` is a list of at most 64 nonempty text items, one remaining gap per item, or `[]` when none remain. Any other type, an empty or oversize item or a longer list refuses `invalid_checkpoint` / `verification_gaps_invalid` before anything is written, naming the field and form without echoing the value, with the next action: send each remaining gap as its own item. A sentence is never counted per character and a wrong type is never converted to an empty list or ignored. A previously stored non-list value stays readable; the Governor counts it as one unresolved requirement, never one per character, and says to rewrite it.
+A checkpoint's `verification_gaps` is a list of at most 64 nonempty text items, one remaining gap per item, or `[]` when none remain. Any other type, an empty or oversize item or a longer list refuses `invalid_checkpoint` / `verification_gaps_invalid` before anything is written, naming the field and form without echoing the value, with the next action: send each remaining gap as its own item. A sentence is never counted per character and a wrong type is never converted to an empty list or ignored. A previously stored non-list value (including null, false, zero, empty text and an empty mapping) stays readable; the Governor counts it as one unresolved requirement, never none and never one per character, and says to rewrite it.
 
-- <a id="a609"></a>**A609** — A sentence, number, mapping, null or malformed item given as `verification_gaps` refuses precisely and writes nothing; genuine gap lists and `[]` are kept exactly as given; a stored legacy sentence is one unresolved gap in a release reason or push warning, not hundreds.
+- <a id="a609"></a>**A609** — A sentence, number, mapping, null or malformed item given as `verification_gaps` refuses precisely and writes nothing; genuine gap lists and `[]` are kept exactly as given; a previously stored sentence or other non-list value, including null, false, zero, empty text and an empty mapping, is one unresolved gap in a release reason or push warning, not hundreds and not none.
 
 ### R175 — Allocate requirement and scenario identifiers uniquely, not contiguously
 

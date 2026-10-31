@@ -38,7 +38,7 @@ class VerificationGapsTests(GovernorCase):
                 self.write(gaps)
                 self.assertEqual(read(self.project, "objective")["checkpoint"]["verification_gaps"], gaps)
 
-    def test_a_stored_legacy_sentence_is_one_unresolved_requirement_not_hundreds(self):
+    def test_a_stored_non_list_is_one_unresolved_requirement_never_none_or_hundreds(self):
         from pod import governor
         for purpose, collected in (("release", 0), ("push", 1)):
             reasons, warnings = [], []
@@ -48,6 +48,19 @@ class VerificationGapsTests(GovernorCase):
             self.assertIn("1 verification gap(s) remain", str(found[0]))
             self.assertIn("rewrite it as one item per gap", str(found[0]))
             self.assertNotIn(str(len(SENTENCE)), str(found[0]))
+        for value in (None, False, 0, "", {}, 3):
+            for purpose, collected in (("release", 0), ("push", 1)):
+                with self.subTest(value=value, purpose=purpose):
+                    reasons, warnings = [], []
+                    governor._check_readiness({"verification_gaps": value}, None, None, None, purpose, {},
+                                              reasons, warnings)
+                    found = [reasons, warnings][collected]
+                    self.assertEqual(len(found), 1)
+                    self.assertIn("1 verification gap(s) remain", str(found[0]))
+        for purpose in ("release", "push"):
+            reasons, warnings = [], []
+            governor._check_readiness({"verification_gaps": []}, None, None, None, purpose, {}, reasons, warnings)
+            self.assertEqual([item for item in reasons + warnings if "verification gap" in str(item)], [])
         reasons, warnings = [], []
         governor._check_readiness({"verification_gaps": ["a", "b"]}, None, None, None, "release", {}, reasons, warnings)
         self.assertIn("2 verification gap(s) remain", str(reasons[0]))
