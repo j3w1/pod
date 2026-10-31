@@ -6,13 +6,16 @@ Read this before you stop to wait with a live worker, an unconsumed report or an
 
 Parking means ending your turn while you own work. Never park without an outstanding wait: a finished worker's `worker_done`, a relayed decision and a failure notice reach your Run's mailbox, and an idle agent does not see them on its own.
 
-Keep exactly one outstanding wait, armed with the helper as a tracked background command so that its exit resumes your turn:
+Keep exactly one outstanding wait, armed with the helper. How you hold it depends on your runtime, because Orca ends the wait and cannot resume an agent:
 
 ```text
 pod wake --run RUN [--ack DELIVERY] [--timeout-ms N]
 ```
 
-Run it with the tool's background mode (Claude Code: Bash `run_in_background`), then end the turn. Never append `&`, never wrap it in a loop, `sleep` or poll, and never run a second wait for the same Run while one is outstanding. The owner's rule: one outstanding blocking wait at a time, for all message types, for your own owned work; after it returns (event or timeout) you process what it returned and arm one new wait. No busy polling, no parallel waits, no sleep loops.
+- Claude Code: run it with the tool's background mode (Bash `run_in_background`), then end the turn; the session is notified when the command exits and the turn resumes.
+- Codex: a background wait does not resume an idle prompt (see the runtime section). Run the helper as a blocking foreground command and keep your turn open on it, with `--timeout-ms` below your command tool's own limit; after it returns, process the result and run it again. If you must end your turn instead, first send your lead one visible `orca orchestration send` saying you are parking with owned work and have no resumable wait, so the lead nudges you; do not claim you are armed.
+
+Never append `&`, never wrap it in a loop, `sleep` or poll, and never run a second wait for the same Run while one is outstanding. The owner's rule: one outstanding blocking wait at a time, for all message types, for your own owned work; after it returns (event or timeout) you process what it returned and arm one new wait. No busy polling, no parallel waits, no sleep loops.
 
 The helper does three things in one call. It confirms this terminal is the bound coordinator of RUN. It acknowledges `--ack` (the batch you just finished) and returns any mail already pending, so an event that arrived before the wait existed is never lost. Only when nothing is pending does it arm one native wait for every message type. Orca keeps mail durably and a pending batch ends a wait at once, so mail that lands between the check and the wait's registration is returned by the wait.
 
@@ -45,6 +48,6 @@ If you lost your place, call `pod wake --run RUN` with no `--ack`. An unacknowle
 Orca delivers mail and ends a wait; it cannot resume an agent, and its wake or nudge is best-effort. Whether the exit of a background command resumes your turn depends on the agent runtime.
 
 - Claude Code: the session is notified when a background command exits. An idle Claude Code coordinator was resumed when a wait armed on an empty mailbox returned on a message sent while it was idle (observed on Claude Code with Orca 1.4.230; the message reached the turn in under a second).
-- Codex: a returning wait does not resume an idle Codex coordinator. In a disposable trial (Orca 1.4.230, GPT-6.1 Sol medium) the coordinator armed `pod wake` as a background command and ended its turn; an array-payload message sent to its Run ended the wait (the prompt's background-terminal indicator cleared in the same second), and the coordinator stayed idle at its prompt for 7 minutes without processing it. A Codex coordinator that holds a wait inside an active turn does receive and process messages, so keep the wait blocking in the current turn where you can, and otherwise tell the lead: an idle Codex coordinator needs the lead's nudge.
+- Codex: a returning wait does not resume an idle Codex coordinator. In a disposable trial (Orca 1.4.230, GPT-6.1 Sol medium) the coordinator armed `pod wake` as a background command and ended its turn; an array-payload message sent to its Run ended the wait (the prompt's background-terminal indicator cleared in the same second), and the coordinator stayed idle at its prompt for 7 minutes without processing it. A Codex coordinator that holds a wait inside an active turn does receive and process messages, so hold the wait in the active turn, and otherwise tell the lead: an idle Codex coordinator needs the lead's nudge.
 
 An empty or silent wait is never evidence that work finished, and a returning shell command is never evidence that an agent resumed.
