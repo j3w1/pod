@@ -1607,6 +1607,28 @@ def _bookkeeping_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
     return True
 
 
+def _proof_unchanged(prior_map: dict, map_state: dict) -> bool:
+    """R119 adoption-only: no row newly satisfied and no evidence, receipt or reuse changed or added."""
+    prior = {row["id"]: row for row in prior_map["obligations"]}
+    for row in map_state["obligations"]:
+        old = prior.get(row["id"], {})
+        if (row["state"] == "satisfied" and old.get("state") != "satisfied"
+                or any(row.get(key) != old.get(key) for key in ("evidence", "receipts", "reuse"))):
+            return False
+    return True
+
+
+def _adoption_only_refusal() -> PodError:
+    action = ("write the governance refresh alone first, keeping the recorded candidate and satisfying no row; "
+              "then record the new candidate and its proof in the next checkpoint under the adopted governance. "
+              "A revision_authority the decision policy accepts for scope changes allows both in one write")
+    return PodError("governance_unavailable",
+                    "This refresh adopts the target only through its first-parent history, without a revision "
+                    f"authority, so it cannot also change the candidate or record new proof. Next: {action}",
+                    {"detail": "governance_unavailable", "next_action": action,
+                     "referent": {"reason": "adoption_only"}})
+
+
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict, issue_revision=None) -> tuple[dict, dict | None]:
@@ -1708,13 +1730,15 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             and isinstance(declared, dict)
             and declared.get("base_ref") == observed.get("target_ref")
             and declared.get("base") == observed.get("commit"))
+        exempted = []
         if derived_adoption is None:
             try:
                 observed = _independent_governance(
                     project, observed, core["candidate"], state["admissions"],
                     established=(prior_map or {}).get("governance"),
                     previous_candidate=previous.get("candidate"),
-                    known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized)
+                    known_candidates=history["candidates"], snapshot_authorized=snapshot_authorized,
+                    exempted=exempted)
             except PodError as exc:
                 canonical = (proposed.get("governance") or {}).get("base_ref")
                 if (refresh and user_direct_revision(proposed.get("revision_authority")) and isinstance(declared, dict)
@@ -1725,6 +1749,11 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                     exc.detail = {**(exc.detail or {}), "next_action": f"{hint}; {(exc.detail or {}).get('next_action')}"}
                     exc.args = (f"{exc.args[0]} ({hint})", *exc.args[1:])
                 raise
+        # R119: an adoption that rests on the first-parent exemption without a policy-valid revision_authority is
+        # adoption-only; a changed candidate and new proof wait for the next write under normal currency.
+        adoption_only = bool(exempted) and not user_direct_revision(proposed.get("revision_authority"))
+        if adoption_only and (core["candidate"] != previous.get("candidate") or {"rebind", "reuse"} & set(proposed)):
+            raise _adoption_only_refusal()
         ctx = kernel_context(project, objective, state, authority.get("native"),
                              candidate=core["candidate"], criteria=core["criteria"],
                              governance=observed, delegation=native.get("delegation"),
@@ -1809,6 +1838,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if withdrawal_refusal is not None and not _settled_rows_unchanged(prior_map, map_state):
             # R201 keeps the baseline only while the closure relies on no new or changed proof.
             raise withdrawal_refusal
+        if adoption_only and not _proof_unchanged(prior_map, map_state):
+            raise _adoption_only_refusal()
         if bookkeeping and not _bookkeeping_rows_unchanged(prior_map, map_state):
             # R202 keeps the delivered baseline only for bookkeeping; anything else gets today's refusal.
             require_governance_current(project, prior_map, checkpoint=True)

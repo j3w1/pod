@@ -558,7 +558,7 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
                             admissions: dict, *, established: dict | None,
                             previous_candidate: str | None = None,
                             known_candidates: list[str] | None = None,
-                            snapshot_authorized: bool = False) -> dict:
+                            snapshot_authorized: bool = False, exempted: list | None = None) -> dict:
     """Preserve the selected bound target; reject adoption of known objective work.
 
     Initial target selection is the trusted authority input, including candidate
@@ -661,6 +661,8 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
                     return unavailable("target_relation_unavailable", target)
             if shared not in chain:
                 contains_work = True
+            elif exempted is not None:
+                exempted.append(identity)  # adopted only through the first-parent exemption (R119)
     if contains_work:
         action = ("the project lead closes proved completed work on the retained baseline without governance_refresh; "
                   f"ordinary work adopting this target needs {SNAPSHOT_DECISION}, then write governance_refresh with "

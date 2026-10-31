@@ -208,7 +208,7 @@ When the objective is delivered under the existing delivered test and R117 has o
 
 ### R119 — Adopt unchanged governance at a checkpoint
 
-Type: B,H · Scenarios: [A331](#a331), [A332](#a332), [A333](#a333), [A334](#a334), [A335](#a335), [A336](#a336), [A337](#a337), [A338](#a338), [A478](#a478), [A483](#a483), [A742](#a742), [A743](#a743), [A744](#a744)
+Type: B,H · Scenarios: [A331](#a331), [A332](#a332), [A333](#a333), [A334](#a334), [A335](#a335), [A336](#a336), [A337](#a337), [A338](#a338), [A478](#a478), [A483](#a483), [A742](#a742), [A743](#a743), [A744](#a744), [A748](#a748)
 
 Governance binds the canonical selected target identity and exact base snapshot. An
 explicit initial user selection is trusted input, including on a nondefault branch
@@ -253,13 +253,17 @@ worker result's base share it as objective work only when it is not one of the t
 states since the old base: a candidate rebased onto the moved target in the adopting write, or a result based
 on a target state, is not objective work. Squash and rebase merges of objective commits stay unrecognized, as before. New in this rule, a fast-forward
 of objective commits that no record names or contains, shared only by the adopting write's new candidate, is
-read as target history: Git cannot tell it from a rebase onto target history. That adoption grants only what any
-independent target advance grants: the bound base and sources move for later work. It records no delivery,
-satisfies, rebinds or reuses no obligation (proof bound to the old governance is invalidated until explicitly
-rebound or refreshed), changes no candidate and grants no Governor consent; the next merge still needs its
-candidate-bound authorization, R93 verifies the exact delivered result against its admitted base, and the
-policy adopted is the target's own, open to every later check. Every recorded objective commit keeps the full
-test, so work Pod has seen stays protected. A changed snapshot holding known objective work requires
+read as target history: Git cannot tell it from a rebase onto target history. That exemption permits adopting
+the target's governance and removes the currency hold for later work, without the exact snapshot decision it
+formerly needed. Without a `revision_authority` the decision policy accepts for scope changes, a write whose
+adoption rests on the exemption is adoption-only: it keeps the recorded candidate and newly satisfies no row,
+adding or changing no evidence, receipt or reuse and naming no rebind or reuse; a mixed write refuses
+`governance_unavailable` (`adoption_only`) without a write and names the two-step route, and the next
+checkpoint records the candidate and its proof under the adopted governance. With such an authority, the same
+write may also change the candidate, accept evidence or perform an explicitly requested rebind or reuse when
+their ordinary checks pass. Neither grants Governor consent or delivery proof: the next merge still needs its
+candidate-bound authorization and R93 verifies the exact delivered result against its admitted base. Every
+recorded objective commit keeps the full test, so work Pod has seen stays protected. A changed snapshot holding known objective work requires
 an exact snapshot decision through `governance_refresh: true`, a `revision_authority` that is a person's or
 one the decision policy verifies for scope changes, and
 `governance` naming the exact newly observed canonical `base_ref` and full `base`.
@@ -290,9 +294,10 @@ automatic adoptions cannot grow the report or status by repeating their rows.
 - <a id="a337"></a>**A337** — A closing write adopts unchanged governance, relocates citations and retains receipts valid for its unchanged candidate without `rebind`; changing the candidate never rebinds that proof and closure refuses invalidated evidence.
 - <a id="a338"></a>**A338** — Excluded sources do not participate in derived adoption; owner refresh and bound-base observation still read every governance path, so an unreadable excluded source holds a refresh as before. Admission/effect refusal names a plain adopting checkpoint without an owner question. An exact source-changing delivery retains R93's existing exemption and old base, while a later nonclosing checkpoint after a sibling merge keeps that bound base only for post-delivery bookkeeping (R202) and otherwise refuses because its policy differs from it; a closing checkpoint with the verified delivery keeps the trusted baseline under R147. A 0.13.3-shaped merge row without `governance_binding` keeps its original base through adoption, outcome and delivery.
 - <a id="a483"></a>**A483** — After M follows the first verified delivery B, a third admission still requires the existing plain checkpoint for unchanged sources or an exact snapshot decision for changed governance. With candidate-authored policy differing from A, the second merge PASS never promotes M to currency and a third admission refuses without any journal/context write, naming the snapshot decision.
-- <a id="a742"></a>**A742** — A candidate rebased onto a target moved only by other objectives' merges: after five other objectives' merge commits, one changing governance, a candidate recorded on the bound base and then rebased onto the moved target in the adopting write adopts it by an `agent_decision` refresh that names no exact snapshot, and by a refresh without `revision_authority`; a worker result based on a target state is not objective work, while the same commit as a result head is.
+- <a id="a742"></a>**A742** — A candidate rebased onto a target moved only by other objectives' merges: after five other objectives' merge commits, one changing governance, a candidate recorded on the bound base and then rebased onto the moved target in the adopting write adopts it by an `agent_decision` refresh that names no exact snapshot, and without `revision_authority` in two writes (R119 adoption-only, A748); a worker result based on a target state is not objective work, while the same commit as a result head is.
 - <a id="a743"></a>**A743** — A target holding this objective's own work beyond its bound base — its earlier pull request merged by merge commit, a recorded candidate fast-forwarded into it, an unrecorded objective commit the current candidate shares through a merge, or an unrecorded objective commit fast-forwarded into it beneath an already recorded candidate — refuses `governance_unavailable` `candidate_policy_target` without a write for a refresh without `revision_authority` or with an `agent_decision` naming no exact snapshot, and its next action names the snapshot decision from the policy's decider, never a person alone; an exact snapshot decision, a person's or under Hands-off the coordinator's own, adopts it.
 - <a id="a744"></a>**A744** — After a recorded delivery that an unchanged-source checkpoint already adopted into the bound base, other objectives' merges change governance; a checkpoint with a new candidate refuses `governance_changed` without a write, its message asks no direct user decision and its next action names R202's bookkeeping route and, for new work, `governance_refresh: true` with no owner decision needed; an `agent_decision` refresh then adopts the target keeping the delivery. When the delivery lies outside the bound base the next action names the exact snapshot decision and an ordinary refresh refuses `candidate_policy_target` without a write. A person's snapshot decision naming an alias of the target is refused with the canonical `base_ref` named.
+- <a id="a748"></a>**A748** — A never-recorded prefix changes governance and becomes the target, and its never-recorded suffix is the new candidate. A `governance_refresh` without `revision_authority` that also changes the candidate, with or without newly satisfying a row, refuses `governance_unavailable` `adoption_only` with the record unchanged and names the two-step route; the adoption-only write keeping the recorded candidate is accepted and the next checkpoint records the candidate and its proof. With an `agent_decision` the decision policy accepts, the same refresh changes the candidate in one write, and a candidate rebased onto a moved target adopts without authority in two writes.
 
 ### R120 — Record every owner decision's channel
 

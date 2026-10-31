@@ -97,10 +97,20 @@ class RebasedCandidateGovernanceTests(KernelCase):
         self.assertEqual(state["governance"]["base"], target)
         self.assertEqual(state["governance"]["base_ref"], TARGET)
 
-    def test_rebase_onto_moved_target_adopts_without_revision_authority(self):
+    def test_rebase_onto_moved_target_adopts_without_revision_authority_in_two_steps(self):
         _, target = self.moved_target()
+        recorded = self.candidate
         self.candidate = self.rebase_work(target)
+        # Without a revision authority the exempted adoption cannot also change the candidate (R119).
+        before = (objective_root(self.project, "objective") / "context.json").read_bytes()
+        error = self.refused("governance_unavailable", "governance_unavailable", self.adopt, target, None)
+        self.assertEqual(error.detail["referent"]["reason"], "adoption_only")
+        self.assertIn("write the governance refresh alone first", error.detail["next_action"])
+        self.assertEqual((objective_root(self.project, "objective") / "context.json").read_bytes(), before)
+        rebased, self.candidate = self.candidate, recorded
         self.assertEqual(self.adopt(target, None)["governance"]["base"], target)
+        self.candidate = rebased
+        self.assertEqual(self.write(self.stored())["checkpoint"]["candidate"], rebased)
 
     def test_target_holding_the_objectives_earlier_pull_request_needs_a_snapshot_decision(self):
         git(self.project, "checkout", "-q", "target")
@@ -154,6 +164,53 @@ class RebasedCandidateGovernanceTests(KernelCase):
             _independent_governance(self.project, observed, self.patch, {"worker": {"result": {"head": middle}}},
                                     established=established)
         self.assertEqual(caught.exception.detail["referent"]["reason"], "candidate_policy_target")
+
+
+class ExemptedAdoptionOnlyTests(KernelCase):
+    """A never-recorded prefix changes governance and becomes the target; its never-recorded suffix is the new
+    candidate. Adopting through the first-parent exemption without authority is adoption-only (R119)."""
+
+    commit = governance_commit
+
+    def test_an_exempted_adoption_without_authority_changes_no_candidate_and_records_no_proof(self):
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        self.intake()
+        git(self.project, "checkout", "-qb", "work")
+        prefix = self.commit("AGENTS.md", "Changed target governance.\n", "unrecorded prefix")
+        suffix = self.commit("src/old.py", "candidate work\n", "unrecorded suffix")
+        git(self.project, "update-ref", TARGET, prefix)
+        record = objective_root(self.project, "objective") / "context.json"
+        governance = {"base_ref": TARGET, "base": prefix}
+        self.candidate = suffix
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        before = record.read_bytes()
+        for name, value in (("candidate and proof", rows), ("candidate alone", self.stored())):
+            with self.subTest(name):
+                error = self.refused("governance_unavailable", "governance_unavailable", self.write, value,
+                                     governance_refresh=True, governance=governance)
+                self.assertEqual(error.detail["referent"]["reason"], "adoption_only")
+                self.assertIn("then record the new candidate and its proof", error.detail["next_action"])
+                self.assertEqual(record.read_bytes(), before)
+        # A policy-valid revision_authority keeps the one-write behaviour.
+        self.assertEqual(self.write(self.stored(), governance_refresh=True, governance=governance,
+                                    revision_authority={**LOCAL, "instruction": "Adopt the target"})
+                         ["checkpoint"]["candidate"], suffix)
+
+    def test_the_adoption_only_write_is_accepted_and_the_candidate_follows(self):
+        self.intake()
+        git(self.project, "checkout", "-qb", "work")
+        prefix = self.commit("AGENTS.md", "Changed target governance.\n", "unrecorded prefix")
+        suffix = self.commit("src/old.py", "candidate work\n", "unrecorded suffix")
+        git(self.project, "update-ref", TARGET, prefix)
+        adopted = self.write(self.stored(), governance_refresh=True, governance={"base_ref": TARGET, "base": prefix})
+        self.assertEqual(adopted["checkpoint"]["governance"]["base"], prefix)
+        self.candidate = suffix
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        self.assertEqual(self.write(rows)["checkpoint"]["obligations"][0]["state"], "satisfied")
 
 
 class DeliveryBookkeepingRowTests(KernelCase):

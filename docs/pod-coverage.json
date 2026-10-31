@@ -9784,7 +9784,7 @@
       ],
       "offline_test": [
         "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_by_agent_decision",
-        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_without_revision_authority",
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_without_revision_authority_in_two_steps",
         "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_a_result_base_on_the_target_history_is_not_objective_work"
       ],
       "status": "NOT_RUN"
@@ -9860,6 +9860,19 @@
         "tests.test_governance_reapproval.DeliveryBookkeepingRowTests.test_row_level_reuse_is_not_bookkeeping",
         "tests.test_governance_reapproval.DeliveryBookkeepingRowTests.test_an_assurance_candidate_change_is_not_bookkeeping",
         "tests.test_evidence_closure.DeliveryClosesTests.test_the_closing_checkpoint_after_its_merge_needs_no_owner_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A748",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_reapproval.ExemptedAdoptionOnlyTests.test_an_exempted_adoption_without_authority_changes_no_candidate_and_records_no_proof",
+        "tests.test_governance_reapproval.ExemptedAdoptionOnlyTests.test_the_adoption_only_write_is_accepted_and_the_candidate_follows",
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_without_revision_authority_in_two_steps"
       ],
       "status": "NOT_RUN"
     }
