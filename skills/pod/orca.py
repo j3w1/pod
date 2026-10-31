@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from contextlib import contextmanager
 from contextvars import ContextVar
+import errno
 import hashlib
 import json
 import os
@@ -535,6 +536,56 @@ def run_show(run: str) -> dict:
 
 def worker_show(dispatch: str) -> dict:
     return _read(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
+
+
+def terminal_inventory() -> list[dict] | None:
+    """Orca's complete live terminal records, or None when the read is not provably complete."""
+    result = _read(["terminal", "list", "--json"])["result"]
+    rows = result.get("terminals") if isinstance(result, dict) else None
+    if (not isinstance(rows, list) or result.get("truncated") is not False
+            or result.get("totalCount", len(rows)) != len(rows)
+            or not all(isinstance(row, dict) and all(isinstance(row.get(key), str) and row[key]
+                                                      for key in ("handle", "incarnationId")) for row in rows)):
+        return None  # a record that cannot be identified cannot show the terminal absent
+    return rows
+
+
+def handle_carriers(handle: str, proc: str = "/proc") -> bool | None:
+    """Whether a same-user process carries ORCA_TERMINAL_HANDLE=<handle>; None when that cannot be told.
+
+    Orca exports the handle to every process of a terminal. A process that vanishes during the scan is
+    gone. A same-user process whose environment the kernel refuses with EACCES is a non-dumpable helper
+    such as systemd, a zombie or ssh-agent, never an agent, shell or tool the terminal ran; it is skipped.
+    Any other failure, including a failed owner lookup or EPERM, leaves the answer unknown.
+    """
+    wanted = b"ORCA_TERMINAL_HANDLE=" + handle.encode()
+    uid = os.getuid()
+    try:
+        names = [name for name in os.listdir(proc) if name.isdecimal()]
+    except OSError:
+        return None
+    for name in names:
+        path = os.path.join(proc, name)
+        try:
+            owner = os.stat(path).st_uid
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            return None
+        if owner != uid:
+            continue
+        try:
+            with open(os.path.join(path, "environ"), "rb") as source:
+                environment = source.read().split(b"\0")
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError as exc:
+            if exc.errno == errno.EACCES:
+                continue
+            return None
+        if wanted in environment:
+            return True
+    return False
 
 
 def terminal_identity(handle: str) -> dict:

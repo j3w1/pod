@@ -13,7 +13,8 @@ from .contracts import policy_mismatch
 from .errors import PodError
 from .ledger import (admission_identity, binding_valid, bound_assignments as _bound_assignments,
                      objective_root, read, reserve,
-                     update_admission, retry_parent, _lock, _path, _read, _write, _native_assignment_settled)
+                     update_admission, retry_parent, _lock, _path, _read, _write, _native_assignment_settled,
+                     _native_assignment_claim_free)
 from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, _passable, contract, current_run, mutate_command, read_command,
                    worker_rows, worker_show, worktree_identity, worktree_selector)
 from .util import atomic_json, bounded_json, bounded_text, digest
@@ -124,7 +125,7 @@ def _assignment_evidence(shown: dict, admission: dict) -> dict:
     if "abandoned_accounting" in admission:
         current_fence(shown, admission, binding)
     claim = current_claim(shown)
-    settled = _native_assignment_settled(shown) and claim is None
+    settled = _native_assignment_claim_free(shown)
     return {"claim": claim, "admission_id": admission["admission_id"], "runtime": shown["runtime"],
             "run_id": binding["runId"], "task_id": binding["taskId"],
             "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
@@ -411,7 +412,8 @@ class OrcaPort:
                 and worker["projection"].get("taskId") == task]
 
     def show_worker(self, dispatch: str) -> dict:
-        return worker_show(dispatch)
+        from .abandoned import attach_closure
+        return attach_closure(worker_show(dispatch))
 
 
 def _valid_request_uuid(value: object) -> str:
