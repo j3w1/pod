@@ -1890,6 +1890,16 @@ def admission_identity(*, objective: str, run_id: str, task_id: str,
     return digest(identity)
 
 
+# What a same-Task retry would replay: the work itself, never the launch choice (route, revisions) or placement.
+_ASSIGNMENT_FIELDS = ("objective", "responsibility", "criteria", "scope", "actions", "candidate", "context",
+                      "dependencies", "sources", "report_contract", "serves", "role", "boundary")
+
+
+def assignment_digest(body: dict) -> str:
+    """Identity of the work a packet assigns; equal across a retry that only changes the route."""
+    return digest({key: body.get(key) for key in _ASSIGNMENT_FIELDS})
+
+
 def retry_parent(state: dict, *, objective: str, owner: str, run_id: str,
                  task_id: str, retry_of: str) -> dict:
     """Resolve an owned admission, never a caller-supplied native Dispatch."""
@@ -2153,6 +2163,7 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
            "boundary_exceeded": [], "admitted_seq": new_map["seq"]}
     from .display import admission_facts
     row["display"] = admission_facts(state, body, worktree_path, placement_naming)
+    row["recovery"]["assignment"] = assignment_digest(body)
     if routing:
         row["recovery"]["routing_responsibility"] = body["responsibility"]
     if retry_of is not None:
@@ -2316,6 +2327,19 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                              delegation="available")
         ctx["operation"] = "admission"
         admission_refusal(map_state, body, ctx, admission_id=admission_id)
+        if parent is not None:
+            held = parent["recovery"].get("assignment")
+            # A parent admitted before the digest kept no assignment content, so only its own identical packet
+            # proves the retry is the same work; anything else cannot be shown equivalent and is refused.
+            changed = held != assignment_digest(body) if held is not None else parent["packet_id"] != packet_id
+            if changed:
+                # Orca replays a same-Task retry with the Task's original spec and has no replacement-prompt flag, so
+                # an assignment that differs from the parent's (route and revisions may change) is not what would run.
+                action = ("restore the parent's assignment to retry it, or settle and discard the failed attempt and "
+                          "admit the changed assignment (a review of a newer candidate included) as its own Task")
+                raise PodError("assignment_changed", "A same-Task retry keeps the original assignment; this packet's "
+                               "candidate, scope, actions, report contract, obligations, role, boundary or sources "
+                               "differ from, or cannot be shown equal to, the retry parent's. Next: " + action, {"next_action": action})
         require_governance_current(project, map_state)
         snapshot = _reserve_route(project, checkpoint_value, body, state, requested, task_id,
                                   moment, projection, failures, reuse_of, native)

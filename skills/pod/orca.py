@@ -81,6 +81,9 @@ def _read_allowed(argv: list[str]) -> bool:
     if (len(argv) == 5 and argv[:3] == ["terminal", "show", "--terminal"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
+    if (len(argv) == 8 and argv[:3] == ["terminal", "read", "--terminal"] and _argument(argv[3])
+            and argv[4:6] == ["--screen", "--limit"] and argv[6] in SCREEN_LIMITS and argv[7] == "--json"):
+        return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
@@ -677,6 +680,29 @@ def mailbox_check(run: str, *, ack: str | None = None, wait_ms: int | None = Non
             "replayed": result.get("replayed") is True, "timed_out": result.get("timedOut") is True,
             "cancelled": result.get("cancelled") is True,
             "connection_lost": result.get("connectionLost") is True}
+
+
+SCREEN_LIMITS = ("40",)  # R200: the one bounded rendered-screen read a receiver diagnosis makes.
+
+
+def terminal_screen(handle: str) -> list[str] | None:
+    """The bounded rendered screen of one exact terminal as text rows, or None when it cannot be read exactly.
+
+    Read-only and used only to classify why a receiving session did not start; the rows never leave the caller.
+    """
+    try:
+        shown = _read(["terminal", "read", "--terminal", handle, "--screen", "--limit", SCREEN_LIMITS[0], "--json"])
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
+        return None
+    row = shown["result"].get("terminal")
+    tail = row.get("tail") if isinstance(row, dict) else None
+    if (not isinstance(row, dict) or row.get("handle") != handle or row.get("source") != "screen"
+            or not isinstance(tail, list) or len(tail) > int(SCREEN_LIMITS[0])
+            or any(not isinstance(line, str) for line in tail)):
+        return None
+    return [line[:400] for line in tail]
 
 
 def terminal_activity(handle: str) -> int | None:
