@@ -21,7 +21,7 @@ BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agen
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "abandoned.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py",
                   "cleanup_archives.py", "cleanup_observations.py",
                   "cleanup_stashes.py", "cli.py", "config.py", "context.py", "contracts.py",
-                  "display.py", "errors.py", "evidence_closure.py", "github.py", "gitio.py", "handoff.py", "history.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py", "listing.py",
+                  "admission.py", "display.py", "errors.py", "evidence_closure.py", "github.py", "gitio.py", "handoff.py", "history.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py", "listing.py",
                   "issue_revision.py", "lineage.py", "obligations.py", "observations.py", "operations.py", "orca.py", "placement.py", "readiness.py", "records.py",
                   "relay.py", "retirement.py", "routes.py", "selection.py", "sources.py", "succession.py",
                   "policy.py", "tool_permissions.py",
