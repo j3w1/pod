@@ -398,17 +398,44 @@ def _action_effects(row: dict, project: Path | None, policies: dict) -> tuple[li
     return sorted(set(effects or []) | set(recorded)), source if effects is not None else "recorded"
 
 
-def _relevant(facts: dict, request: dict, repo_key: str | None, overlap=None) -> bool:
+def _effect_scopes(row: dict, identities: list[str] | None) -> tuple[list[str] | None, list[str]]:
+    """Attach repository context to intrinsic names; declared/mapped effects stay global."""
+    from .governor import _effects
+    if identities is None:
+        return None, []
+    action = row["action"]
+    intrinsic, _ = _effects({**action, "effects": None}, {})
+    prefixes = {value.split(":", 1)[0] + ":" for value in intrinsic or []}
+    prefixes -= {"deploy:", "release:"}
+    if action["kind"] in ("push", "pr_update"):
+        prefixes.add(action["kind"] + ":")
+    declared = set(action.get("effects") or [])
+    relative = [value for value in identities if value not in declared and value.startswith(tuple(prefixes))]
+    return [value for value in identities if value not in relative], relative
+
+
+def _effect_match(facts: dict, requested: list[str], repo_key: str | None) -> bool:
+    shared = facts.get("global_effects", facts.get("effects")) or []
+    relative = facts.get("repository_effects") or []
+    return bool(set(shared) & set(requested) or
+                facts.get("repo_key") in (None, repo_key) and set(relative) & set(requested))
+
+
+def _relevant(facts: dict, request: dict, repo_key: str | None, overlap=None, fact=None) -> bool:
     """Intersect factual scopes, without deciding whether CE may perform an action."""
     if not any(request.values()):
         return True
     if "effects" in facts:
         identities = facts["effects"]
-        return bool(request["effects"] and (identities is None or set(identities) & set(request["effects"]))
+        return bool(request["effects"] and (identities is None or _effect_match(facts, request["effects"], repo_key))
+                    or request["target"] and facts.get("repo_key") is None and facts.get("repository_effects")
                     or request["target"] and facts.get("target") == request["target"]
                        and facts.get("repo_key", repo_key) == repo_key)
     owners = facts.get("repo_keys") or ([facts["repo_key"]] if facts.get("repo_key") else [])
     if owners and repo_key not in owners:
+        return False
+    location_fact = facts.get("kind") in ("writer", "ownership", "assignment") or fact in ("process_liveness", "terminal_liveness")
+    if location_fact and not request["worktree"] and not request["branch"] and facts.get("locations_complete") is True and not facts.get("native_effects"):
         return False
     if request["worktree"] or request["branch"]:
         paths = facts.get("worktrees", [facts.get("worktree")])
@@ -507,8 +534,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     if target_commit and (not target or not gitio.OBJECT_ID.fullmatch(target_commit)):
         raise PodError("admission_target", "A target commit needs a target ref and a full object id")
     project = Path(repository or project).expanduser().resolve()
+    if not project.is_dir():
+        raise PodError("admission_scope_unavailable", "The repository argument is not an existing directory")
     requested_target, target = target, _canonical_target(project, target)
     context = repository_context(project, fresh=True)
+    if context["repo_key"] is None:
+        raise PodError("admission_scope_unavailable", "The repository argument has no usable Git identity")
     known = [context, *(repository_context(Path(path).expanduser().resolve(), fresh=True)
                         for path in known_repositories or [])]
     root = state_root(project)
@@ -541,8 +572,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         except (OSError, ValueError):
             return True  # An inaccessible path cannot establish independence.
 
-    def relevant(facts, selection, key):
-        return _relevant(facts, selection, key, overlap)
+    def relevant(facts, selection, key, fact=None):
+        return _relevant(facts, selection, key, overlap, fact)
 
     def workspace(path, places):
         if not path:
@@ -598,19 +629,26 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             target_project = source_project or next((Path(item["worktree"]) for item in known
                 if source and item["repo_key"] == source.get("repo_key")), None)
             identities, effect_source = _action_effects(row, source_project, policies)
+            shared, relative = _effect_scopes(row, identities)
             action_target = _canonical_target(target_project, action["target"]) if action["kind"] in ("merge", "push", "pr_update") else action["target"]
             fact_scope = {"effects": identities, "target": action_target, "action": row["record_id"],
+                          "global_effects": shared, "repository_effects": relative,
                           "repo_key": source.get("repo_key") if source else None}
             claim({"objective": name, "record": directory.name,
                 "repo_key": source.get("repo_key") if source else None,
                 "repository": source.get("repository") if source else None,
                 "kind": "target_update" if action["kind"] in ("merge", "push", "pr_update") else "external_effect",
                 "action": row["record_id"], "effects": identities, "effect_source": effect_source,
+                "global_effects": shared, "repository_effects": relative,
                 "target": action_target, "outcome": row["outcome"]})
             if identities is None:
                 unknown(directory.name, "effects_unknown", objective=name, fact="external_effect_identity",
                         fact_scope=fact_scope, reconciliation={"action": "reconcile_governor",
                         "record": row["record_id"], "condition": "Read back the admitted action and establish its actual downstream effects"})
+            elif relative and not (source or {}).get("repo_key"):
+                unknown(directory.name, "effect_attribution_unknown", objective=name, fact="effect_repository",
+                        fact_scope=fact_scope, reconciliation={"action": "establish_effect_repository",
+                        "record": row["record_id"], "condition": "Establish the repository namespace of this admitted intrinsic effect"})
 
     with read_deadline(budget):
         try:
@@ -867,6 +905,16 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                             fact_scope={"effects": None}, fact="native_effect_identity",
                                             reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
                                                             "condition": "Reconcile the W1-reported pending native effects and their targets"})
+                                if native_effects and target:
+                                    from .abandoned import _effect_conflicts
+                                    target_branch = (target.removeprefix("refs/remotes/").partition("/")[2]
+                                                     if target.startswith("refs/remotes/") else target.removeprefix("refs/heads/"))
+                                    if _effect_conflicts({"repo_key": actor_repo, "effects": native_effects},
+                                                         {"repo_key": context["repo_key"], "branch": target_branch}):
+                                        unknown(None, "native_effect_target_unknown", dispatch=shown["dispatch"],
+                                            fact="native_effect_target", fact_scope={"repo_key": context["repo_key"], "target": target},
+                                            reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
+                                                           "condition": "Reconcile the shared-reader native effect that may update this target"})
                         except PodError as exc:
                             unknown(None, exc.code, dispatch=shown["dispatch"],
                                     fact_scope={"effects": None} if effects else actor_scope,
@@ -1020,9 +1068,21 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     all_unknowns = result["unknowns"]
     result["repository_complete"] = not all_unknowns
     result["unknowns"] = [row for row in all_unknowns if row.get("objective") == objective and objective
-                          or relevant(row["scope"], request, context["repo_key"])]
+                          or relevant(row["scope"], request, context["repo_key"], row["fact"])]
+    relevant_unknowns = list(result["unknowns"])
+    if not worktree and not branch and (target or effects):
+        writers = [row for row in result["unknowns"] if row["fact"] in ("process_liveness", "terminal_liveness")]
+        if len(writers) > 1:
+            result["unknowns"] = [row for row in result["unknowns"] if row not in writers]
+            result["unknowns"].append({"record": None, "code": "native_writer_scope_unknown", "fact": "writer_relevance",
+                "scope": {"repo_key": context["repo_key"], "target": target}, "count": len(writers),
+                "by_code": dict(Counter(row["code"] for row in writers)),
+                "references": {"dispatches": sorted({row["dispatch"] for row in writers if row.get("dispatch")}),
+                               "terminals": sorted({row["terminal"] for row in writers if row.get("terminal")})},
+                "reconciliation": {"action": "supply_candidate_workspace",
+                    "condition": "Supply the candidate worktree and branch, or reconcile the listed unlocated writer resources before deciding their relevance"}})
     result["unrelated_unknowns"] = [*result.get("unrelated_unknowns", []),
-                                    *(row for row in all_unknowns if row not in result["unknowns"])]
+                                    *(row for row in all_unknowns if row not in relevant_unknowns)]
     unrelated = result["unrelated_unknowns"]
     result["unrelated_unknowns"] = {"count": len(unrelated), "by_code": dict(Counter(row["code"] for row in unrelated)),
         "references": {"records": sorted({row["record"] for row in unrelated
@@ -1046,7 +1106,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             dimensions.append("branch")
         if target and claim.get("target") == target and claim.get("repo_key", context["repo_key"]) == context["repo_key"]:
             dimensions.append("target_update")
-        if set(claim.get("effects") or []) & set(effects or []):
+        if _effect_match(claim, effects or [], context["repo_key"]):
             dimensions.append("external_effect")
         if dimensions:
             result["conflicts"].append({"claim": claim, "dimensions": dimensions})
@@ -1094,7 +1154,8 @@ def query(project: Path, **kwargs) -> dict:
         try:
             result = _query(project, **kwargs)
         except PodError as exc:
-            if exc.code in ("admission_candidate", "admission_target", "admission_timeout"):
+            if exc.code in ("admission_candidate", "admission_target", "admission_timeout", "admission_scope_unavailable",
+                            "repository_identity_unavailable", "git_unavailable"):
                 raise
             scope = {"repository": None, "repo_key": None, "path": str(Path(kwargs.get("repository") or project).expanduser().absolute()),
                      "inventory": "pod_objectives_and_recorded_runs", "selection": {

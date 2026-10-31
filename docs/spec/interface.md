@@ -1088,9 +1088,11 @@ Effects use the existing Governor `_effects` predicate: intrinsic identities suc
 as `workflow:ci.yml`, declared effects and admitted policy-mapped triggers. Durable
 `row.effects` is preserved alongside `action.effects`; missing declarations remain
 missing, never fabricated as an empty declaration. Each claim returns `effects`
-as a canonical identity list or null when its actual effects are unknown. Effects
-are compared across repository attribution: a foreign source can still affect a
-shared target. Requested effect reads inspect foreign current journals without
+as a canonical identity list or null when its actual effects are unknown. Intrinsic repository-relative identities (merge/push/pr_update targets, workflow
+files and cancellation records) carry the source repo_key. Declared and mapped
+effects, deploy and release identities retain their shared/global meaning; a
+foreign source can still affect that shared target. Unknown intrinsic repository
+attribution stays relevant and names its reconciliation. Requested effect reads inspect foreign current journals without
 hydrating their report/evidence histories. An unknown effect names its action and
 requires actual effect readback/reconciliation. The W1-owned current-claim reader
 alone interprets abandoned workers' native effects, on fresh exact worker reads.
@@ -1166,7 +1168,8 @@ capacity/scope/proof/epoch/lease records before its atomic transition. A changed
 candidate, current claim, resource or target remains an observed conflict or
 uncertainty; no lock or permission receipt is created by Pod. Claims are ordered
 canonically so presentation order does not change the token. Every successfully rendered factual JSON answer exits zero, including blocked
-and unknown answers. Invalid invocation or unusable execution remains nonzero.
+and unknown answers. Invalid invocation, nonexistent/non-Git repository arguments, or unusable
+execution remains nonzero.
 CE always parses the factual status and scope; zero is never permission.
 
 - <a id="a670"></a>**A670** — Unrelated finished evidence and more than 1,024 foreign records cause no full status hydration or lifetime cliff; file, chunk, journal and native reads are counted. Detailed proof is limited to the selected exact candidate, separately from future objective closure.

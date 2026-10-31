@@ -9440,7 +9440,9 @@
         "tests.test_admission_query.ReviewCorrectionTests.test_manual_native_terminal_is_a_current_writer_without_a_pod_admission",
         "tests.test_admission_query.ReviewCorrectionTests.test_settled_unsupervised_dispatch_uses_current_terminal_ownership",
         "tests.test_admission_query.ReviewCorrectionTests.test_owner_observation_joins_run_and_live_terminal",
-        "tests.test_admission_query.ReviewCorrectionTests.test_native_folder_inside_repository_is_not_a_hidden_manual_writer"
+        "tests.test_admission_query.ReviewCorrectionTests.test_native_folder_inside_repository_is_not_a_hidden_manual_writer",
+        "tests.test_admission_query.ReviewCorrectionTests.test_repository_intrinsic_effects_do_not_leak_to_foreign_repositories",
+        "tests.test_admission_query.ReviewCorrectionTests.test_declared_and_mapped_workflow_effects_remain_global"
       ],
       "status": "NOT_RUN"
     },
@@ -9497,7 +9499,10 @@
         "tests.test_admission_query.ReviewCorrectionTests.test_successful_fact_read_exits_zero_for_intersections_and_uncertainty",
         "tests.test_admission_query.ReviewCorrectionTests.test_git_target_aliases_identify_the_same_pending_target_update",
         "tests.test_admission_query.ReviewCorrectionTests.test_unrelated_diagnostics_are_counts_and_unique_resource_references",
-        "tests.test_admission_query.ReviewCorrectionTests.test_target_alias_uses_registered_common_repository_when_old_worktree_is_gone"
+        "tests.test_admission_query.ReviewCorrectionTests.test_target_alias_uses_registered_common_repository_when_old_worktree_is_gone",
+        "tests.test_admission_query.ReviewCorrectionTests.test_unusable_repository_argument_is_a_real_cli_failure",
+        "tests.test_admission_query.ReviewCorrectionTests.test_target_only_read_does_not_count_unrelated_process_liveness",
+        "tests.test_admission_query.ReviewCorrectionTests.test_target_only_read_keeps_shared_reader_pending_native_target"
       ],
       "status": "NOT_RUN"
     }

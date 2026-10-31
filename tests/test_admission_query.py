@@ -826,3 +826,75 @@ class ReviewCorrectionTests(AdmissionQueryCase):
         result = self.query(target="refs/remotes/origin/main", target_commit=self.base)
         self.assertEqual(result["status"], "blocked", result["unknowns"])
         self.assertTrue(any("target_update" in row.get("dimensions", []) for row in result["conflicts"]))
+
+    def test_repository_intrinsic_effects_do_not_leak_to_foreign_repositories(self):
+        self.intake(worktree=self.place)
+        other = self.root / "other"
+        other.mkdir(); git(other, "init", "-q", "-b", "main")
+        _, raw = self.raw()
+        raw["checkpoint"]["objective"] = "foreign"
+        raw["checkpoint"]["worktree"] = {**self.place, "path": str(other), "repo_key": repository_context(other)["repo_key"]}
+        directory = objective_root(other, "foreign")
+        directory.mkdir(); self.save(directory / "context.json", raw)
+        for kind, target, identity in (("merge", "origin/main", "merge:origin/main"),
+                                       ("workflow_dispatch", "ci.yml", "workflow:ci.yml"),
+                                       ("cancel_validation", "old-run", "cancel:old-run")):
+            with self.subTest(kind=kind):
+                self.journal(kind=kind, target=target, directory=directory)
+                foreign = self.query(effects=[identity])
+                self.assertEqual(foreign["status"], "observed", foreign["unknowns"])
+                self.assertFalse(foreign["conflicts"])
+                self.journal(kind=kind, target=target)
+                local = self.query(effects=[identity])
+                self.assertEqual(local["status"], "blocked", local["unknowns"])
+                (objective_root(self.project, "objective") / "governor.json").unlink()
+
+    def test_declared_and_mapped_workflow_effects_remain_global(self):
+        self.intake(worktree=self.place)
+        other = self.root / "other"
+        other.mkdir(); git(other, "init", "-q", "-b", "main")
+        _, raw = self.raw()
+        raw["checkpoint"]["objective"] = "foreign"
+        raw["checkpoint"]["worktree"] = {**self.place, "path": str(other), "repo_key": repository_context(other)["repo_key"]}
+        directory = objective_root(other, "foreign")
+        directory.mkdir(); self.save(directory / "context.json", raw)
+        for kind, declared, recorded in (("workflow_dispatch", ["workflow:ci.yml"], None),
+                                         ("push", None, ["workflow:ci.yml"])):
+            with self.subTest(kind=kind):
+                self.journal(kind=kind, target="ci.yml" if kind=="workflow_dispatch" else "origin/topic",
+                             declared=declared, recorded=recorded, directory=directory)
+                result = self.query(effects=["workflow:ci.yml"])
+                self.assertEqual(result["status"], "blocked", result["unknowns"])
+                self.assertTrue(result["conflicts"])
+
+    def test_unusable_repository_argument_is_a_real_cli_failure(self):
+        plain = self.root / "plain"
+        plain.mkdir()
+        for path in (plain, self.root / "missing"):
+            with self.subTest(path=path):
+                out = StringIO()
+                with redirect_stdout(out):
+                    code = cli.main(["admission", "--repository", str(path), "--json"])
+                self.assertEqual(code, 1)
+                self.assertEqual(json.loads(out.getvalue())["schema"], "pod-cli/v5")
+
+    def test_target_only_read_does_not_count_unrelated_process_liveness(self):
+        self.intake(worktree=self.place)
+        native = self.writer()
+        with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": [native]}):
+            result = self.query(target="target", target_commit=self.base)
+        self.assertTrue(result["complete"], result["unknowns"])
+        self.assertEqual(result["status"], "observed")
+        self.assertIn("native_liveness_unverified", result["unrelated_unknowns"]["by_code"])
+
+    def test_target_only_read_keeps_shared_reader_pending_native_target(self):
+        self.intake(worktree=self.place)
+        git(self.project, "update-ref", "refs/remotes/origin/main", self.base)
+        source = self.writer(verdict="exited")
+        source["workerState"] = "abandoned"
+        claim = {"process": "exited", "effects": [{"kind": "push", "id": "origin/main", "state": "pending"}]}
+        with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": [source]}), \
+             patch("pod.admission._native_claim", return_value=claim):
+            result = self.query(target="origin/main", target_commit=self.base)
+        self.assertEqual(result["status"], "unknown")
+        self.assertIn("native_effect_target_unknown", [row["code"] for row in result["unknowns"]])
