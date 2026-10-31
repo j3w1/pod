@@ -9929,7 +9929,11 @@
         "tests.test_governance_delta_rebind.LinkScopeTests.test_a_link_loop_refuses",
         "tests.test_governance_delta_rebind.LinkScopeTests.test_an_over_long_chain_refuses",
         "tests.test_governance_delta_rebind.LinkScopeTests.test_the_direct_spelling_still_refuses",
-        "tests.test_governance_delta_rebind.LinkScopeTests.test_an_unrelated_link_rebinds"
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_an_unrelated_link_rebinds",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_link_inside_a_submodule_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_scope_that_is_a_gitlink_or_lies_under_one_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_link_into_a_submodule_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_any_mode_outside_the_allow_list_is_unresolved"
       ],
       "status": "NOT_RUN"
     },

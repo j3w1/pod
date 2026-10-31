@@ -747,7 +747,7 @@ def rebind_blocker(ob: dict, evidence: list[dict], plan: dict) -> tuple[str | No
         names = plan["scope"](scope)
         if names is None:
             return (f"its proof scope path {scope} does not resolve within the repository in the bound base, target and "
-                    "candidate trees (an absolute, escaping, looping or over-long link)"), []
+                    "candidate trees (through a gitlink or another unresolvable mode, or an absolute, escaping, looping or over-long link)"), []
         named = [path for path in changed for name in [scope, *names] if _parts(name) and _prefix(name, path)]
         if named:
             via = "" if all(name == scope for name in names) else f" (through {scope})"

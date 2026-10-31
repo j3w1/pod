@@ -262,14 +262,19 @@ class LinkScopeTests(KernelCase):
 
     commit = governance_commit
 
-    def scoped(self, scope, links=()):
+    def scoped(self, scope, links=(), gitlinks=()):
         config.set_decision_policy(self.project, "hands_off", decision=PERSON)
         for name, target in links:
             path = self.project / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.symlink_to(target)
-        if links:
-            git(self.project, "add", "-A"); git(self.project, "commit", "-qm", "links")
+        if links or gitlinks:
+            git(self.project, "add", "-A")
+            for name in gitlinks:
+                # A committed submodule entry (mode 160000); its subtree is another repository's, never read.
+                (self.project / name).mkdir()
+                git(self.project, "update-index", "--add", "--cacheinfo", f"160000,{self.base},{name}")
+            git(self.project, "commit", "-qm", "links")
             self.base = self.candidate = git(self.project, "rev-parse", "HEAD")
             git(self.project, "branch", "-f", "target", self.base)
             git(self.project, "update-ref", "refs/remotes/origin/target", self.base)
@@ -290,8 +295,8 @@ class LinkScopeTests(KernelCase):
             return exc
         return None
 
-    def refused(self, scope, links, phrase):
-        error = self.scoped(scope, links)
+    def refused(self, scope, links, phrase, gitlinks=()):
+        error = self.scoped(scope, links, gitlinks)
         self.assertIsNotNone(error, scope)
         self.assertEqual((error.detail["detail"], error.detail["referent"]["obligation"]), ("rebind_refused", "L"))
         self.assertIn(phrase, str(error))
@@ -314,6 +319,30 @@ class LinkScopeTests(KernelCase):
 
     def test_an_unrelated_link_rebinds(self):
         self.assertIsNone(self.scoped("code-link", [("code-link", "src/old.py")]))
+
+    def test_a_link_inside_a_submodule_refuses(self):
+        # The reviewed case: module/rules-link -> ../AGENTS.md lives in the submodule's own, opaque tree.
+        self.refused("module/rules-link", [], "does not resolve", gitlinks=["module"])
+
+    def test_a_scope_that_is_a_gitlink_or_lies_under_one_refuses(self):
+        self.refused("module", [], "does not resolve", gitlinks=["module"])
+
+    def test_a_link_into_a_submodule_refuses(self):
+        self.refused("into", [("into", "module/src")], "does not resolve", gitlinks=["module"])
+
+    def test_any_mode_outside_the_allow_list_is_unresolved(self):
+        # Git normalizes modes on write, so an unknown mode is shown through a doubled tree read.
+        from subprocess import CompletedProcess
+        from unittest.mock import patch
+        from pod.governance import scope_resolver
+        listing = "\0".join([f"100664 blob {'1' * 40}\tweird", f"040000 tree {'2' * 40}\tsrc",
+                              f"100644 blob {'3' * 40}\tsrc/old.py", ""])
+        with patch("pod.ledger._git", return_value=CompletedProcess([], 0, listing, "")):
+            resolve = scope_resolver(self.project, ["c" * 40])
+            self.assertIsNone(resolve("weird"))
+            self.assertIsNone(resolve("weird/below"))
+            self.assertEqual(resolve("src/old.py"), ["src/old.py"])
+            self.assertEqual(resolve("src/new.py"), ["src/new.py"])
 
 
 class ExemptedAdoptionTests(KernelCase):

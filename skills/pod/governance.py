@@ -488,29 +488,32 @@ def governance_delta(project: Path, bound: list[dict], observed: dict, exclude: 
 
 
 MAX_LINK_HOPS = 8
+RESOLVABLE_MODES = ("100644", "100755", "040000")  # plus symlinks (120000), which are followed
 
 
 def scope_resolver(project: Path, commits: list[str]):
     """R203: what one declared scope path names in each immutable Git tree involved, following committed symlinks.
 
     Each component, parents included, is resolved within the repository against each commit's own tree, with at
-    most MAX_LINK_HOPS link hops per path. Returns the resolved paths, or None when any tree is unreadable or a
-    link is absolute, leaves the repository, loops or exceeds the bound. Host paths are never read.
+    most MAX_LINK_HOPS link hops per path. Only regular files, trees and symlinks (followed) are resolvable; a path
+    that does not exist in a tree stays as named. Returns the resolved paths, or None when any tree is unreadable,
+    a component has any other mode (a gitlink's opaque subtree included), or a link is absolute, leaves the
+    repository, loops or exceeds the bound. Host paths, submodule checkouts and remotes are never read.
     """
-    tables: dict[str, dict[str, str] | None] = {}
+    tables: dict[str, dict[str, tuple[str, str]] | None] = {}
     blobs: dict[str, str | None] = {}
 
-    def links(commit):
+    def entries(commit):
         if commit not in tables:
-            listed = _git(project, ["ls-tree", "-r", "-z", "--full-tree", commit])
+            listed = _git(project, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit])
             rows = None
             if listed is not None and listed.returncode == 0:
                 rows = {}
                 for entry in listed.stdout.split("\0"):
                     meta, _, name = entry.partition("\t")
                     parts = meta.split()
-                    if len(parts) == 3 and parts[0] == "120000" and _OBJECT.fullmatch(parts[2]):
-                        rows[name] = parts[2]
+                    if len(parts) == 3 and name:
+                        rows[name] = (parts[0], parts[2])
             tables[commit] = rows
         return tables[commit]
 
@@ -521,7 +524,7 @@ def scope_resolver(project: Path, commits: list[str]):
         return blobs[blob]
 
     def resolve(path, commit):
-        rows = links(commit)
+        rows = entries(commit)
         if rows is None:
             return None
         done, queue, hops = [], [part for part in path.split("/") if part not in ("", ".")], 0
@@ -532,14 +535,16 @@ def scope_resolver(project: Path, commits: list[str]):
                     return None
                 done.pop()
                 continue
-            name = "/".join([*done, part])
-            if name in rows:
+            mode, obj = rows.get("/".join([*done, part]), (None, None))
+            if mode == "120000":
                 hops += 1
-                link = target(rows[name])
+                link = target(obj) if _OBJECT.fullmatch(obj) else None
                 if hops > MAX_LINK_HOPS or link is None or link.startswith("/") or "\0" in link:
                     return None
                 queue = [item for item in link.split("/") if item not in ("", ".")] + queue
                 continue
+            if mode not in (None, *RESOLVABLE_MODES):
+                return None  # an allow-list: a gitlink or any other mode is opaque, so the path is unresolved
             done.append(part)
         return "/".join(done) or "."
 
