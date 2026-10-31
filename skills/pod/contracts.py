@@ -80,6 +80,7 @@ _MAP_FIELDS = {
                   "bound_purpose": "new proposals per operation; out-of-scope proposal history has no lifetime quota"}, "governance": record("governance"),
     "governance_refresh": {"type": "boolean"}, "revision_authority": record("revision authority"),
     "reopen": {"type": "boolean"}, "close": {"type": "boolean"}, "rebind": {"type": "list"},
+    "governance_delta": record("governance delta"),
     "dispositions": items(16, record("disposition")), "delivery": {"type": "object"},
     "route_settlements": {**items(16, record("route settlement")), "only": "checkpoint or report map"},
     "update": {"type": "object", "max_items": 128, "form": "obligation ids mapped to field updates; state changes clear conflicting state fields"},
@@ -89,6 +90,16 @@ _MAP_FIELDS = {
 }
 
 TABLE = {
+    "governance delta": definition({
+        "sources": items(8, record("governance delta source")), "reason": text(1024),
+    }, ("sources", "reason"),
+       form="the decider's attestation for a rebind in a governance refresh: exactly the governance source changes "
+            "Pod reports for the rebound rows (one entry per path and bound blob) and why they do not affect them"),
+    "governance delta source": definition({
+        "path": choice(GOVERNANCE_PATHS), "bound": {**_GIT, "nullable": True}, "current": {**_GIT, "nullable": True},
+        "added": {"type": "integer", "minimum": 0}, "removed": {"type": "integer", "minimum": 0},
+    }, ("path", "bound", "current", "added", "removed"),
+       form="Git blob ids at the bound base and the target (null when absent) and Git's added/removed line counts"),
     "route settlement": definition({
         "admission": _DIGEST, "basis": choice(("redone", "lead_decision")),
         "replacement": _DIGEST, "decision": choice(("accept", "discard")),

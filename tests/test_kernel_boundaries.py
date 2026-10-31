@@ -244,10 +244,16 @@ class ProofIntegrityBoundaryTests(KernelCase):
         self.write(self.waiting(), governance_refresh=True)
         rows = self.stored()
         a = next(row for row in rows if row["id"] == "A")
+        receipts = deepcopy(a["receipts"])
         a.pop("wait"); a.update(state="satisfied", evidence=[a["receipts"][0]["evidence"]])
         self.refused("obligation_unaccounted", "evidence_invalidated", self.write, rows)
-        self.write(rows, governance_refresh=True, rebind=["A"])
-        self.assertEqual(self.label(), "QUALIFIED")
+        # R203: the receipt was bound under governance this record's history does not name, so no rebind,
+        # even with an empty delta, can carry it across the change it never attested.
+        before = read(self.project, "objective")
+        self.refused("obligation_unaccounted", "rebind_refused", self.write, rows, governance_refresh=True, rebind=["A"])
+        self.assertEqual(read(self.project, "objective"), before)
+        self.assertEqual(next(row for row in self.stored() if row["id"] == "A")["receipts"], receipts)
+        self.assertNotEqual(self.label(), "QUALIFIED")
 
 
 class GovernanceTests(KernelCase):

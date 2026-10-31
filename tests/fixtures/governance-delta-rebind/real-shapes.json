@@ -1,0 +1,50 @@
+{
+  "note": "Sanitized from four real objective records (Pod 0.21.26). Only the relationships that reproduce each defect are kept: the governance change's shape (one purely added paragraph in the bound AGENTS.md, Git numstat 11 0), row kinds and counts, which review rows read AGENTS.md as bound context, the authority of the refused write and the refusal seen on the unchanged code. Paths, digests, commit ids, runtime and terminal ids, objective names, issue numbers and owner words are removed; the added paragraph is replaced by neutral text with the same line count.",
+  "governance_change": {
+    "path": "AGENTS.md",
+    "added": 11,
+    "removed": 0,
+    "paragraph": [
+      "",
+      "After the evidence commit and before opening a pull request, run the final check:",
+      "",
+      "```bash",
+      "run-final-check --base origin/target",
+      "```",
+      "",
+      "It verifies the prepared manifest against the selected base. Pass the exact reviewed",
+      "base when a moving reference is inappropriate. It never writes the manifest or the",
+      "evidence. Earlier checks keep their existing informational role; this check is a",
+      "separate final step."
+    ]
+  },
+  "records": {
+    "refresh_without_authority": {
+      "satisfied_rows": {"correction": 18, "subgoal": 3, "assurance": 2, "criterion": 1, "delivery": 1},
+      "reviews_with_governance_context": 2,
+      "before_fix": {
+        "plain_refresh": {"code": "obligation_unaccounted", "detail": "evidence_invalidated", "classification": "governance change", "eligible_rebind_listed": 8},
+        "rebind_every_row": "written with no delta check, reason or authority"
+      }
+    },
+    "agent_snapshot_with_undated_prior": {
+      "satisfied_rows": {"correction": 13, "assurance": 2},
+      "reviews_with_governance_context": 1,
+      "earlier_decisions_without_time": 3,
+      "authority": {"provenance": "agent_decision", "channel": "agent_session", "decision_policy": "hands_off"},
+      "before_fix": {
+        "refresh": {"code": "obligation_unaccounted", "detail": "evidence_invalidated", "classification": "governance change"},
+        "refresh_with_rebind": {"code": "decision_order_unknown"}
+      }
+    },
+    "restating_agent_refresh": {
+      "earlier_decisions_without_time": 2,
+      "authority": {"provenance": "agent_decision", "channel": "agent_session", "decision_policy": "hands_off"},
+      "before_fix": {"refresh": {"code": "decision_order_unknown"}}
+    },
+    "question_after_delivery": {
+      "delivered": true,
+      "before_fix": {"cancel": {"code": "governance_changed"}, "replacement": "never reached"}
+    }
+  }
+}

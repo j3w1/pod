@@ -331,7 +331,9 @@ def _stamp_evidence(ob: dict, prior: dict | None, ctx: dict, gov: str, rebind: b
                          obligation=ob["id"], receipt=key)
         stamp = (previous["evidence"]["governance"] if previous else
                  (base.get("binding") or {}).get("governance") if identity == "attempt" else gov)
-        if rebind:
+        if rebind and stamp != gov:
+            from .obligations import rebind_crossing
+            rebind_crossing(ob, stamp, base, ctx)
             stamp = gov
         evidence = {**base, "governance": stamp}
         receipts[key] = {**(previous or {}), "evidence": evidence}

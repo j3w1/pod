@@ -357,6 +357,34 @@ def git(project: Path, *argv: str) -> str:
                           check=True).stdout.strip()
 
 
+def governance_attestation(project, objective="objective", rows=None,
+                           reason="The change does not affect the rebound rows."):
+    """R203: the decider's attestation, declaring exactly the governance delta Pod itself reads for the rows.
+
+    Without rows, the delta from the bound governance; with rows, the union of what their receipts cross.
+    """
+    from pod.governance import governance_observation, stamp_resolver
+    from pod.obligations import _delta_order, bind_governance, bound_governance_digest, governance_digest
+    prior = read(project, objective)["checkpoint"]
+    bound = prior["governance"]
+    observed = governance_observation(project, bound["base_ref"], bound_ref=bound["base_ref"],
+                                      selection=bound.get("selection"))
+    resolve = stamp_resolver(project, prior, observed)
+    target = governance_digest(bind_governance(observed, observed["target_ref"], bound["exclude"])[0])
+    stamps = ({bound_governance_digest(prior)} if rows is None else
+              {item["evidence"]["governance"] for row in prior["obligations"] if row["id"] in rows
+               for item in row.get("receipts", [])} - {target})
+    entries = []
+    for stamp in stamps:
+        entries += [entry for entry in resolve(stamp) if entry not in entries]
+    return {"sources": _delta_order(entries), "reason": reason}
+
+
+def snapshot(project, ref="refs/remotes/origin/target"):
+    """An exact snapshot naming the observed target, as an attested rebind needs."""
+    return {"base_ref": ref, "base": git(project, "rev-parse", ref)}
+
+
 class KernelCase(unittest.TestCase):
     def setUp(self):
         self.temp = fixture(); self.root = self.temp.__enter__()

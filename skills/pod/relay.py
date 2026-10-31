@@ -788,8 +788,15 @@ class Decision:
             if not set(keys).intersection(row.get("keys", [])):
                 continue
             stamp = row.get("decided_at")
-            if stamp is None and (self.actor["kind"], self.record["channel"]) != ("person", "session"):
-                raise PodError("decision_order_unknown", "Earlier decision time is unknown; obtain fresh person resolution")
+            # R166: a local decision takes Pod's own clock at this write (callers never supply decided_at), so it
+            # orders after every decision already recorded, known time or not. A relayed decision carries its
+            # verifier's time, which cannot be ordered against an unknown one.
+            if stamp is None and not (self.verdict is None and self.record["channel"] in ("session", "agent_session")):
+                raise PodError("decision_order_unknown", "Earlier decision time is unknown, so a relayed decision cannot "
+                               "be ordered after it. Next: decide at this write in session: a person, or an "
+                               "agent_session decision where the decision policy names the agent",
+                               {"next_action": "decide at this write in session: a person, or an agent_session "
+                                "decision where the decision policy names the agent"})
             previous = datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp is not None else None
             if previous is not None and (at < previous or at == previous and not stop):
                 raise PodError("decision_stale", "A conflicting decision is newer or tied")

@@ -10,7 +10,8 @@ from pod.errors import PodError
 from pod.ledger import checkpoint, objective_root, read
 from pod.records import source_identity
 from tests.decision_policy_support import LOCAL, PERSON
-from tests.kernel_support import KernelCase, assurance_review, git, governance_commit, governance_policy
+from tests.kernel_support import (KernelCase, assurance_review, git, governance_attestation, governance_commit,
+                                 governance_policy)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "superseded-closure"
 
@@ -116,7 +117,7 @@ class WithdrawalOnlyClosureTests(SupersededClosureCase):
         with self.assertRaises(PodError) as caught:
             self.write(self.stored(), governance_refresh=True, rebind=rows,
                        governance={"base_ref": "refs/remotes/origin/target", "base": self.target},
-                       revision_authority=LOCAL)
+                       revision_authority=LOCAL, governance_delta=governance_attestation(self.project))
         expected = self.shape["before_fix"]["governance_refresh"]
         self.assertEqual((caught.exception.code, caught.exception.detail["detail"]),
                          (expected["code"], expected["detail"]))

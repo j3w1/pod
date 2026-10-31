@@ -818,6 +818,14 @@ def render(result: dict) -> None:
         for row in result.get("owner_decisions", []):
             channel = row["decision"]["channel"] + (" (earlier record)" if row["decision"].get("channel_recorded") is False else "")
             print(f"Decision {clean(row['kind'])}: {clean(channel)} ({clean(row['reference'])})")
+            rebind = row["decision"].get("rebind") if row["kind"] == "governance" else None
+            if isinstance(rebind, dict):
+                # R203: the attested rebind, plainly: rows, each source change, reason.
+                changes = ", ".join(f"{clean(entry['path'])} +{entry['added']} -{entry['removed']}" for entry in rebind["delta"])
+                print(f"Governance rebind at seq {row['decision']['seq']}: {len(rebind['rows'])} rows across {changes}"
+                      + (f"; read as context: {clean(', '.join(rebind['bound_context']))}" if rebind.get("bound_context") else "")
+                      + (f"; from earlier steps: {clean(', '.join(rebind['earlier']))}" if rebind.get("earlier") else "")
+                      + f"; reason: {clean(rebind['reason'])}")
         derived = result.get("derived_governance_decisions")
         if derived:
             print(f"Derived governance adoptions ({derived['count']}): {clean(derived['previous_base'])} -> "
