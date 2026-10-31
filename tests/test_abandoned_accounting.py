@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -150,9 +151,9 @@ class AbandonedAccountingTests(AbandonedFixture):
         row = result['admission']
         self.assertEqual((result['status'], result['action']), ('bound', 'accounted_abandoned'))
         proof = row['abandoned_accounting']
-        self.assertEqual(proof['execution'], 'unknown')
+        self.assertEqual(proof['classification'], 'abandoned_no_observed_start')
         self.assertEqual(proof['previous_error'], original['error'])
-        self.assertEqual((proof['recorded_by'], proof['native_abandoner']), ('owner', 'unknown'))
+        self.assertEqual(proof['recorded_by'], 'owner')
         for key in ('request_uuid', 'task_id', 'run_id', 'packet_id', 'candidate', 'result', 'failures', 'reuse_of'):
             self.assertEqual(row[key], original[key])
         self.assertEqual(self.port.show_worker('dispatch-1'), before_show)
@@ -180,7 +181,7 @@ class AbandonedAccountingTests(AbandonedFixture):
         row = self.account(admission)['admission']
         self.assertNotIn(self.port.show_worker('dispatch-1')['result']['worker']['state'], STARTED_STATES)
         proof = row['abandoned_accounting']
-        self.assertEqual((proof['classification'], proof['execution']), ('abandoned_no_observed_start', 'unknown'))
+        self.assertEqual(proof['classification'], 'abandoned_no_observed_start')
         self.assertEqual((row['report'], row['changed_paths'], row['disposition']), (None, None, None))
         text = json.dumps(row).lower()
         for claim in ('never_started', 'never started', 'exited', 'process_exited', 'succeeded'):
@@ -192,7 +193,7 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
         result = self.account(admission)
         self.assertEqual((result['status'], result['release'], result['hold']), ('bound', 'process_exited', None))
-        self.assertEqual(result['admission']['abandoned_accounting']['execution'], 'unknown')
+        self.assertEqual(result['admission']['abandoned_accounting']['classification'], 'abandoned_no_observed_start')
         self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'], [])
         self.assertEqual(len(self.port.starts), 1)
 
@@ -348,7 +349,7 @@ class AbandonedAccountingTests(AbandonedFixture):
             result = self.account(admission)
             row = result['admission']
             self.assertEqual((result['status'], result['release']), ('bound', None))
-            self.assertEqual(row['abandoned_accounting']['execution'], 'unknown')
+            self.assertEqual(row['abandoned_accounting']['classification'], 'abandoned_no_observed_start')
             placement = admission['recovery']['placement_binding']
             self.assertEqual({key: result['hold'][key] for key in ('worktree', 'branch', 'path')},
                              {'worktree': row['native_binding']['worktreeId'],
@@ -518,7 +519,7 @@ class AbandonedAccountingTests(AbandonedFixture):
                 row = result['admission']
                 proof = row['abandoned_accounting']
                 self.assertEqual((row['state'], result['action']), ('bound', 'accounted_abandoned'))
-                self.assertEqual((proof['classification'], proof['execution']), ('abandoned_observed_start', 'observed'))
+                self.assertEqual(proof['classification'], 'abandoned_observed_start')
                 self.assertTrue(proof['observed_start'])
                 self.assertEqual((row['report'], row['changed_paths'], row['disposition']), (None, None, None))
                 self.assertIsNotNone(result['hold'])
@@ -745,9 +746,15 @@ class AbandonedRealRecordTests(AbandonedFixture):
         shown['result']['worker']['effects'].extend(extra)
         return shown
 
-    def accounted(self, verdict=None, extra=()):
-        admission = self.held(null_launch=True)
+    def accounted(self, verdict=None, extra=(), closure=None, admission=None):
+        """Account the real record; `closure` is the (terminal inventory, carriers) Pod's own reads return."""
+        from pod.abandoned import attach_closure
+        admission = admission or self.held(null_launch=True)
         shown = self.real(verdict, extra)
+        if closure is not None:
+            inventory, carried = closure
+            attach_closure(shown, inventory=lambda: inventory(shown) if callable(inventory) else inventory,
+                           carriers=lambda handle: carried)
         with patch.object(self.port, 'show_worker', return_value=shown):
             result = self.account(admission)
             return admission, result, self.outstanding(result['admission'])
@@ -789,7 +796,7 @@ class AbandonedRealRecordTests(AbandonedFixture):
         from pod.abandoned import refuse_held_claim
         admission, result, held = self.accounted('exited')
         self.assertEqual((result['release'], result['hold'], held['outstanding_ids']), ('process_exited', None, []))
-        self.assertEqual(result['admission']['abandoned_accounting']['execution'], 'unknown')
+        self.assertEqual(result['admission']['abandoned_accounting']['classification'], 'abandoned_no_observed_start')
         self.assertNotIn(result['admission']['state'], STARTED_STATES)
         self.assertIsNone(result['admission'].get('report'))
         refuse_held_claim(held, {'repo_key': None, 'path': '/work/other', 'branch': 'independent'})
@@ -820,6 +827,137 @@ class AbandonedRealRecordTests(AbandonedFixture):
             setup['result']['worker']['effects'][1].update(action='run', state=state)
             self.assertEqual(current_claim(setup)['effects'], [{'kind': 'setup', 'id': None, 'state': state}])
 
+    def gone(self, shown):
+        """Orca's live terminal records after the close: other terminals only."""
+        return [{'handle': 'term-other', 'incarnationId': 'other-incarnation'}]
+
+    def present(self, shown):
+        return self.gone(shown) + [{'handle': shown['result']['worker']['agentTerminalHandle'],
+                                    'incarnationId': 'incarnation-267'}]
+
+    def test_real_record_with_the_terminal_still_present_stays_held(self):
+        admission, result, held = self.accounted(closure=(self.present, False))
+        self.assertEqual((result['release'], held['outstanding_ids']), (None, [admission['admission_id']]))
+        self.assertEqual(held['outstanding'][0]['hold']['process'], 'unverifiable')
+
+    def test_real_record_with_the_incarnation_gone_but_a_process_carrying_the_handle_stays_held(self):
+        first = self.held(null_launch=True)
+        for name, closure in (('a live carrier', (self.gone, True)), ('an unknown /proc scan', (self.gone, None)),
+                              ('an incomplete inventory', (lambda shown: None, False))):
+            with self.subTest(name):
+                admission, result, held = self.accounted(closure=closure, admission=first)
+                self.assertEqual((result['release'], held['outstanding_ids']), (None, [admission['admission_id']]))
+
+    def test_real_record_with_the_terminal_and_every_carrier_gone_settles_with_its_own_source(self):
+        from pod.abandoned import refuse_held_claim
+        admission, result, held = self.accounted(closure=(self.gone, False))
+        self.assertEqual((result['release'], result['hold'], held['outstanding_ids']), ('terminal_closed', None, []))
+        row = result['admission']
+        self.assertEqual(row['abandoned_accounting']['classification'], 'abandoned_no_observed_start')
+        self.assertNotIn(row['state'], STARTED_STATES)
+        self.assertIsNone(row.get('report'))
+        refuse_held_claim(held, {'repo_key': None, 'path': '/work/other', 'branch': 'independent'})
+        self.assertEqual(len(self.port.starts), 1)
+
+    def test_real_record_closed_terminal_never_clears_a_pending_effect_or_a_proof_of_another_terminal(self):
+        deploy = {'kind': 'cloud_deployment', 'id': 'shared-production', 'action': 'started', 'state': 'pending'}
+        admission, result, held = self.accounted(extra=[deploy], closure=(self.gone, False))
+        self.assertEqual((result['release'], held['outstanding_ids']), (None, [admission['admission_id']]))
+        # A proof the caller supplies, or one that names another terminal or incarnation, is not accepted.
+        from pod.abandoned import current_claim
+        for forged in ({'source': 'terminal_closed', 'handle': 'term-other', 'incarnation': 'incarnation-267'},
+                       {'source': 'terminal_closed', 'handle': self.port.workers['dispatch-1']['terminal'],
+                        'incarnation': 'other-incarnation'}, {'source': 'resource_release'}):
+            shown = self.real()
+            shown['terminal_closed'] = forged
+            self.assertEqual(current_claim(shown)['process'], 'unverifiable')
+
+    def test_an_exact_forged_or_stale_proof_never_survives_a_fresh_read_that_finds_the_terminal(self):
+        from pod.abandoned import attach_closure, closure_target, current_claim, exit_source
+        from pod.errors import PodError
+        self.held(null_launch=True)
+        handle, incarnation = closure_target(self.real())
+        exact = {'source': 'terminal_closed', 'handle': handle, 'incarnation': incarnation}
+        present = [{'handle': handle, 'incarnationId': incarnation}]
+        forged = self.real()
+        forged['terminal_closed'] = dict(exact)  # exactly what a caller or an earlier read could write
+        self.assertEqual(current_claim(forged)['process'], 'unverifiable')
+        for name, inventory, carried in (('the terminal is present', lambda: present, False),
+                                         ('a carrier is present', lambda: [], True),
+                                         ('the carrier scan is unknown', lambda: [], None),
+                                         ('the inventory is incomplete', lambda: None, False)):
+            with self.subTest(name):
+                shown = self.real()
+                shown['terminal_closed'] = dict(exact)
+                attach_closure(shown, inventory=inventory, carriers=lambda handle, carried=carried: carried)
+                self.assertNotIn('terminal_closed', shown)
+                self.assertEqual((current_claim(shown)['process'], exit_source(shown)), ('unverifiable', 'process_exited'))
+        # The same observation read again after the terminal returned, or after a read failed, holds again.
+        shared = self.real()
+        attach_closure(shared, inventory=lambda: [], carriers=lambda handle: False)
+        self.assertIsNone(current_claim(shared))
+        attach_closure(shared, inventory=lambda: present, carriers=lambda handle: True)
+        self.assertIsNotNone(current_claim(shared))
+        attach_closure(shared, inventory=lambda: [], carriers=lambda handle: False)
+        self.assertIsNone(current_claim(shared))
+
+        def unreadable():
+            raise PodError('unsupported_orca_read', 'unreadable')
+        attach_closure(shared, inventory=unreadable, carriers=lambda handle: False)
+        self.assertIsNotNone(current_claim(shared))
+
+    def test_a_proof_in_the_native_observation_is_ignored_by_the_production_port(self):
+        from pod.operations import OrcaPort, _assignment_evidence
+        row = self.accounted()[1]['admission']
+        raw = self.real()
+        handle = raw['result']['worker']['agentTerminalHandle']
+        raw['terminal_closed'] = {'source': 'terminal_closed', 'handle': handle, 'incarnation': 'incarnation-267'}
+        present = [{'handle': handle, 'incarnationId': 'incarnation-267'}]
+        with patch('pod.operations.worker_show', return_value=raw), \
+                patch('pod.orca.terminal_inventory', return_value=present), \
+                patch('pod.orca.handle_carriers', return_value=True):
+            fresh = OrcaPort(self.project).show_worker('dispatch-1')
+        evidence = _assignment_evidence(fresh, row)
+        self.assertEqual((evidence['settled'], evidence['claim']['process']), (False, 'unverifiable'))
+        raw = self.real()
+        with patch('pod.operations.worker_show', return_value=raw), \
+                patch('pod.orca.terminal_inventory', return_value=[]), \
+                patch('pod.orca.handle_carriers', return_value=False):
+            fresh = OrcaPort(self.project).show_worker('dispatch-1')
+        evidence = _assignment_evidence(fresh, row)
+        self.assertEqual((evidence['settled'], evidence['claim']), (True, None))
+
+    def test_a_closed_terminal_proves_nothing_for_an_ineligible_attempt(self):
+        from pod.abandoned import attach_closure, closure_target, current_claim
+        self.held(null_launch=True)
+        attach = lambda shown: attach_closure(shown, inventory=lambda: [], carriers=lambda handle: False)
+        self.assertIn('terminal_closed', attach(self.real()))
+        remote = self.real()
+        remote['result']['dispatch']['hostScope'] = {'kind': 'remote', 'hostId': 'elsewhere'}
+        released = self.real()  # a terminal Orca itself released is judged by Orca's verdict alone
+        released['result']['terminalResource']['releaseState'] = 'released'
+        released['result']['worker']['effects'] = [row for row in released['result']['worker']['effects']
+                                                  if row.get('action') != 'reused' or row['kind'] != 'terminal']
+        exited = self.real('exited')
+        for shown in (remote, released, exited):
+            self.assertIsNone(closure_target(shown))
+            self.assertNotIn('terminal_closed', attach(shown))
+        self.assertIsNone(current_claim(exited))
+
+    def test_real_record_closed_terminal_repeats_idempotently_and_a_returning_terminal_holds_again(self):
+        from pod.abandoned import attach_closure
+        admission = self.held(null_launch=True)
+        closed = attach_closure(self.real(), inventory=lambda: self.gone(None), carriers=lambda handle: False)
+        with patch.object(self.port, 'show_worker', return_value=closed):
+            first = self.account(admission)
+            again = self.account(admission)
+            self.assertEqual(again['admission']['abandoned_accounting'], first['admission']['abandoned_accounting'])
+            self.assertEqual((again['release'], self.outstanding(again['admission'])['outstanding_ids']),
+                             ('terminal_closed', []))
+        self.assertEqual(len(self.port.starts), 1)
+        with patch.object(self.port, 'show_worker', return_value=self.real()):  # a read where it is present again
+            self.assertEqual(self.outstanding(again['admission'])['outstanding_ids'], [admission['admission_id']])
+
     def test_real_record_repeated_recovery_never_duplicates_execution_and_a_later_live_read_holds_again(self):
         admission = self.held(null_launch=True)
         with patch.object(self.port, 'show_worker', return_value=self.real('exited')):
@@ -831,6 +969,65 @@ class AbandonedRealRecordTests(AbandonedFixture):
         self.assertEqual(len(self.port.starts), 1)
         with patch.object(self.port, 'show_worker', return_value=self.real('alive')):
             self.assertEqual(self.outstanding(again['admission'])['outstanding_ids'], [admission['admission_id']])
+
+
+class TerminalReadTests(unittest.TestCase):
+    """Pod's own reads behind the terminal-closed evidence."""
+
+    def test_handle_carriers_reads_same_user_environments_and_fails_closed_when_one_is_unreadable(self):
+        from pod.orca import handle_carriers
+        with tempfile.TemporaryDirectory() as proc:
+            def process(pid, *entries):
+                (Path(proc) / pid).mkdir()
+                (Path(proc) / pid / 'environ').write_bytes(b'\0'.join(entry.encode() for entry in entries))
+            process('10', 'PATH=/bin', 'ORCA_TERMINAL_HANDLE=term-other')
+            process('11', 'ORCA_TERMINAL_HANDLE=term-1-longer')  # a different handle sharing a prefix is no carrier
+            (Path(proc) / 'self').mkdir()  # not a process id
+            self.assertIs(handle_carriers('term-1', proc), False)
+            process('12', 'HOME=/h', 'ORCA_TERMINAL_HANDLE=term-1')
+            self.assertIs(handle_carriers('term-1', proc), True)
+            os.remove(Path(proc) / '12' / 'environ')  # vanished while scanned: gone
+            self.assertIs(handle_carriers('term-1', proc), False)
+            (Path(proc) / '13').mkdir()
+            (Path(proc) / '13' / 'environ').mkdir()  # any read failure other than a refusal: unknown, never "none"
+            self.assertIsNone(handle_carriers('term-1', proc))
+            os.rmdir(Path(proc) / '13' / 'environ')
+            (Path(proc) / '13' / 'environ').write_bytes(b'')
+            with patch('builtins.open', side_effect=PermissionError(errno.EACCES, 'denied')):  # non-dumpable helper
+                self.assertIs(handle_carriers('term-1', proc), False)
+        self.assertIsNone(handle_carriers('term-1', '/nonexistent-proc'))
+
+    def test_the_terminal_inventory_must_be_complete_to_count(self):
+        from pod import orca
+        rows = [{'handle': 'term-a', 'incarnationId': 'i'}]
+        unidentifiable = ({}, {'handle': 'term-other'}, {'incarnationId': 'other-incarnation'},
+                          {'handle': '', 'incarnationId': 'i'}, {'handle': 'term-a', 'incarnationId': None},
+                          {'handle': 7, 'incarnationId': 'i'})
+        for result, expected in (({'terminals': rows, 'truncated': False}, rows),
+                                 ({'terminals': rows, 'truncated': True}, None),
+                                 ({'terminals': rows}, None), ({'terminals': ['x'], 'truncated': False}, None),
+                                 ({'terminals': rows, 'truncated': False, 'totalCount': 2}, None),
+                                 *(({'terminals': [*rows, row], 'truncated': False}, None) for row in unidentifiable),
+                                 ({'truncated': False}, None)):
+            with patch.object(orca, '_read', return_value={'runtime': 'r', 'result': result}):
+                self.assertEqual(orca.terminal_inventory(), expected)
+
+
+    def test_an_unreadable_owner_or_a_permission_error_other_than_eacces_leaves_the_carrier_scan_unknown(self):
+        from pod.orca import handle_carriers
+        with tempfile.TemporaryDirectory() as proc:
+            (Path(proc) / '10').mkdir()
+            (Path(proc) / '10' / 'environ').write_bytes(b'ORCA_TERMINAL_HANDLE=other')
+            self.assertIs(handle_carriers('term-1', proc), False)
+            with patch('builtins.open', side_effect=PermissionError(errno.EPERM, 'not permitted')):
+                self.assertIsNone(handle_carriers('term-1', proc))
+            with patch('builtins.open', side_effect=OSError(errno.EIO, 'io')):
+                self.assertIsNone(handle_carriers('term-1', proc))
+            for code in (errno.EACCES, errno.EPERM, errno.EIO):  # the owner cannot be classified
+                with patch('pod.orca.os.stat', side_effect=PermissionError(code, 'owner')):
+                    self.assertIsNone(handle_carriers('term-1', proc))
+            with patch('pod.orca.os.stat', side_effect=FileNotFoundError):  # vanished before it was looked at
+                self.assertIs(handle_carriers('term-1', proc), False)
 
 
 class AbandonedReadinessTests(AbandonedFixture):

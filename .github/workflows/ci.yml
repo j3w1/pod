@@ -63,22 +63,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ needs.python.outputs.version }}
       - name: The resolved interpreter is the one running
         run: test "$(python -c 'import platform; print(platform.python_version())')" = "${{ needs.python.outputs.version }}"
-      - name: Install zsh for shell and terminal tests
-        if: matrix.lane != 'parallel'
+      - name: Install bubblewrap, and zsh for shell and terminal tests
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y zsh
+          sudo apt-get install -y bubblewrap
+          if [ "$LANE" != parallel ]; then sudo apt-get install -y zsh; fi
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Install Python test prerequisites
         run: |
           PIN="$(python -c 'from pod.installer import PIN; print(PIN)')"
           python -m pip install "$PIN" -r tests/requirements-pty.txt
-      - name: Unit, incident, PTY and installer tests in this lane share
-        run: python tools/suite_lanes.py run --lane "$LANE" --shard "$SHARD" --of "$OF" --strict --forbid-skips
+      - name: Unit, incident, PTY and installer tests in this lane share, with the home and credentials absent
+        run: python tools/isolate.py -- python tools/suite_lanes.py run --lane "$LANE" --shard "$SHARD" --of "$OF" --strict --forbid-skips
 
   checks:
     name: checks
@@ -89,6 +91,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ needs.python.outputs.version }}

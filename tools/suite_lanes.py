@@ -1145,6 +1145,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "refresh":
             if not (args.run or args.pr or args.latest or args.log or args.prune):
                 raise Finding("REFRESH needs --run, --pr, --latest, --log or --prune", usage=True)
+            # Runs no test, and needs the network, GitHub credentials and a writable manifest, which the
+            # test boundary (tests/boundary.py) withholds from any process that imports the tests package.
+            os.environ["POD_TEST_BOUNDARY"] = "off"
             return command_refresh(root, args)
         manifest, ids, lanes, unclassified, plan = prepare(root)
         if args.command == "plan" and args.json:

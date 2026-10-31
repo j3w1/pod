@@ -44,6 +44,10 @@ class MachineCase:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        # `main()` reads the project configuration of the current directory's checkout: never this one.
+        previous = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, previous)
         isolate = patch.dict(os.environ, {name: str(self.root / suffix) for name, suffix in (
             ("POD_CONFIG_HOME", "config"), ("POD_STATE_HOME", "state"), ("POD_CACHE_HOME", "cache"))})
         isolate.start()

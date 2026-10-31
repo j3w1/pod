@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from contextlib import contextmanager
 from contextvars import ContextVar
+import errno
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 from .errors import PodError
 
@@ -540,6 +542,56 @@ def worker_show(dispatch: str) -> dict:
     return _read(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
 
 
+def terminal_inventory() -> list[dict] | None:
+    """Orca's complete live terminal records, or None when the read is not provably complete."""
+    result = _read(["terminal", "list", "--json"])["result"]
+    rows = result.get("terminals") if isinstance(result, dict) else None
+    if (not isinstance(rows, list) or result.get("truncated") is not False
+            or result.get("totalCount", len(rows)) != len(rows)
+            or not all(isinstance(row, dict) and all(isinstance(row.get(key), str) and row[key]
+                                                      for key in ("handle", "incarnationId")) for row in rows)):
+        return None  # a record that cannot be identified cannot show the terminal absent
+    return rows
+
+
+def handle_carriers(handle: str, proc: str = "/proc") -> bool | None:
+    """Whether a same-user process carries ORCA_TERMINAL_HANDLE=<handle>; None when that cannot be told.
+
+    Orca exports the handle to every process of a terminal. A process that vanishes during the scan is
+    gone. A same-user process whose environment the kernel refuses with EACCES is a non-dumpable helper
+    such as systemd, a zombie or ssh-agent, never an agent, shell or tool the terminal ran; it is skipped.
+    Any other failure, including a failed owner lookup or EPERM, leaves the answer unknown.
+    """
+    wanted = b"ORCA_TERMINAL_HANDLE=" + handle.encode()
+    uid = os.getuid()
+    try:
+        names = [name for name in os.listdir(proc) if name.isdecimal()]
+    except OSError:
+        return None
+    for name in names:
+        path = os.path.join(proc, name)
+        try:
+            owner = os.stat(path).st_uid
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            return None
+        if owner != uid:
+            continue
+        try:
+            with open(os.path.join(path, "environ"), "rb") as source:
+                environment = source.read().split(b"\0")
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError as exc:
+            if exc.errno == errno.EACCES:
+                continue
+            return None
+        if wanted in environment:
+            return True
+    return False
+
+
 def terminal_identity(handle: str) -> dict:
     """Read only handle liveness; presentation and pane fields never leave this port."""
     try:
@@ -564,3 +616,77 @@ def terminal_identity(handle: str) -> dict:
     return {"handle": handle, "runtime": shown["runtime"],
             "state": "live" if live else "unreadable", "code": None, "exited": exited,
             "cause": cause["kind"] if exited else None}
+
+
+# R190: the one native mailbox call a coordinator's wake uses. `check` consumes (a consuming read replays its batch
+# until acknowledged), so it is not a plain read; Pod passes only the shapes below and never `--peek`, `--types`,
+# `--from` or a Dispatch/terminal override.
+MAILBOX_GRACE_SECONDS = 30
+MAILBOX_NATIVE_REFUSALS = ("stale_delivery", "consumer_fenced")
+
+
+def mailbox_check(run: str, *, ack: str | None = None, wait_ms: int | None = None) -> dict:
+    """One native `orchestration check` for exactly this Run: acknowledge `ack` first, then return the oldest
+    unacknowledged FIFO batch, or, with `wait_ms`, block until a message of any type arrives or the timeout ends.
+
+    A pending batch makes the wait return at once, so mail that arrives before the wait is armed is not lost; the
+    batch replays until acknowledged. A timeout, a cancelled wait and a lost connection consume nothing."""
+    if not _argument(run) or ack is not None and not _argument(ack):
+        raise PodError("orca_contract", "Exact Run and delivery identities are required for a mailbox check")
+    if wait_ms is not None and (type(wait_ms) is not int or wait_ms < 1):
+        raise PodError("orca_contract", "A mailbox wait needs a positive millisecond timeout")
+    argv = ["orchestration", "check", "--run", run]
+    if ack is not None:
+        argv += ["--ack", ack]
+    if wait_ms is not None:
+        argv += ["--wait", "--timeout-ms", str(wait_ms)]
+    argv.append("--json")
+    command = [str(executable()), *argv]
+    limit = (wait_ms or 0) / 1000 + MAILBOX_GRACE_SECONDS
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=limit, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PodError("orca_unavailable", "Orca mailbox check failed") from exc
+    except UnicodeDecodeError:
+        raise PodError("orca_contract", "Orca mailbox output is not valid UTF-8") from None
+    if len(proc.stdout) > MAX_OUTPUT:
+        raise PodError("orca_contract", "Orca mailbox output exceeds bounded output")
+    try:
+        value = json.loads(proc.stdout)
+    except ValueError:
+        value = None
+    if not isinstance(value, dict):
+        raise PodError("orca_contract", "Orca mailbox check returned invalid JSON")
+    if value.get("ok") is not True:
+        error = value.get("error") if isinstance(value.get("error"), dict) else {}
+        code = error.get("code") if isinstance(error.get("code"), str) else None
+        raise PodError("mailbox_refused" if code in MAILBOX_NATIVE_REFUSALS else "orca_contract",
+                       "Orca refused the mailbox check", {"native_code": code})
+    result = value.get("result")
+    meta = value.get("_meta")
+    runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
+    messages = result.get("messages") if isinstance(result, dict) else None
+    if not _passable(runtime) or not runtime or not isinstance(messages, list):
+        raise PodError("orca_contract", "Orca mailbox response is incomplete")
+    delivery = result.get("deliveryId")
+    if delivery is None and isinstance(result.get("delivery"), dict):
+        delivery = result["delivery"].get("id")
+    if messages and not _argument(delivery):
+        raise PodError("orca_contract", "Orca mailbox batch carries no delivery identity")
+    return {"runtime": runtime, "delivery": delivery if messages else None, "messages": messages,
+            "replayed": result.get("replayed") is True, "timed_out": result.get("timedOut") is True,
+            "cancelled": result.get("cancelled") is True,
+            "connection_lost": result.get("connectionLost") is True}
+
+
+def terminal_activity(handle: str) -> int | None:
+    """Milliseconds since Orca last saw output from one exact terminal, or None when it cannot be read."""
+    try:
+        shown = _read(["terminal", "show", "--terminal", handle, "--json"])
+    except PodError:
+        return None
+    row = shown["result"].get("terminal")
+    last = row.get("lastOutputAt") if isinstance(row, dict) and row.get("handle") == handle else None
+    if type(last) is not int or last < 0:
+        return None
+    return max(0, int(time.time() * 1000) - last)
