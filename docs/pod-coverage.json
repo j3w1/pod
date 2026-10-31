@@ -9046,6 +9046,85 @@
         "tests.test_suite_lanes.ManifestTests.test_the_checked_in_manifest_is_valid_and_owner_capped"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A594",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_event_between_inspection_and_wait_arm_is_not_lost",
+        "tests.test_wake.WakeTests.test_mail_pending_before_the_wait_is_returned_without_arming_one",
+        "tests.test_wake.WakeTests.test_one_wait_per_call_and_a_timeout_is_a_checkpoint_not_a_rearm"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A595",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_a_duplicate_is_delivered_once",
+        "tests.test_wake.WakeTests.test_second_settlement_report_for_one_dispatch_is_one_event",
+        "tests.test_wake.WakeTests.test_a_rejected_settlement_is_not_a_completion",
+        "tests.test_wake.WakeTests.test_wake_after_compaction_replays_the_unacknowledged_batch_then_continues"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A596",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_a_lost_connection_consumes_nothing_and_leaves_no_armed_wait",
+        "tests.test_wake.WakeTests.test_a_fenced_coordinator_stops_before_waiting",
+        "tests.test_wake.WakeTests.test_a_repeated_acknowledgement_reads_what_is_pending_now",
+        "tests.test_wake.WakeTests.test_other_native_refusals_and_an_unbound_run_are_refused"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A597",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.MailboxCheckTests.test_argument_shape_is_exact_and_the_process_outlives_the_native_timeout",
+        "tests.test_wake.MailboxCheckTests.test_a_batch_carries_its_delivery_identity_and_replay_flag",
+        "tests.test_wake.MailboxCheckTests.test_native_refusals_keep_their_code_and_bad_input_never_starts_a_process"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A598",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_wake.WakeTests.test_status_flags_an_idle_coordinator_that_owns_work_without_an_armed_wait",
+        "tests.test_wake.WakeTests.test_the_armed_wait_is_visible_only_while_waiting",
+        "tests.test_wake.WakeTests.test_a_lease_of_a_dead_or_recycled_process_does_not_count"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A599",
+      "required_evidence": [
+        "unit",
+        "installed_bundle"
+      ],
+      "offline_test": "tests.test_inventory.InventoryIntegrityTests.test_repository_owned_validator_checks_the_actual_canonical_skill",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A600",
+      "required_evidence": [
+        "live_native"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

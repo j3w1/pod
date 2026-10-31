@@ -20,7 +20,7 @@ from tests.test_succession import SuccessionCase
 
 BASELINE = "5f7298bab47c4a3263496dc2a7fe50ecfcda0530"  # Pod 0.12.0, the last status without readiness
 REPOSITORY = Path(__file__).resolve().parents[1]
-NEW_FIELDS = ("readiness", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization",
+NEW_FIELDS = ("readiness", "wake", "successor_claim", "record_capacity", "worker_tabs", "pod_ticks", "recorded_questions", "standing_authorization",
               "window_continuation", "decision_policy", "tool_permissions", "waiting_decisions", "needs_you", "setup_question")
 DECISION_FIELDS = ("owner_decisions", "derived_governance_decisions")
 

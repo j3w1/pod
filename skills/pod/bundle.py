@@ -16,7 +16,8 @@ BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agen
                "references/orca-boundary.md", "references/verification.md",
                "references/governor.md", "references/pes-template.md",
                "references/seal-template.md", "references/eel-template.md",
-               "references/recovery.md", "references/cleanup.md", "references/worker-tabs.md", "references/pod-ticks.md")
+               "references/recovery.md", "references/cleanup.md", "references/worker-tabs.md", "references/pod-ticks.md",
+               "references/wake.md")
 BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py",
                   "cleanup_archives.py", "cleanup_observations.py",
                   "cleanup_stashes.py", "cli.py", "config.py", "context.py", "contracts.py",
@@ -25,7 +26,7 @@ BUNDLE_MODULES = ("__init__.py", "__main__.py", "assurance.py", "bundle.py", "ca
                   "relay.py", "retirement.py", "routes.py", "selection.py", "sources.py", "succession.py",
                   "policy.py", "tool_permissions.py",
                   "pod_mapping.py", "pod_ticks.py", "skill_validation.py", "standing.py", "status.py", "term.py", "tui.py", "tui_render.py",
-                  "tui_state.py", "traces.py", "util.py", "window.py", "worker_tabs.py")
+                  "tui_state.py", "traces.py", "util.py", "wake.py", "window.py", "worker_tabs.py")
 BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))
 IGNORED_DIRS = frozenset({"__pycache__"})
 IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})

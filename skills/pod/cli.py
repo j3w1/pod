@@ -78,6 +78,11 @@ def parser() -> argparse.ArgumentParser:
                        help="a repository to sweep (repeatable; default: here)")
     sweep.add_argument("--objective", metavar="NAME", action="append", help="only this objective (repeatable)")
     sweep.add_argument("--json", action="store_true")
+    wake = sub.add_parser("wake", help="recheck mail, then arm one native wait for this Run's coordinator")
+    wake.add_argument("--run", required=True, help="the Run this terminal coordinates")
+    wake.add_argument("--ack", metavar="DELIVERY", help="acknowledge the batch you finished processing")
+    wake.add_argument("--timeout-ms", type=int, help="wait limit; default one hour, at most six")
+    wake.add_argument("--json", action="store_true")
     resume = sub.add_parser("continue", help="continue an objective whose coordinator a verified Orca window ended")
     resume.add_argument("--objective", metavar="NAME", required=True)
     resume.add_argument("--json", action="store_true")
@@ -378,6 +383,9 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
     if args.command == "sweep":
         from .evidence_closure import sweep
         return sweep(project, repositories=args.repository, objectives=args.objective)
+    if args.command == "wake":
+        from .wake import DEFAULT_WAIT_MS, arm
+        return arm(args.run, ack=args.ack, timeout_ms=args.timeout_ms or DEFAULT_WAIT_MS)
     if args.command == "continue":
         from .window import continue_command
         return continue_command(project, args.objective)
@@ -470,7 +478,7 @@ def _exit_code(args: argparse.Namespace, result: dict) -> int:
         # The route view succeeds as a read; its exit code still reports preference validity.
         return 0 if result["projection"]["preferences"]["status"] == "valid" else 1
     return 0 if result["status"] in ("valid", "observed", "promoted", "checked", "listed", "absent", "swept",
-                                     "continued", "already_continued") else 1
+                                     "continued", "already_continued", "events", "timeout") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -503,7 +511,7 @@ def main(argv: list[str] | None = None) -> int:
     except PodError as exc:
         result = {"schema": "pod-cli/v5", "status": "blocked",
                   "error": {"code": exc.code, "message": str(exc)}}
-    if getattr(args, "json", False):
+    if getattr(args, "json", False) or args.command == "wake":
         print(json.dumps(result.get("projection", result) if args.command == "models"
                          and getattr(args, "models_command", None) is None and result["status"] != "blocked"
                          else result, sort_keys=True, ensure_ascii=False))

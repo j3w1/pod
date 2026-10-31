@@ -64,3 +64,4 @@ Read a reference when the current action, or a necessary prerequisite of it, nee
 - Proof/review/REUSE: [verification](references/verification.md).
 - Delivery/Git/CI/deployment, or yolo mode on or off: [Governor](references/governor.md).
 - Before cleanup, a sweep or worktree/branch deletion; after worker release or when deciding immediate worktree reuse: [cleanup](references/cleanup.md).
+- Before parking with a live worker, an unconsumed report or an awaited reply, or when a wait returns or you resume after compaction or a restart: [wake](references/wake.md).
