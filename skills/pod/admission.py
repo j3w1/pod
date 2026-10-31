@@ -12,7 +12,7 @@ from .errors import PodError
 from . import gitio, history, listing
 from .github import repository_context
 from .ledger import binding_valid, record_name, state_root
-from .orca import _read, read_deadline, worker_rows
+from .orca import _read, read_deadline
 from .util import digest as _digest, public_decisions
 from .window import Budget
 
@@ -475,6 +475,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
              "inventory": "pod_objectives_and_recorded_runs"}
     result = {"schema": "pod-admission-query/v1", "status": "observed", "scope": scope,
               "complete": True, "claims": [], "conflicts": [], "unknowns": [],
+              "native_resources_complete": False,
               "proof": None, "snapshot": None, "target": None,
               "authorization": False,
               "next_action": "Join CE authority/resources and recheck under effect serialization"}
@@ -687,14 +688,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             result["native_resources_complete"] = terminals.get("complete") is True
             native_groups = []
             if fleet is None:
-                unknown(None, "native_inventory_scope")
-                for run in sorted(runs):
-                    budget.check()
-                    try:
-                        native_groups.append((run, worker_rows(run)))
-                    except PodError as exc:
-                        for record, name, _ in set(run_owners[run]):
-                            unknown(record, exc.code, objective=name)
+                unknown(None, "native_inventory_scope", fact="all_run_coverage", reconciliation={
+                    "action": "use_ce_unbound_read_backend",
+                    "condition": "Read from CE's unbound backend while retaining the original caller in CE authority checks; do not mutate the native Run binding"})
             else:
                 native_groups = [(None, fleet)]
             with gitio.worktree_inventory(project) as inventory:
@@ -1022,6 +1018,9 @@ def query(project: Path, **kwargs) -> dict:
                         "branch": kwargs.get("branch"), "target": kwargs.get("target"), "effects": kwargs.get("effects") or []}}
             result = {"schema": "pod-admission-query/v1", "status": "unknown", "scope": scope,
                       "complete": False, "claims": [], "conflicts": [],
+                      "repository_complete": False, "native_resources_complete": False,
+                      "unrelated_unknowns": {"count": 0, "by_code": {}, "references": {
+                        "records": [], "runs": [], "dispatches": [], "terminals": []}},
                       "proof": {"status": "unknown", "candidate": kwargs["candidate"], "reason": exc.code}
                                if kwargs.get("objective") else None,
                       "snapshot": None, "target": None, "authorization": False,

@@ -177,15 +177,15 @@ class AdmissionQueryTests(AdmissionQueryCase):
             with self.subTest(bad=bad), patch("pod.admission._read", side_effect=[first, bad]), self.assertRaises(PodError):
                 real_fleet()
 
-    def test_bound_native_inventory_falls_back_to_exact_runs(self):
+    def test_bound_native_inventory_reports_coverage_without_history_reads(self):
         self.intake(worktree=self.place)
         # Intake records its exact Run; no global or another bound Run can stand in.
         with patch("pod.admission._fleet", return_value=None), \
-             patch("pod.admission.worker_rows", return_value={"runtime": "runtime", "complete": True, "workers": []}) as read:
+             patch("pod.orca.worker_rows", side_effect=AssertionError("historical Run hydration")) as read:
             result = self.query()
         self.assertFalse(result["complete"])
         self.assertIn("native_inventory_scope", [row["code"] for row in result["unknowns"]])
-        self.assertEqual(read.call_args.args, ("run",))
+        self.assertEqual(read.call_count, 0)
         with patch("pod.admission._read", return_value={"runtime": "runtime", "result": {"scope": {"source": "bound", "run": "run"}}}):
             self.assertIsNone(self._real_fleet())
 

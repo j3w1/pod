@@ -1102,8 +1102,8 @@ native all-Run inventory, and a complete native terminal ownership inventory.
 The latter includes sessions outside supervised workers. A completed context-only
 Dispatch with no supervised resource is not itself a current native resource
 claim: its terminal's current ownership is read separately, without inferring
-process exit. Native resource release alone does not prove exit. A bound caller's
-exact-Run fallback cannot certify all-Run coverage. Worker identity, host coverage,
+process exit. Native resource release alone does not prove exit. A bound caller cannot certify all-Run coverage and receives a specific CE-backend
+reconciliation without replaying unrelated historical Runs. Worker identity, host coverage,
 pagination, runtime changes and explicit completeness remain checked.
 
 Foreign exclusion requires repository/objective attribution consistent with the
