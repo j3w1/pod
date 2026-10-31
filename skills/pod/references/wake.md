@@ -44,7 +44,7 @@ If you lost your place, call `pod wake --run RUN` with no `--ack`. An unacknowle
 
 Orca delivers mail and ends a wait; it cannot resume an agent, and its wake or nudge is best-effort. Whether the exit of a background command resumes your turn depends on the agent runtime.
 
-- Claude Code: the session is notified when a background command exits. A coordinator parked this way was resumed from idle when the helper returned (observed once on Claude Code; a repeat with an empty mailbox at arm time is recorded where noted in the delivering PR).
+- Claude Code: the session is notified when a background command exits. An idle Claude Code coordinator was resumed when a wait armed on an empty mailbox returned on a message sent while it was idle (observed on Claude Code with Orca 1.4.230; the message reached the turn in under a second).
 - Codex: Pod has observed no equivalent, and an idle Codex prompt has missed Orca messages. A returning wait does not by itself resume an idle Codex coordinator; treat that as unproven, tell the lead, and rely on the lead's nudge.
 
 An empty or silent wait is never evidence that work finished, and a returning shell command is never evidence that an agent resumed.
