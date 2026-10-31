@@ -143,11 +143,13 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if (not failure and not terminal and observation.get("status") == "missing"
             and observation.get("exactWorker") is False
             and handle and facts.get("worker_terminal") == handle
-            and row["ownership"] in ("released", "user_owned", "external")):
+            and (row["ownership"] in ("released", "user_owned", "external") or facts.get("terminal_closed") is True)):
         # Orca's exact read has no terminal record of this worker, the worker still names the admitted terminal,
         # and Orca released the resource or does not own it: the tab is gone, which reads as disconnected (R125).
-        # It releases and closes nothing. An owned resource, or a worker naming another or no terminal, stays
-        # unreadable: the admitted terminal is then not proved gone.
+        # Orca never updates a retained resource after a manual close, so for an owned resource the same read
+        # must also carry Pod's own proof (A611) that this attempt's exact terminal incarnation is gone.
+        # It releases and closes nothing. An owned resource without that proof, or a worker naming another or no
+        # terminal, stays unreadable: the admitted terminal is then not proved gone.
         return finish("disconnected")
     if not failure and not resource and not release and not terminal:
         return finish("not_materialized", "This worker has no tab.")

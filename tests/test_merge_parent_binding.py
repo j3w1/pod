@@ -123,7 +123,7 @@ class MergeParentTests(KernelCase):
         # One verified delivery per objective remains unchanged; M is no new currency exception.
         refused = self.refuses_unchanged("governor", action=self.request)
         self.assertEqual(refused.code, "governance_changed")
-        self.assertIn("direct user decision", str(refused))
+        self.assertIn("snapshot decision", str(refused))
 
     def test_second_merge_after_merge_delivery_uses_delivered_parent(self):
         self.two_deliveries("merge")

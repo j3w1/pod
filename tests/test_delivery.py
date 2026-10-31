@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+from pod import config
 from pod.errors import PodError
 from pod.governor import (_check_authority, _check_unresolved, _empty_journal, _record_path, _write_journal,
                           validate_authorization)
@@ -13,6 +15,7 @@ from pod.governance import require_governance_current
 from pod.ledger import _authorization_granted, read
 from pod.records import evidence_record
 from tests.common import proof
+from tests.decision_policy_support import LOCAL, PERSON
 from tests.kernel_support import COMMIT, TREE, KernelCase, authorization, git
 
 
@@ -192,6 +195,45 @@ class VerifiedDeliveryTests(KernelCase):
         self.assertEqual(caught.exception.code, "governance_changed")
         self.assertIn("target moved after the recorded delivery", str(caught.exception))
         self.assertEqual(read(self.project, "objective")["checkpoint"]["delivery"], delivered["delivery"])
+        # The delivery is this objective's own work beyond the bound base: adopting it needs an exact snapshot
+        # decision, and an ordinary refresh is refused without a write.
+        self.assertIn("snapshot decision", caught.exception.detail["next_action"])
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        before = read(self.project, "objective")
+        with self.assertRaises(PodError) as refresh:
+            self.write(self.stored(), governance_refresh=True, governance={"base_ref": "refs/remotes/origin/target"},
+                       revision_authority={**LOCAL, "instruction": "Adopt the current target"})
+        self.assertEqual(refresh.exception.detail["referent"]["reason"], "candidate_policy_target")
+        self.assertEqual(read(self.project, "objective"), before)
+
+    def test_changed_governance_after_a_delivery_inside_the_base_names_the_ordinary_refresh(self):
+        # pes-264 shape: an unchanged-source checkpoint already adopted a target holding the delivery; other
+        # objectives' later merges then changed governance.
+        shape = json.loads((Path(__file__).parent / "fixtures" / "governance-reapproval"
+                            / "governance-shapes.json").read_text())["after_delivery"]
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        self.prepare_result()
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        for change in shape["later_target_changes"]:
+            (self.project / change["path"]).write_text((self.project / change["path"]).read_text() + "later\n")
+            git(self.project, "add", change["path"])
+            git(self.project, "commit", "-qm", "another objective's merge")
+            moved = git(self.project, "rev-parse", "HEAD")
+            git(self.project, "update-ref", "refs/remotes/origin/target", moved)
+            if not change["governance"]:
+                adopted = self.write(self.stored())["checkpoint"]
+                self.assertEqual(adopted["governance"]["base"], moved)
+        before = read(self.project, "objective")
+        error = self.refused("governance_changed", "governance_changed", self.write, self.stored())
+        self.assertNotIn("direct user decision", str(error))
+        self.assertIn("governance_refresh: true", error.detail["next_action"])
+        self.assertIn("no owner decision is needed", error.detail["next_action"])
+        self.assertEqual(read(self.project, "objective"), before)
+        refreshed = self.write(self.stored(), governance_refresh=True,
+                               governance={"base_ref": "refs/remotes/origin/target"},
+                               revision_authority={**LOCAL, "instruction": "Adopt the current target"})["checkpoint"]
+        self.assertEqual(refreshed["governance"]["base"], moved)
+        self.assertEqual(refreshed["delivery"], before["checkpoint"]["delivery"])
 
     def test_owner_refresh_after_delivery_restores_currency(self):
         self.prepare_result()

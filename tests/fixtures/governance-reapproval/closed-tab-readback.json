@@ -1,0 +1,126 @@
+{
+  "note": "Sanitized from the real worker-show readback of an abandoned follow-up attempt whose retained, Orca-owned tab the owner closed by hand (Pod 0.21.26). Kept: the abandoned/failed stages, unverifiable liveness, the harmless setup and reused-terminal effects, Orca's missing-terminal observation and the still owned/retained/user_requested resource. Identifiers, paths, timestamps and texts are replaced.",
+  "admission": {
+    "admission_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "objective": "objective",
+    "role": "implement",
+    "state": "bound",
+    "runtime": "runtime",
+    "native_binding": {
+      "runId": "run_a",
+      "taskId": "task_a",
+      "dispatchId": "ctx_abandoned",
+      "workerId": "ctx_abandoned",
+      "terminalHandle": "term_worker",
+      "worktreeId": "wt-a::/repo/worktree"
+    }
+  },
+  "readback": {
+    "dispatch": {
+      "id": "ctx_abandoned",
+      "runId": "run_a",
+      "taskId": "task_a",
+      "processIncarnation": "wt-a::/repo/worktree@@endpoint:incarnation-1",
+      "retryOfDispatchId": null,
+      "hostScope": {
+        "kind": "local",
+        "hostId": "local"
+      },
+      "status": "failed",
+      "lastFailure": "abandoned"
+    },
+    "worker": {
+      "dispatchId": "ctx_abandoned",
+      "state": "abandoned",
+      "stage": "abandoned",
+      "worktreeId": "wt-a::/repo/worktree",
+      "agentTerminalHandle": "term_worker",
+      "setupState": "not_applicable",
+      "effects": [
+        {
+          "kind": "worktree",
+          "action": "reused",
+          "id": "wt-a::/repo/worktree"
+        },
+        {
+          "kind": "setup",
+          "action": "not_applicable",
+          "state": "not_applicable"
+        },
+        {
+          "kind": "terminal",
+          "role": "agent",
+          "action": "reused",
+          "id": "term_worker"
+        },
+        {
+          "kind": "dispatch_input",
+          "role": "agent",
+          "id": "term_worker",
+          "state": "accepted"
+        },
+        {
+          "kind": "dispatch_input",
+          "role": "agent",
+          "id": "term_worker",
+          "state": "turn_unobserved"
+        }
+      ],
+      "residualResources": []
+    },
+    "projection": {
+      "id": "ctx_abandoned",
+      "dispatchId": "ctx_abandoned",
+      "taskId": "task_a",
+      "runId": "run_a",
+      "role": "worker",
+      "stage": {
+        "worker": "abandoned",
+        "dispatch": "failed",
+        "detail": "abandoned",
+        "activity": "unknown"
+      },
+      "outcome": "failed",
+      "liveness": {
+        "verdict": "unverifiable",
+        "reason": "missing_status"
+      },
+      "resource": {
+        "state": "owned",
+        "releaseState": "retained",
+        "terminalState": "retained",
+        "id": "wtr_a",
+        "ownerDispatchId": "ctx_abandoned"
+      },
+      "nextAction": {
+        "kind": "release",
+        "argv": [
+          "orchestration",
+          "worker-release",
+          "--dispatch",
+          "ctx_abandoned"
+        ]
+      }
+    },
+    "terminal": null,
+    "observation": {
+      "status": "missing",
+      "exactWorker": false
+    },
+    "terminalResource": {
+      "id": "wtr_a",
+      "ownershipState": "owned",
+      "releaseState": "retained",
+      "retainedReason": "user_requested",
+      "terminalHandle": "term_worker",
+      "worktreeId": "wt-a::/repo/worktree",
+      "originDispatchId": "ctx_origin",
+      "ownerDispatchId": "ctx_abandoned"
+    }
+  },
+  "before_fix": {
+    "row": "unreadable",
+    "failed_read": "worker_terminal_unverified",
+    "blocks_closure": true
+  }
+}

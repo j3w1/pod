@@ -9775,6 +9775,61 @@
       ],
       "offline_test": "tests.test_inventory.InventoryIntegrityTests.test_spec_and_coverage_ids_are_complete",
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A742",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_by_agent_decision",
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_rebase_onto_moved_target_adopts_without_revision_authority",
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_a_result_base_on_the_target_history_is_not_objective_work"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A743",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_target_holding_the_objectives_earlier_pull_request_needs_a_snapshot_decision",
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_unrecorded_objective_commit_merged_into_the_target_still_counts",
+        "tests.test_governance_reapproval.RebasedCandidateGovernanceTests.test_fast_forwarded_recorded_candidate_still_counts",
+        "tests.test_governance_history.GovernanceHistoryTests.test_intermediate_candidate_policy_needs_exact_snapshot_authority"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A744",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivery.VerifiedDeliveryTests.test_changed_governance_after_a_delivery_inside_the_base_names_the_ordinary_refresh",
+        "tests.test_delivery.VerifiedDeliveryTests.test_target_moved_after_verified_result_holds_future_work"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A745",
+      "required_evidence": [
+        "unit",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": [
+        "tests.test_governance_reapproval.ClosedWorkerTabTests.test_pods_own_closed_terminal_proof_reads_as_disconnected",
+        "tests.test_governance_reapproval.ClosedWorkerTabTests.test_without_the_proof_the_owned_tab_stays_unreadable",
+        "tests.test_governance_reapproval.ClosedWorkerTabTests.test_a_remote_host_or_another_terminal_gets_no_disconnected_row",
+        "tests.test_governance_reapproval.ClosedWorkerTabTests.test_a_present_terminal_keeps_its_row",
+        "tests.test_governance_reapproval.ClosedWorkerTabTests.test_a_stale_or_hand_written_proof_is_ignored"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

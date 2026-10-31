@@ -170,6 +170,7 @@ def _prepare_report(request, state, admission, shown, *, closing):
     if "abandoned_accounting" in admission:
         raise PodError("report_attempt_unverified", "Abandoned accounting is not worker output; use the ordinary discarded implementation disposition")
     from .operations import _binding_from_show, _reuse_effective_evidence, _placement_evidence
+    from .abandoned import _closed
     binding = admission["native_binding"]
     fresh = _binding_from_show(shown, admission, binding["dispatchId"])
     if fresh != binding:
@@ -209,7 +210,7 @@ def _prepare_report(request, state, admission, shown, *, closing):
                        {"runtime": admission["runtime"], **{key: binding[key] for key in
                         ("runId", "taskId", "dispatchId", "workerId")}})
     return {"observation": validated, "route_refresh": route_refresh, "route_mismatch": route_mismatch,
-            "report_placement": _placement_evidence(shown["result"], binding)}
+            "report_placement": _placement_evidence(shown["result"], binding, closed=_closed(shown))}
 
 
 def _op_report(request: dict) -> dict:

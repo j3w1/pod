@@ -536,6 +536,24 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
     map_state["governance_history"] = history
 
 
+MAX_TARGET_CHAIN = 4096
+# The authority an exact snapshot adoption accepts (`user_direct_revision`): a person, or a decision the
+# decision policy verifies for scope changes.
+SNAPSHOT_DECISION = ("a snapshot decision for this exact target from the decider the decision policy names for scope "
+                     "changes (a person, or an agent_decision where the policy delegates them)")
+
+
+def _first_parent_chain(project: Path, target: str, base: str) -> set[str] | None:
+    """The target branch's own states since the bound base, or None when unreadable or past the read bound."""
+    walk = _git(project, ["rev-list", "--first-parent", f"--max-count={MAX_TARGET_CHAIN + 1}", target, "^" + base])
+    if walk is None or walk.returncode != 0:
+        return None
+    chain = walk.stdout.split()
+    if len(chain) > MAX_TARGET_CHAIN or any(not _OBJECT.fullmatch(commit) for commit in chain):
+        return None
+    return set(chain)
+
+
 def _independent_governance(project: Path, observed: dict, candidate: str | None,
                             admissions: dict, *, established: dict | None,
                             previous_candidate: str | None = None,
@@ -548,6 +566,11 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
     are checked against that baseline, regardless of ref reuse or policy bytes.
     Adopting known objective work requires direct authority for the exact new
     snapshot; it does not prove that the project merged or authored that work.
+    Known objective work is a recorded objective commit inside the target, or
+    history beyond the base the target shares with a recorded objective commit.
+    The write's new candidate and a result's start point share it as work only
+    when it is not one of the target's own first-parent states, so a candidate
+    rebased onto the moved target in the adopting write is not work.
     """
     if observed.get("status") != "observed" or established is None:
         return observed
@@ -562,9 +585,9 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
         return observed
 
     def unavailable(reason: str, identity: str | None = None) -> dict:
-        action = ("the project lead restores missing Git evidence for completion bookkeeping; ordinary work adopting changed governance requires a fresh direct user decision for "
-                  "this exact target snapshot, then write governance_refresh with "
-                  "revision_authority and governance.base_ref/base")
+        action = ("the project lead restores missing Git evidence for completion bookkeeping; ordinary work adopting "
+                  f"changed governance requires {SNAPSHOT_DECISION}, then write governance_refresh with that "
+                  "revision_authority and governance naming the exact canonical base_ref and base")
         raise PodError("governance_unavailable", f"Governance comparison is unavailable: {reason}. Next: {action}",
                        {"detail": "governance_unavailable", "next_action": action,
                         "referent": {"reason": reason, "identity": identity,
@@ -572,21 +595,31 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
 
     if base is None or _resolve_commit(project, base) is None:
         return unavailable("bound_base_unavailable", base)
+    # Work identities are commits the objective made or proposed. A result's base is where a worker started,
+    # usually a target commit, so it only joins the merge-base test below.
     values = [current_candidate, *(known_candidates or [])]
     if previous_candidate is not None:
         values.append(previous_candidate)
+    bases = []
     for row in admissions.values():
         result = row.get("result") or {}
-        values.extend(value for value in (row.get("candidate"), result.get("base"), result.get("head"),
+        values.extend(value for value in (row.get("candidate"), result.get("head"),
                                           (row.get("report") or {}).get("result_commit"))
                       if value is not None)
-    identities = set()
-    for value in values:
+        if result.get("base") is not None:
+            bases.append(result["base"])
+    identities, work, recorded = set(), set(), set()
+    for index, value in enumerate([*values, *bases]):
         resolved = _resolve_commit(project, value)
         if resolved is None:
             return unavailable("objective_identity_unavailable", value)
         identities.add(resolved)
+        if index < len(values):
+            work.add(resolved)
+            if index:
+                recorded.add(resolved)
     target = observed["commit"]
+    chain = None
     contains_work = False
     for identity in sorted(identities):
         baseline = git_is_ancestor(project, identity, base)
@@ -594,6 +627,14 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
             return unavailable("target_relation_unavailable", identity)
         if baseline:
             continue
+        if identity in work:
+            # A recorded objective commit inside the target is objective work, however it got there.
+            inside = git_is_ancestor(project, identity, target)
+            if inside is None:
+                return unavailable("target_relation_unavailable", identity)
+            if inside:
+                contains_work = True
+                continue
         common = _git(project, ["merge-base", "--all", identity, target])
         if common is None or common.returncode not in (0, 1):
             return unavailable("target_relation_unavailable", identity)
@@ -606,11 +647,24 @@ def _independent_governance(project: Path, observed: dict, candidate: str | None
             in_baseline = git_is_ancestor(project, shared, base)
             if in_baseline is None:
                 return unavailable("target_relation_unavailable", shared)
-            if not in_baseline:
+            if in_baseline:
+                continue
+            if identity in recorded:
+                # A recorded objective commit already held this history before the target reached it.
+                contains_work = True
+                continue
+            # The write's new candidate, or a result's start point, sharing one of the target's own first-parent
+            # states was rebased onto it or started from it: that state is the target branch's history.
+            if chain is None:
+                chain = _first_parent_chain(project, target, base)
+                if chain is None:
+                    return unavailable("target_relation_unavailable", target)
+            if shared not in chain:
                 contains_work = True
     if contains_work:
-        action = ("the project lead closes proved completed work on the retained baseline without governance_refresh; ordinary work adopting this exact target snapshot needs a fresh direct user decision, then write "
-                  "governance_refresh with revision_authority and governance.base_ref/base")
+        action = ("the project lead closes proved completed work on the retained baseline without governance_refresh; "
+                  f"ordinary work adopting this target needs {SNAPSHOT_DECISION}, then write governance_refresh with "
+                  "that revision_authority and governance naming the exact canonical base_ref and base")
         raise PodError("governance_unavailable",
                        "The changed governance target contains known objective work beyond its bound base. "
                        f"Next: {action}",
@@ -832,12 +886,26 @@ def require_governance_current(project: Path, map_state: dict | None, *, checkpo
     unchanged = unchanged_governance(project, map_state)
     if checkpoint and unchanged is not None:
         return unchanged
+    # Changed governance is adopted by an ordinary refresh, which itself refuses known objective work in the
+    # target. A recorded delivery outside the bound base is that work, so it needs a snapshot decision (R119).
     action = ("write a plain checkpoint; it adopts unchanged governance itself without an owner question"
-              if unchanged is not None else None)
+              if unchanged is not None else
+              "write a checkpoint with governance_refresh: true and governance naming the current target's base_ref "
+              "and base; no owner decision is needed (revision_authority is optional and follows the decision "
+              "policy) unless the refresh refuses because the target holds this objective's own work beyond its "
+              "bound base or that comparison is unavailable")
     if delivery is not None:
-        raise refuse("governance_changed", "governance_changed",
-                     ("the target moved after the recorded delivery; unchanged governance awaits checkpoint adoption"
-                      if unchanged is not None else "the target moved after the recorded delivery; obtain a direct user decision for the new snapshot"),
+        message = ("the target moved after the recorded delivery; unchanged governance awaits checkpoint adoption"
+                   if unchanged is not None else
+                   "the target moved after the recorded delivery and bound governance changed; adopt the new "
+                   "snapshot with a governance refresh")
+        if unchanged is None and git_is_ancestor(project, delivery["result"], governance["base"]) is not True:
+            message = ("the target moved after the recorded delivery, which is this objective's own work beyond its "
+                       "bound base; adopting the new snapshot needs a snapshot decision")
+            action = (f"obtain {SNAPSHOT_DECISION}, then write governance_refresh with that revision_authority and "
+                      "governance naming the exact canonical base_ref and base; a closing write that proves the "
+                      "delivery keeps the bound baseline instead (R154)")
+        raise refuse("governance_changed", "governance_changed", message,
                      next_action=action, recorded=delivery["result"][:12], current=current[:12])
     raise refuse("governance_changed", "governance_changed",
                  "the target branch moved since governance was bound", bound=governance["base"][:12],

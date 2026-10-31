@@ -121,7 +121,7 @@ def _assignment_evidence(shown: dict, admission: dict) -> dict:
     _check_retry_dispatch(dispatch, admission)
     # A fence is not an exit: an abandoned attempt, accounted or not, keeps its claim and its logical
     # slot until the fresh native read shows the process exited with nothing pending.
-    from .abandoned import current_claim, current_fence
+    from .abandoned import _closed, current_claim, current_fence
     if "abandoned_accounting" in admission:
         current_fence(shown, admission, binding)
     claim = current_claim(shown)
@@ -132,7 +132,7 @@ def _assignment_evidence(shown: dict, admission: dict) -> dict:
             "settled": settled,
             "retry_eligible": (_retry_eligible(shown)
                                and worker.get("agentTerminalHandle") == binding["terminalHandle"]),
-            "placement": _placement_evidence(result, binding)}
+            "placement": _placement_evidence(result, binding, closed=_closed(shown))}
 
 
 def _retry_eligible(shown: dict) -> bool:
@@ -223,8 +223,11 @@ def _retry_parent_current(state: dict, admission: dict, port: NativePort) -> str
     return dispatch
 
 
-def _placement_evidence(result: dict, binding: dict) -> dict:
-    """Presentation facts from the same exact native read; none is UI rendering proof."""
+def _placement_evidence(result: dict, binding: dict, *, closed: bool = False) -> dict:
+    """Presentation facts from the same exact native read; none is UI rendering proof.
+
+    `closed` is Pod's own A611 proof from that read that this attempt's exact terminal incarnation is gone.
+    """
     worker = result["worker"]
     handle = binding.get("terminalHandle")
     terminal = result.get("terminal")
@@ -273,6 +276,8 @@ def _placement_evidence(result: dict, binding: dict) -> dict:
         # Orca's gone-record observation is judged against the worker's own terminal, so its identity is kept even
         # when the raw resource is omitted (R125, A475).
         facts["worker_terminal"] = worker.get("agentTerminalHandle")
+    if closed:
+        facts["terminal_closed"] = True
     if worker.get("agentTerminalHandle") != handle:
         facts.update(tab=None, placement_readback="unavailable")
         return facts
