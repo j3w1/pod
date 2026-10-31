@@ -1294,7 +1294,7 @@
  "fast_mean_seconds": 0.15,
  "lanes": {
   "installer": {
-   "shards": 1,
+   "shards": 2,
    "target_seconds": 180,
    "workers": 2
   },
