@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+from pod import config
 from pod.errors import PodError
 from pod.governor import (_check_authority, _check_unresolved, _empty_journal, _record_path, _write_journal,
                           validate_authorization)
@@ -13,6 +15,7 @@ from pod.governance import require_governance_current
 from pod.ledger import _authorization_granted, read
 from pod.records import evidence_record
 from tests.common import proof
+from tests.decision_policy_support import LOCAL, PERSON
 from tests.kernel_support import COMMIT, TREE, KernelCase, authorization, git
 
 
@@ -187,11 +190,77 @@ class VerifiedDeliveryTests(KernelCase):
         git(self.project, "add", "AGENTS.md")
         git(self.project, "commit", "-qm", "later target")
         git(self.project, "update-ref", "refs/remotes/origin/target", git(self.project, "rev-parse", "HEAD"))
+        # Post-delivery bookkeeping keeps the delivered baseline and adopts nothing (R202).
+        kept = self.write(self.stored())
+        self.assertEqual(kept["checkpoint"]["governance"], delivered["governance"])
+        self.assertFalse(kept["governance_adoption"]["adopted"])
+        # Future work does not: a new candidate is refused without a write.
+        before = read(self.project, "objective")
+        self.candidate = self.commit_file("src/new.py", "future work\n")
         with self.assertRaises(PodError) as caught:
             self.write(self.stored())
         self.assertEqual(caught.exception.code, "governance_changed")
         self.assertIn("target moved after the recorded delivery", str(caught.exception))
-        self.assertEqual(read(self.project, "objective")["checkpoint"]["delivery"], delivered["delivery"])
+        self.assertEqual(read(self.project, "objective"), before)
+        # The delivery is this objective's own work beyond the bound base: adopting it needs an exact snapshot
+        # decision, and an ordinary refresh is refused without a write.
+        self.assertIn("snapshot decision", caught.exception.detail["next_action"])
+        self.assertIn("post-delivery bookkeeping", caught.exception.detail["next_action"])
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        before = read(self.project, "objective")
+        with self.assertRaises(PodError) as refresh:
+            self.write(self.stored(), governance_refresh=True, governance={"base_ref": "refs/remotes/origin/target"},
+                       revision_authority={**LOCAL, "instruction": "Adopt the current target"})
+        self.assertEqual(refresh.exception.detail["referent"]["reason"], "candidate_policy_target")
+        self.assertEqual(read(self.project, "objective"), before)
+
+    def test_bookkeeping_after_a_delivery_inside_the_base_keeps_it_and_new_work_names_the_refresh(self):
+        # After a delivery already inside the bound base: an unchanged-source checkpoint already adopted a target holding the delivery; other
+        # objectives' later merges then changed governance.
+        shape = json.loads((Path(__file__).parent / "fixtures" / "governance-reapproval"
+                            / "governance-shapes.json").read_text())["after_delivery"]
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        self.prepare_result()
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        for change in shape["later_target_changes"]:
+            (self.project / change["path"]).write_text((self.project / change["path"]).read_text() + "later\n")
+            git(self.project, "add", change["path"])
+            git(self.project, "commit", "-qm", "another objective's merge")
+            moved = git(self.project, "rev-parse", "HEAD")
+            git(self.project, "update-ref", "refs/remotes/origin/target", moved)
+            if not change["governance"]:
+                adopted = self.write(self.stored())["checkpoint"]
+                self.assertEqual(adopted["governance"]["base"], moved)
+        bound = read(self.project, "objective")["checkpoint"]["governance"]
+        # Bookkeeping (a remaining row becomes externally blocked) keeps the delivered baseline (R202).
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="blocked_external", external={"party": "third_party", "need": "live acceptance",
+                                                           "unblocks_when": "the acceptance arrives"})
+        kept = self.write(rows)
+        self.assertEqual(kept["checkpoint"]["governance"], bound)
+        self.assertEqual(kept["governance_adoption"]["adopted"], False)
+        self.assertEqual(kept["checkpoint"]["obligations"][0]["state"], "blocked_external")
+        # New work is refused, naming the ordinary refresh and no owner decision.
+        before = read(self.project, "objective")
+        self.candidate = self.commit_file("src/new.py", "future work\n")
+        error = self.refused("governance_changed", "governance_changed", self.write, self.stored())
+        self.assertNotIn("direct user decision", str(error))
+        self.assertIn("governance_refresh: true", error.detail["next_action"])
+        self.assertIn("no owner decision is needed", error.detail["next_action"])
+        self.assertIn("post-delivery bookkeeping", error.detail["next_action"])
+        self.assertEqual(read(self.project, "objective"), before)
+        refreshed = self.write(self.stored(), governance_refresh=True,
+                               governance={"base_ref": "refs/remotes/origin/target"},
+                               revision_authority={**LOCAL, "instruction": "Adopt the current target"})["checkpoint"]
+        self.assertEqual(refreshed["governance"]["base"], moved)
+        self.assertEqual(refreshed["delivery"], before["checkpoint"]["delivery"])
+
+    def commit_file(self, path, text):
+        (self.project / path).write_text(text)
+        git(self.project, "add", path)
+        git(self.project, "commit", "-qm", "work")
+        return git(self.project, "rev-parse", "HEAD")
 
     def test_owner_refresh_after_delivery_restores_currency(self):
         self.prepare_result()

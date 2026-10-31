@@ -31,11 +31,16 @@ the merge evidence. Never call a landed merge FAILED or CANCELED.
 The second merge creates no second map delivery record or new currency exception.
 Before later work, target movement beyond the recorded delivery needs a plain
 checkpoint when every bound governance source is unchanged; Pod adopts that
-snapshot without an owner question. Changed governance needs a fresh owner
-decision for the exact observed `base_ref` and full `base`, recorded with
-`governance_refresh: true` and `revision_authority`. An honestly relayed snapshot
-decision remains relayed. The completion-bookkeeping exception above retains the
-trusted baseline and adopts no later policy.
+snapshot without an owner question. Changed governance is adopted with
+`governance_refresh: true`, which needs no owner decision unless the target holds
+this objective's own work beyond its bound base, such as a delivery the base does not
+yet contain. That needs an exact snapshot decision for the observed canonical
+`base_ref` and full `base`, recorded as `revision_authority` from the decider the
+decision policy names for scope changes; the refusal says which applies. An honestly
+relayed snapshot decision remains relayed. The completion-bookkeeping exception above retains the
+trusted baseline and adopts no later policy, and so does a checkpoint that only records post-delivery
+bookkeeping (acceptance, external evidence, questions, next action) with the same candidate, rows and
+settled proof.
 
 For an earlier merge row lacking `target_binding.commit`, retry the supported
 `governor-outcome PASS` with its exact provider `merge_commit` after fetching.
