@@ -169,8 +169,15 @@ def is_abandoned(shown: dict) -> bool:
             or isinstance(dispatch, dict) and dispatch.get("lastFailure") == "abandoned")
 
 
+MAX_PENDING_EFFECTS = 64
+
+
 def _pending_effects(worker: dict) -> list[dict]:
-    """Effects beyond the worktree and the accepted input, by bounded identity; an unreadable list is one unknown."""
+    """Effects beyond the worktree and the accepted input, with full identities.
+
+    Nothing is truncated: an identity is compared in full. Only a count past the bound is not listed;
+    that overflow is recorded as one effect of unknown identity, which holds the whole repository.
+    """
     effects = worker.get("effects")
     if not isinstance(effects, list):
         return [{"kind": "unknown", "id": None, "state": None}]
@@ -179,10 +186,12 @@ def _pending_effects(worker: dict) -> list[dict]:
         if isinstance(row, dict) and row.get("kind") in _BENIGN_EFFECTS:
             continue
         row = row if isinstance(row, dict) else {}
-        pending.append({key: row[key][:128] if isinstance(row.get(key), str) and row[key] else None
-                        for key in ("kind", "id", "state")}
-                       | ({"kind": "unknown"} if not isinstance(row.get("kind"), str) else {}))
-    return pending[:16]
+        pending.append({"kind": row["kind"] if isinstance(row.get("kind"), str) and row["kind"] else "unknown",
+                        "id": row["id"] if isinstance(row.get("id"), str) and row["id"] else None,
+                        "state": row["state"] if isinstance(row.get("state"), str) and row["state"] else None})
+    if len(pending) > MAX_PENDING_EFFECTS:
+        pending = pending[:MAX_PENDING_EFFECTS] + [{"kind": "unknown", "id": None, "state": None}]
+    return pending
 
 
 def current_claim(shown: dict) -> dict | None:
@@ -228,14 +237,20 @@ def hold_scope(admission: dict, claim: dict | None = None) -> dict:
 
 
 def _effect_conflicts(hold: dict, placement: dict) -> bool:
-    """A pending effect blocks an assignment that may touch its target; an unknown one blocks its repository."""
+    """A pending effect blocks an assignment in its repository that may touch its target.
+
+    The repository is part of the key: the same target name elsewhere is independent, but an unknown
+    repository on either side cannot establish independence. An effect of unknown identity holds the
+    whole repository.
+    """
+    held_repo, repo = hold.get("repo_key"), placement.get("repo_key")
+    if held_repo is not None and repo is not None and held_repo != repo:
+        return False
     branch = placement.get("branch")
     for effect in hold.get("effects") or []:
         ident = effect.get("id")
         if effect.get("kind") == "unknown" or not isinstance(ident, str):
-            if hold.get("repo_key") == placement.get("repo_key"):
-                return True
-            continue
+            return True
         if branch is not None and branch in (ident, ident.split("/", 1)[-1]):
             return True
     return False

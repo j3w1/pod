@@ -258,7 +258,66 @@ class AbandonedAccountingTests(AbandonedFixture):
         projection['outstanding'][0]['hold']['effects'] = [{'kind': 'tool', 'id': None, 'state': None}]
         with self.assertRaises(PodError):
             refuse_held_claim(projection, {**other, 'branch': 'feature'})
-        refuse_held_claim(projection, {**other, 'repo_key': 'another', 'branch': 'feature'})
+
+    def held_effects(self, effects):
+        """Account an exited attempt with these pending effects; the projection a new admission is checked against."""
+        admission = self.held()
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        shown = self.port.show_worker('dispatch-1')
+        shown['result']['worker']['effects'].extend(effects)
+        with patch.object(self.port, 'show_worker', return_value=shown):
+            return self.outstanding(self.account(admission)['admission'])
+
+    @staticmethod
+    def push(ident):
+        return {'kind': 'push', 'id': ident, 'state': 'pending'}
+
+    @staticmethod
+    def elsewhere(projection, branch):
+        return {'repo_key': projection['outstanding'][0]['hold']['repo_key'], 'path': '/work/b', 'branch': branch}
+
+    def test_the_seventeenth_held_effect_is_held_like_the_first(self):
+        from pod.abandoned import refuse_held_claim
+        projection = self.held_effects([self.push(f'origin/other-{index}') for index in range(16)]
+                                       + [self.push('origin/main')])
+        self.assertEqual(len(projection['outstanding'][0]['hold']['effects']), 17)
+        with self.assertRaises(PodError) as caught:
+            refuse_held_claim(projection, self.elsewhere(projection, 'main'))
+        self.assertEqual(caught.exception.code, 'abandoned_claim_held')
+        refuse_held_claim(projection, self.elsewhere(projection, 'feature'))
+
+    def test_a_long_held_target_is_compared_in_full_never_truncated(self):
+        from pod.abandoned import refuse_held_claim
+        target = 'origin/' + 'x' * 300
+        projection = self.held_effects([self.push(target)])
+        self.assertEqual(projection['outstanding'][0]['hold']['effects'][0]['id'], target)
+        with self.assertRaises(PodError):
+            refuse_held_claim(projection, self.elsewhere(projection, 'x' * 300))
+        refuse_held_claim(projection, self.elsewhere(projection, 'x' * 128))
+
+    def test_effects_past_the_bound_fail_closed_and_hold_the_whole_repository(self):
+        from pod.abandoned import MAX_PENDING_EFFECTS, refuse_held_claim
+        projection = self.held_effects([self.push(f'origin/other-{index}') for index in range(MAX_PENDING_EFFECTS + 6)]
+                                       + [self.push('origin/main')])
+        self.assertEqual(projection['outstanding'][0]['hold']['effects'][-1]['kind'], 'unknown')
+        with self.assertRaises(PodError):
+            refuse_held_claim(projection, self.elsewhere(projection, 'feature'))
+
+    def test_the_same_target_name_in_another_repository_is_independent(self):
+        from pod.abandoned import refuse_held_claim
+        hold = {'worktree': 'w', 'repo_key': 'repo-a', 'branch': 'feature', 'path': '/work/a', 'paths': [],
+                'surfaces': [], 'process': 'exited',
+                'effects': [{'kind': 'push', 'id': 'origin/main', 'state': 'pending'}]}
+        held = {'outstanding': [{'admission_id': 'a', 'hold': hold}]}
+        with self.assertRaises(PodError):
+            refuse_held_claim(held, {'repo_key': 'repo-a', 'path': '/work/b', 'branch': 'main'})
+        refuse_held_claim(held, {'repo_key': 'repo-b', 'path': '/work/b', 'branch': 'main'})
+        # An unknown repository on either side cannot establish independence.
+        with self.assertRaises(PodError):
+            refuse_held_claim(held, {'repo_key': None, 'path': '/work/b', 'branch': 'main'})
+        with self.assertRaises(PodError):
+            refuse_held_claim({'outstanding': [{'admission_id': 'a', 'hold': {**hold, 'repo_key': None}}]},
+                              {'repo_key': 'repo-b', 'path': '/work/b', 'branch': 'main'})
 
     def test_held_abandoned_reviewer_on_the_exact_candidate_still_blocks_validation(self):
         from pod.governor import _active
