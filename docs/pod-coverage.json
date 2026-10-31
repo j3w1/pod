@@ -9131,7 +9131,9 @@
       "offline_test": [
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_never_started_attempt_is_never_recorded_as_started_exited_or_successful",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_exited_process_settles_and_releases_the_slot",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_released_resource_settles_and_releases_the_slot",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_released_resource_metadata_never_clears_a_live_or_unverifiable_process",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_attempt_that_becomes_abandoned_keeps_its_claim_before_any_accounting",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_pending_effect_target_is_a_claim_across_worktrees_and_an_unrelated_one_is_not",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_live_process_settles_but_the_hold_remains",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_abandoned_attempt_without_observed_start_evidence_is_refused_and_ordinary_failure_binds",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_wrong_identity_or_another_attempts_result_is_refused",
@@ -9152,7 +9154,8 @@
       "offline_test": [
         "tests.test_abandoned_accounting.AbandonedReadinessTests.test_settled_non_success_with_no_live_claim_is_non_material_and_reported_as_history",
         "tests.test_abandoned_accounting.AbandonedReadinessTests.test_live_or_unknown_process_claim_is_material",
-        "tests.test_abandoned_accounting.AbandonedReadinessTests.test_without_the_exact_native_read_nothing_is_history"
+        "tests.test_abandoned_accounting.AbandonedReadinessTests.test_without_the_exact_native_read_nothing_is_history",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_held_abandoned_reviewer_on_the_exact_candidate_still_blocks_validation"
       ],
       "status": "NOT_RUN"
     },

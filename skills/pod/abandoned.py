@@ -161,45 +161,91 @@ def _owners(ownership: dict, binding: dict) -> tuple:
 _BENIGN_EFFECTS = ("worktree", "dispatch_input")
 
 
-def release_evidence(shown: dict) -> str | None:
-    """Native proof that nothing of this attempt can still run: the process exited or the resource was released.
+def is_abandoned(shown: dict) -> bool:
+    result = shown.get("result") if isinstance(shown, dict) else None
+    worker = result.get("worker") if isinstance(result, dict) else None
+    dispatch = result.get("dispatch") if isinstance(result, dict) else None
+    return (isinstance(worker, dict) and worker.get("state") == "abandoned"
+            or isinstance(dispatch, dict) and dispatch.get("lastFailure") == "abandoned")
 
-    `abandoned` fences the worker without claiming its process stopped, so settlement alone proves
-    neither, and a closed terminal does not prove that no external effect is pending: any effect
-    beyond the worktree and the accepted input keeps the claim until it is read back.
+
+def _pending_effects(worker: dict) -> list[dict]:
+    """Effects beyond the worktree and the accepted input, by bounded identity; an unreadable list is one unknown."""
+    effects = worker.get("effects")
+    if not isinstance(effects, list):
+        return [{"kind": "unknown", "id": None, "state": None}]
+    pending = []
+    for row in effects:
+        if isinstance(row, dict) and row.get("kind") in _BENIGN_EFFECTS:
+            continue
+        row = row if isinstance(row, dict) else {}
+        pending.append({key: row[key][:128] if isinstance(row.get(key), str) and row[key] else None
+                        for key in ("kind", "id", "state")}
+                       | ({"kind": "unknown"} if not isinstance(row.get("kind"), str) else {}))
+    return pending[:16]
+
+
+def current_claim(shown: dict) -> dict | None:
+    """The fresh claim of an abandoned attempt, or None when it is not abandoned or nothing can still run.
+
+    `abandoned` fences the worker without claiming its process stopped, so settlement proves nothing
+    about the claim. It is gone only when the native read positively reports the process exited and no
+    effect beyond the worktree and accepted input is left unresolved. A live, unverifiable, missing or
+    contradictory process verdict always keeps the claim, whatever the resource bookkeeping says: a
+    released resource is not proof that the process stopped. This is the one decision every admission,
+    readiness, retirement and succession boundary uses; it is derived from the current read, never from
+    an accounting receipt.
     """
-    result = shown["result"]
-    effects = (result.get("worker") or {}).get("effects")
-    if not isinstance(effects, list) or any(not isinstance(row, dict) or row.get("kind") not in _BENIGN_EFFECTS
-                                           for row in effects):
+    if not is_abandoned(shown):
         return None
-    projection = result.get("projection")
-    projection = projection if isinstance(projection, dict) else {}
-    liveness, resource = projection.get("liveness"), projection.get("resource")
-    if isinstance(liveness, dict) and liveness.get("verdict") == "exited":
-        return "process_exited"
-    if (isinstance(resource, dict) and resource.get("state") == "released"
-            and resource.get("releaseState") == "released"):
-        return "resource_released"
-    return None
+    result = shown["result"]
+    worker = result.get("worker") if isinstance(result.get("worker"), dict) else {}
+    projection = result.get("projection") if isinstance(result.get("projection"), dict) else {}
+    liveness = projection.get("liveness")
+    verdict = liveness.get("verdict") if isinstance(liveness, dict) else None
+    effects = _pending_effects(worker)
+    if verdict == "exited" and not effects:
+        return None
+    return {"process": verdict if isinstance(verdict, str) and verdict else "unknown", "effects": effects}
 
 
-def hold_scope(admission: dict) -> dict:
-    """What a retained, possibly-live attempt can still affect: its worktree, branch, paths and surfaces."""
+def release_evidence(shown: dict) -> str | None:
+    """`process_exited` when the fresh claim is gone, else None."""
+    return "process_exited" if is_abandoned(shown) and current_claim(shown) is None else None
+
+
+def hold_scope(admission: dict, claim: dict | None = None) -> dict:
+    """What a possibly-live attempt can still affect: worktree, branch, paths, surfaces and pending effects."""
     placement = admission["recovery"].get("placement_binding")
     placement = placement if isinstance(placement, dict) else {}
     boundary = admission.get("boundary") or {}
+    claim = claim or {"process": "unknown", "effects": []}
     return {"worktree": admission["native_binding"]["worktreeId"], "repo_key": placement.get("repo_key"),
             "branch": placement.get("branch"), "path": placement.get("path"),
             "paths": sorted(set(boundary.get("paths") or []) | set(admission.get("changed_paths") or [])),
-            "surfaces": sorted(boundary.get("surfaces") or [])}
+            "surfaces": sorted(boundary.get("surfaces") or []),
+            "process": claim["process"], "effects": claim["effects"]}
+
+
+def _effect_conflicts(hold: dict, placement: dict) -> bool:
+    """A pending effect blocks an assignment that may touch its target; an unknown one blocks its repository."""
+    branch = placement.get("branch")
+    for effect in hold.get("effects") or []:
+        ident = effect.get("id")
+        if effect.get("kind") == "unknown" or not isinstance(ident, str):
+            if hold.get("repo_key") == placement.get("repo_key"):
+                return True
+            continue
+        if branch is not None and branch in (ident, ident.split("/", 1)[-1]):
+            return True
+    return False
 
 
 def refuse_held_claim(projection: dict, placement: dict | None) -> None:
-    """A new assignment in a held attempt's worktree or branch waits; an independent scope does not.
+    """A new assignment that may touch a held attempt's worktree, branch or pending-effect target waits.
 
-    Shared by the admission boundary; path and surface overlap is refused by the obligation kernel
-    over the same outstanding rows, and Governor counts every held claim.
+    An independent worktree, branch and target stays usable. Path and surface overlap is refused by the
+    obligation kernel over the same outstanding rows, and Governor counts every held claim.
     """
     placement = placement if isinstance(placement, dict) else {}
     for row in projection.get("outstanding", []):
@@ -209,11 +255,11 @@ def refuse_held_claim(projection: dict, placement: dict | None) -> None:
         same_path = hold.get("path") is not None and hold.get("path") == placement.get("path")
         same_branch = (hold.get("branch") is not None and hold.get("branch") == placement.get("branch")
                        and hold.get("repo_key") == placement.get("repo_key"))
-        if same_path or same_branch:
+        if same_path or same_branch or _effect_conflicts(hold, placement):
             raise PodError("abandoned_claim_held",
-                           "An abandoned attempt that may still run holds this worktree and branch. Next: read its "
-                           "exact native terminal and release, or wait for positive exit; an independent worktree "
-                           "and branch is unaffected",
+                           "An abandoned attempt that may still run holds this worktree, branch or target. Next: read "
+                           "its exact native terminal and wait for positive exit and resolved effects; an independent "
+                           "worktree, branch and target is unaffected",
                            {"admission": row.get("admission_id"), "worktree": hold.get("worktree"),
                             "branch": hold.get("branch")})
 
@@ -398,11 +444,12 @@ def recover(project: Path, objective: str, *, owner: str, admission: dict, reaso
     row = update_admission(project, objective, owner=owner, admission_id=admission["admission_id"],
                            update=apply, expected_runtime=admission["runtime"])
     return {"status": row["state"], "admission": row, "action": "accounted_abandoned",
-            **_hold_fields(row, release_evidence(shown))}
+            **_hold_fields(row, shown)}
 
 
-def _hold_fields(row: dict, release: str | None) -> dict:
-    return {"release": release, "hold": None if release else hold_scope(row)}
+def _hold_fields(row: dict, shown: dict) -> dict:
+    claim = current_claim(shown)
+    return {"release": None if claim else "process_exited", "hold": hold_scope(row, claim) if claim else None}
 
 
 def _current_hold(admission: dict, port) -> dict:
@@ -411,7 +458,6 @@ def _current_hold(admission: dict, port) -> dict:
     try:
         shown = port.show_worker(binding["dispatchId"])
         current_fence(shown, admission, binding)
-        release = release_evidence(shown)
+        return _hold_fields(admission, shown)
     except PodError:
-        release = None
-    return _hold_fields(admission, release)
+        return {"release": None, "hold": hold_scope(admission)}

@@ -566,7 +566,7 @@ def _active(native_projection: dict | None, tasks: list[str] | None = None, *,
             continue
         # Only a review admitted on this exact commit id overlaps validation. A ref name is not resolved
         # here: it may have moved since admission, and an older review must not count for a newer candidate.
-        if (ignore_review_commit is not None and row.get("role") == "review"
+        if (ignore_review_commit is not None and row.get("role") == "review" and "hold" not in row
                 and isinstance(row.get("candidate"), str) and gitio.OBJECT_ID.fullmatch(row["candidate"])
                 and row["candidate"] == ignore_review_commit):
             continue

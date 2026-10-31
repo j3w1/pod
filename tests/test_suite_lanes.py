@@ -373,8 +373,16 @@ class RefreshTests(unittest.TestCase):
             sl.validated_legs([dict(body, sha="other") if body["python"] == "3.14" else body for body in bodies])
         with self.assertRaisesRegex(sl.Finding, "with and without"):
             sl.validated_legs(bodies + [dict(measured_bodies()[0])])
-        with self.assertRaisesRegex(sl.Finding, "no 3.13"):
-            sl.validated_legs([dict(body, python=python) for body in measured_bodies() for python in ("3.14", "3.15")])
+        # A named run must prove every required interpreter: dropping an entire environment refuses.
+        only = lambda python: [dict(body, python=python) for body in measured_bodies()]
+        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter.*3.13"):
+            sl.validated_legs(only("3.14"))
+        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter.*3.14"):
+            sl.validated_legs(only("3.13"))
+        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter"):
+            sl.merge_timings(manifest(), only("3.14"))
+        with self.assertRaisesRegex(sl.Finding, "lack the required interpreter.*3.13"):
+            sl.validated_legs(only("3.14") + only("3.15"))
         with self.assertRaisesRegex(sl.Finding, "invalid timing interpreter"):
             sl.validated_legs([dict(body, python="three") for body in measured_bodies()])
         earlier = measured_bodies()

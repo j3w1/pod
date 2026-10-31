@@ -40,6 +40,7 @@ SCHEMA = "suite-lanes/v1"
 TIMINGS_SCHEMA = "suite-lanes-timings/v1"
 MARKER = "POD_TEST_TIMINGS "
 PRIMARY_PYTHON = "3.13"  # The interpreter whose durations and calibration `refresh` records.
+REQUIRED_PYTHONS = ("3.13", "3.14")  # Every named run proves each of these, complete by itself.
 LANES = ("parallel", "serial", "installer")
 HARNESS = {"tests.pty_harness": "serial", "tests.install_support": "installer"}
 PRECEDENCE = ("serial", "installer")
@@ -916,18 +917,19 @@ def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:
         if not isinstance(environment, str) or environment and not re.fullmatch(r"\d+\.\d+", environment):
             raise Finding("REFRESH invalid timing interpreter: use complete unmodified logs")
         environments.setdefault(environment, []).append(body)
-    if len(environments) == 1:
-        return _validated_environment(bodies)
+    if set(environments) == {""}:
+        return _validated_environment(bodies)  # Legacy unnamed logs: one environment, as before.
     if "" in environments:
         raise Finding("REFRESH mixes shares with and without an interpreter: use one complete run")
+    missing = [name for name in REQUIRED_PYTHONS if name not in environments]
+    if missing:
+        raise Finding(f"REFRESH named timing lines lack the required interpreter(s) {', '.join(missing)}: "
+                      f"refresh from a run in which every interpreter ({', '.join(REQUIRED_PYTHONS)}) finished")
     checked = {name: _validated_environment(group) for name, group in environments.items()}
     identities = {(body["plan"], body["sha"], body.get("run_id", "")) for body in bodies}
     if len(identities) != 1:
         raise Finding("REFRESH legs disagree on the plan digest, SHA or run identity: "
                       "refresh from a single run of one commit")
-    if PRIMARY_PYTHON not in checked:
-        raise Finding(f"REFRESH found several interpreters ({', '.join(sorted(checked))}) and no "
-                      f"{PRIMARY_PYTHON}: refresh from a run that includes the primary interpreter")
     return checked[PRIMARY_PYTHON]
 
 

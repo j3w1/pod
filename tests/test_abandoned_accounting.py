@@ -92,6 +92,24 @@ class AbandonedFixture(unittest.TestCase):
         self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
         return admission
 
+    def settled(self, role):
+        """A no-output abandoned attempt; a review's assurance serving is set on the record, as that map is heavy."""
+        from pod.ledger import update_admission
+        self.port = AbandonedPort()
+        self.port.placement = {'repository': None, 'repo_key': None, 'path': str(self.project.resolve()),
+                               'branch': None, 'runtime': 'runtime'}
+        with self.assertRaises(PodError) as caught:
+            self.start()
+        self.assertEqual(caught.exception.code, 'native_start_unsettled')
+        admission = next(iter(read(self.project, 'objective')['admissions'].values()))
+        if role == 'review':
+            update_admission(self.project, 'objective', owner='owner', admission_id=admission['admission_id'],
+                             update=lambda row: row.update(role='review', serves=['PA']))
+        admission = read(self.project, 'objective')['admissions'][admission['admission_id']]
+        self.assertEqual(admission['role'], role)
+        self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
+        return admission
+
     def normal(self):
         port = AbandonedPort()
         port.placement = self.port.placement
@@ -177,12 +195,87 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'], [])
         self.assertEqual(len(self.port.starts), 1)
 
-    def test_unknown_start_with_released_resource_settles_and_releases_the_slot(self):
+    def test_released_resource_metadata_never_clears_a_live_or_unverifiable_process(self):
         admission = self.held()
-        self.port.workers['dispatch-1'].update(released=True)
-        result = self.account(admission)
-        self.assertEqual((result['release'], result['hold']), ('resource_released', None))
-        self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'], [])
+        self.port.workers['dispatch-1']['released'] = True
+        for verdict in ('alive', 'live', 'unverifiable', 'unknown'):
+            with self.subTest(verdict=verdict):
+                self.port.workers['dispatch-1']['liveness'] = {'verdict': verdict, 'reason': 'test'}
+                result = self.account(admission)
+                self.assertEqual((result['release'], result['hold'] is not None), (None, True))
+                self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'],
+                                 [admission['admission_id']])
+        self.port.workers['dispatch-1'].pop('liveness')  # a missing verdict is unknown, not gone
+        shown = self.port.show_worker('dispatch-1')
+        shown['result']['projection'].pop('liveness')
+        with patch.object(self.port, 'show_worker', return_value=shown):
+            self.assertEqual(self.outstanding(read(self.project, 'objective')['admissions'][admission['admission_id']])
+                             ['outstanding_ids'], [admission['admission_id']])
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        self.assertEqual(self.account(admission)['release'], 'process_exited')
+        self.assertEqual(self.outstanding(read(self.project, 'objective')['admissions'][admission['admission_id']])
+                         ['outstanding_ids'], [])
+
+    def test_bound_attempt_that_becomes_abandoned_keeps_its_claim_before_any_accounting(self):
+        from pod.governor import _active
+        self.normal()
+        bound = self.start()['admission']
+        self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
+        for verdict in ('alive', 'unverifiable'):
+            with self.subTest(verdict=verdict):
+                self.port.workers['dispatch-1']['liveness'] = {'verdict': verdict, 'reason': 'test'}
+                held = self.outstanding(bound)
+                self.assertEqual(held['outstanding_ids'], [bound['admission_id']])
+                self.assertEqual(held['outstanding'][0]['hold']['process'], verdict)
+                self.assertEqual(len(_active(held)), 1)
+                # While the process may run there is no settled result to discard, and no replacement.
+                with self.assertRaises(PodError) as refused:
+                    self.discard(bound, 'abandoned; replacing')
+                self.assertEqual(refused.exception.detail['detail'], 'disposition_invalid')
+                with self.assertRaises(PodError) as caught:
+                    self.start('next-task', frozen=self.frozen(task='next-task'))
+                self.assertEqual(caught.exception.code, 'abandoned_claim_held')
+                self.assertEqual(len(self.port.starts), 1)
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        self.assertEqual(self.outstanding(bound)['outstanding_ids'], [])
+
+    def test_a_pending_effect_target_is_a_claim_across_worktrees_and_an_unrelated_one_is_not(self):
+        from pod.abandoned import refuse_held_claim
+        admission = self.held()
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        shown = self.port.show_worker('dispatch-1')
+        shown['result']['worker']['effects'].append({'kind': 'push', 'id': 'origin/main', 'state': 'pending'})
+        with patch.object(self.port, 'show_worker', return_value=shown):
+            row = self.account(admission)['admission']
+            projection = self.outstanding(row)
+        hold = projection['outstanding'][0]['hold']
+        self.assertEqual(hold['effects'], [{'kind': 'push', 'id': 'origin/main', 'state': 'pending'}])
+        other = {'repo_key': hold['repo_key'], 'path': '/work/b'}
+        with self.assertRaises(PodError) as caught:
+            refuse_held_claim(projection, {**other, 'branch': 'main'})
+        self.assertEqual(caught.exception.code, 'abandoned_claim_held')
+        refuse_held_claim(projection, {**other, 'branch': 'feature'})
+        projection['outstanding'][0]['hold']['effects'] = [{'kind': 'tool', 'id': None, 'state': None}]
+        with self.assertRaises(PodError):
+            refuse_held_claim(projection, {**other, 'branch': 'feature'})
+        refuse_held_claim(projection, {**other, 'repo_key': 'another', 'branch': 'feature'})
+
+    def test_held_abandoned_reviewer_on_the_exact_candidate_still_blocks_validation(self):
+        from pod.governor import _active
+        from pod.ledger import update_admission
+        sha = 'a' * 40
+        reviewer = self.settled('review')
+        update_admission(self.project, 'objective', owner='owner', admission_id=reviewer['admission_id'],
+                         update=lambda row: row.update(candidate=sha))
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'alive', 'reason': 'test'}
+        row = self.account(reviewer)['admission']
+        held = self.outstanding(row)
+        self.assertEqual(held['outstanding'][0]['candidate'], sha)
+        self.assertEqual(len(_active(held, ignore_review_commit=sha)), 1)
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        cleared = self.outstanding(row)
+        self.assertEqual(_active(cleared, ignore_review_commit=sha), [])
+        self.assertEqual(_active(cleared), [])
 
     def test_unknown_start_with_live_process_settles_but_the_hold_remains(self):
         admission = self.held()
@@ -625,24 +718,6 @@ class AbandonedReadinessTests(AbandonedFixture):
 
 class AbandonedRoleTests(AbandonedFixture):
     """A no-output abandoned attempt completes for the implement and review roles without a manufactured report."""
-
-    def settled(self, role):
-        """A no-output abandoned attempt; a review's assurance serving is set on the record, as that map is heavy."""
-        from pod.ledger import update_admission
-        self.port = AbandonedPort()
-        self.port.placement = {'repository': None, 'repo_key': None, 'path': str(self.project.resolve()),
-                               'branch': None, 'runtime': 'runtime'}
-        with self.assertRaises(PodError) as caught:
-            self.start()
-        self.assertEqual(caught.exception.code, 'native_start_unsettled')
-        admission = next(iter(read(self.project, 'objective')['admissions'].values()))
-        if role == 'review':
-            update_admission(self.project, 'objective', owner='owner', admission_id=admission['admission_id'],
-                             update=lambda row: row.update(role='review', serves=['PA']))
-        admission = read(self.project, 'objective')['admissions'][admission['admission_id']]
-        self.assertEqual(admission['role'], role)
-        self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
-        return admission
 
     def context(self, row):
         native = self.port.read_native('owner', authority_runs=('run',), assignments=(row,))

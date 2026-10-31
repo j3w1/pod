@@ -1886,6 +1886,8 @@ def logical_projection(project: Path, native: dict, *, objective: str,
         raise PodError("native_assignment_unverified", "Objective assignment evidence is incomplete")
     state = read(project, objective)
     admissions = state.get("admissions", {}) if isinstance(state, dict) else {}
+    claims = {row["admission_id"]: row.get("claim") for row in native["assignments"]
+              if isinstance(row, dict) and isinstance(row.get("admission_id"), str)}
     outstanding = []
     for admission_id in (_outstanding_ids(state, native) if isinstance(state, dict) else []):
         admission = admissions[admission_id]
@@ -1897,9 +1899,12 @@ def logical_projection(project: Path, native: dict, *, objective: str,
                "admission_id": admission_id, "task": task,
                "state": admission["state"], "role": admission["role"],
                "candidate": admission["candidate"]}
-        if "abandoned_accounting" in admission and binding_valid(binding):
+        claim = claims.get(admission_id)
+        if claim is None and "abandoned_accounting" in admission:
+            claim = {"process": "unknown", "effects": []}
+        if claim is not None and binding_valid(binding):
             from .abandoned import hold_scope
-            row["hold"] = hold_scope(admission)
+            row["hold"] = hold_scope(admission, claim)
         outstanding.append(row)
     return {"schema": "pod-logical-projection/v1", "runtime": native["runtime"],
             "authoritative": native.get("authoritative") is True,
@@ -1939,6 +1944,14 @@ def _native_assignment_settled(shown: dict) -> bool:
             and projection.get("runId") == dispatch["runId"]
             and isinstance(dispatch.get("taskId"), str)
             and projection.get("taskId") == dispatch["taskId"])
+
+
+def _native_assignment_claim_free(shown: dict) -> bool:
+    """Settled, and no abandoned attempt's process may still run or leave an effect pending."""
+    if not _native_assignment_settled(shown):
+        return False
+    from .abandoned import current_claim
+    return current_claim(shown) is None
 
 
 def _routing_context(project, state, body, task, native, moment):
