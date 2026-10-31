@@ -9067,7 +9067,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_observed_start_in_current_effects_or_fields_refuses_without_changes",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_abandoned_attempt_without_observed_start_evidence_is_refused_and_ordinary_failure_binds",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_any_immutable_observed_start_blocks_accounting_even_with_unobserved_latest_read",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_observed_or_missing_original_receipt_and_request_conflict_refuse",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_missing_or_conflicting_fence_remains_unresolved",
@@ -9133,10 +9133,13 @@
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_exited_process_settles_and_releases_the_slot",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_released_resource_settles_and_releases_the_slot",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unknown_start_with_live_process_settles_but_the_hold_remains",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_observed_start_is_not_this_path_and_the_failed_path_applies",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_abandoned_attempt_without_observed_start_evidence_is_refused_and_ordinary_failure_binds",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_wrong_identity_or_another_attempts_result_is_refused",
         "tests.test_abandoned_accounting.AbandonedAccountingTests.test_stale_runtime_is_refused",
-        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_repeated_recovery_is_idempotent_and_takes_no_extra_slot"
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_repeated_recovery_is_idempotent_and_takes_no_extra_slot",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_independent_scope_is_usable_while_the_same_scope_stays_held",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_retained_reused_resource_is_not_treated_as_released",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_a_relevant_external_effect_still_blocks_after_the_agent_exits"
       ],
       "status": "NOT_RUN"
     },
@@ -9150,6 +9153,42 @@
         "tests.test_abandoned_accounting.AbandonedReadinessTests.test_settled_non_success_with_no_live_claim_is_non_material_and_reported_as_history",
         "tests.test_abandoned_accounting.AbandonedReadinessTests.test_live_or_unknown_process_claim_is_material",
         "tests.test_abandoned_accounting.AbandonedReadinessTests.test_without_the_exact_native_read_nothing_is_history"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A602",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_unresolved_start_later_proved_observed_is_accounted_as_observed_not_unknown",
+        "tests.test_abandoned_accounting.AbandonedAccountingTests.test_bound_admission_abandoned_after_an_observed_start_is_accounted_without_a_report"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A603",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_abandoned_accounting.AbandonedRoleTests.test_review_role_releases_its_reservation_only_when_the_claim_clears_and_finalizes_without_a_report",
+        "tests.test_abandoned_accounting.AbandonedRoleTests.test_implement_role_still_takes_the_ordinary_discard_before_replacement"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A604",
+      "required_evidence": [
+        "unit",
+        "hosted_ci"
+      ],
+      "offline_test": [
+        "tests.test_suite_lanes.RefreshTests.test_a_two_interpreter_run_refreshes_from_the_primary_and_checks_both_environments",
+        "tests.test_inventory.ExecutionSpecDocumentationTests.test_ci_validates_the_skill_and_publishes_nothing"
       ],
       "status": "NOT_RUN"
     }

@@ -561,7 +561,8 @@ def _active(native_projection: dict | None, tasks: list[str] | None = None, *,
         if not isinstance(row, dict):
             raise PodError("native_assignment_unverified", "Governor logical projection is malformed")
         task = row.get("task")
-        if tasks is not None and task is not None and task not in tasks:
+        # A held claim of an abandoned attempt that may still run is material to every unit.
+        if tasks is not None and task is not None and task not in tasks and "hold" not in row:
             continue
         # Only a review admitted on this exact commit id overlaps validation. A ref name is not resolved
         # here: it may have moved since admission, and an older review must not count for a newer candidate.

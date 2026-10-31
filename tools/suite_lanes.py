@@ -898,24 +898,41 @@ def parse_timings(text: str) -> list[dict]:
             if not isinstance(body, dict) or body.get("schema") != TIMINGS_SCHEMA:
                 raise Finding("REFRESH unsupported POD_TEST_TIMINGS schema")
             bodies.append(body)
-    return _one_interpreter(bodies)
-
-
-def _one_interpreter(bodies: list[dict]) -> list[dict]:
-    """A matrix run repeats every share per interpreter; record the primary's, never a mixture."""
-    versions = {body["python"] for body in bodies if isinstance(body.get("python"), str)}
-    if any(not isinstance(body.get("python", ""), str) for body in bodies) or len(versions) < 2:
-        return bodies
-    if PRIMARY_PYTHON not in versions:
-        raise Finding(f"REFRESH found several interpreters ({', '.join(sorted(versions))}) and no "
-                      f"{PRIMARY_PYTHON}: refresh from a run that includes the primary interpreter")
-    return [body for body in bodies if body.get("python") == PRIMARY_PYTHON]
+    return bodies
 
 
 def validated_legs(bodies: list[dict]) -> dict[tuple, dict]:
-    """Validate a complete single run before allowing any duration or calibration update."""
+    """Validate every interpreter's complete run; calibrate from the primary interpreter's legs only.
+
+    A matrix run repeats each share per interpreter. Each environment must be complete and consistent
+    by itself, the environments must agree on plan, commit and run, and a mixture of shares with and
+    without an interpreter is refused. Only the primary's durations feed the manifest.
+    """
     if not bodies:
         raise Finding("REFRESH found no POD_TEST_TIMINGS lines: name a finished suite-lanes CI run")
+    environments: dict[str, list[dict]] = {}
+    for body in bodies:
+        environment = body.get("python", "") if isinstance(body, dict) else ""
+        if not isinstance(environment, str) or environment and not re.fullmatch(r"\d+\.\d+", environment):
+            raise Finding("REFRESH invalid timing interpreter: use complete unmodified logs")
+        environments.setdefault(environment, []).append(body)
+    if len(environments) == 1:
+        return _validated_environment(bodies)
+    if "" in environments:
+        raise Finding("REFRESH mixes shares with and without an interpreter: use one complete run")
+    checked = {name: _validated_environment(group) for name, group in environments.items()}
+    identities = {(body["plan"], body["sha"], body.get("run_id", "")) for body in bodies}
+    if len(identities) != 1:
+        raise Finding("REFRESH legs disagree on the plan digest, SHA or run identity: "
+                      "refresh from a single run of one commit")
+    if PRIMARY_PYTHON not in checked:
+        raise Finding(f"REFRESH found several interpreters ({', '.join(sorted(checked))}) and no "
+                      f"{PRIMARY_PYTHON}: refresh from a run that includes the primary interpreter")
+    return checked[PRIMARY_PYTHON]
+
+
+def _validated_environment(bodies: list[dict]) -> dict[tuple, dict]:
+    """Validate a complete single-environment run before allowing any duration or calibration update."""
     legs: dict[tuple, dict] = {}
     identities, calibrated = set(), set()
     for body in bodies:

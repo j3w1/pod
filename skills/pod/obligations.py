@@ -977,6 +977,7 @@ def _renew(prior: dict | None, value: dict, ctx: dict, seq: int) -> dict:
                    and not route_discarded(admission, pending=ctx.get("pending_route_settlements", ()))
                    and (key in _outstanding(ctx) or admission.get("state") != "deferred"
                         and (admission.get("report") is None and admission.get("disposition") is None
+                             and "abandoned_accounting" not in admission
                              or admission.get("role") == "implement" and admission.get("disposition") is None))]
         if pending:
             admission = _admissions(ctx)[pending[0]]

@@ -346,21 +346,39 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(bodies[0]["fast"], {"count": 1, "seconds": 0.2})
         self.assertEqual((bodies[0]["planned"], bodies[0]["ran"]), (234, 233))
 
-    def test_a_two_interpreter_run_refreshes_from_the_primary_interpreter_only(self):
+    def test_a_two_interpreter_run_refreshes_from_the_primary_and_checks_both_environments(self):
         legs = [dict(body, python=python) for python in ("3.13", "3.14") for body in measured_bodies()]
         log = "\n".join(sl.MARKER + json.dumps(body) for body in legs)
-        kept = sl.parse_timings(log)
-        self.assertEqual({body["python"] for body in kept}, {"3.13"})
-        self.assertEqual(len(kept), len(legs) // 2)
-        sl.validated_legs(kept)  # Both interpreters together would repeat every test id.
-        with self.assertRaises(sl.Finding):
-            sl.validated_legs(legs)
-        earlier = [dict(body) for body in measured_bodies()]
-        self.assertEqual(len(sl.parse_timings("\n".join(sl.MARKER + json.dumps(body) for body in earlier))),
-                         len(earlier))
+        bodies = sl.parse_timings(log)
+        self.assertEqual({body["python"] for body in bodies}, {"3.13", "3.14"})
+        primary = sl.validated_legs(bodies)
+        self.assertEqual({parts[1]["python"] for parts in primary.values()}, {"3.13"})
+        merged, _ = sl.merge_timings(manifest(), bodies)
+        self.assertEqual(sl.manifest_problems(merged), [])
+        # A second interpreter with other timings is no conflict; its accounting is still enforced.
+        slower = [dict(body, wall=body["wall"] + 1) if body["python"] == "3.14" else body for body in bodies]
+        sl.validated_legs(slower)
+        incomplete = [body for body in bodies if not (body["python"] == "3.14" and body["lane"] == "serial")]
+        with self.assertRaisesRegex(sl.Finding, "missing legs"):
+            sl.validated_legs(incomplete)
+        short = [dict(body, ran=body["ran"] - 1) if body["python"] == "3.14" else body for body in bodies]
+        with self.assertRaisesRegex(sl.Finding, "unsuccessful"):
+            sl.validated_legs(short)
+        # Within one environment a conflicting duplicate part still refuses.
+        duplicate = bodies + [dict(bodies[0], wall=bodies[0]["wall"] + 1)]
+        with self.assertRaisesRegex(sl.Finding, "conflicting duplicate"):
+            sl.validated_legs(duplicate)
+        # Mixed identity, mixed presence and a missing primary refuse.
+        with self.assertRaisesRegex(sl.Finding, "disagree"):
+            sl.validated_legs([dict(body, sha="other") if body["python"] == "3.14" else body for body in bodies])
+        with self.assertRaisesRegex(sl.Finding, "with and without"):
+            sl.validated_legs(bodies + [dict(measured_bodies()[0])])
         with self.assertRaisesRegex(sl.Finding, "no 3.13"):
-            sl.parse_timings("\n".join(sl.MARKER + json.dumps(dict(body, python=python))
-                                       for body in measured_bodies() for python in ("3.14", "3.15")))
+            sl.validated_legs([dict(body, python=python) for body in measured_bodies() for python in ("3.14", "3.15")])
+        with self.assertRaisesRegex(sl.Finding, "invalid timing interpreter"):
+            sl.validated_legs([dict(body, python="three") for body in measured_bodies()])
+        earlier = measured_bodies()
+        self.assertEqual(len(sl.validated_legs(earlier)), len(sl.validated_legs(earlier)))
         lines = sl.timing_lines(lane="serial", shard=1, of=1, workers=1, digest="d", results={},
                                 manifest=manifest(), wall=1.0, skips=0, fixture_errors=0)
         self.assertEqual(sl.parse_timings(lines[0])[0]["python"], "%d.%d" % sys.version_info[:2])

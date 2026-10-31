@@ -2266,6 +2266,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                        if item.get("admission_id") == prior["admission_id"]]
             if len(matches) != 1 or matches[0].get("settled") is not True:
                 raise PodError("failed_attempt_unsettled", "Settle the failed attempt before an alternative route")
+        from .abandoned import refuse_held_claim
+        refuse_held_claim(projection, placement_binding)
         from .obligations import admission_refusal
         # The caller verified launch-preference capability for this runtime before reserving.
         ctx = kernel_context(project, objective, state, native, candidate=checkpoint_value.get("candidate"),

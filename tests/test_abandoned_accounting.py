@@ -92,6 +92,12 @@ class AbandonedFixture(unittest.TestCase):
         self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
         return admission
 
+    def normal(self):
+        port = AbandonedPort()
+        port.placement = self.port.placement
+        port.normal_start = True
+        self.port = port
+
     def account(self, admission, reason='Account this fenced nonsuccess; execution remains unknown'):
         return recover_admission(self.project, 'objective', owner='owner',
                                  admission_id=admission['admission_id'], worktree='current',
@@ -187,19 +193,23 @@ class AbandonedAccountingTests(AbandonedFixture):
             self.assertEqual((result['status'], result['release']), ('bound', None))
             self.assertEqual(row['abandoned_accounting']['execution'], 'unknown')
             placement = admission['recovery']['placement_binding']
-            self.assertEqual(result['hold'], {'worktree': row['native_binding']['worktreeId'],
-                                              'branch': placement['branch'], 'path': placement['path']})
+            self.assertEqual({key: result['hold'][key] for key in ('worktree', 'branch', 'path')},
+                             {'worktree': row['native_binding']['worktreeId'],
+                              'branch': placement['branch'], 'path': placement['path']})
             held = self.outstanding(row)
             self.assertEqual(held['outstanding_ids'], [admission['admission_id']])
             self.assertEqual(held['outstanding'][0]['hold'], result['hold'])
+            with self.assertRaises(PodError) as caught:
+                self.start('next-task', frozen=self.frozen(task='next-task'))
+            self.assertEqual(caught.exception.code, 'abandoned_claim_held')
             self.assertEqual(len(self.port.starts), 1)
             # Exit evidence arrives later: the same record releases without another accounting or worker.
             self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
             self.assertEqual(self.outstanding(row)['outstanding_ids'], [])
             break
 
-    def test_observed_start_is_not_this_path_and_the_failed_path_applies(self):
-        self.port.normal_start = True
+    def test_bound_abandoned_attempt_without_observed_start_evidence_is_refused_and_ordinary_failure_binds(self):
+        self.normal()
         bound = self.start()['admission']
         self.assertEqual(bound['state'], 'bound')
         self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
@@ -213,6 +223,47 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.assertEqual(_binding_from_show(self.port.show_worker('dispatch-1'), bound, 'dispatch-1')['dispatchId'],
                          'dispatch-1')
         self.assertNotIn('abandoned_accounting', read(self.project, 'objective')['admissions'][bound['admission_id']])
+
+    def test_independent_scope_is_usable_while_the_same_scope_stays_held(self):
+        from pod.abandoned import refuse_held_claim
+        row = self.account(self.held())['admission']
+        projection = self.outstanding(row)
+        placement = self.port.placement
+        with self.assertRaises(PodError) as caught:
+            refuse_held_claim(projection, placement)
+        self.assertEqual(caught.exception.code, 'abandoned_claim_held')
+        refuse_held_claim(projection, {**placement, 'path': '/elsewhere', 'branch': 'other'})
+        hold = {'worktree': 'w', 'repo_key': 'repo', 'branch': 'feature', 'path': '/work/a', 'paths': [], 'surfaces': []}
+        held = {'outstanding': [{'admission_id': 'a', 'hold': hold}]}
+        for same in ({'path': '/work/a', 'branch': 'x', 'repo_key': 'repo'},
+                     {'path': '/work/b', 'branch': 'feature', 'repo_key': 'repo'}):
+            with self.assertRaises(PodError):
+                refuse_held_claim(held, same)
+        for independent in ({'path': '/work/b', 'branch': 'other', 'repo_key': 'repo'},
+                            {'path': '/work/b', 'branch': 'feature', 'repo_key': 'another'}, None):
+            refuse_held_claim(held, independent)
+
+    def test_a_retained_reused_resource_is_not_treated_as_released(self):
+        admission = self.held()
+        shown = self.port.show_worker('dispatch-1')
+        self.assertEqual(shown['result']['projection']['resource']['releaseState'], 'retained')
+        self.assertEqual(shown['result']['terminalResource']['retainedReason'], 'user_requested')
+        result = self.account(admission)
+        self.assertEqual((result['release'], self.outstanding(result['admission'])['outstanding_ids']),
+                         (None, [admission['admission_id']]))
+
+    def test_a_relevant_external_effect_still_blocks_after_the_agent_exits(self):
+        admission = self.held()
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        shown = self.port.show_worker('dispatch-1')
+        shown['result']['worker']['effects'].append({'kind': 'push', 'id': 'origin/feature', 'state': 'pending'})
+        with patch.object(self.port, 'show_worker', return_value=shown):
+            result = self.account(admission)
+            self.assertEqual(result['release'], None)
+            self.assertIsNotNone(result['hold'])
+            self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'], [admission['admission_id']])
+        # The effect is read back as resolved: the same record then clears.
+        self.assertEqual(self.outstanding(result['admission'])['outstanding_ids'], [])
 
     def test_wrong_identity_or_another_attempts_result_is_refused(self):
         admission = self.held()
@@ -263,6 +314,9 @@ class AbandonedAccountingTests(AbandonedFixture):
         self.assertEqual((released['admission'], released['release'], released['hold']),
                          (first['admission'], 'process_exited', None))
         self.port.workers['dispatch-1']['liveness'] = {'verdict': 'alive', 'reason': 'test'}
+        again = self.account(admission)
+        self.assertEqual((again['release'], again['hold'] is not None), (None, True))
+        self.assertEqual(self.outstanding(first['admission'])['outstanding_ids'], [admission['admission_id']])
         stored = read(self.project, 'objective')
         self.assertEqual(len(stored['admissions']), 1)
         self.assertEqual(self.outstanding(first['admission'])['outstanding_ids'], [admission['admission_id']])
@@ -288,13 +342,58 @@ class AbandonedAccountingTests(AbandonedFixture):
                          run_id='run', task_id='task', retry_of=row['admission_id'])
         self.assertEqual(caught.exception.code, 'retry_parent_unverified')
 
-    def test_observed_start_in_current_effects_or_fields_refuses_without_changes(self):
-        admission = self.held()
-        self.refused(admission, lambda s: s['result']['worker']['effects'].append(
-            {'kind': 'dispatch_input', 'role': 'agent', 'id': 'term-dispatch-1', 'state': 'turn_observed'}))
-        self.refused(admission, lambda s: s['result']['worker'].update(turnStart='observed'))
-        self.refused(admission, lambda s: s['result']['worker'].update(prompt={'stages': ['turn_started']}))
-        self.refused(admission, lambda s: s['result']['dispatch'].update(lastHeartbeatAt='2026-10-01T11:59:00Z'))
+    def test_unresolved_start_later_proved_observed_is_accounted_as_observed_not_unknown(self):
+        changes = (
+            lambda s: s['result']['worker']['effects'].append(
+                {'kind': 'dispatch_input', 'role': 'agent', 'id': 'term-dispatch-1', 'state': 'turn_observed'}),
+            lambda s: s['result']['worker'].update(turnStart='observed'),
+            lambda s: s['result']['worker'].update(prompt={'stages': ['input_accepted', 'turn_started']}),
+            lambda s: s['result']['dispatch'].update(lastHeartbeatAt='2026-10-01T11:59:00Z'),
+        )
+        for change in changes:
+            with self.subTest(change=change):
+                self.setUp()
+                admission = self.held()
+                shown = self.port.show_worker('dispatch-1')
+                change(shown)
+                with patch.object(self.port, 'show_worker', return_value=shown):
+                    result = self.account(admission)
+                row = result['admission']
+                proof = row['abandoned_accounting']
+                self.assertEqual((row['state'], result['action']), ('bound', 'accounted_abandoned'))
+                self.assertEqual((proof['classification'], proof['execution']), ('abandoned_observed_start', 'observed'))
+                self.assertTrue(proof['observed_start'])
+                self.assertEqual((row['report'], row['changed_paths'], row['disposition']), (None, None, None))
+                self.assertIsNotNone(result['hold'])
+                with self.assertRaises(PodError) as caught:
+                    _binding_from_show(shown, row, 'dispatch-1')
+                self.assertEqual(caught.exception.code, 'native_start_unsettled')
+                self.assertEqual(len(self.port.starts), 1)
+
+    def test_bound_admission_abandoned_after_an_observed_start_is_accounted_without_a_report(self):
+        self.normal()
+        bound = self.start()['admission']
+        self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed',
+                                               liveness={'verdict': 'exited', 'reason': 'terminal_closed'})
+        shown = self.port.show_worker('dispatch-1')
+        shown['result']['worker']['startedAt'] = '2026-10-01T11:00:00Z'
+        shown['result']['dispatch']['lastHeartbeatAt'] = '2026-10-01T11:30:00Z'
+        with patch.object(self.port, 'show_worker', return_value=shown):
+            result = self.account(bound)
+            row = result['admission']
+            self.assertEqual((row['state'], row['native_binding']), ('bound', bound['native_binding']))
+            self.assertEqual(row['abandoned_accounting']['classification'], 'abandoned_observed_start')
+            self.assertEqual(row['abandoned_accounting']['observed_start']['workerStartedAt'], '2026-10-01T11:00:00Z')
+            self.assertEqual((result['release'], result['hold']), ('process_exited', None))
+            self.assertEqual((row['report'], row['effective_evidence'], row['route_decision']),
+                             (None, bound['effective_evidence'], bound['route_decision']))
+            self.assertEqual(self.account(bound)['admission'], row)
+            self.assertEqual(self.outstanding(row)['outstanding_ids'], [])
+        self.assertEqual(len(self.port.starts), 1)
+        # An unobserved record never turns observed later, and a recorded observed start never regresses.
+        regress = self.port.show_worker('dispatch-1')
+        with patch.object(self.port, 'show_worker', return_value=regress), self.assertRaises(PodError):
+            self.port.read_native('owner', authority_runs=('run',), assignments=(row,))
 
     def test_missing_or_conflicting_fence_remains_unresolved(self):
         admission = self.held()
@@ -511,6 +610,7 @@ class AbandonedReadinessTests(AbandonedFixture):
                 row = self.accounted({'verdict': verdict, 'reason': 'test'})
                 projection, reasons, warnings = self.evaluate(row)
                 self.assertEqual(len(governor._active(projection)), 1)
+                self.assertEqual(len(governor._active(projection, ['unrelated-task'])), 1)
                 self.assertIn('effective_unknown', reasons)
                 self.assertIn('integration_unsettled', reasons)
                 self.assertNotIn('abandoned_attempt_history', warnings)
@@ -521,6 +621,65 @@ class AbandonedReadinessTests(AbandonedFixture):
         self.assertEqual(governor._settled_abandoned(read(self.project, 'objective')['admissions'], None), set())
         self.assertEqual(governor._settled_abandoned(read(self.project, 'objective')['admissions'],
                                                     {'outstanding': [{'admission_id': row['admission_id']}]}), set())
+
+
+class AbandonedRoleTests(AbandonedFixture):
+    """A no-output abandoned attempt completes for the implement and review roles without a manufactured report."""
+
+    def settled(self, role):
+        """A no-output abandoned attempt; a review's assurance serving is set on the record, as that map is heavy."""
+        from pod.ledger import update_admission
+        self.port = AbandonedPort()
+        self.port.placement = {'repository': None, 'repo_key': None, 'path': str(self.project.resolve()),
+                               'branch': None, 'runtime': 'runtime'}
+        with self.assertRaises(PodError) as caught:
+            self.start()
+        self.assertEqual(caught.exception.code, 'native_start_unsettled')
+        admission = next(iter(read(self.project, 'objective')['admissions'].values()))
+        if role == 'review':
+            update_admission(self.project, 'objective', owner='owner', admission_id=admission['admission_id'],
+                             update=lambda row: row.update(role='review', serves=['PA']))
+        admission = read(self.project, 'objective')['admissions'][admission['admission_id']]
+        self.assertEqual(admission['role'], role)
+        self.port.workers['dispatch-1'].update(state='abandoned', outcome='failed')
+        return admission
+
+    def context(self, row):
+        native = self.port.read_native('owner', authority_runs=('run',), assignments=(row,))
+        outstanding = logical_projection(self.project, native, objective='objective')['outstanding_ids']
+        return {'admissions': read(self.project, 'objective')['admissions'], 'outstanding': outstanding}
+
+    def test_review_role_releases_its_reservation_only_when_the_claim_clears_and_finalizes_without_a_report(self):
+        from pod import governor
+        from pod.assurance import pending_serving
+        admission = self.settled('review')
+        served = {'id': 'PA'}
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'alive', 'reason': 'test'}
+        row = self.account(admission)['admission']
+        self.assertEqual(pending_serving(served, self.context(row)), [admission['admission_id']])
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        self.assertEqual(self.account(admission)['release'], 'process_exited')
+        self.assertEqual(pending_serving(served, self.context(row)), [])
+        done = governor.finalization(read(self.project, 'objective'), {'actions': []})
+        self.assertNotIn('report_consumption', done['remaining'])
+        self.assertEqual(done['history'], [admission['admission_id']])
+        stored = read(self.project, 'objective')['admissions'][admission['admission_id']]
+        self.assertEqual((stored['report'], stored['disposition']), (None, None))
+        with self.assertRaises(PodError) as caught:
+            consume_report(self.project, 'objective', owner='owner', admission_id=admission['admission_id'],
+                           observation={})
+        self.assertEqual(caught.exception.code, 'report_attempt_unverified')
+
+    def test_implement_role_still_takes_the_ordinary_discard_before_replacement(self):
+        from pod import governor
+        admission = self.settled('implement')
+        self.port.workers['dispatch-1']['liveness'] = {'verdict': 'exited', 'reason': 'terminal_closed'}
+        row = self.account(admission)['admission']
+        self.discard(row, 'No accepted output; the abandoned attempt remains history')
+        stored = read(self.project, 'objective')['admissions'][admission['admission_id']]
+        self.assertEqual(stored['disposition']['kind'], 'discarded')
+        self.assertEqual(governor.finalization(read(self.project, 'objective'), {'actions': []})['history'],
+                         [admission['admission_id']])
 
 
 class AbandonedPrecedingReaderTests(AbandonedFixture):

@@ -341,7 +341,8 @@ def pending_serving(ob: dict, ctx: dict) -> list[str]:
     return [key for key, row in _admissions(ctx).items()
             if ob["id"] in (row.get("serves") or []) and row.get("state") != "deferred"
             and not route_discarded(row, pending=ctx.get("pending_route_settlements", ()))
-            and row.get("disposition") is None and (key in outstanding or row.get("report") is None)]
+            and row.get("disposition") is None
+            and (key in outstanding or row.get("report") is None and "abandoned_accounting" not in row)]
 
 
 def reserve_capacity(ob: dict, ctx: dict, *, seq: int):
