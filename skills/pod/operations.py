@@ -118,6 +118,9 @@ def _assignment_evidence(shown: dict, admission: dict) -> dict:
             or worker.get("worktreeId") != binding["worktreeId"]):
         raise PodError("native_assignment_unverified", "Exact assignment identity differs")
     _check_retry_dispatch(dispatch, admission)
+    if "abandoned_accounting" in admission:
+        from .abandoned import current_fence
+        current_fence(shown, admission, binding)
     return {"admission_id": admission["admission_id"], "runtime": shown["runtime"],
             "run_id": binding["runId"], "task_id": binding["taskId"],
             "dispatch_id": binding["dispatchId"], "worker_id": binding["workerId"],
@@ -434,7 +437,7 @@ def _receipt_from_request_show(shown: dict, request_uuid: str) -> tuple[str, dic
     return status, receipt if isinstance(receipt, dict) else None
 
 
-def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
+def _identity_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
     if shown.get("runtime") != admission["runtime"]:
         raise PodError("native_identity_unverified", "Orca runtime changed")
     result = shown.get("result")
@@ -452,8 +455,6 @@ def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
             or worker.get("dispatchId") != dispatch):
         raise PodError("native_identity_unverified", "Worker readback does not join admission")
     _check_retry_dispatch(native_dispatch, admission)
-    if worker.get("state") not in STARTED_STATES:
-        raise PodError("native_start_unsettled", "Worker has not proved that start occurred")
     binding = {"runId": admission["run_id"], "taskId": admission["task_id"],
                "dispatchId": dispatch, "workerId": projection.get("id"),
                "worktreeId": worker.get("worktreeId"),
@@ -461,6 +462,13 @@ def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
     # A record holds only identities that can be written and passed back to Orca exactly (R18).
     if not binding_valid(binding) or not all(value is None or _passable(value) for value in binding.values()):
         raise PodError("native_identity_unverified", "Worker identity is incomplete")
+    return binding
+
+
+def _binding_from_show(shown: dict, admission: dict, dispatch: str) -> dict:
+    binding = _identity_from_show(shown, admission, dispatch)
+    if shown["result"]["worker"].get("state") not in STARTED_STATES:
+        raise PodError("native_start_unsettled", "Worker has not proved that start occurred")
     return binding
 
 
@@ -1253,7 +1261,8 @@ def _continuity_for_recovery(project: Path, objective: str, owner: str, admissio
 
 
 def recover_admission(project: Path, objective: str, *, owner: str, admission_id: str,
-                      worktree: str, port: NativePort | None = None, issue_port=None) -> dict:
+                      worktree: str, port: NativePort | None = None, issue_port=None,
+                      abandoned_reason: str | None = None) -> dict:
     """Recover the same admission; pending replay never rechecks model preferences."""
     native_port = port or OrcaPort(project)
     state = read(project, objective)
@@ -1267,6 +1276,19 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
     _start_observations(project, objective, admission)
     if _retry_conflict_code(admission) is not None:
         return {"status": admission["state"], "admission": admission, "action": "hold"}
+    if abandoned_reason is not None:
+        from .abandoned import recover
+        try:
+            return recover(project, objective, owner=owner, admission=admission,
+                           reason=abandoned_reason, port=native_port)
+        except PodError as exc:
+            if admission.get("retry_of") is not None and exc.code in (
+                    "native_retry_parent_mismatch", "native_retry_parent_unverified",
+                    "native_retry_placement_mismatch", "native_retry_placement_unverified"):
+                row = _hold(project, objective, owner=owner, admission_id=admission_id,
+                            request_uuid=admission["request_uuid"], code=exc.code, detail=str(exc))
+                return {"status": row["state"], "admission": row, "action": "hold"}
+            raise
     if admission["state"] in ("bound", "closed", "deferred"):
         action = "defer" if admission["state"] == "deferred" else "reuse"
         return {"status": admission["state"], "admission": admission, "action": action}
@@ -1361,7 +1383,8 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   plan_revision: str, frozen_packet: dict, worktree: str = "current",
                   reuse_of: str | None = None, port: NativePort | None = None,
                   issue_port=None, accompanying: dict | None = None,
-                  retry_of: str | None = None, retry_after: str | None = None) -> dict:
+                  retry_of: str | None = None, retry_after: str | None = None,
+                  abandoned_reason: str | None = None) -> dict:
     """Packet, recovery, issue, placement, serialized boundary, then one native start."""
     from .issue_revision import refuse_alternate
     refuse_alternate(accompanying)
@@ -1399,8 +1422,11 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
             code = "unresolved_prior_attempt" if existing["state"] in ("reserved", "unresolved") else "admission_conflict"
             raise PodError(code, "A Task's admission cannot be replaced by another packet or placement")
         recovered = recover_admission(project, objective, owner=owner, admission_id=admission_id,
-                                      worktree=worktree, port=native_port, issue_port=issue_port)
+                                      worktree=worktree, port=native_port, issue_port=issue_port,
+                                      abandoned_reason=abandoned_reason)
         return {**recovered, "decision": recovered["admission"]["route_decision"]}
+    if abandoned_reason is not None:
+        raise PodError("unknown_admission", "Abandoned accounting recovers an existing admission; it never starts work")
     # A tick rebind changes only objective_source. Name that stale packet before
     # rechecking its old source; every other pre-existing refusal keeps its order.
     if any(row["phase"] != "completed" for row in existing_state.get("pod_ticks", {}).get("requests", {}).values()):
