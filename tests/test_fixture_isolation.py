@@ -1,4 +1,4 @@
-"""#141: a test process cannot reach a real checkout, home or credential, however Git is invoked."""
+"""#141: an inherited Git environment cannot send a fixture to a real repository, and the wrapper hides the host."""
 import json
 import os
 from pathlib import Path
@@ -10,11 +10,11 @@ import unittest
 from unittest.mock import patch
 
 from tests import boundary, isolation
+from tools import isolate
 from tests.common import fixture
 from tests.isolation import IsolationBreach
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFINED = unittest.skipUnless(boundary.CONFINED, "Landlock is unavailable here; the CI lanes forbid skips")
 HOSTILE = {"GIT_DIR": "x", "GIT_WORK_TREE": "x", "GIT_INDEX_FILE": "x", "GIT_COMMON_DIR": "x"}
 
 
@@ -43,15 +43,11 @@ def state(repo: Path) -> dict:
             "worktrees": git(repo, "worktree", "list", "--porcelain")}
 
 
-def child(program: str, args: dict, *, nested: bool = True, readable=(), env: dict | None = None,
-          cwd: Path | None = None) -> subprocess.CompletedProcess:
-    """Run a program in a fresh interpreter. A nested child gets its own, narrower private root, so
-    everything the parent created (the stand-ins) is outside it, as a real checkout is."""
+def child(program: str, args: dict, *, nested: bool = True, env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """Run a program in a fresh interpreter. A nested child gets its own private root."""
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "skills"), str(ROOT))), **(env or {})}
     if nested:
         environment[boundary.SWITCH] = "nested"
-    if readable:
-        environment[boundary.READABLE] = os.pathsep.join(map(str, readable))
     return subprocess.run([sys.executable, "-c", textwrap.dedent(program), json.dumps(args)], cwd=cwd or ROOT,
                           env=environment, capture_output=True, text=True, timeout=60)
 
@@ -123,9 +119,9 @@ class ScrubTests(unittest.TestCase):
             import json
             import tests
             from tests import boundary
-            print(json.dumps([boundary.PRIVATE_ROOT is None, boundary.CONFINED]))
+            print(json.dumps(boundary.PRIVATE_ROOT is None))
         """, {}, nested=False, env={boundary.SWITCH: "off"})
-        self.assertEqual(json.loads(result.stdout), [True, False], result.stderr)
+        self.assertTrue(json.loads(result.stdout), result.stderr)
 
 
 class ContaminationTests(unittest.TestCase):
@@ -178,134 +174,51 @@ class ContaminationTests(unittest.TestCase):
             self.assertEqual(git(elsewhere, "log", "-1", "--format=%s"), "legitimate work by someone else")
 
 
-@CONFINED
-class BoundaryTests(unittest.TestCase):
-    """Leaks aimed at stand-ins for the host, from children whose boundary excludes them."""
+class IsolateTests(unittest.TestCase):
+    """The command line tools/isolate.py builds. `python tools/isolate.py --self-check` runs it for real."""
 
-    def setUp(self):
-        self.temp = fixture(); self.root = self.temp.__enter__()
-        self.addCleanup(self.temp.__exit__, None, None, None)
-        self.canonical = repository(self.root / "canonical")
-        self.home = self.root / "real-home"
-        (self.home / ".codex").mkdir(parents=True)
-        (self.home / ".codex/auth.json").write_text("synthetic-credential\n")
-        (self.home / ".local/bin").mkdir(parents=True)
-        (self.home / ".local/bin/pod").write_text("#!/bin/sh\n")
-        self.before = state(self.canonical)
+    @staticmethod
+    def bound(argv, path) -> bool:
+        return any(argv[i:i + 3] == ["--ro-bind", str(path), str(path)] for i in range(len(argv)))
 
-    def assert_untouched(self):
-        self.assertEqual(state(self.canonical), self.before)
-        self.assertEqual((self.home / ".codex/auth.json").read_text(), "synthetic-credential\n")
-        self.assertEqual((self.home / ".local/bin/pod").read_text(), "#!/bin/sh\n")
+    def argv(self, **options):
+        env = {"PATH": "/usr/bin", "HOME": "/home/x", "GH_TOKEN": "t", "ORCA_HOOK": "h", "SSH_AUTH_SOCK": "s",
+               "GIT_DIR": "/host/.git", "LC_ALL": "C", "POD_REQUIRE_PTY": "1", "PYTHONPATH": str(ROOT / "skills")}
+        return isolate.arguments(["true"], env=env, **options)
 
-    def test_this_process_cannot_write_the_checkout_or_its_git_metadata(self):
-        for target in (ROOT / "tests" / ".leak-canary", ROOT / ".git-leak-canary"):
-            with self.subTest(target.name), self.assertRaises(PermissionError):
-                target.write_text("leak")
-            self.assertFalse(target.exists())
+    def test_the_host_is_read_only_and_home_credentials_and_scratch_are_empty(self):
+        argv = self.argv()
+        self.assertEqual(argv[argv.index("--ro-bind"):argv.index("--ro-bind") + 3], ["--ro-bind", "/", "/"])
+        hidden = [argv[i + 1] for i, item in enumerate(argv) if item == "--tmpfs"]
+        self.assertTrue({"/home", "/tmp"} <= set(hidden), hidden)
+        self.assertTrue(self.bound(argv, ROOT))
+        self.assertGreater(argv.index(str(ROOT)), max(i for i, item in enumerate(argv) if item == "--tmpfs"),
+                           "the checkout is put back after /home is hidden")
+        self.assertNotIn("--bind", argv)
 
-    def test_a_child_can_neither_write_nor_read_a_real_home_launcher_or_credentials(self):
-        result = child("""
-            import json, sys
-            import tests
-            from pathlib import Path
-            home, out = Path(json.loads(sys.argv[1])["home"]), {}
-            for name, action in (("write credentials", lambda: (home / ".codex/auth.json").write_text("x")),
-                                 ("write launcher", lambda: (home / ".local/bin/pod").write_text("x")),
-                                 ("create", lambda: (home / "new").write_text("x")),
-                                 ("read credentials", lambda: (home / ".codex/auth.json").read_text()),
-                                 ("delete", lambda: (home / ".local/bin/pod").unlink())):
-                try: action(); out[name] = "allowed"
-                except PermissionError: out[name] = "denied"
-            print(json.dumps(out))
-        """, {"home": str(self.home)})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(set(json.loads(result.stdout).values()), {"denied"}, result.stdout)
-        self.assert_untouched()
+    def test_nothing_is_inherited_except_an_allowlist(self):
+        argv = self.argv()
+        self.assertIn("--clearenv", argv)
+        passed = {argv[i + 1] for i, item in enumerate(argv) if item == "--setenv"}
+        self.assertEqual(passed, {"PATH", "LC_ALL", "POD_REQUIRE_PTY", "PYTHONPATH", "HOME", "TMPDIR"})
 
-    def test_an_import_during_discovery_cannot_write_outside_the_boundary(self):
-        discovery = self.root / "discovery"; discovery.mkdir()
-        outside = self.home / "import-leak"
-        (discovery / "test_canary.py").write_text(textwrap.dedent(f"""
-            import unittest
-            import tests.common
-            try:
-                open({str(outside)!r}, "w").write("leak"); LEAKED = True
-            except PermissionError:
-                LEAKED = False
-            class Canary(unittest.TestCase):
-                def test_import_time_write_was_prevented(self): self.assertFalse(LEAKED)
-        """))
-        environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "skills"), str(ROOT))),
-                       boundary.SWITCH: "nested", boundary.READABLE: str(discovery)}
-        result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(discovery), "-t",
-                                 str(discovery)], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(outside.exists())
+    def test_the_command_follows_the_separator_and_the_process_dies_with_its_parent(self):
+        argv = self.argv()
+        self.assertEqual(argv[-2:], ["--", "true"])
+        self.assertIn("--die-with-parent", argv)
+        self.assertIn("--unshare-all", argv)
 
-    GIT = """
-        import json, subprocess, sys
-        import tests
-        from pathlib import Path
-        from tests.common import fixture
-        args, out = json.loads(sys.argv[1]), {}
-        def run(where, *argv, env=None):
-            return subprocess.run(["git", "-C", str(where), "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
-                                   *argv], capture_output=True, text=True, env=env).returncode
+    def test_a_linked_worktree_gets_its_git_directories_read_only_and_extras_come_back_read_only(self):
         with fixture() as root:
-            own = root / "own"; own.mkdir()
-            out["control init"] = run(own, "init", "-q", "-b", "main")
-            (own / "f").write_text("f")
-            out["control commit"] = run(own, "add", ".") + run(own, "commit", "-qm", "own")
-            %s
-        print(json.dumps(out))
-    """
-
-    def test_a_dot_git_pointer_to_an_external_repository_cannot_write_it(self):
-        result = child(self.GIT % """
-            project = root / "project"; project.mkdir()
-            (project / ".git").write_text("gitdir: " + args["gitdir"] + "\\n")
-            out["config"] = run(project, "config", "user.name", "Fixture")
-            out["commit"] = run(project, "commit", "--allow-empty", "-qm", "base")
-            out["branch"] = run(project, "branch", "leak")
-        """, {"gitdir": str(self.canonical / ".git")}, readable=[self.canonical])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        outcome = json.loads(result.stdout)
-        self.assertEqual([outcome["control init"], outcome["control commit"]], [0, 0], outcome)
-        self.assertTrue(all(outcome[key] != 0 for key in ("config", "commit", "branch")), outcome)
-        self.assert_untouched()
-
-    def test_explicit_hostile_git_environment_and_cwd_cannot_write_the_external_repository(self):
-        hostile = {**os.environ, "GIT_DIR": str(self.canonical / ".git"), "GIT_WORK_TREE": str(self.canonical),
-                   "GIT_INDEX_FILE": str(self.canonical / ".git/index")}
-        result = child(self.GIT % """
-            for name, argv in (("config", ["config", "user.name", "Fixture"]), ("add", ["add", "-A"]),
-                               ("commit", ["commit", "--allow-empty", "-qm", "base"]), ("reinit", ["init", "-q"])):
-                out[name] = run(Path(args["canonical"]), *argv, env=args["env"])
-        """, {"canonical": str(self.canonical), "env": hostile}, readable=[self.canonical])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        outcome = json.loads(result.stdout)
-        self.assertEqual([outcome["control init"], outcome["control commit"]], [0, 0], outcome)
-        self.assertTrue(all(outcome[key] != 0 for key in ("config", "commit")), outcome)
-        self.assert_untouched()
-
-    def test_a_linked_worktree_and_its_common_directory_cannot_be_written_from_outside(self):
-        linked = self.root / "linked"
-        git(self.canonical, "worktree", "add", "-q", "-b", "task", str(linked))
-        self.before = state(self.canonical)
-        before_linked = state(linked)
-        result = child(self.GIT % """
-            linked = Path(args["linked"])
-            out["commit"] = run(linked, "commit", "--allow-empty", "-qm", "leak")
-            out["common branch"] = run(linked, "branch", "leak")
-            out["tag"] = run(linked, "tag", "leak")
-        """, {"linked": str(linked)}, readable=[self.canonical, linked], cwd=linked)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        outcome = json.loads(result.stdout)
-        self.assertEqual([outcome["control init"], outcome["control commit"]], [0, 0], outcome)
-        self.assertTrue(all(outcome[key] != 0 for key in ("commit", "common branch", "tag")), outcome)
-        self.assert_untouched()
-        self.assertEqual(state(linked), before_linked)
+            common = root / "common.git"; common.mkdir()
+            gitdir = common / "worktrees" / "w"; gitdir.mkdir(parents=True)
+            (gitdir / "commondir").write_text("../..\n")
+            checkout = root / "checkout"; checkout.mkdir()
+            (checkout / ".git").write_text(f"gitdir: {gitdir}\n")
+            extra = root / "extra"; extra.mkdir()
+            argv = self.argv(checkout=checkout, readable=(str(extra),))
+            for path in (checkout, gitdir.resolve(), common.resolve(), extra):
+                self.assertTrue(self.bound(argv, path), path)
 
 
 if __name__ == "__main__":
