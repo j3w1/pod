@@ -338,7 +338,7 @@ def review_fixture():
         case.report(admission, packet, outcome="failed", map={"seq": seq + 1, "update": {
             "A": WAITING, "K": {"kind": "correction", "provenance": "coordinator", "parent": "A",
                 "check": "repair the defect", "proof_scope": ["src"], **WAITING}}},
-            triage=[{"finding": "F1", "severity": "major", "triage": "required_correction",
+            triage=[{"finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                      "correction": "K", "summary": "repair required"}])
         case.write(renew=[{"id": "A", "as": "A2"}])
         case.controls = case.root / "withdrawal-controls.json"

@@ -2678,7 +2678,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
         lines.append(f"Flag       serialization: {flag['obligation']} sequenced behind {flag['holder']} "
                      f"since seq {flag['since_seq']}")
     for key in observed.get("churn", []):
-        lines.append(f"Flag       churn: {key} has {CHURN_THRESHOLD}+ settled admissions without satisfaction")
+        lines.append(f"Flag       churn: {key} has {CHURN_THRESHOLD}+ settled admissions without satisfaction; "
+                     "diagnose before another attempt (narrow the approach, repair the named defect or get specialist input); "
+                     "this blocks nothing")
     if observed.get("governance_stale"):
         lines.append("Flag       governance base moved; refresh before new admission")
     if state.get("delivery") is not None:

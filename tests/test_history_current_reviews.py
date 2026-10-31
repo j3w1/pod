@@ -197,7 +197,7 @@ class CurrentReviewProductionTests(unittest.TestCase):
             if correction:
                 update[correction] = {"kind": "correction", "provenance": "coordinator", "parent": "A",
                                       "check": "repair the finding", "proof_scope": ["src"], **WAITING}
-                triage = [{"finding": "F1", "severity": "major", "triage": "required_correction",
+                triage = [{"finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
                            "correction": correction, "summary": "repair required"}]
             case.report(admission, frozen, outcome=result, map={"seq": seq() + 1, "update": update}, triage=triage)
             return admission["admission_id"]

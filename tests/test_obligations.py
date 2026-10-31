@@ -820,7 +820,7 @@ class AssuranceTests(unittest.TestCase):
     def test_triage_creates_corrections_or_proposals_and_lists_downgrades(self):
         correction = ob("K1", "unassigned", kind="correction", parent="A", boundary={"paths": ["src/p.py"]})
         findings = [
-            {"finding": "f1", "severity": "blocker", "triage": "required_correction", "summary": "off by one",
+            {"finding": "f1", "severity": "blocker", "triage": "required_correction", "blocks": "outcome", "summary": "off by one",
              "correction": "K1"},
             {"finding": "f2", "severity": "major", "triage": "advisory", "summary": "rename helper",
              "reason": "cosmetic; the reviewer marked style issues major"},

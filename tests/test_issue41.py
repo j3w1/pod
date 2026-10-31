@@ -169,8 +169,8 @@ class FindingBoundaryTests(ProductionCase):
         rows = self.stored(); rows[1].pop("executor"); rows[1].update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
         rows.append({"id":"C", "kind":"correction", "provenance":"coordinator", "parent":"A", "check":"fix", "state":"waiting", "wait":{"class":"sequenced", "referent":"O1"}})
         self.report(admission, frozen, map={"obligations": rows}, triage=[
-          {"finding":"F1", "severity":"major", "triage":"required_correction", "summary":"root", "correction":"C"},
-          {"finding":"F2", "severity":"minor", "triage":"required_correction", "summary":"sibling", "correction":"C"}])
+          {"finding":"F1", "severity":"major", "triage":"required_correction", "blocks": "outcome", "summary":"root", "correction":"C"},
+          {"finding":"F2", "severity":"minor", "triage":"required_correction", "blocks": "outcome", "summary":"sibling", "correction":"C"}])
         rows = self.stored(); c = next(row for row in rows if row["id"] == "C")
         self.assertEqual(c["finding"]["findings"], ["F1", "F2"]); self.assertEqual(c["finding"]["severity"], "major")
         c.pop("wait"); c.update(state="satisfied", evidence=[self.proof("C")]); self.write(rows)
@@ -514,7 +514,7 @@ class AdditionalFindingTests(FindingBoundaryTests):
     def test_findings_and_correction_id_bounds_refuse_without_eviction(self):
         frozen,admission=self.intake_review();rows=self.stored();rows[1].pop("executor");rows[1].update(state="waiting",wait={"class":"sequenced","referent":"O1"})
         rows.append({"id":"C","kind":"correction","provenance":"coordinator","parent":"A","check":"fix","state":"waiting","wait":{"class":"sequenced","referent":"O1"}})
-        findings=[{"finding":f"F{i}","severity":"minor","triage":"required_correction","summary":"shared predicate","correction":"C"} for i in range(9)]
+        findings=[{"finding":f"F{i}","severity":"minor","triage":"required_correction", "blocks": "outcome","summary":"shared predicate","correction":"C"} for i in range(9)]
         before=read(self.project,"objective")
         with self.assertRaises(PodError) as caught:self.report(admission,frozen,map={"obligations":rows},triage=findings)
         self.assertEqual(caught.exception.detail["detail"],"finding_limit");self.assertEqual(read(self.project,"objective"),before)
@@ -614,7 +614,7 @@ class RemainingProofTests(ProofBoundaryTests):
         entries={item["obligation"]:item for item in detail["referent"]["invalidations"]}
         self.assertEqual(detail["referent"]["remaining"],1)
         self.assertEqual(entries["O1"]["eligibility"],"eligible");self.assertEqual(entries["T"]["eligibility"],"touched")
-        self.assertEqual(entries["N"]["eligibility"],"no declared scope");self.assertEqual(entries["U"]["eligibility"],"delta unreadable")
+        self.assertEqual(entries["N"]["eligibility"],"no declared scope");self.assertEqual(entries["U"]["eligibility"],"eligible");self.assertIn("{from: "+self.base+"}",entries["U"]["correction"])
         self.assertEqual(entries["R"]["eligibility"],"touched");self.assertEqual(entries["D"]["classification"],"definition change")
         self.assertEqual(entries["B"]["classification"],"binding change");self.assertEqual(entries["G"]["classification"],"governance change")
         self.assertTrue(all(item["correction"] for item in entries.values()));self.assertEqual(read(self.project,"objective"),before)
@@ -640,12 +640,13 @@ class RemainingProofTests(ProofBoundaryTests):
         self.write(rows)
         self.assertEqual(self.stored()[0]["proof_scope"],["src"])
 
-    def test_empty_process_scope_still_refuses_an_unreadable_delta(self):
+    def test_empty_process_scope_ignores_an_unreadable_claimed_source(self):
         self.satisfied_rows();self.move("src/old.py")
         rows=self.stored();rows[1]["reuse"]={"from":"f"*40}
         with self.assertRaises(PodError) as caught:self.write(rows)
         s=next(item for item in caught.exception.detail["referent"]["invalidations"] if item["obligation"]=="S")
-        self.assertEqual(s["eligibility"],"delta unreadable")
+        # The proposal comes from the evidence's own candidate; an unreadable claimed source decides nothing.
+        self.assertEqual(s["eligibility"],"eligible");self.assertNotIn("f"*40,s["correction"])
 
 
 class RemainingDiagnosticsTests(ProductionCase):

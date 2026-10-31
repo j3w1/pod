@@ -946,7 +946,7 @@ class RetentionTests(TabCase):
             "check": "repair parser", "boundary": {"paths": ["src"]}, "state": "unassigned"})
         self.tab_case = "retained"
         self.report(reviewer, review_packet, map={"obligations": rows}, triage=[{
-            "finding": "defect", "severity": "major", "triage": "required_correction",
+            "finding": "defect", "severity": "major", "triage": "required_correction", "blocks": "outcome",
             "summary": "parser defect", "correction": "K"}])
         for reason in ("corrections", "delta review"):
             with self.subTest(reason=reason):
@@ -995,7 +995,7 @@ class RetentionTests(TabCase):
             "check": "repair parser", "boundary": {"paths": ["src"]}, "state": "unassigned"})
         self.tab_case = "retained"
         raw = self.report(admission, frozen, map={"obligations": rows}, triage=[{
-            "finding": "defect", "severity": "major", "triage": "required_correction",
+            "finding": "defect", "severity": "major", "triage": "required_correction", "blocks": "outcome",
             "summary": "parser defect", "correction": "K"}])
         self.assertEqual(raw["worker_tab"]["retained_title"]["title"], "Reviewer · Check parser")
         self.assertEqual(self.status()["worker_tabs"][0]["retention_reason"], "corrections")

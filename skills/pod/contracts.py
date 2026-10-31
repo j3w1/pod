@@ -324,6 +324,7 @@ TABLE["standing authorization"] = definition({
 TABLE["finding"] = definition({
     "finding": ident(), "severity": choice(SEVERITIES), "triage": choice(TRIAGE),
     "summary": text(512),
+    "blocks": {**text(128), "validated_when": "new required_correction (the outcome, requirement, PoD or policy it blocks); refused on advisory"},
     "reason": {**text(1024), "validated_when": "blocker or major finding downgraded to advisory"},
     "root_cause": text(512),
     "findings": {**items(8, record("group member")), "min_items": 1},
