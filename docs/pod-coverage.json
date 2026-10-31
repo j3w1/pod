@@ -5650,17 +5650,6 @@
       "status": "NOT_RUN"
     },
     {
-      "id": "A412",
-      "required_evidence": [
-        "unit",
-        "hosted_ci",
-        "independent_review",
-        "live_native"
-      ],
-      "offline_test": "tests.test_inventory.InventoryIntegrityTests.test_spec_and_coverage_ids_are_complete",
-      "status": "NOT_RUN"
-    },
-    {
       "id": "A413",
       "required_evidence": [
         "unit"
@@ -9731,6 +9720,61 @@
         "tests.test_delivery_retry.DeliveryTests.test_the_screen_read_has_one_exact_shape_and_accepts_only_that_terminals_screen"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A738",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_superseded_closure.WithdrawalOnlyClosureTests.test_withdrawal_only_closure_keeps_the_bound_baseline_and_proof",
+        "tests.test_superseded_closure.WithdrawalOnlyClosureTests.test_the_label_is_left_as_it_was",
+        "tests.test_superseded_closure.WithdrawalOnlyClosureTests.test_refresh_route_still_requires_fresh_review_so_closure_does_not_use_it"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A739",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_superseded_closure.WithdrawalOnlyBoundaryTests.test_withdrawal_without_closure_still_needs_current_governance",
+        "tests.test_superseded_closure.WithdrawalOnlyBoundaryTests.test_new_satisfaction_in_the_closing_write_still_needs_current_governance",
+        "tests.test_superseded_closure.WithdrawalOnlyBoundaryTests.test_a_new_row_in_the_closing_write_still_needs_current_governance",
+        "tests.test_superseded_closure.WithdrawalOnlyBoundaryTests.test_withdrawal_closure_still_needs_valid_withdrawal_authority",
+        "tests.test_superseded_closure.WithdrawalOnlyBoundaryTests.test_a_rewritten_satisfied_criterion_check_keeps_ordinary_checks",
+        "tests.test_superseded_closure.WithdrawalOnlyBoundaryTests.test_a_rewritten_satisfied_assurance_question_or_scope_keeps_ordinary_checks",
+        "tests.test_superseded_closure.WithdrawalOnlyBoundaryTests.test_a_changed_satisfied_assurance_candidate_keeps_ordinary_checks"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A740",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_superseded_closure.WithdrawalAuthorityRefusalTests.test_missing_revision_authority_is_named_with_every_allowed_form",
+        "tests.test_superseded_closure.WithdrawalAuthorityRefusalTests.test_the_named_next_action_shape_is_accepted",
+        "tests.test_superseded_closure.WithdrawalAuthorityRefusalTests.test_mismatched_authority_names_the_matching_withdrawal",
+        "tests.test_superseded_closure.WithdrawalAuthorityRefusalTests.test_a_withdrawal_kind_that_does_not_apply_names_the_accepted_shape",
+        "tests.test_superseded_closure.WithdrawalAuthorityRefusalTests.test_an_unsupported_withdrawal_kind_is_named_without_its_value"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A741",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review",
+        "live_native"
+      ],
+      "offline_test": "tests.test_inventory.InventoryIntegrityTests.test_spec_and_coverage_ids_are_complete",
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
@@ -9757,6 +9801,10 @@
     {
       "id": "A347",
       "reason": "Scoped compaction publication withdrawn: R180 has one source-bound storage migration entry; prior authority receipts remain readable and lossless migration is covered by A652/A666."
+    },
+    {
+      "id": "A412",
+      "reason": "Superseded release qualification (full local gates/lanes, owner approval and install) withdrawn under the owner's 2026-10-31 directive and docs/validation.md: one hosted latest-stable suite with focused local checks, the Director installs and merges follow owner delegation; the live tick proof it named continues as A741."
     }
   ]
 }

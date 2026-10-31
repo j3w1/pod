@@ -727,6 +727,29 @@ def closure_keeps_baseline(project: Path, map_state: dict, *, state: dict | None
                       "the contained result and later policy are not adopted"}
 
 
+def withdrawal_closure_baseline(project: Path, map_state: dict) -> dict | None:
+    """R201: a closing write that only withdraws keeps the bound baseline after the target moved.
+
+    The caller proves the write is withdrawal-only. Nothing is adopted: no policy, delivery, label or acceptance
+    relies on the moved target, so its ancestry is not needed. A default retarget or an unresolvable target grants
+    nothing, and a recorded delivery keeps R147's own route."""
+    governance = map_state.get("governance") or {}
+    if (governance.get("base_ref") is None or governance.get("base") is None
+            or map_state.get("delivery") is not None):
+        return None
+    if (governance.get("selection") == "default"
+            and _symbolic_ref(project, "refs/remotes/origin/HEAD") != governance["base_ref"]):
+        return None
+    current = _resolve_commit(project, governance["base_ref"])
+    if current is None or current == governance["base"]:
+        return None
+    return {"adopted": False, "base_ref": governance["base_ref"], "base": governance["base"], "target": current,
+            "closure": "withdrawn",
+            "reason": "withdrawn, not delivered: the closing write only withdraws the remaining obligations, so "
+                      "it keeps the bound governance base, adopts no changed policy, records no delivery and "
+                      "leaves the label, acceptances and satisfied proof as recorded"}
+
+
 def completion_governance(project: Path, map_state: dict, *, checkpoint: bool = False,
                           state: dict | None = None) -> tuple[dict | None, tuple[dict, dict] | None]:
     """Completion callers share proof and refusal guidance; ordinary adoption keeps its own authority."""
@@ -745,7 +768,9 @@ def completion_governance(project: Path, map_state: dict, *, checkpoint: bool = 
                         "merge into that target exists, delivery proof is unavailable and closure stays blocked; "
                         "retry only after the required proof "
                         "is available, on the retained baseline without governance_refresh; ordinary work adopting changed "
-                        "governance retains its existing revision authority"}) from exc
+                        "governance retains its existing revision authority. Superseded work that was not delivered "
+                        "closes instead by withdrawing every remaining live obligation with revision authority in "
+                        "the closing checkpoint itself, changing no other row (R201)"}) from exc
 
 
 def accepted_current_target(map_state: dict, current: str) -> bool:
