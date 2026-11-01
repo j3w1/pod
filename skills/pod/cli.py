@@ -80,6 +80,8 @@ def parser() -> argparse.ArgumentParser:
     admission.add_argument("--known-repository", action="append", default=[],
                            help="CE-owned repository path used to prove earlier record attribution")
     admission.add_argument("--timeout", type=float, default=10.0)
+    admission.add_argument("--batch", action="store_true",
+                           help="answer a pod-admission-batch-request/v1 object from stdin over one shared discovery")
     admission.add_argument("--json", action="store_true")
     sweep = sub.add_parser("sweep", help="close every provably delivered open objective by evidence")
     sweep.add_argument("--repository", metavar="PATH", action="append",
@@ -374,6 +376,9 @@ def _models(project: Path, action: str | None, *, check: bool = False,
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
+    if args.command == "admission" and args.batch:
+        from .admission import batch_command
+        return batch_command(args, project)
     if args.command == "admission":
         from .admission import query
         return query(project, repository=args.repository, objective=args.objective, candidate=args.candidate,
@@ -488,7 +493,7 @@ def _print_observation_status(report: dict) -> None:
 
 
 def _exit_code(args: argparse.Namespace, result: dict) -> int:
-    if args.command == "admission" and result.get("schema") == "pod-admission-query/v1":
+    if args.command == "admission" and result.get("schema") in ("pod-admission-query/v1", "pod-admission-batch/v1"):
         return 0  # A factual answer, including scoped uncertainty, is not authorization.
     if args.command in ("policy", "tool"):
         return 1 if result["status"] == "blocked" else 0

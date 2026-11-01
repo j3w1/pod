@@ -10359,6 +10359,141 @@
         "tests.test_historical_retirement.RecordShapeTests.test_a_malformed_entry_makes_the_record_unsupported"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A779",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.RequestTests.test_every_request_refusal_is_one_batch_error",
+        "tests.test_admission_batch.RequestTests.test_bounds_and_nulls_are_accepted",
+        "tests.test_admission_batch.RequestTests.test_timeouts_outside_the_bound_are_refused",
+        "tests.test_admission_batch.RequestTests.test_per_query_input_faults_name_the_query_before_any_discovery",
+        "tests.test_admission_batch.RequestTests.test_the_whole_response_limit_refuses_the_batch",
+        "tests.test_admission_batch.RequestTests.test_cli_answers_exit_zero_and_refusals_print_only_an_error",
+        "tests.test_admission_batch.EquivalenceTests.test_responses_follow_request_order_and_known_repositories_are_shared"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A780",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.EquivalenceTests.test_occupancy_shapes_equal_their_single_queries",
+        "tests.test_admission_batch.EquivalenceTests.test_target_effect_and_expect_shapes_equal_their_single_queries",
+        "tests.test_admission_batch.EquivalenceTests.test_a_native_writer_stays_equivalent",
+        "tests.test_admission_batch.EquivalenceTests.test_a_bound_caller_keeps_its_coverage_unknown",
+        "tests.test_admission_batch.EquivalenceTests.test_the_projection_limit_stays_per_result"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A781",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.SharedReadTests.test_eight_queries_read_each_source_once_and_two_calls_read_afresh",
+        "tests.test_admission_batch.SharedReadTests.test_abandoned_workers_claims_start_from_their_inventory_rows",
+        "tests.test_admission_batch.FleetReadTests.test_abandoned_rows_start_their_claim_reads_during_the_walk"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A782",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_malformed_row_keeps_the_sequential_order_and_its_claims",
+        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it",
+        "tests.test_admission_batch.FleetReadTests.test_a_bound_first_page_answers_none_with_one_read",
+        "tests.test_admission_batch.FleetReadTests.test_the_end_fence_reads_every_unreleased_partition_and_refuses_any_race",
+        "tests.test_admission_batch.FleetReadTests.test_the_allowlist_accepts_exactly_the_walk_and_partition_reads",
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_balanced_replacement_during_the_call_is_never_a_complete_stable_answer_without_it",
+        "tests.test_admission_batch.CorrectionRoundTests.test_an_active_replacement_makes_the_fence_unstable",
+        "tests.test_admission_batch.DiscoveryRaceTests.test_an_old_abandoned_dispatch_settling_beside_a_deletion_and_a_creation",
+        "tests.test_admission_batch.DiscoveryRaceTests.test_a_creation_or_a_deletion_makes_the_fence_unstable",
+        "tests.test_admission_batch.DiscoveryRaceTests.test_a_balanced_state_swap_of_two_old_rows_makes_the_fence_unstable",
+        "tests.test_admission_batch.DiscoveryRaceTests.test_an_unchanged_fleet_is_stable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A783",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.SharedReadTests.test_a_spent_shared_deadline_reaches_every_result"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A784",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.SharedReadTests.test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to",
+        "tests.test_admission_batch.SharedReadTests.test_a_record_added_during_discovery_is_an_inventory_change_for_every_query"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A785",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.FenceTests.test_a_stable_fence_fingerprints_the_documented_rule",
+        "tests.test_admission_batch.FenceTests.test_each_terminal_change_or_an_incomplete_end_is_unstable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A786",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.FleetFenceTests.test_an_unchanged_fleet_fence_is_stable_and_digests_the_documented_rows",
+        "tests.test_admission_batch.FleetFenceTests.test_each_fleet_change_between_discovery_and_the_end_is_unstable",
+        "tests.test_admission_batch.FleetFenceTests.test_a_released_row_outside_the_newest_page_that_changes_makes_the_fence_unstable",
+        "tests.test_admission_batch.FleetFenceTests.test_an_unproved_end_or_a_bound_caller_is_incomplete",
+        "tests.test_admission_batch.FleetFenceTests.test_end_reads_start_only_after_every_native_read_a_result_uses",
+        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A787",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.SharedReadTests.test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to",
+        "tests.test_admission_batch.SharedReadTests.test_a_record_added_during_discovery_is_an_inventory_change_for_every_query",
+        "tests.test_admission_batch.SharedReadTests.test_a_record_removed_during_discovery_is_an_inventory_change",
+        "tests.test_admission_batch.SharedReadTests.test_an_effect_policy_change_during_the_call_is_reported",
+        "tests.test_admission_batch.RequestTests.test_a_fault_inside_one_projection_prints_no_partial_batch",
+        "tests.test_admission_batch.PreexistingFaultTests.test_an_unlocated_foreign_worker_and_a_stale_runtime_answer_normally",
+        "tests.test_admission_batch.CorrectionRoundTests.test_read_faults_stay_scoped_unknowns_in_both_forms",
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_late_run_owner_read_is_never_made_and_marks_the_result_incomplete"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
