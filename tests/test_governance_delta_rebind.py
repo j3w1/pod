@@ -337,7 +337,7 @@ class LinkScopeTests(KernelCase):
         from pod.governance import scope_resolver
         listing = "\0".join([f"100664 blob {'1' * 40}\tweird", f"040000 tree {'2' * 40}\tsrc",
                               f"100644 blob {'3' * 40}\tsrc/old.py", ""])
-        with patch("pod.ledger._git", return_value=CompletedProcess([], 0, listing, "")):
+        with patch("pod.ledger._git", return_value=CompletedProcess([], 0, listing.encode(), b"")):
             resolve = scope_resolver(self.project, ["c" * 40])
             self.assertIsNone(resolve("weird"))
             self.assertIsNone(resolve("weird/below"))

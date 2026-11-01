@@ -415,26 +415,23 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
                 "current": current}
     texts: dict[str, str | None] = {}
     for path in GOVERNANCE_PATHS if paths is None else paths:
-        listed = _git(project, ["ls-tree", "-z", commit, "--", path])
-        if listed is None or listed.returncode != 0:
+        readable, entry = gitio.tree_entry(project, commit, path, reader=_git)
+        if not readable:
             return {"status": "unavailable", "reason": "tree_unreadable", "current": current}
-        entry = listed.stdout.split("\0")[0]
-        if not entry:
+        if entry is None:
             texts[path] = None
             continue
-        meta, _, _name = entry.partition("\t")
-        parts = meta.split()
-        if len(parts) != 3 or parts[1] != "blob":
+        if entry[1] != "blob":
             return {"status": "unavailable", "reason": "source_not_blob", "current": current}
-        size = _git(project, ["cat-file", "-s", parts[2]])
+        size = _git(project, ["cat-file", "-s", entry[2]])
         if size is None or size.returncode != 0 or not size.stdout.strip().isdigit() \
                 or int(size.stdout.strip()) > MAX_GOVERNANCE_TEXT:
             return {"status": "unavailable", "reason": "source_oversized", "current": current}
-        blob = _git(project, ["cat-file", "blob", parts[2]], binary=True)
-        if blob is None or blob.returncode != 0:
+        data = gitio.blob(project, entry[2], limit=MAX_GOVERNANCE_TEXT, reader=_git)
+        if data is None:
             return {"status": "unavailable", "reason": "source_unreadable", "current": current}
         try:
-            texts[path] = blob.stdout.decode("utf-8")
+            texts[path] = data.decode("utf-8")
         except UnicodeError:
             return {"status": "unavailable", "reason": "source_not_text", "current": current}
     return {"status": "observed", "target_ref": target, "selection": chosen_by, "commit": commit,
@@ -443,16 +440,14 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
 
 def _source_blob(project: Path, commit: str, path: str) -> tuple[bool, str | None]:
     """(readable, blob id or None when the path is absent) at one commit."""
-    listed = _git(project, ["ls-tree", "-z", commit, "--", path])
-    if listed is None or listed.returncode != 0:
+    readable, entry = gitio.tree_entry(project, commit, path, reader=_git)
+    if not readable:
         return False, None
-    entry = listed.stdout.split("\0")[0]
-    if not entry:
+    if entry is None:
         return True, None
-    parts = entry.partition("\t")[0].split()
-    if len(parts) != 3 or parts[1] != "blob" or not _OBJECT.fullmatch(parts[2]):
+    if entry[1] != "blob":
         return False, None
-    return True, parts[2]
+    return True, entry[2]
 
 
 def governance_delta(project: Path, bound: list[dict], observed: dict, exclude: list[str]) -> list[dict] | None:
@@ -505,22 +500,17 @@ def scope_resolver(project: Path, commits: list[str]):
 
     def entries(commit):
         if commit not in tables:
-            listed = _git(project, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit])
-            rows = None
-            if listed is not None and listed.returncode == 0:
-                rows = {}
-                for entry in listed.stdout.split("\0"):
-                    meta, _, name = entry.partition("\t")
-                    parts = meta.split()
-                    if len(parts) == 3 and name:
-                        rows[name] = (parts[0], parts[2])
-            tables[commit] = rows
+            listed = gitio.tree_entries(project, commit, reader=_git)
+            tables[commit] = None if listed is None else {name: (mode, obj) for name, (mode, _, obj) in listed.items()}
         return tables[commit]
 
     def target(blob):
         if blob not in blobs:
-            shown = _git(project, ["cat-file", "blob", blob])
-            blobs[blob] = shown.stdout if shown is not None and shown.returncode == 0 and len(shown.stdout) <= 4096 else None
+            data = gitio.blob(project, blob, limit=4096, reader=_git)
+            try:
+                blobs[blob] = data.decode("utf-8") if data is not None else None
+            except UnicodeError:
+                blobs[blob] = None
         return blobs[blob]
 
     def resolve(path, commit):
@@ -570,8 +560,9 @@ def delivered_source_reader(project: Path, commit: str):
     cannot read it: an unsafe or secret-bearing path, an unreadable tree or blob, a blob over the source read
     limit, or a path whose final component is not a regular file (`100644`/`100755`) or whose parents are not
     all trees, so a committed symlink or gitlink is never followed, as `source_identity` refuses one on the host
-    and R203's resolver refuses an opaque mode. The worktree, host paths and remotes are never read; the tree
-    inventory and blobs are cached for one write.
+    and R203's resolver refuses an opaque mode. Names are compared byte-exactly and blobs verified against their
+    ids; replacement refs, grafts and shallow boundaries do not apply (`gitio.read`). The worktree, host paths
+    and remotes are never read; the tree inventory and blobs are cached for one write.
     """
     from hashlib import sha256
     from .records import _safe_relative
@@ -580,26 +571,12 @@ def delivered_source_reader(project: Path, commit: str):
 
     def entries():
         if not table:
-            listed = (_git(project, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit])
-                      if isinstance(commit, str) and _OBJECT.fullmatch(commit) else None)
-            rows = None
-            if listed is not None and listed.returncode == 0:
-                rows = {}
-                for entry in listed.stdout.split("\0"):
-                    meta, _, name = entry.partition("\t")
-                    parts = meta.split()
-                    if len(parts) == 3 and name:
-                        rows[name] = (parts[0], parts[2])
-            table.append(rows)
+            listed = gitio.tree_entries(project, commit, reader=_git)
+            table.append(None if listed is None else {name: (mode, obj) for name, (mode, _, obj) in listed.items()})
         return table[0]
 
     def blob(obj):
-        size = _git(project, ["cat-file", "-s", obj])
-        if size is None or size.returncode != 0 or not size.stdout.strip().isdigit() \
-                or int(size.stdout.strip()) > MAX_SOURCE_BYTES:
-            return None
-        shown = _git(project, ["cat-file", "blob", obj], binary=True)
-        return shown.stdout if shown is not None and shown.returncode == 0 else None
+        return gitio.blob(project, obj, limit=MAX_SOURCE_BYTES, reader=_git)
 
     def read(path):
         rows = entries()

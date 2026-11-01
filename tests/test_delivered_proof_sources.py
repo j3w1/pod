@@ -11,7 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from pod import config, governance
-from pod.governance import delivered_source_reader
+from pod.gitio import blob, is_ancestor, read as read_git, tree_entry
+from pod.governance import delivered_source_reader, scope_resolver
 from pod.ledger import checkpoint, closed_snapshot_context, objective_root, read
 from pod.obligations import validate_closed_snapshot
 from pod.records import source_identity
@@ -36,20 +37,29 @@ class DeliveredProofSourceTests(KernelCase):
         super().setUp()
         config.set_decision_policy(self.project, "hands_off", decision=PERSON)
 
-    def deliver(self, *, move=True, dirty=None, later=True):
+    def deliver(self, *, move=True, dirty=None, later=True, untracked=None):
         """O1 satisfied with proof binding README.md (as the candidate changed it) and src/old.py, delivered; the
-        target then moves with changed governance and the worktree takes later work that edits README.md."""
+        target then moves with changed governance and the worktree takes later work that edits README.md.
+
+        `dirty` is a tracked file whose uncommitted bytes the proof binds; `untracked` is a file only the worktree
+        holds while the proof is accepted and the delivery recorded."""
         self.prepare_result()
         if dirty is not None:
             (self.project / dirty).write_text("uncommitted bytes the proof was bound to\n")
+        bound = ["README.md", "src/old.py"]
+        if untracked is not None:
+            (self.project / untracked).write_text("proof bytes\n")
+            bound.append(untracked)
         rows = self.stored()
         rows[0].pop("executor")
         rows[0].update(state="satisfied", evidence=[self.proof("O1", sources=[
-            source_identity(self.project, "README.md"), source_identity(self.project, "src/old.py")])])
+            source_identity(self.project, path) for path in bound])])
         self.write(rows)
         self.write(self.stored(), delivery={"record": "merge-1"})
         if dirty is not None:
             git(self.project, "checkout", "-q", "--", dirty)
+        if untracked is not None:
+            (self.project / untracked).unlink()
         self.bound = read(self.project, "objective")["checkpoint"]["governance"]
         if move:
             self.target = self.move_target("AGENTS.md")
@@ -137,6 +147,46 @@ class DeliveredProofSourceTests(KernelCase):
             error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
                                            lambda: self.write(self.closing_rows(), close=True))
         self.assertIn("compared with the delivered candidate changed", str(error))
+
+    def test_replacement_refs_cannot_redirect_the_delivered_candidate(self):
+        self.deliver(dirty="src/old.py")
+        proof = hashlib.sha256(b"uncommitted bytes the proof was bound to\n").hexdigest()
+        forged = subprocess.run(["git", "-C", str(self.project), "hash-object", "-w", "--stdin"], check=True,
+                                capture_output=True, text=True,
+                                input="uncommitted bytes the proof was bound to\n").stdout.strip()
+        original = git(self.project, "rev-parse", self.candidate + ":src/old.py")
+        index = self.root / "replacement-index"
+        environment = {**os.environ, "GIT_INDEX_FILE": str(index)}
+        run = lambda *argv: subprocess.run(["git", "-C", str(self.project), *argv], env=environment, check=True,
+                                           capture_output=True, text=True).stdout.strip()
+        run("read-tree", self.candidate)
+        run("update-index", "--cacheinfo", "100644," + forged + ",src/old.py")
+        parents = git(self.project, "rev-list", "--parents", "-n", "1", self.candidate).split()[1:]
+        replacement = run("commit-tree", run("write-tree"), *sum((["-p", parent] for parent in parents), []),
+                          "-m", "replacement")
+        for name, (old, new) in (("commit", (self.candidate, replacement)), ("blob", (original, forged))):
+            with self.subTest(name):
+                git(self.project, "replace", old, new)
+                try:
+                    shown = subprocess.run(["git", "-C", str(self.project), "show", self.candidate + ":src/old.py"],
+                                           check=True, capture_output=True).stdout
+                    self.assertEqual(hashlib.sha256(shown).hexdigest(), proof)  # ordinary Git follows the replacement
+                    error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                                   lambda: self.update(self.external_evidence()))
+                    self.assertIn("src/old.py", str(error))
+                finally:
+                    git(self.project, "replace", "-d", old)
+
+    def test_a_carriage_return_name_does_not_stand_in_for_a_newline_name(self):
+        lf, cr = "line\nname.py", "line\rname.py"
+        (self.project / cr).write_text("proof bytes\n")
+        git(self.project, "add", cr)
+        git(self.project, "commit", "-qm", "carriage-return name")
+        self.deliver(untracked=lf)  # only the worktree held the newline name; the candidate holds the other
+        error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                       lambda: self.update(self.external_evidence()))
+        # Refusal text drops control characters, so the newline name reads as "linename.py".
+        self.assertEqual(error.detail["referent"]["invalidations"][0]["paths"], ["linename.py"])
 
     def test_writes_outside_the_bookkeeping_route_judge_the_worktree(self):
         self.deliver(move=False)  # the target still names the delivery: currency holds, no route is taken
@@ -229,6 +279,96 @@ class DeliveredSourceReaderTests(unittest.TestCase):
             self.assertIsNone(delivered_source_reader(self.project, self.commit)("big.txt"))
         self.assertIsNone(delivered_source_reader(self.project, "0" * 40)("src/file.py"))
         self.assertIsNone(delivered_source_reader(self.project, "not-a-commit")("src/file.py"))
+
+
+class GitObjectTrustTests(unittest.TestCase):
+    """Pod's Git reads see the repository's own objects and history: no replacement refs, grafts or shallow
+    boundaries, and distinct names stay distinct."""
+
+    def setUp(self):
+        self.temp = fixture()
+        self.root = self.temp.__enter__()
+        self.addCleanup(self.temp.__exit__, None, None, None)
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.run_git("init", "-q", "-b", "main")
+        self.run_git("config", "user.name", "Fixture")
+        self.run_git("config", "user.email", "fixture@example.invalid")
+        self.run_git("config", "advice.graftFileDeprecated", "false")
+
+    def run_git(self, *argv, check=True):
+        return subprocess.run(["git", "-C", str(self.project), *argv], check=check, capture_output=True,
+                              text=True).stdout.strip()
+
+    def commit(self, files, links=(), message="tree", parents=None):
+        for name, text in files.items():
+            path = self.project / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        for name, target in links:
+            os.symlink(target, self.project / name)
+        self.run_git("add", "-A")
+        self.run_git("commit", "-qm", message)
+        return self.run_git("rev-parse", "HEAD")
+
+    def test_replacement_refs_redirect_neither_trees_nor_blobs(self):
+        delivered = self.commit({"AGENTS.md": "rules\n", "src/file.py": "bound\n"}, [("rules-link", "AGENTS.md")])
+        bound = hashlib.sha256(b"bound\n").hexdigest()
+        os.unlink(self.project / "rules-link")
+        other = self.commit({"src/file.py": "other\n", "rules-link": "plain file\n"}, message="other")
+        self.run_git("replace", delivered, other)
+        self.assertEqual(self.run_git("show", delivered + ":src/file.py"), "other")  # ordinary Git follows it
+        self.assertEqual(delivered_source_reader(self.project, delivered)("src/file.py")["sha256"], bound)
+        self.assertEqual(scope_resolver(self.project, [delivered])("rules-link"), ["AGENTS.md"])
+        self.run_git("replace", "-d", delivered)
+        self.run_git("replace", self.run_git("rev-parse", delivered + ":src/file.py"),
+                     self.run_git("rev-parse", other + ":src/file.py"))
+        self.assertEqual(self.run_git("show", delivered + ":src/file.py"), "other")
+        self.assertEqual(delivered_source_reader(self.project, delivered)("src/file.py")["sha256"], bound)
+
+    def test_grafts_and_shallow_boundaries_leave_recorded_parents(self):
+        root = self.commit({"a.txt": "a\n"})
+        self.run_git("checkout", "-q", "--orphan", "other")
+        orphan = self.commit({"b.txt": "b\n"}, message="orphan")
+        (self.project / ".git" / "info" / "grafts").write_text(f"{orphan} {root}\n")
+        self.assertEqual(subprocess.run(["git", "-C", str(self.project), "merge-base", "--is-ancestor", root, orphan],
+                                        capture_output=True).returncode, 0)  # ordinary Git follows the graft
+        self.assertFalse(is_ancestor(self.project, root, orphan))
+        self.assertEqual(delivered_source_reader(self.project, orphan)("b.txt")["state"], "present")
+        (self.project / ".git" / "info" / "grafts").unlink()
+        self.run_git("checkout", "-q", "main")
+        middle = self.commit({"a.txt": "a2\n"})
+        head = self.commit({"a.txt": "a3\n"})
+        (self.project / ".git" / "shallow").write_text(middle + "\n")
+        self.assertEqual(subprocess.run(["git", "-C", str(self.project), "merge-base", "--is-ancestor", root, head],
+                                        capture_output=True).returncode, 1)  # ordinary Git stops at the boundary
+        self.assertTrue(is_ancestor(self.project, root, head))
+
+    def test_carriage_return_and_newline_names_stay_distinct(self):
+        commit = self.commit({"AGENTS.md": "rules\n", "line\rname.py": "cr\n", "crlf\r\nname.py": "crlf\n"},
+                             [("a\rb", "AGENTS.md")])
+        read = delivered_source_reader(self.project, commit)
+        self.assertEqual(read("line\rname.py")["sha256"], hashlib.sha256(b"cr\n").hexdigest())
+        self.assertEqual(read("line\nname.py"), {"path": "line\nname.py", "state": "absent"})
+        self.assertEqual(read("crlf\r\nname.py")["state"], "present")
+        self.assertEqual(read("crlf\nname.py")["state"], "absent")
+        resolve = scope_resolver(self.project, [commit])
+        self.assertEqual(resolve("a\rb"), ["AGENTS.md"])
+        self.assertEqual(resolve("a\nb"), ["a\nb"])
+        self.assertEqual(tree_entry(self.project, commit, "line\nname.py"), (True, None))
+
+    def test_blob_bytes_must_match_their_object_id(self):
+        commit = self.commit({"file.txt": "real\n"})
+        obj = self.run_git("rev-parse", commit + ":file.txt")
+        self.assertEqual(blob(self.project, obj, limit=64), b"real\n")
+
+        def corrupted(root, argv, binary=False):
+            answer = read_git(root, argv, binary=binary)
+            if argv[:2] == ["cat-file", "blob"]:
+                answer.stdout = b"fake\n"
+            return answer
+        self.assertIsNone(blob(self.project, obj, limit=64, reader=corrupted))
+        self.assertIsNone(blob(self.project, obj, limit=4))
 
 
 if __name__ == "__main__":

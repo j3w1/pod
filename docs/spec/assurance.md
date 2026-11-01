@@ -24,9 +24,11 @@ Proof of project-required gates binds to the final candidate; the coordinator ch
 
 ### R41 — Bind verification to commit/tree where applicable
 
-Type: B · Scenarios: [A27](#a27), [A29](coordination.md#a29), [A67](#a67), [A229](#a229)
+Type: B · Scenarios: [A27](#a27), [A29](coordination.md#a29), [A67](#a67), [A229](#a229), [A759](#a759)
 
 Git checkpoint candidates must be full object ids equal to their resolution, and assurance candidates full object ids; refusals name any resolved full id rather than rewriting proof identity. Non-Git projects keep bounded text. Bind verification to commit/tree where applicable, relevant dirty/source identity, policy/configuration, dependencies, environment, commands/results and reviewer attempt. Receipts also bind the obligation definition/check/scope they verified; material changes invalidate affected evidence even when ids and candidate stay fixed. Retain immutable receipt provenance across omission or restoration. Reuse unaffected proof only when bindings/project rules permit.
+
+Pod reads Git as the repository records it: replacement refs, grafts (`info/grafts`) and shallow boundaries are not applied, so an object id names its own content and a commit its recorded parents (a parent a shallow clone lacks makes the read fail, which counts as unknown); pathspecs are literal; text output is strict UTF-8 without newline translation, and tree listings are NUL-delimited bytes compared exactly, so distinct names such as one with a carriage return and one with a newline never stand for each other. A blob read for proof, scope or governance is verified against its object id. Alternates only add storage for the same content-addressed objects, so they need no separate treatment.
 
 ### R42 — Keep implemented, locally verified, independently reviewed
 
@@ -91,6 +93,7 @@ An assurance admission reserves the bounded per-report finding allowance for its
 - <a id="a225"></a>**A225** - Several required findings from one review share one new correction without losing ids or highest severity. Related grouped entries retain at most eight ids and highest severity, count once, replay unchanged and cannot regroup stored ids. Correction-id and 33-entry report overflow refuse without eviction; a retained count above 64 alone does not refuse. Current-work or pending-report overflow names the material work to settle, without deleting evidence or expanding advisory scope. Interrupted report publication and identical retry preserve all findings without duplication. A genuine earlier 32-bound reader preserves histories within that bound and refuses 33 retained records during semantic validation without rewriting. Major/blocker downgrades need reasons and ordering remains unchanged.
 
 - <a id="a229"></a>**A229** — Git checkpoint candidates are full object ids equal to their resolution; assurance candidates are full object ids. Mutable names refuse with the resolved id; non-Git candidates remain bounded text. Genuine 0.7.1 full-id criterion, subgoal, correction and assurance proof survives unchanged-map checkpoint/report, absent proof_scope preserves definition identity, and abbreviated proof invalidates honestly on full-id restatement.
+- <a id="a759"></a>**A759** — With a replacement ref on the delivered candidate or on one of its blobs, a graft giving a commit another parent, a shallow boundary, or committed names differing only by a carriage return versus a newline, Pod's tree, blob, scope and ancestry reads still see the recorded objects: the delivered reader and R203's scope resolver read the original tree and blob, ancestry follows recorded parents, the newline name is absent, and a post-delivery bookkeeping write whose proof differs from the delivered tree, or names a path it lacks, still refuses `evidence_invalidated` with the record unchanged. A blob whose bytes do not match its id is unreadable.
 
 ## Verification
 
