@@ -490,7 +490,7 @@ class UnreadableRecordTests(RetirementCase):
     """R206: another Pod record that cannot be read holds only itself; detection names it and goes on."""
 
     def test_an_unreadable_record_beside_it_never_refuses_detection_or_the_decision(self):
-        for arrange in (_record_unreadable_elsewhere, _record_directory_unreadable):
+        for arrange in (_record_unreadable_elsewhere,):
             case = RetirementCase(); case.setUp()
             try:
                 with self.subTest(arrange=arrange.__name__):
@@ -503,6 +503,21 @@ class UnreadableRecordTests(RetirementCase):
                     self.assertEqual(case.retire(decision)["status"], "retired")
             finally:
                 case.doCleanups()
+
+    def test_an_unreadable_record_that_names_the_objective_holds_its_detection(self):
+        self.delivered()
+        _record_unreadable_elsewhere(self)
+        stray = objective_root(self.project, "objective").parent / "stray" / "context.json"
+        stray.write_text('{"continued_by": {"objective": "objective"')  # Its bytes name this objective exactly.
+        verdict = self.retire()["objectives"][0]
+        self.assertEqual((verdict["status"], verdict["condition"]), ("refused", "scope_unreadable"))
+        self.assertEqual([Path(path).name for path in verdict["unavailable_records"]], ["stray"])
+
+    def test_a_record_directory_pod_cannot_read_still_holds_detection(self):
+        self.delivered()
+        _record_directory_unreadable(self)  # Its bytes cannot be read at all, so it could name this objective.
+        verdict = self.retire()["objectives"][0]
+        self.assertEqual((verdict["status"], verdict["condition"]), ("refused", "scope_unreadable"))
 
 
 class RefusalTableShapeTests(unittest.TestCase):

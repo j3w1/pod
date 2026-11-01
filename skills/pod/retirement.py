@@ -676,8 +676,9 @@ def _governor_rows(project: Path, objective: str) -> list[dict]:
 
 def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
     """Objectives of this repository whose claim names this one as successor, and the records Pod cannot read, by
-    path, for callers to name. Every readable record is read whatever the others are, so an unreadable record never
-    hides a readable claim, and it holds only its own resources (R206). Directories without a record are skipped."""
+    path. Every readable record is read whatever the others are, so an unreadable record never hides a readable claim;
+    `could_claim` says which unreadable ones could name this objective (R206). Directories without a record are
+    skipped."""
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
@@ -716,6 +717,17 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
                 and record_name(project, context, name) == entry.name):
             found.append(name)
     return found, unreadable
+
+
+def could_claim(project: Path, unreadable: list[str], objective: str) -> list[str]:
+    """The unreadable records, by path, that could hold a claim naming this objective (R206): the state root itself
+    when it cannot be enumerated, or a record whose readable bytes name the objective exactly or cannot all be read.
+    Every other unreadable record holds only its own resources."""
+    from .handoff import record_mentions
+    from .ledger import state_root
+    root = str(state_root(project))
+    return [path for path in unreadable
+            if path == root or record_mentions(Path(path), objective, exact=True)]
 
 
 def _readable(place: object) -> bool:
@@ -1176,8 +1188,11 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         return fail("objective_continues", f"Objective {claimants[0]} records this objective as its successor; "
                     "historical retirement never ends a successor that holds a claim.")
     if unreadable:
-        # An unreadable record holds only its own resources (R206); it is named, and detection goes on.
+        # An unreadable record holds only its own resources, and a claim only of an objective it names (R206).
         verdict["unavailable_records"] = unreadable[:MAX_LISTED]
+        if could_claim(project, unreadable, objective):
+            return fail("scope_unreadable", "A Pod record that names this objective, and so could hold a claim of it "
+                        "as a successor, is unreadable.")
     scoped_runs = None
     if doc is not None:
         # An older record is read whole: a field detection does not prove refuses before any native read (R205).

@@ -524,11 +524,18 @@ def _claims(project: Path, objective: str, raw: dict, kind: str, proof: _Proof) 
             proof.add("unverified", "claim_ambiguous", "More than one predecessor names it as successor.")
         elif found["predecessor"] is not None:
             proof.add("unverified", "claim_incomplete", f"An incomplete claim of {found['predecessor']} names it.")
+        else:
+            proof.add("unverified", "claim_unverified", "A Pod record that names it, and so could name it as a "
+                      "claimed successor, is unreadable.")
         return
-    from .retirement import _claimants
-    claimants, _ = _claimants(project, objective)  # An unreadable record holds only itself (R206).
+    from .retirement import _claimants, could_claim
+    claimants, unreadable = _claimants(project, objective)
     if claimants:
         proof.add("unverified", "claim_incomplete", f"Objective {claimants[0]} records it as its successor.")
+    elif unreadable and could_claim(project, unreadable, objective):
+        # Only an unreadable record that names it could hold a claim of it (R206).
+        proof.add("unverified", "claim_unverified", "A Pod record that names it, and so could name it as a claimed "
+                  "successor, is unreadable.")
 
 
 def _coordinator(doc: dict, proof: _Proof):

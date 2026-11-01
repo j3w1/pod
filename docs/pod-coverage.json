@@ -4211,7 +4211,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_predecessor_record_hides_its_claim_until_repaired",
+        "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_predecessor_record_holds_the_successor_until_repaired",
         "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_journal_of_its_own_never_proves_a_successor_started"
       ],
       "status": "NOT_RUN"
@@ -10230,7 +10230,10 @@
         "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_neither_an_unstarted_objective_nor_its_closure",
         "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_before_an_unreadable_record",
         "tests.test_historical_retirement.UnreadableRecordTests.test_an_unreadable_record_beside_it_never_refuses_detection_or_the_decision",
-        "tests.test_evidence_closure.UnreadableRecordProofTests.test_an_unreadable_record_holds_only_a_run_it_could_name"
+        "tests.test_evidence_closure.UnreadableRecordProofTests.test_an_unreadable_record_holds_only_a_run_it_could_name",
+        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_that_names_an_objective_holds_only_that_objective",
+        "tests.test_historical_retirement.UnreadableRecordTests.test_an_unreadable_record_that_names_the_objective_holds_its_detection",
+        "tests.test_historical_retirement.UnreadableRecordTests.test_a_record_directory_pod_cannot_read_still_holds_detection"
       ],
       "status": "NOT_RUN"
     },

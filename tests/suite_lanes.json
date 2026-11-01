@@ -212,7 +212,7 @@
   "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_after_an_unreadable_record": 1.6,
   "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_before_an_unreadable_record": 1.6,
   "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_journal_of_its_own_never_proves_a_successor_started": 1.1,
-  "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_predecessor_record_hides_its_claim_until_repaired": 1.3,
+  "tests.test_carried_claim.UnreadableScanTests.test_an_unreadable_predecessor_record_holds_the_successor_until_repaired": 1.3,
   "tests.test_catalog_optional_pty.OptionalObservationPtyTests.test_missing_observation_row_renders_unknown_and_reads_still_work": 3.4,
   "tests.test_cleanup_archives.ArchiveBranchTests.test_arbitrary_synthetic_config_value_change_invalidates_expect": 3.6,
   "tests.test_cleanup_archives.ArchiveBranchTests.test_branch_and_worktree_cache_bind_their_independent_material_bases": 1.8,

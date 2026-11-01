@@ -84,13 +84,16 @@ def _mentions(value: object, text: str, depth: int = 0) -> bool:
     return False
 
 
-def record_mentions(directory: Path, text: str, check=None) -> bool:
-    """Whether a record Pod cannot read could name `text`, such as a Run id (R206): its stored bytes mention it, or
-    some of them cannot be read. Every file under the record's directory is read without following a link; a link,
-    a special file or a failed read counts as mentioning it. Pod stores records and history chunks as plain JSON, so
-    a record whose bytes never mention a Run cannot bind it."""
+def record_mentions(directory: Path, text: str, check=None, *, exact: bool = False) -> bool:
+    """Whether a record Pod cannot read could name `text`, such as a Run id or, `exact`, an objective name as a whole
+    JSON string (R206): its stored bytes mention it, or some of them cannot be read. Every file under the record's
+    directory is read without following a link; a link, a special file or a failed read counts as mentioning it. Pod
+    stores records and history chunks as plain JSON, so a record whose bytes never mention a name cannot bind it."""
     import json
-    needles = {text.encode("utf-8", "surrogatepass"), json.dumps(text)[1:-1].encode("ascii")}
+    if exact:
+        needles = {json.dumps(text).encode("ascii"), json.dumps(text, ensure_ascii=False).encode("utf-8", "surrogatepass")}
+    else:
+        needles = {text.encode("utf-8", "surrogatepass"), json.dumps(text)[1:-1].encode("ascii")}
     pending = [Path(directory)]
     try:
         while pending:

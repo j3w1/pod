@@ -489,6 +489,22 @@ class ReservationTests(CarriedCase):
         self.assertTrue(read(self.project, "successor")["checkpoint"]["closure"])
         self.assertEqual((broken / "context.json").read_bytes(), b"")
 
+    def test_an_unreadable_record_that_names_an_objective_holds_only_that_objective(self):
+        """R206: a record the scan cannot read holds the claim decision of an objective its readable bytes name
+        exactly; another objective proceeds, and the refusal names the record."""
+        self.lost_with(lambda: None)
+        self.successor()
+        broken = state_root(self.project) / "zz-unreadable"
+        broken.mkdir()
+        (broken / "context.json").write_text('{"continued_by": {"objective": "successor"')
+        before = self.snapshot()
+        refused = self.refused(self.own_work()["prepare"], code="claim_unverified")
+        self.assertEqual((refused.detail["unreadable"], refused.detail["next_action"]),
+                         ([str(broken)], "repair or remove the unreadable record, then retry"))
+        self.assertEqual(before, self.snapshot())
+        self.successor(name="other", caller="other", run_id="run-o")  # B's first write proceeds.
+        self.assertIsNotNone(read(self.project, "other"))
+
     def test_a_repeated_close_answers_from_the_recorded_closure(self):
         """R117/A300: an unreadable record never changes the answer once closure is recorded."""
         self.lost_with(lambda: None)
@@ -1439,17 +1455,21 @@ class UnreadableScanTests(ShapeCase):
     def test_a_readable_claim_is_found_after_an_unreadable_record(self):
         self.masked("00-unreadable")
 
-    def test_an_unreadable_predecessor_record_hides_its_claim_until_repaired(self):
-        # R206: while the predecessor's own record is unreadable, the claim it holds cannot be seen, so the successor's
-        # refresh proceeds; once the record is repaired, the claim completes with every carried row.
+    def test_an_unreadable_predecessor_record_holds_the_successor_until_repaired(self):
+        # R206: its other stored files name the successor, so it could hold that successor's claim.
         built = self.lost_with(self.publications)
         self.earlier_successor()
         decision = self.interrupted("candidate-2b613c8", "after_link")
         record = objective_root(self.project, "objective") / "context.json"
         original = record.read_bytes()
         record.write_text("{")
-        self.refresh()
+        before = self.snapshot()
+        for call in (self.refresh, self.prepare_own, lambda: self.close("successor", "next", "run-s")):
+            refused = self.refused(call, code="claim_unverified")
+            self.assertEqual(refused.detail["unreadable"], [str(record.parent)])
+        self.assertEqual(before, self.snapshot())
         record.write_bytes(original)
+        self.refused(self.prepare_own, code="claim_incomplete")
         self.assertEqual(self.claim(decision)["status"], "claimed")
         self.assertEqual(sorted(row["record_id"] for row in self.journal("successor")["actions"]),
                          sorted(built.values()))
