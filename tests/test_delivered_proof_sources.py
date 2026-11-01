@@ -424,22 +424,12 @@ class DeliveredProofSourceTests(KernelCase):
         self.assertTrue(_closure_recorded(self.project, "objective", state))
 
 
-class RelocatedPolicyCitationTests(KernelCase):
-    """After a delivery the target moves with unchanged governance, so a later checkpoint adopts it (R119) and
-    relocates the citation of a satisfied policy assurance to the adopted commit; the shared worktree has moved
-    off the delivered candidate. Bookkeeping then satisfies a waiting criterion and a blocked subgoal.
+class BuiltOnce:
+    """A KernelCase whose fixture `build()` runs once per class. Records and the fixture's Git remote name absolute
+    paths, so each test restores the same disposable directory from a template instead of building a new one;
+    `CARRIED` names the builder attributes each test reads."""
 
-    The delivered fixture is built once per class. Records and the fixture's Git remote name absolute paths, so
-    each test restores the same disposable directory from that template instead of building a new one."""
-
-    prepare_result = delivery.VerifiedDeliveryTests.prepare_result
-    move_target = delivery.VerifiedDeliveryTests.move_target
-    later_work = DeliveredProofSourceTests.later_work
-    refused_unchanged = DeliveredProofSourceTests.refused_unchanged
-    record = DeliveredProofSourceTests.record
-    update = DeliveredProofSourceTests.update
-    review = assurance_review
-    CARRIED = ("root", "project", "base", "candidate", "port", "recorded", "adopted", "later")
+    CARRIED: tuple = ()
 
     @classmethod
     def setUpClass(cls):
@@ -462,6 +452,23 @@ class RelocatedPolicyCitationTests(KernelCase):
         builder.port.__dict__.update(deepcopy(self.port_state))
         for name in self.CARRIED:
             setattr(self, name, getattr(builder, name))
+
+
+class RelocatedPolicyCitationTests(BuiltOnce, KernelCase):
+    """After a delivery the target moves with unchanged governance, so a later checkpoint adopts it (R119) and
+    relocates the citation of a satisfied policy assurance to the adopted commit; the shared worktree has moved
+    off the delivered candidate. Bookkeeping then satisfies a waiting criterion and a blocked subgoal.
+
+    The delivered fixture is built once per class (BuiltOnce)."""
+
+    prepare_result = delivery.VerifiedDeliveryTests.prepare_result
+    move_target = delivery.VerifiedDeliveryTests.move_target
+    later_work = DeliveredProofSourceTests.later_work
+    refused_unchanged = DeliveredProofSourceTests.refused_unchanged
+    record = DeliveredProofSourceTests.record
+    update = DeliveredProofSourceTests.update
+    review = assurance_review
+    CARRIED = ("root", "project", "base", "candidate", "port", "recorded", "adopted", "later")
 
     def core(self, **extra):
         return super().core(**{"criteria": ["PoD#1", "PoD#2"], **extra})
@@ -742,6 +749,145 @@ class GitObjectTrustTests(unittest.TestCase):
             return answer
         self.assertIsNone(blob(self.project, obj, limit=64, reader=corrupted))
         self.assertIsNone(blob(self.project, obj, limit=4))
+
+
+class LaterDeliveryTests(BuiltOnce, KernelCase):
+    """A delivered objective keeps working: a second candidate, extending the first, is merged under the same
+    objective's Governor merge PASS onto the first delivery's result, and the shared worktree then moves to later
+    work that edits a file the second candidate's proof binds. Recording that later delivery makes it the current
+    one (R93), so bookkeeping and closure judge the proof against its candidate's tree (R204).
+
+    The fixture is built once per class (BuiltOnce)."""
+
+    prepare_result = delivery.VerifiedDeliveryTests.prepare_result
+    later_work = DeliveredProofSourceTests.later_work
+    record = DeliveredProofSourceTests.record
+    update = DeliveredProofSourceTests.update
+    intake = DeliveredProofSourceTests.intake
+    assurance = False
+    commit_file = delivery.VerifiedDeliveryTests.commit_file
+    CARRIED = ("root", "project", "base", "candidate", "port", "first", "first_result", "second", "second_result",
+               "later")
+
+    def build(self):
+        from pod.governor import _read_journal, _record_path, _write_journal
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        self.first, _, self.first_result = self.prepare_result()
+        self.satisfy("README.md")
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        # Later work on the same objective: a second candidate extends the first and is merged onto its result.
+        git(self.project, "checkout", "-q", "candidate")
+        self.candidate = self.second = self.commit_file("src/old.py", "second delivery\n")
+        self.satisfy("README.md", "src/old.py")
+        git(self.project, "checkout", "-q", "target")
+        git(self.project, "merge", "--no-ff", "-qm", "second merge", "candidate")
+        self.second_result = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/target", self.second_result)
+        path = _record_path(self.project, "objective")
+        journal = _read_journal(path)
+        tree = git(self.project, "rev-parse", f"{self.second}^{{tree}}")
+        unit = journal["units"]["delivery"]
+        unit["candidate"] = {"id": "candidate-2", "commit": self.second, "tree": tree}
+        unit["history"].append("candidate-2")
+        first = journal["actions"][0]
+        first["receipt"]["finished_at"] = "2026-11-01T10:00:00+00:00"
+        row = deepcopy(first)
+        row.update(record_id="merge-2", logical_key="merge-2", candidate_id="candidate-2", commit=self.second)
+        row["action"].update(candidate="candidate-2", authorization=delivery.authorization(
+            candidate=self.second, tree=tree, scope=("merge",)))
+        row["target_binding"] = {**first["target_binding"], "commit": self.first_result}
+        row["receipt"] = {"provider": {"merge_commit": self.second_result, "method": "merge"},
+                          "finished_at": "2026-11-01T12:00:00+00:00"}
+        journal["actions"].append(row)
+        _write_journal(path, journal)
+        self.later_work()  # the shared worktree moves off the second candidate
+
+    def satisfy(self, *paths):
+        rows = self.stored()
+        rows[0].pop("executor", None)
+        rows[0].update(state="satisfied", evidence=[self.proof("O1", sources=[
+            source_identity(self.project, path) for path in paths])])
+        self.write(rows)
+
+    def journal(self, change):
+        from pod.governor import _read_journal, _record_path, _write_journal
+        path = _record_path(self.project, "objective")
+        journal = _read_journal(path)
+        change(journal)
+        _write_journal(path, journal)
+
+    def test_a_later_delivery_recorded_at_a_moved_worktree_replaces_the_recorded_one(self):
+        seq = read(self.project, "objective")["checkpoint"]["seq"] + 1
+        recorded = self.write(self.stored(), delivery={"record": "merge-2"})["checkpoint"]
+        self.assertEqual({key: recorded["delivery"][key] for key in ("seq", "record", "candidate", "result")},
+                         {"seq": seq, "record": "merge-2", "candidate": self.second, "result": self.second_result})
+        self.assertIsNone(governance.require_governance_current(self.project, recorded))  # current: the latest
+        self.assertEqual(self.write(self.stored(), delivery={"record": "merge-2"})["checkpoint"]["delivery"],
+                         recorded["delivery"])  # idempotent
+
+    def test_after_a_later_delivery_bookkeeping_and_closure_keep_its_proof(self):
+        recorded = self.write(self.stored(), delivery={"record": "merge-2"})["checkpoint"]
+        kept = self.update({"R": {"state": "satisfied", "evidence": [self.proof("R")]}})["checkpoint"]
+        self.assertEqual(kept["obligations"][0], recorded["obligations"][0])
+        closed = self.write(self.stored(), close=True)["checkpoint"]
+        self.assertIsNotNone(closed["closure"])
+        self.assertEqual(closed["delivery"], recorded["delivery"])
+
+    def test_without_the_later_delivery_the_moved_worktree_invalidates_its_proof(self):
+        with self.assertRaises(PodError) as caught:
+            self.update({"R": {"state": "satisfied", "evidence": [self.proof("R")]}})
+        self.assertIn("binding change", str(caught.exception))
+
+    def test_a_record_that_is_not_a_later_delivery_of_the_candidate_keeps_the_recorded_one(self):
+        def other_target(journal):
+            git(self.project, "update-ref", "refs/remotes/origin/other", self.second_result)
+            row = journal["actions"][1]
+            row["action"]["target"] = "origin/other"
+            row["target_binding"] = {**row["target_binding"], "base": "other", "ref": "refs/remotes/origin/other"}
+
+        def off_the_first_result(journal):
+            # The second candidate merged onto the original base instead: the result lacks the first delivery.
+            git(self.project, "checkout", "-q", "--detach", self.base)
+            git(self.project, "merge", "--no-ff", "-qm", "merge beside", self.second)
+            beside = git(self.project, "rev-parse", "HEAD")
+            git(self.project, "checkout", "-q", "later-work")
+            git(self.project, "update-ref", "refs/remotes/origin/target", beside)
+            row = journal["actions"][1]
+            row["target_binding"]["commit"] = self.base
+            row["receipt"]["provider"]["merge_commit"] = beside
+
+        def first_again(journal):
+            # A later merge PASS row of the recorded candidate.
+            row = deepcopy(journal["actions"][0])
+            row.update(record_id="merge-3", logical_key="merge-3")
+            row["receipt"]["finished_at"] = "2026-11-01T13:00:00+00:00"
+            journal["units"]["delivery"]["candidate"] = {"id": "candidate-1", "commit": self.first,
+                                                         "tree": git(self.project, "rev-parse", f"{self.first}^{{tree}}")}
+            journal["actions"].append(row)
+
+        cases = {
+            "an earlier journal row": ("merge-2", "record_not_later",
+                                       lambda journal: journal["actions"].reverse()),
+            "an earlier finish": ("merge-2", "record_not_later", lambda journal: journal["actions"][1]["receipt"]
+                                  .update(finished_at="2026-11-01T09:00:00+00:00")),
+            "an unsettled merge": ("merge-2", "record_not_merge_pass",
+                                   lambda journal: journal["actions"][1].update(outcome="FAILED")),
+            "another target": ("merge-2", "target_identity", other_target),
+            "a result without the first delivery": ("merge-2", "result", off_the_first_result),
+            "the recorded candidate again": ("merge-3", "candidate", first_again),
+            "an absent record": ("merge-9", "record_missing", lambda journal: None),
+        }
+        for name, (record_id, reason, change) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self.journal(change)
+                before = self.record()
+                with self.assertRaises(PodError) as caught:
+                    self.write(self.stored(), delivery={"record": record_id})
+                self.assertEqual((caught.exception.code, caught.exception.detail["reason"]),
+                                 ("delivery_recorded", reason))
+                self.assertEqual(caught.exception.detail["record"], "merge-1")
+                self.assertEqual(self.record(), before)
 
 
 if __name__ == "__main__":

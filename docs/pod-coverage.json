@@ -10188,6 +10188,20 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A789",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.LaterDeliveryTests.test_a_later_delivery_recorded_at_a_moved_worktree_replaces_the_recorded_one",
+        "tests.test_delivered_proof_sources.LaterDeliveryTests.test_after_a_later_delivery_bookkeeping_and_closure_keep_its_proof",
+        "tests.test_delivered_proof_sources.LaterDeliveryTests.test_without_the_later_delivery_the_moved_worktree_invalidates_its_proof",
+        "tests.test_delivered_proof_sources.LaterDeliveryTests.test_a_record_that_is_not_a_later_delivery_of_the_candidate_keeps_the_recorded_one"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A768",
       "required_evidence": [
         "unit",
