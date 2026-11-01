@@ -775,7 +775,8 @@ def _complete(result: object, kind: str) -> list | None:
         return None
     rows, scope = result.get(kind), result.get("hostScope")
     hosts = scope.get("hostIds") if isinstance(scope, dict) else None
-    if (isinstance(rows, list) and result.get("truncated") is False and result.get("totalCount") == len(rows)
+    if (isinstance(rows, list) and result.get("truncated") is False and type(result.get("totalCount")) is int
+            and result["totalCount"] == len(rows)
             and all(isinstance(row, dict) for row in rows) and isinstance(hosts, list) and "local" in hosts
             and scope.get("omittedHostIds") == []):
         return rows

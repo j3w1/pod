@@ -1003,7 +1003,11 @@ class TerminalReadTests(unittest.TestCase):
         unidentifiable = ({}, {'handle': 'term-other'}, {'incarnationId': 'other-incarnation'},
                           {'handle': '', 'incarnationId': 'i'}, {'handle': 'term-a', 'incarnationId': None},
                           {'handle': 7, 'incarnationId': 'i'})
-        for result, expected in (({'terminals': rows, 'truncated': False}, rows),
+        for result, expected in (({'terminals': rows, 'truncated': False, 'totalCount': 1}, rows),
+                                 ({'terminals': rows, 'truncated': False}, None),
+                                 ({'terminals': rows, 'truncated': False, 'totalCount': True}, None),
+                                 ({'terminals': [], 'truncated': False, 'totalCount': False}, None),
+                                 ({'terminals': rows, 'truncated': False, 'totalCount': 1.0}, None),
                                  ({'terminals': rows, 'truncated': True}, None),
                                  ({'terminals': rows}, None), ({'terminals': ['x'], 'truncated': False}, None),
                                  ({'terminals': rows, 'truncated': False, 'totalCount': 2}, None),
@@ -1015,7 +1019,8 @@ class TerminalReadTests(unittest.TestCase):
     def test_the_terminal_inventory_reads_past_the_default_page_and_still_checks_rows(self):
         from pod import orca
         rows = [{'handle': f'term-{index}', 'incarnationId': 'i'} for index in range(230)]
-        for whole, expected in (({'terminals': rows, 'truncated': False, 'totalCount': 230}, rows),
+        scope = {'hostIds': ['local'], 'omittedHostIds': []}
+        for whole, expected in (({'terminals': rows, 'truncated': False, 'totalCount': 230, 'hostScope': scope}, rows),
                                 ({'terminals': rows, 'truncated': True, 'totalCount': 230}, None),
                                 ({'terminals': rows, 'truncated': False, 'totalCount': 231}, None),
                                 ({'terminals': [*rows[:229], {'handle': 'term-x'}], 'truncated': False,
@@ -1030,6 +1035,17 @@ class TerminalReadTests(unittest.TestCase):
                     patch.object(orca, '_read', side_effect=read):
                 self.assertEqual(orca.terminal_inventory(), expected)
                 self.assertEqual(calls, [['terminal', 'list', '--json'], ['terminal', 'list', '--limit', '230', '--json']])
+
+    def test_an_incomplete_second_terminal_read_leaves_the_first_page_refused(self):
+        from pod import orca
+        from tests.common import bad_retries
+        rows = [{'handle': f'term-{index}', 'incarnationId': 'i'} for index in range(230)]
+        first = {'runtime': 'r', 'result': {'terminals': rows[:200], 'truncated': True, 'totalCount': 230,
+                                            'hostScope': {'hostIds': ['local'], 'omittedHostIds': []}}}
+        for label, second in bad_retries('terminals', rows, 230).items():
+            with self.subTest(label), patch.object(orca, '_read', side_effect=[first, {'runtime': 'r', 'result': second}]) as read:
+                self.assertIsNone(orca.terminal_inventory())
+                self.assertEqual(read.call_count, 2)
 
 
     def test_an_unreadable_owner_or_a_permission_error_other_than_eacces_leaves_the_carrier_scan_unknown(self):

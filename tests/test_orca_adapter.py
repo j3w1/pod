@@ -53,8 +53,11 @@ class OrcaAdapterTests(unittest.TestCase):
 
     def test_a_whole_inventory_reads_past_the_default_page_once(self):
         from pod.orca import complete_list
-        page = {"worktrees": [{"id": str(index)} for index in range(200)], "totalCount": 278, "truncated": True}
-        whole = {"worktrees": [{"id": str(index)} for index in range(278)], "totalCount": 278, "truncated": False}
+        scope = {"hostIds": ["local"], "omittedHostIds": []}
+        page = {"worktrees": [{"id": str(index)} for index in range(200)], "totalCount": 278, "truncated": True,
+                "hostScope": scope}
+        whole = {"worktrees": [{"id": str(index)} for index in range(278)], "totalCount": 278, "truncated": False,
+                 "hostScope": scope}
         calls = []
 
         def read(argv):
@@ -70,11 +73,14 @@ class OrcaAdapterTests(unittest.TestCase):
                 self.assertIs(complete_list("worktree", lambda argv: calls.append(argv) or
                                             {"runtime": "r", "result": result})["result"], result)
                 self.assertEqual(calls, [["worktree", "list", "--json"]])
-        calls.clear()
-        still = {**page, "totalCount": 279}  # The inventory grew between the reads: returned, never read again.
-        self.assertIs(complete_list("worktree", lambda argv: calls.append(argv) or
-                                    {"runtime": "r", "result": still if "--limit" in argv else page})["result"], still)
-        self.assertEqual(len(calls), 2)
+        from tests.common import bad_retries
+        for label, second in bad_retries("worktrees", whole["worktrees"], 278).items():
+            calls.clear()  # Not complete as a whole: the first page stays in force, and nothing is read again.
+            with self.subTest(label):
+                self.assertIs(complete_list("worktree", lambda argv: calls.append(argv) or
+                                            {"runtime": "r", "result": second if "--limit" in argv else page})["result"],
+                              page)
+                self.assertEqual(len(calls), 2)
 
     def test_display_bounded_read_keeps_timeout_output_and_environment(self):
         from pod.orca import MAX_OUTPUT

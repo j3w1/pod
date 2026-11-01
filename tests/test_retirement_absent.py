@@ -884,6 +884,46 @@ class PagedInventoryTests(AbsentCase):
         self.assertIn(["terminal", "list", "--limit", "230", "--json"], self.native_calls)
 
 
+class RetryCompletenessTests(unittest.TestCase):
+    """Review of PR 171: a second Orca answer that is not complete as a whole never proves a released path absent;
+    the first, truncated page stays in force, so the path stays `unknown` as on that page alone."""
+    SCOPE = {"hostIds": ["local"], "omittedHostIds": []}
+    PATH = "/nonexistent-pod-fixture/released"
+
+    def located(self, worktrees, terminals):
+        from pod import orca, retirement
+
+        def native(argv, **kwargs):
+            answers = worktrees if argv[0] == "worktree" else terminals
+            return {"runtime": "r", "result": deepcopy(answers[1] if "--limit" in argv else answers[0])}
+        host = retirement._Host(Path("/nonexistent-pod-fixture"))
+        with patch.object(host, "registered", return_value=False), patch.object(orca, "read_command", side_effect=native):
+            return retirement._absent(self.PATH, host)
+
+    def test_an_incomplete_second_read_of_either_inventory_leaves_the_path_unknown(self):
+        from tests.common import bad_retries
+        whole = {"worktrees": [{"path": f"/elsewhere/w{index}"} for index in range(230)],
+                 "terminals": [{"handle": f"t{index}", "worktreePath": f"/elsewhere/w{index}"} for index in range(230)]}
+        complete = {kind: ({kind: rows, "totalCount": 230, "truncated": False, "hostScope": self.SCOPE},) * 2
+                    for kind, rows in whole.items()}
+        self.assertEqual(self.located(complete["worktrees"], complete["terminals"])["disposition"], "absent")
+        for kind, rows in whole.items():
+            first = {kind: rows[:200], "totalCount": 230, "truncated": True, "hostScope": self.SCOPE}
+            for label, second in bad_retries(kind, rows, 230).items():
+                answers = {**complete, kind: (first, second)}
+                with self.subTest(kind=kind, label=label):
+                    row = self.located(answers["worktrees"], answers["terminals"])
+                    self.assertEqual((row["disposition"], row["condition"]), ("unknown", "path_unverified"), row)
+
+    def test_a_false_total_never_counts_an_empty_first_page_complete(self):
+        from pod.retirement import _complete
+        for total in (False, 0.0):
+            self.assertIsNone(_complete({"worktrees": [], "totalCount": total, "truncated": False,
+                                         "hostScope": self.SCOPE}, "worktrees"))
+        self.assertEqual(_complete({"worktrees": [], "totalCount": 0, "truncated": False, "hostScope": self.SCOPE},
+                                   "worktrees"), [])
+
+
 class PreservationTests(AbsentCase):
     def test_retiring_an_absent_path_keeps_history_and_reads_back_its_reservations(self):
         self.placed()

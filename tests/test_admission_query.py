@@ -687,6 +687,19 @@ class ReviewCorrectionTests(AdmissionQueryCase):
                     self.assertEqual(caught.exception.code, "native_resources_incomplete")
                 self.assertEqual(calls, [["terminal", "list", "--json"], ["terminal", "list", "--limit", "230", "--json"]])
 
+    def test_an_incomplete_second_terminal_read_leaves_admission_refusing(self):
+        from pod.errors import PodError
+        from tests.common import bad_retries
+        rows = [{"handle": f"t{index}", "worktreePath": str(self.project), "connected": True} for index in range(230)]
+        first = {"runtime": "runtime", "result": {"terminals": rows[:200], "truncated": True, "totalCount": 230,
+                                                  "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}}
+        for label, second in bad_retries("terminals", rows, 230).items():
+            with self.subTest(label), patch("pod.admission._read",
+                                            side_effect=[first, {"runtime": "runtime", "result": second}]) as read:
+                with self.assertRaises(PodError) as caught:
+                    self._real_terminals()
+                self.assertEqual((caught.exception.code, read.call_count), ("native_resources_incomplete", 2))
+
     def test_positive_owner_identity_does_not_invent_a_different_writer_per_purpose(self):
         self.intake(worktree=self.place)
         self.write([self.criterion()], objective="retained-purpose", governance={"base_ref": "target"}, worktree=self.place)
