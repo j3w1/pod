@@ -37,7 +37,7 @@ this objective's own work beyond its bound base, such as a delivery the base doe
 yet contain. That needs an exact snapshot decision for the observed canonical
 `base_ref` and full `base`, recorded as `revision_authority` from the decider the
 decision policy names for scope changes; the refusal says which applies. An honestly
-relayed snapshot decision remains relayed. The completion-bookkeeping exception above retains the
+relayed snapshot decision remains relayed. Satisfied proof crosses changed governance only by an attested rebind in that refresh (see the proof reference). The completion-bookkeeping exception above retains the
 trusted baseline and adopts no later policy, and so does a checkpoint that only records post-delivery
 bookkeeping (acceptance, external evidence, questions, next action) with the same candidate, rows and
 settled proof.

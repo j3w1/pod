@@ -441,6 +441,180 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
             "current": current, "texts": texts}
 
 
+def _source_blob(project: Path, commit: str, path: str) -> tuple[bool, str | None]:
+    """(readable, blob id or None when the path is absent) at one commit."""
+    listed = _git(project, ["ls-tree", "-z", commit, "--", path])
+    if listed is None or listed.returncode != 0:
+        return False, None
+    entry = listed.stdout.split("\0")[0]
+    if not entry:
+        return True, None
+    parts = entry.partition("\t")[0].split()
+    if len(parts) != 3 or parts[1] != "blob" or not _OBJECT.fullmatch(parts[2]):
+        return False, None
+    return True, parts[2]
+
+
+def governance_delta(project: Path, bound: list[dict], observed: dict, exclude: list[str]) -> list[dict] | None:
+    """R203: every changed governance source between bound sources and the observed target.
+
+    Each entry names the path, its bound and current Git blob ids (None when absent) and Git's added
+    and removed line counts. None when any part is unreadable: an unknown delta is never empty.
+    """
+    from .obligations import bind_governance
+    try:
+        current, commit = bind_governance(observed, observed.get("target_ref"), exclude)
+    except PodError:
+        return None
+    rows = {row["path"]: row for row in bound}
+    entries = []
+    for row in current:
+        old = rows.get(row["path"])
+        if old is None or old["revision"] == row["revision"]:
+            continue
+        readable, before = _source_blob(project, old["read_at"], row["path"])
+        known, after = _source_blob(project, commit, row["path"])
+        if (not readable or not known or (before is None) != (old["revision"] is None)
+                or (after is None) != (row["revision"] is None) or before == after):
+            return None
+        stat = _git(project, ["diff", "--numstat", "--no-renames", "--no-ext-diff", "--no-textconv",
+                              old["read_at"], commit, "--", row["path"]])
+        counts = (stat.stdout.split("\t")[:2] if stat is not None and stat.returncode == 0 else [])
+        if len(counts) != 2 or not all(item.isdigit() for item in counts):
+            return None
+        entries.append({"path": row["path"], "bound": before, "current": after,
+                        "added": int(counts[0]), "removed": int(counts[1])})
+    return entries
+
+
+MAX_LINK_HOPS = 8
+RESOLVABLE_MODES = ("100644", "100755", "040000")  # plus symlinks (120000), which are followed
+
+
+def scope_resolver(project: Path, commits: list[str]):
+    """R203: what one declared scope path names in each immutable Git tree involved, following committed symlinks.
+
+    Each component, parents included, is resolved within the repository against each commit's own tree, with at
+    most MAX_LINK_HOPS link hops per path. Only regular files, trees and symlinks (followed) are resolvable; a path
+    that does not exist in a tree stays as named. Returns the resolved paths, or None when any tree is unreadable,
+    a component has any other mode (a gitlink's opaque subtree included), or a link is absolute, leaves the
+    repository, loops or exceeds the bound. Host paths, submodule checkouts and remotes are never read.
+    """
+    tables: dict[str, dict[str, tuple[str, str]] | None] = {}
+    blobs: dict[str, str | None] = {}
+
+    def entries(commit):
+        if commit not in tables:
+            listed = _git(project, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit])
+            rows = None
+            if listed is not None and listed.returncode == 0:
+                rows = {}
+                for entry in listed.stdout.split("\0"):
+                    meta, _, name = entry.partition("\t")
+                    parts = meta.split()
+                    if len(parts) == 3 and name:
+                        rows[name] = (parts[0], parts[2])
+            tables[commit] = rows
+        return tables[commit]
+
+    def target(blob):
+        if blob not in blobs:
+            shown = _git(project, ["cat-file", "blob", blob])
+            blobs[blob] = shown.stdout if shown is not None and shown.returncode == 0 and len(shown.stdout) <= 4096 else None
+        return blobs[blob]
+
+    def resolve(path, commit):
+        rows = entries(commit)
+        if rows is None:
+            return None
+        done, queue, hops = [], [part for part in path.split("/") if part not in ("", ".")], 0
+        while queue:
+            part = queue.pop(0)
+            if part == "..":
+                if not done:
+                    return None
+                done.pop()
+                continue
+            mode, obj = rows.get("/".join([*done, part]), (None, None))
+            if mode == "120000":
+                hops += 1
+                link = target(obj) if _OBJECT.fullmatch(obj) else None
+                if hops > MAX_LINK_HOPS or link is None or link.startswith("/") or "\0" in link:
+                    return None
+                queue = [item for item in link.split("/") if item not in ("", ".")] + queue
+                continue
+            if mode not in (None, *RESOLVABLE_MODES):
+                return None  # an allow-list: a gitlink or any other mode is opaque, so the path is unresolved
+            done.append(part)
+        return "/".join(done) or "."
+
+    def resolved(path):
+        found = []
+        for commit in dict.fromkeys(commits):
+            name = resolve(path, commit)
+            if name is None:
+                return None
+            if name not in found:
+                found.append(name)
+        return found
+    return resolved
+
+
+MAX_STAMP_BASES = 64
+
+
+def stamp_resolver(project: Path, prior_map: dict, observed: dict):
+    """R203: the delta a receipt's governance stamp crosses to the observed target, or None when Pod cannot read it.
+
+    The prior bound governance is read from the map. An older stamp is matched, read only, against the bases the
+    record's own governance history names (newest first, at most MAX_STAMP_BASES): first with the bound source
+    revisions, then by reading the sources at that base. Nothing is stored; results are cached for one write.
+    """
+    from .obligations import bind_governance, bound_governance_digest, governance_digest
+    exclude = prior_map["governance"]["exclude"]
+    proof_base = prior_map["governance"].get("proof_base")
+    prior = [{**row, "read_at": row["base"]} for row in prior_map["governance_sources"]]
+    cache = {bound_governance_digest(prior_map): prior}
+    bases = []
+    for row in reversed(prior_map.get("governance_history", {}).get("decisions", [])):
+        for key in ("base", "previous_base"):
+            if isinstance(row.get(key), str) and row[key] not in bases:
+                bases.append(row[key])
+    for value in (proof_base, prior_map["governance"].get("base")):
+        if isinstance(value, str) and value not in bases:
+            bases.insert(0, value)
+    bases = bases[:MAX_STAMP_BASES]
+    deltas: dict[str, list[dict] | None] = {}
+
+    def sources(stamp):
+        if stamp in cache:
+            return cache[stamp]
+        for base in bases:
+            # Unchanged sources keep their revisions; only the recorded base differs.
+            same = [{"path": row["path"], "revision": row["revision"], "base": base} for row in prior_map["governance_sources"]]
+            if governance_digest(same) == stamp:
+                cache[stamp] = [{**row, "read_at": row_at["base"]} for row, row_at in zip(same, prior)]
+                return cache[stamp]
+        for base in bases:
+            seen = governance_observation(project, prior_map["governance"]["base_ref"], at=base)
+            try:
+                read, _ = bind_governance(seen, prior_map["governance"]["base_ref"], exclude)
+            except PodError:
+                continue
+            if governance_digest(read) == stamp:
+                cache[stamp] = [{**row, "read_at": base} for row in read]
+                return cache[stamp]
+        cache[stamp] = None
+        return None
+
+    def delta(stamp):
+        if stamp not in deltas:
+            bound = sources(stamp)
+            deltas[stamp] = None if bound is None else governance_delta(project, bound, observed, exclude)
+        return deltas[stamp]
+    return delta
+
+
 MAX_GOVERNANCE_HISTORY = 64
 
 
@@ -482,7 +656,8 @@ def _governance_history(prior: dict | None) -> dict:
                 raise PodError("state_unsupported", "Derived governance decision history is malformed")
             continue
         if (not isinstance(row, dict)
-                or set(row) - {"seq", "base_ref", "base", "provenance", "instruction", "kind", "question", *CHANNEL_FIELDS}
+                or set(row) - {"seq", "base_ref", "base", "provenance", "instruction", "kind", "question", "rebind",
+                               *CHANNEL_FIELDS}
                 or not {"seq", "base_ref", "base", "provenance", "instruction", "kind"} <= set(row)
                 or type(row["seq"]) is not int or row["seq"] < 1
                 or not isinstance(row["base_ref"], str) or not _BASE_REF.fullmatch(row["base_ref"])
@@ -490,10 +665,41 @@ def _governance_history(prior: dict | None) -> dict:
                 or row["provenance"] not in ("user_direct", "agent_decision") or row["kind"] not in ("initial", "snapshot", "retarget")
                 or not isinstance(row["instruction"], str) or not 1 <= len(row["instruction"]) <= 1024):
             raise PodError("state_unsupported", "Governance decision history is malformed")
+        if "rebind" in row:
+            rebind_record(row["rebind"])
         owner_decision(row, kind="governance", stored=True)
     _require_history_capacity(history)
     return {"candidates": list(history["candidates"]),
             "decisions": [dict(row) for row in history["decisions"]]}
+
+
+def rebind_record(value: object) -> dict:
+    """R203's attested rebind as recorded on its snapshot decision: rows, exact delta and reason; which rebound
+    rows had a changed governance source as bound context, and which crossed more than one governance step."""
+    from .obligations import MAX_DELTA, MAX_OBLIGATIONS
+    def ids(rows):
+        return (isinstance(rows, list) and 1 <= len(rows) <= MAX_OBLIGATIONS and len(set(map(str, rows))) == len(rows)
+                and all(isinstance(key, str) and 0 < len(key) <= 64 for key in rows))
+    optional = {"bound_context", "earlier"}
+    ok = (isinstance(value, dict) and {"rows", "delta", "reason"} <= set(value) <= {"rows", "delta", "reason", *optional}
+          and ids(value["rows"]) and all(ids(value[key]) and set(value[key]) <= set(value["rows"])
+                                         for key in optional & set(value))
+          and isinstance(value["reason"], str) and 1 <= len(value["reason"]) <= 1024
+          and isinstance(value["delta"], list) and 1 <= len(value["delta"]) <= MAX_DELTA
+          and all(delta_entry(entry) for entry in value["delta"])
+          and len({(entry["path"], entry["bound"]) for entry in value["delta"]}) == len(value["delta"]))
+    if not ok:
+        raise PodError("state_unsupported", "Governance rebind record is malformed")
+    return value
+
+
+def delta_entry(entry: object) -> bool:
+    from .obligations import GOVERNANCE_PATHS
+    return (isinstance(entry, dict) and set(entry) == {"path", "bound", "current", "added", "removed"}
+            and entry["path"] in GOVERNANCE_PATHS and entry["bound"] != entry["current"]
+            and all(entry[key] is None or isinstance(entry[key], str) and _OBJECT.fullmatch(entry[key])
+                    for key in ("bound", "current"))
+            and all(type(entry[key]) is int and entry[key] >= 0 for key in ("added", "removed")))
 
 
 def _checkpoint_candidate(project: Path, candidate: str | None) -> str:
@@ -508,7 +714,7 @@ def _checkpoint_candidate(project: Path, candidate: str | None) -> str:
 
 def _retain_governance_history(project: Path, map_state: dict, prior: dict | None,
                                candidate: str, proposed: dict, *, snapshot_authorized: bool,
-                               derived_adoption: dict | None = None) -> None:
+                               derived_adoption: dict | None = None, rebind: dict | None = None) -> None:
     if map_state["governance"].get("base") is None:
         return
     history = _governance_history(prior)
@@ -526,6 +732,7 @@ def _retain_governance_history(project: Path, map_state: dict, prior: dict | Non
                     "provenance": owner_decision(authority, kind="governance")["provenance"], "instruction": authority["instruction"],
                     **channel_fields(owner_decision(authority, kind="governance")),
                     **({"question": authority["question"]} if "question" in authority else {}),
+                    **({"rebind": rebind} if rebind is not None else {}),
                     "kind": "initial" if prior is None else "snapshot" if snapshot_authorized else "retarget"}
         if not any({key: value for key, value in row.items() if key != "seq"} == decision
                    for row in history["decisions"]):

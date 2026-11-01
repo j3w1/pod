@@ -1823,6 +1823,15 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             _facts(ticks, source, live["body"], mapping_check=checked)
             ctx["pod_mapping_facts"], ctx["pod_mapping_read"] = ticks["facts"], ticks["read"]
         ctx["governance_refresh"] = refresh
+        if refresh and prior_map is not None:
+            # R203: Pod's own read of the changed governance sources a rebind would cross.
+            from .governance import scope_resolver, stamp_resolver
+            from .obligations import bound_governance_digest
+            resolve = stamp_resolver(project, prior_map, observed)
+            trees = [row["base"] for row in prior_map["governance_sources"]] + [observed.get("commit"), core["candidate"]]
+            ctx.update(governance_stamp_delta=resolve, governance_delta=resolve(bound_governance_digest(prior_map)),
+                       snapshot_decision=snapshot_authorized, rebind_outcome={},
+                       governance_scope=scope_resolver(project, [tree for tree in trees if isinstance(tree, str)]))
         if withdrawing:
             # R201: satisfied rows are retained history that this closure does not rely on.
             from .obligations import settled_proof
@@ -1883,8 +1892,21 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         checkpoint_times(state, prior_map, map_state)
         if verified_delivery is not None:
             map_state["delivery"] = verified_delivery
+        attested = proposed.get("governance_delta")
+        rebind_record = None
+        if isinstance(attested, dict):
+            from .obligations import governance_context
+            outcome = ctx["rebind_outcome"]
+            rows = sorted(set(proposed["rebind"]))
+            changed = sorted({entry["path"] for entry in outcome["delta"]})
+            stored = {row["id"]: row for row in map_state["obligations"]}
+            context = [key for key in rows if key in stored and governance_context(stored[key], changed)]
+            rebind_record = {"rows": rows, "delta": outcome["delta"], "reason": attested["reason"],
+                             **({"bound_context": context} if context else {}),
+                             **({"earlier": outcome["earlier"]} if outcome["earlier"] else {})}
         _retain_governance_history(project, map_state, prior_map, core["candidate"], proposed,
-                                   snapshot_authorized=snapshot_authorized, derived_adoption=derived_adoption)
+                                   snapshot_authorized=snapshot_authorized, derived_adoption=derived_adoption,
+                                   rebind=rebind_record)
         if map_state.get("closure") is not None:
             # Include this checkpoint's decision in the final stored report as well.
             from .obligations import report_projection
@@ -3293,11 +3315,14 @@ def _tool_native(project, objective, state, owner):
     return authority, digest(identity)
 
 
-def _write_tool_questions(project, objective, state, questions, authority):
+def _write_tool_questions(project, objective, state, questions, authority, *, effect=False):
+    """Record question rows. R164: asking, answering, cancelling or replacing a question adopts nothing and
+    changes no governance binding, so only the write that lets an approved operation run checks currency."""
     from .obligations import accept_write
     prior = map_of(state)
     if prior is not None:
-        require_governance_current(project, prior)
+        if effect:
+            require_governance_current(project, prior)
         ctx = kernel_context(project, objective, state, authority["native"])
         ctx.update(operation="checkpoint", recorded_questions=state["checkpoint"].get("questions", []))
         updated = accept_write(prior, {"seq": prior["seq"] + 1}, ctx)
@@ -3440,7 +3465,8 @@ def tool_decision(project: Path, objective: str, *, action: str, owner: str | No
             capability.phases({"objective": path}, {"objective": deepcopy(state)})
             with capability.scope():
                 row.update(state="consumed", resolved=True)
-                _write_tool_questions(project, objective, state, questions, authority)
+                _write_tool_questions(project, objective, state, questions, authority,
+                                      effect=capability.pending_use is not None)
             return {"status": "allowed" if capability.execute else "consumed", "execute": capability.execute,
                     "invocation": row["id"], **({"readback": True} if not capability.execute else {})}
         result = tool_permissions.check(snapshot["decision_policy"], snapshot["tool_permissions"], tool, category, operation,

@@ -9882,6 +9882,108 @@
         "tests.test_governance_reapproval.ResultBaseAdoptionOnlyTests.test_a_policy_valid_authority_changes_the_row_in_the_same_write"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A749",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.DiagnosticsTests.test_plain_refresh_lists_every_rebindable_row_and_the_exact_delta",
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_an_unattested_rebind_across_changed_sources_is_refused"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A750",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_attested_rebind_keeps_receipts_and_records_delta_reason_and_authority",
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_edited_and_removed_lines_are_recorded_not_refused",
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_the_declared_delta_must_equal_the_delta_pod_reads",
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_an_attested_rebind_is_a_snapshot_decision_by_the_policy_decider",
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_an_empty_delta_rebinds_without_attestation",
+        "tests.test_issue41.RemainingProofTests.test_one_refusal_classifies_candidate_definition_binding_and_governance_failures",
+        "tests.test_governance_delta_rebind.ExemptedAdoptionTests.test_the_attested_rebind_carries_proof_through_an_exempted_adoption"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A751",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_a_pod_policy_source_change_refuses",
+        "tests.test_governance_delta_rebind.AttestedRebindTests.test_a_changed_row_definition_stays_invalid",
+        "tests.test_governance_delta_rebind.ScopedRowTests.test_a_row_whose_scope_names_the_changed_source_refuses",
+        "tests.test_governance_delta_rebind.ScopedRowTests.test_a_review_that_read_the_changed_source_rebinds_until_the_candidate_takes_it",
+        "tests.test_superseded_closure.WithdrawalOnlyClosureTests.test_refresh_route_still_requires_fresh_review_so_closure_does_not_use_it",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_file_link_to_the_changed_source_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_parent_directory_link_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_link_loop_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_an_over_long_chain_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_the_direct_spelling_still_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_an_unrelated_link_rebinds",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_link_inside_a_submodule_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_scope_that_is_a_gitlink_or_lies_under_one_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_a_link_into_a_submodule_refuses",
+        "tests.test_governance_delta_rebind.LinkScopeTests.test_any_mode_outside_the_allow_list_is_unresolved"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A752",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.EarlierStepTests.test_a_restated_row_rebinds_later_across_both_steps",
+        "tests.test_kernel_boundaries.ProofIntegrityBoundaryTests.test_governance_refresh_preserves_stale_receipts_and_requires_explicit_rebind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A753",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.SizeTests.test_a_realistic_attestation_fits_and_reads_back"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A754",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.UndatedPriorTests.test_an_agent_decision_at_this_write_orders_after_undated_decisions",
+        "tests.test_governance_delta_rebind.UndatedPriorTests.test_a_decider_the_policy_does_not_name_still_refuses",
+        "tests.test_constraint_decision_channels.ConstraintDecisionChannelTests.test_unknown_original_chronology_still_needs_person_resolution"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A755",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.QuestionTests.test_cancel_and_replacement_skip_currency_and_change_no_binding",
+        "tests.test_governance_delta_rebind.QuestionTests.test_an_answer_records_but_using_the_approval_still_needs_current_governance"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

@@ -606,7 +606,11 @@ class RemainingProofTests(ProofBoundaryTests):
         next(row for row in rows if row["id"]=="R")["reuse"]={"from":self.base}
         next(row for row in rows if row["id"]=="D")["proof_scope"]=["src"]
         before=read(self.project,"objective")
-        with self.assertRaises(PodError) as caught:self.write(rows,governance_refresh=True,rebind=[key for key in ids if key!="G"])
+        from tests.decision_policy_support import PERSON
+        from tests.kernel_support import governance_attestation, snapshot
+        with self.assertRaises(PodError) as caught:self.write(rows,governance_refresh=True,rebind=[key for key in ids if key!="G"],
+                                                               governance=snapshot(self.project),revision_authority=PERSON,
+                                                               governance_delta=governance_attestation(self.project))
         detail=caught.exception.detail;self.assertEqual(detail["detail"],"evidence_invalidated")
         entries={item["obligation"]:item for item in detail["referent"]["invalidations"]}
         self.assertEqual(detail["referent"]["remaining"],1)
