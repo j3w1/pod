@@ -432,6 +432,60 @@ class RefusalTableTests(GroupedTable):
         self.rows()
 
 
+class DecisionWordingTests(RetirementCase):
+    """Retirement text names the owner only when the owner decided; an agent decision reads neutrally."""
+    AGENT = "historical retirement (agent decision under the decision policy)"
+
+    def agent_retired(self):
+        from pod import config
+        from tests.decision_policy_support import PERSON
+        self.delivered()
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        decision = {key: value for key, value in self.decide().items() if key != "provenance"}
+        decision.update(provenance="agent_decision", channel="agent_session")
+        self.assertEqual(self.retire(decision)["status"], "retired")
+
+    def test_status_readiness_and_detection_word_an_agent_decision_neutrally(self):
+        self.agent_retired()
+        shown = self.status()
+        self.assertEqual(shown["retirement"]["decided_by"], "agent")
+        self.assertTrue(shown["readiness"]["summary"].startswith(
+            f"Ended by a {self.AGENT}: not completed or closed, and its record accepts no writes."))
+        self.assertIn(self.AGENT, shown["next_action"])
+        self.assertIn("Historical retirement by an agent decision under the decision policy", self.text_status())
+        self.assertEqual(self.retire()["objectives"][0]["message"], f"A {self.AGENT} already covers this objective.")
+        self.assertNotIn("owner's", json.dumps(shown) + self.text_status())
+
+    def test_the_write_refusal_and_handoff_word_an_agent_decision_neutrally(self):
+        self.agent_retired()
+        self.returning()
+        refused = self.refused(lambda: self.op("checkpoint", value=self.core()), code="objective_retired")
+        self.assertTrue(str(refused).startswith(f"A {self.AGENT} of this objective at "), str(refused))
+        self.assertIn(self.AGENT, refused.detail["next_action"])
+
+    def test_handoff_window_and_claim_word_an_agent_decision_neutrally(self):
+        from pod import handoff, window
+        self.agent_retired()
+        state = read(self.project, "objective")
+        for verdict in (handoff.detect(self.project, "objective", state, port=self.port, caller="next"),
+                        window.detect(self.project, "objective", state, port=self.port, objective_only=True)):
+            self.assertEqual(verdict["condition"], "objective_retired")
+            self.assertIn(self.AGENT, verdict["message"])
+            self.assertNotIn("owner's", verdict["message"] + verdict.get("next_action", ""))
+        self.successor()
+        claimed = self.claim()
+        self.assertEqual(claimed["condition"], "predecessor_retired")
+        self.assertTrue(claimed["message"].startswith(f"A {self.AGENT} covers the predecessor"), claimed["message"])
+
+    def test_an_owner_decision_still_names_the_owner(self):
+        self.delivered()
+        self.assertEqual(self.retire(self.decide())["status"], "retired")
+        shown = self.status()
+        self.assertEqual(shown["retirement"]["decided_by"], "owner")
+        self.assertTrue(shown["readiness"]["summary"].startswith("Ended by the owner's historical retirement"))
+        self.assertIn("Historical retirement by the owner at", self.text_status())
+
+
 class UnreadableRecordTests(RetirementCase):
     """R206: another Pod record that cannot be read holds only itself; detection names it and goes on."""
 

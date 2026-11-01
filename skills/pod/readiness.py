@@ -410,12 +410,12 @@ def assess(project: Path, objective: str, state: dict, root: Path, *, view: dict
                             f"({chain['state'].replace('_', ' ')}); read that objective, as this record "
                             "accepts no writes."}
     elif isinstance(state.get("historical_retirement"), dict):
+        from .retirement import named
         entry = state["historical_retirement"]
         block = {"contract": CONTRACT, "state": "retired", "acts_next": "none", "coordinator_needed": False,
                  "coordinator": coordinator(state), "finalization": None,
                  "reason": {"retired_at": entry["at"], "reason": entry["reason"]},
-                 "summary": "Ended by the owner's historical retirement: not completed or closed, and its "
-                            "record accepts no writes."}
+                 "summary": f"Ended by {named(entry)}: not completed or closed, and its record accepts no writes."}
     elif map_error is not None:
         block = unavailable(map_error, f"the objective map cannot be projected ({map_error})")
     else:

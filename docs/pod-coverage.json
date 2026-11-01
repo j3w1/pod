@@ -10250,6 +10250,21 @@
         "tests.test_owner_handoff.TransitionTableTests.test_pending_unreadable_scope_and_nonlive_success_do_not_abort"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A777",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_historical_retirement.DecisionWordingTests.test_status_readiness_and_detection_word_an_agent_decision_neutrally",
+        "tests.test_historical_retirement.DecisionWordingTests.test_the_write_refusal_and_handoff_word_an_agent_decision_neutrally",
+        "tests.test_historical_retirement.DecisionWordingTests.test_handoff_window_and_claim_word_an_agent_decision_neutrally",
+        "tests.test_historical_retirement.DecisionWordingTests.test_an_owner_decision_still_names_the_owner",
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_agent_decision_the_hands_off_policy_accepts_retires"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

@@ -577,8 +577,9 @@ def _predecessor_facts(project: Path, objective: str, predecessor: str, state: d
         return fail("predecessor_claimed", f"Successor objective {link['objective']} already continues it.",
                     ACTION.format(link["objective"]))
     if isinstance(prior.get("historical_retirement"), dict):
-        return fail("predecessor_retired", "The owner's historical retirement covers the predecessor; it is not "
-                    "continued.")
+        from .retirement import named
+        return fail("predecessor_retired", f"{named(prior['historical_retirement'], capital=True)} covers the "
+                    "predecessor; it is not continued.")
     back = state.get("continues")
     if isinstance(back, dict) and reserved_for(state) != predecessor:
         return fail("successor_started", f"This successor already continues objective {back['objective']}.")
@@ -621,8 +622,9 @@ def claim_view(project: Path, objective: str, state: dict, *, port, previous: di
         return fail("predecessor_claimed", f"Successor objective {link['objective']} already continues it.",
                     ACTION.format(link["objective"]))
     if isinstance(state.get("historical_retirement"), dict):
-        return fail("predecessor_retired", "The owner's historical retirement covers this objective; it is not "
-                    "continued.")
+        from .retirement import named
+        return fail("predecessor_retired", f"{named(state['historical_retirement'], capital=True)} covers this "
+                    "objective; it is not continued.")
     failed, unfinished_rows, unreported = _predecessor_checks(project, objective, state, facts, fail, port=port,
                                                               previous=previous)
     if failed is not None:

@@ -282,9 +282,10 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("objective_continued", f"The objective was continued by successor objective {link['objective']}.",
                     definitive=True, action=ACTION.format(link["objective"]))
     if isinstance(state.get("historical_retirement"), dict):
-        from .retirement import ACTION as RETIREMENT
-        return fail("objective_retired", "The owner's historical retirement ended this objective's coordination; "
-                    "it accepts no coordinator.", definitive=True, action=RETIREMENT.format(objective))
+        from .retirement import named, retired_action
+        entry = state["historical_retirement"]
+        return fail("objective_retired", f"{named(entry, capital=True)} ended this objective's coordination; "
+                    "it accepts no coordinator.", definitive=True, action=retired_action(objective, entry))
     from .evidence_closure import present
     from .ledger import objective_root
     if present(objective_root(project, objective)):

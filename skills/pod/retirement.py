@@ -60,8 +60,44 @@ MAX_LISTED = 64
 # objective lock is held. Recorded worktrees it does not name are released without those reads (R206).
 MAX_PATHS = MAX_LISTED
 MAX_DELIVERY = 16
-ACTION = ("Read it with pod status --objective {}; the owner's historical retirement released its worktrees: "
-          "it is not completed, and its record accepts no writes.")
+OWNER_RETIREMENT = "the owner's historical retirement"
+AGENT_RETIREMENT = "a historical retirement (agent decision under the decision policy)"
+
+
+def by_agent(entry: object) -> bool:
+    """Whether a retirement entry records an agent's decision rather than the owner's: its recorded actor, else its
+    provenance, else its channel. Entries written before decision actors were user_direct, the owner's."""
+    if not isinstance(entry, dict):
+        return False
+    actor = entry.get("actor")
+    if isinstance(actor, dict) and "kind" in actor:
+        return actor["kind"] != "person"
+    if "provenance" in entry:
+        return entry["provenance"] != "user_direct"
+    return entry.get("channel") == "agent_session"
+
+
+def named(entry: object, *, capital: bool = False) -> str:
+    """How text names a retirement: the owner's only when the owner decided it."""
+    text = AGENT_RETIREMENT if by_agent(entry) else OWNER_RETIREMENT
+    return text[0].upper() + text[1:] if capital else text
+
+
+def entry_of(project: Path, root: Path, raw: object) -> dict | None:
+    """The retirement entry of a record: a current record's own, or an older record's certified entry beside it."""
+    entry = raw.get(FIELD) if isinstance(raw, dict) else None
+    if isinstance(entry, dict):
+        return entry
+    try:
+        found = older_state(root, project)
+    except PodError:
+        return None
+    return found[0].get(FIELD) if found is not None else None
+
+
+def retired_action(objective: str, entry: object) -> str:
+    return (f"Read it with pod status --objective {objective}; {named(entry)} released its worktrees: it is not "
+            "completed, and its record accepts no writes.")
 # An older record's retirement, stored beside its unchanged bytes (R205).
 SIDECAR = "historical-retirement.json"
 SIDECAR_SCHEMA = "pod-historical-retirement/v1"
@@ -206,9 +242,9 @@ def refuse_retired(state: dict | None) -> None:
     if isinstance(entry, dict):
         name = ((state.get("checkpoint") or {}).get("objective")) or "this objective"
         raise PodError("objective_retired",
-                       f"The owner's historical retirement of this objective at {entry['at']} released its worktrees; "
+                       f"{named(entry, capital=True)} of this objective at {entry['at']} released its worktrees; "
                        "it is not completed, and its record accepts no writes",
-                       {"retired_at": entry["at"], "next_action": ACTION.format(name)})
+                       {"retired_at": entry["at"], "next_action": retired_action(name, entry)})
 
 
 # --------------------------------------------------------------------------- an older record's retirement (R205)
@@ -236,11 +272,13 @@ def refuse_sidecar(root: Path) -> None:
                        "nothing was written", {"next_action": "restore access to the objective's state directory, "
                                                               "then retry"})
     try:
-        at = _sidecar(root)[FIELD]["at"]
+        entry = _sidecar(root)[FIELD]
+        at = entry["at"]
     except PodError:
-        at = None
+        entry, at = None, None
     raise PodError("objective_retired",
-                   "The owner's historical retirement of this objective" + (f" at {at}" if at else "")
+                   (named(entry, capital=True) if entry is not None else "A historical retirement")
+                   + " of this objective" + (f" at {at}" if at else "")
                    + " released its worktrees; it is not completed, and its record accepts no writes",
                    {"retired_at": at, "next_action": "Read it with pod status --objective NAME; nothing remains to "
                                                      "record."})
@@ -558,7 +596,7 @@ def older_status(project: Path, objective: str, root: Path) -> dict | None:
         else:
             settled.append(item)
     checkpoint = view["checkpoint"]
-    action = ACTION.format(objective)
+    next_action = retired_action(objective, entry)
     runs = doc["runs"]
     return {**out, "status": "observed", "phase": "retired", "blocker": "objective_retired",
             "source": checkpoint.get("objective_source", "direct_objective"),
@@ -575,9 +613,9 @@ def older_status(project: Path, objective: str, root: Path) -> dict | None:
                                           "runs": runs[:32], "generation": None, "runtime": None,
                                           "liveness": "not_read", "code": None},
                           "finalization": None, "reason": {"retired_at": entry["at"], "reason": entry["reason"]},
-                          "summary": "Ended by the owner's historical retirement: not completed or closed, and its "
-                                     "record accepts no writes."},
-            "next_safe_action": action, "next_action": action}
+                          "summary": f"Ended by {named(entry)}: not completed or closed, and its record accepts "
+                                     "no writes."},
+            "next_safe_action": next_action, "next_action": next_action}
 
 
 def counts(rows: list[dict]) -> dict:
@@ -615,7 +653,8 @@ def status_block(state: dict) -> dict | None:
     if not isinstance(entry, dict):
         return None
     held = _reservations(state, entry["released"])
-    return {"retired_at": entry["at"], "completed": False, "released": list(entry["released"]),
+    return {"retired_at": entry["at"], "completed": False, "decided_by": "agent" if by_agent(entry) else "owner",
+            "released": list(entry["released"]),
             "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None, **held,
             "preserved": [dict(row) for row in entry["preserved"]], "counts": counts(entry["preserved"]),
             "unfinished": list(entry["unfinished"]), "delivery": list(entry["delivery"]),
@@ -1117,7 +1156,8 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
             "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None,
             "retained": held["retained"], "unrecorded_locations": held["unrecorded_locations"],
             "records": list(entry["preserved"])}, also_released=held["also_released"],
-            message="The owner's historical retirement already covers this objective.", next_action=ACTION.format(objective))
+            message=f"{named(entry, capital=True)} already covers this objective.",
+            next_action=retired_action(objective, entry))
         return verdict
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
@@ -1135,10 +1175,10 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     if unreadable:
         # An unreadable record holds only its own resources (R206); it is named, and detection goes on.
         verdict["unavailable_records"] = unreadable[:MAX_LISTED]
-    named = None
+    scoped_runs = None
     if doc is not None:
         # An older record is read whole: a field detection does not prove refuses before any native read (R205).
-        named, field = older_scope(state, objective)
+        scoped_runs, field = older_scope(state, objective)
         if field is not None:
             verdict["field"] = field
             return fail("retirement_scope_unproved", f"The superseded record's field {field} is not one "
@@ -1155,7 +1195,7 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         from .window import unfinished as window_unfinished
         if (window_unfinished(state) or {}).get("state") == "pending":
             return fail("handoff_pending", "The objective has a pending window continuation.")
-        refs = sorted(set(doc["runs"]) | set(named)) if doc is not None else sorted(_run_references(state))
+        refs = sorted(set(doc["runs"]) | set(scoped_runs)) if doc is not None else sorted(_run_references(state))
         recorded, _ = _recorded(state)
         records = _governor_rows(project, objective)
     except PodError as exc:
@@ -1667,7 +1707,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             results.append({**verdict, "status": "retired", "retirement": status_block(state),
                             "message": "Historical retirement recorded: the record is kept, not completed, and "
                                        "accepts no writes.",
-                            "next_action": ACTION.format(name)})
+                            "next_action": retired_action(name, entry)})
     done = [row for row in results if row["status"] in ("retired", "replayed")]
     if decision is None:
         eligible = [row for row in results if row["status"] == "eligible"]

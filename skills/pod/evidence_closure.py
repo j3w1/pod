@@ -460,8 +460,10 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
     if phase != "open":
         code = {"closed": "objective_closed", "retired": "objective_retired",
                 "continued": "objective_continued"}[phase]
+        from .retirement import entry_of, named
+        ended_by = f"{named(entry_of(project, root, raw), capital=True)} covers it." if phase == "retired" else ""
         proof.add("not_applicable", code, {"closed": "Its coordinator recorded its closure.",
-                                           "retired": "The owner's historical retirement covers it.",
+                                           "retired": ended_by,
                                            "continued": "A successor continues it; its chain tail closes it."}[phase])
         return proof.result()
     try:

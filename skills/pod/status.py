@@ -593,14 +593,15 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 result.update(next_safe_action=action, next_action=action,
                               **({"blocker": "window_available"} if window["status"] == "window_available" else {}))
     if state is not None:
-        from .retirement import ACTION as RETIREMENT, status_block as retirement_block
+        from .retirement import retired_action, status_block as retirement_block
         retirement = retirement_block(state)
         if retirement is not None:
             # Under historical retirement a record is read, never written; it is not closed, continued or
             # successful (R112).
             # Other objectives keep their exact earlier projection, without a phase field.
             result.update(phase="retired", retirement=retirement, blocker="objective_retired",
-                          next_safe_action=RETIREMENT.format(objective), next_action=RETIREMENT.format(objective))
+                          next_safe_action=retired_action(objective, state["historical_retirement"]),
+                          next_action=retired_action(objective, state["historical_retirement"]))
         from .succession import ACTION, reserved_for, status_block
         block = status_block(project, state)
         if block is not None:
@@ -779,7 +780,8 @@ def render(result: dict) -> None:
         retirement = result.get("retirement")
         if isinstance(retirement, dict):
             tally = retirement["counts"]
-            print(f"Historical retirement by the owner at {clean(retirement['retired_at'])}: not completed or closed; released "
+            decider = "an agent decision under the decision policy" if retirement["decided_by"] == "agent" else "the owner"
+            print(f"Historical retirement by {decider} at {clean(retirement['retired_at'])}: not completed or closed; released "
                   + ", ".join(clean(path) for path in retirement["released"])
                   + f"; preserved {tally['pending']} pending, {tally['unknown']} unknown, {tally['failed']} failed and "
                   f"{tally['unreported']} unreported record(s); {len(retirement['unfinished'])} unfinished "

@@ -451,7 +451,9 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     if isinstance(state.get("continued_by"), dict):
         return fail("objective_continued", "a successor objective continued this objective.", definitive=True)
     if isinstance(state.get("historical_retirement"), dict):
-        return fail("objective_retired", "the owner's historical retirement ended this objective.", definitive=True)
+        from .retirement import named
+        return fail("objective_retired", f"{named(state['historical_retirement'])} ended this objective.",
+                    definitive=True)
     from .evidence_closure import _presence
     from .ledger import objective_root
     _step(budget)
