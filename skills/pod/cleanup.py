@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import json
 from pathlib import Path
 import re
 
@@ -14,8 +15,9 @@ from .ledger import read
 from .orca import read_command
 from .util import bounded_text, digest, exact
 
-MAX_RESOURCES = 96
 MAX_GIT_OUTPUT = 2_000_000
+# One plan's response and its expect input are bounded by bytes, never by a resource count (R206).
+MAX_RESPONSE = 2_000_000
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 
 
@@ -538,7 +540,7 @@ def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple
     if expect is not None:
         provided = exact(expect, {"plan", "resources"}, {"plan", "resources"}, name="cleanup_expect")
         older = provided["resources"]
-        if (not isinstance(older, dict) or len(older) > MAX_RESOURCES
+        if (not isinstance(older, dict) or len(json.dumps(provided).encode()) > MAX_RESPONSE
                 or not isinstance(provided["plan"], str) or len(provided["plan"]) != 64
                 or any(not isinstance(key, str) or not isinstance(value, str) or len(value) != 64
                        for key, value in older.items())):
@@ -742,8 +744,6 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                                                     selected_released=not worker_holds)
         worker_facts["placement_history"] = history
         worker_holds.extend(history_holds)
-    if len(paths) > MAX_RESOURCES:
-        raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     selected_branches = {"refs/heads/" + branch for branches in expected_branches.values() for branch in branches}
     journal_branches = {"refs/heads/" + branch["branch"] for unit in journal["units"].values()
                         if isinstance(branch := unit.get("branch"), dict) and isinstance(branch.get("branch"), str)}
@@ -754,8 +754,6 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
     # Recorded names remain observations when a checkout disappears; absence is
     # neither completed removal nor permission to delete its remaining ref.
     local_branches.update(selected_branches)
-    if len(paths) + len(local_branches) + len(remote_names) > MAX_RESOURCES:
-        raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     repository = cleanup_archives.repository_observation(project)
     git_resources = {}
     for path_text in sorted(paths):
@@ -971,8 +969,6 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                                                   archive_ref]
                                                  if classification == "unique" and not completed else None),
                                    archive_verified=verified, archive_observations=observed_archives))
-    if len(resources) > MAX_RESOURCES:
-        raise PodError("cleanup_unavailable", "Objective cleanup resource bound is exceeded")
     resources.sort(key=lambda row: row["id"])
     observed_target = {"ref": target_ref, "commit": target, "moved_after_delivery": moved}
     for row in resources:

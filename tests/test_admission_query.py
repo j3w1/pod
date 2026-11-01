@@ -197,6 +197,20 @@ class AdmissionQueryTests(AdmissionQueryCase):
             with self.subTest(bad=bad), patch("pod.admission._read", side_effect=[first, bad]), self.assertRaises(PodError):
                 real_fleet()
 
+    def test_every_native_page_is_read_however_many_and_a_repeated_cursor_refuses(self):
+        # R206: the all-Run inventory has no page count; a repeated cursor still refuses.
+        from pod.errors import PodError
+        def pages(count, cursor=lambda index: f"c{index}"):
+            return [{"runtime": "runtime", "result": {"scope": {"source": "all"},
+                     "workers": [{"dispatchId": f"d{index}"}],
+                     "page": {"hasMore": index < count - 1, "nextCursor": cursor(index)}}} for index in range(count)]
+        with patch("pod.admission._read", side_effect=pages(101)):
+            self.assertEqual(len(self._real_fleet()["workers"]), 101)
+        with patch("pod.admission._read", side_effect=pages(3, cursor=lambda index: "same")), \
+                self.assertRaises(PodError) as caught:
+            self._real_fleet()
+        self.assertEqual(caught.exception.code, "orca_pagination")
+
     def test_bound_native_inventory_reports_coverage_without_history_reads(self):
         self.intake(worktree=self.place)
         # Intake records its exact Run; no global or another bound Run can stand in.

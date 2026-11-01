@@ -13,7 +13,7 @@ from pod.errors import PodError
 from pod.ledger import objective_root, read
 from pod.operations import OrcaPort, guarded_start
 from pod.retirement import status_block, validate_entry
-from tests.common import GroupedTable, assert_grouped_table
+from tests.common import GroupedTable, assert_grouped_table, padded_worktrees
 from tests.kernel_support import git
 from tests import test_historical_retirement as earlier  # Its test classes would be discovered twice if imported.
 from tests.test_historical_retirement import RetirementCase
@@ -683,7 +683,7 @@ class DecisionTests(AbsentCase):
         path, raw = _raw(self, "objective")
         raw["checkpoint"].pop("worktree")  # Now the record no longer lists every location.
         path.write_text(json.dumps(raw))
-        # Nothing it holds changes (a retired objective holds nothing), so the decided facts still match (R206).
+        # Nothing it holds changes (an objective under historical retirement holds nothing), so the decided facts still match (R206).
         self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
 
     def test_a_mixed_batch_reports_each_objective_and_later_retires_the_other(self):
@@ -700,6 +700,21 @@ class DecisionTests(AbsentCase):
         os.rmdir(self.gone)
         later = {row["objective"]: row["status"] for row in self.retire(decision, objectives=both)["objectives"]}
         self.assertEqual(later, {"objective": "retired", "reconcile": "replayed"})
+
+
+class RepositorySizeTests(AbsentCase):
+    """R206: no repository-size bound on R113's registry read."""
+
+    def test_more_than_ninety_six_unrelated_worktrees_still_prove_absence(self):
+        from pod.cleanup import _worktrees
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        with padded_worktrees(self.root, 120):
+            self.assertGreaterEqual(len(_worktrees(self.project)), 122)
+            found = self.retire(objectives=self.request(self.gone, self.kept))
+        verdict = found["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+        self.assertEqual(self.located(found)[self.gone]["evidence"]["git"], "unregistered")
 
 
 class ReleaseCapacityTests(AbsentCase):
@@ -1137,7 +1152,7 @@ class LocatedEntryShapeTests(unittest.TestCase):
                  "admissions": {"a": {"native_binding": {"worktreeId": "repo::/w/one"}},
                                 "b": {"worktree": "path:/w/two"}}}
         block = status_block(state)
-        # Computed on read from the whole record: a retired objective holds no worktree (R206).
+        # Computed on read from the whole record: an objective under historical retirement holds no worktree (R206).
         self.assertEqual((block["retained"], block["also_released"], block["unrecorded_locations"], block["locations"]),
                          ([], ["/w/coordinator"], "hold_ends", self.ENTRY["locations"]))
         state["admissions"]["c"] = {"worktree": "current"}
