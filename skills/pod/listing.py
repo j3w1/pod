@@ -210,6 +210,9 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
         try:
             raw = load_context(Path(entry.path) / "context.json", validate=False)
         except PodError as exc:
+            from .orca import DEADLINE_SPENT
+            if exc.code == DEADLINE_SPENT:
+                raise  # Outer deadline exhaustion refuses the whole list; it is no record's fault.
             unreadable.append({"record": entry.name, "code": exc.code})
             continue
         if not isinstance(raw, dict):

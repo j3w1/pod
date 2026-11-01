@@ -10238,7 +10238,8 @@
         "tests.test_historical_retirement.RefusalTableTests.test_other_records_refuse",
         "tests.test_record_membership.MembershipTests.test_each_record_shape_holds_only_what_it_could_name",
         "tests.test_record_membership.MembershipTests.test_an_outer_deadline_still_refuses_on_its_own",
-        "tests.test_record_membership.LazyPageTests.test_a_missing_descendant_page_stays_inside_its_record"
+        "tests.test_record_membership.LazyPageTests.test_a_missing_descendant_page_stays_inside_its_record",
+        "tests.test_record_membership.ListDeadlineTests.test_an_outer_deadline_at_the_first_record_read_refuses_the_whole_list"
       ],
       "status": "NOT_RUN"
     },
