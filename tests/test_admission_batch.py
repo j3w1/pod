@@ -608,7 +608,11 @@ class FenceTests(FencedCase):
 
 
 def worker(dispatch, state, **fields):
-    return {"dispatchId": dispatch, "terminalState": state, "workerState": "ready", **fields}
+    """A structurally valid worker row (projection passes `_worker_fact`)."""
+    row = {"dispatchId": dispatch, "runId": "run", "taskId": "task", "terminalState": state, "workerState": "ready",
+           "projection": {"id": "w-" + dispatch, "dispatchId": dispatch, "runId": "run", "taskId": "task"}}
+    row.update(fields)
+    return row
 
 
 def fleet_model(rows, **fields):
@@ -727,8 +731,8 @@ class PartitionTests(base.AdmissionQueryCase):
 
     def test_abandoned_rows_start_their_claim_reads_during_the_walk(self):
         rows = self.fleet()
-        rows["active"] = [worker("a1", "active", workerState="abandoned", runId="run", taskId="task",
-                                 projection={"id": "w"})]
+        rows["active"] = [worker("a1", "active", workerState="abandoned",
+                                 projection={"id": "w", "dispatchId": "a1", "runId": "run", "taskId": "task"})]
         shown = {"runtime": "runtime", "result": {"dispatch": {"id": "a1", "runId": "run", "taskId": "task"},
                  "worker": {}, "projection": {"id": "w"}}}
         double = FleetDouble(rows, overrides={tuple(["orchestration", "worker-show", "--dispatch", "a1", "--json"]): shown})
@@ -782,3 +786,120 @@ class PreexistingFaultTests(BatchCase):
             codes = [row["code"] for row in result["unknowns"]] + list(result["unrelated_unknowns"]["by_code"])
             self.assertIn("native_location_unavailable", codes)
             self.assertIn("native_runtime_changed", codes)
+
+
+class CorrectionRoundTests(BatchCase):
+    """Review corrections: the newest page binds the union, malformed rows keep the sequential order,
+    read faults stay scoped unknowns, and a late Run-owner read is never made."""
+
+    def real_inventories(self):
+        fleet = patch("pod.admission._fleet", side_effect=self._real_fleet)
+        terminals = patch("pod.admission._terminals", side_effect=self._real_terminals)
+        fleet.start(); self.addCleanup(fleet.stop)
+        terminals.start(); self.addCleanup(terminals.stop)
+
+    def replaced(self, before, after):
+        """Discovery's partitions list `before`; every later read (newest page, fallback, fence) sees `after`."""
+        start, end = fleet_model([before]), fleet_model([after])
+        def read(argv):
+            if "--terminal-state" in argv and not admission._FENCING.get():
+                return start(argv)
+            return end(argv)
+        self.native.fleet = read
+
+    def row(self, dispatch, path, state, worker_state, verdict):
+        row = base.ReviewCorrectionTests.writer(self, path=path, verdict=verdict, dispatch=dispatch)
+        row.update(terminalState=state, workerState=worker_state, dispatchStatus="completed")
+        row["projection"]["resource"] = {"state": state}
+        return row
+
+    def test_a_balanced_replacement_falls_back_and_keeps_the_new_claim(self):
+        self.intake(worktree=self.place)
+        self.real_inventories()
+        gone = self.row("B", self.root / "foreign", "released", "ready", "exited")
+        new = self.row("C", self.project, "released", "abandoned", "exited")
+        self.replaced(gone, new)
+        pending = {"process": "exited", "effects": [{"kind": "push", "id": "main", "state": "pending"}]}
+        with patch("pod.admission._native_claim", return_value=pending):
+            answer = self.batch({"branch": "main"})
+        result = answer["responses"][0]["result"]
+        self.assertEqual(answer["discovery"]["fleet_read"], "sequential")
+        self.assertIn("C", [claim.get("dispatch") for claim in result["claims"]])
+        self.assertFalse(result["complete"] and answer["native_fence"]["stable"]
+                         and "C" not in [claim.get("dispatch") for claim in result["claims"]])
+
+    def test_an_active_replacement_falls_back(self):
+        self.intake(worktree=self.place)
+        self.real_inventories()
+        self.replaced(self.row("B", self.root / "foreign", "active", "ready", "live"),
+                      self.row("C", self.project, "active", "ready", "live"))
+        answer = self.batch({"branch": "main"})
+        self.assertEqual(answer["discovery"]["fleet_read"], "sequential")
+        self.assertIn("C", [claim.get("dispatch") for claim in answer["responses"][0]["result"]["claims"]])
+
+    def test_a_newest_row_whose_identity_differs_from_its_partition_copy_falls_back(self):
+        listed = worker("t1", "retained")
+        page = [*LIST, "--limit", "100"]
+        changed = FleetDouble({"retained": [listed]}).page([dict(listed, dispatchStatus="running")], 0, 1)
+        double = FleetDouble({"retained": [listed]}, overrides={tuple(page): changed})
+        fleet, discovery = PartitionTests.read(self, double)
+        self.assertEqual(discovery.fleet_read, "sequential")
+        self.assertEqual(discovery.fleet_fallback, "native_inventory_partition")
+
+    def test_a_malformed_row_keeps_the_sequential_order_and_its_claims(self):
+        self.intake(worktree=self.place)
+        self.real_inventories()
+        valid = base.ReviewCorrectionTests.writer(self, verdict="live", dispatch="valid")
+        valid.update(terminalState="retained", workerState="ready")
+        self.native.fleet = fleet_model([valid, worker("bad", "active", projection=None)])
+        head = self.query(branch="main")
+        with patch("pod.admission._fleet_partitioned", side_effect=admission._rejected("forced")):
+            sequential = self.query(branch="main")  # main's newest-first walk, as before 0.21.31
+        self.assertEqual(head, sequential)
+        self.assertEqual([claim["dispatch"] for claim in head["claims"] if "dispatch" in claim], ["valid"])
+        self.assertIn(["branch"], [row["dimensions"] for row in head["conflicts"]
+                                   if row.get("claim", {}).get("dispatch") == "valid"])
+        self.assertIn("orca_contract", [row["code"] for row in head["unknowns"]])
+        answer = self.batch({"branch": "main"})
+        self.assertEqual(answer["responses"][0]["result"], head)
+
+    def test_read_faults_stay_scoped_unknowns_in_both_forms(self):
+        self.intake(worktree=self.place)
+        with patch("pod.admission._fleet", side_effect=OSError("failed")):
+            single = self.query()
+            answer = self.batch({}, {"branch": "main"})
+        self.assertIn("inventory_unreadable", [row["code"] for row in single["unknowns"]])
+        self.assertEqual(answer["responses"][0]["result"], single)
+        self.assertEqual(answer["native_fence"]["fleet_start"]["complete"], False)
+        real = history.load_admission_facts
+        record = objective_root(self.project, "objective").name
+        def unreadable(path, *, include_admissions=True):
+            if path.parent.name == record:
+                raise OSError("failed")
+            return real(path, include_admissions=include_admissions)
+        with patch("pod.history.load_admission_facts", side_effect=unreadable):
+            single = self.query()
+            answer = self.batch({}, {"branch": "main"})
+        self.assertIn({"record": record, "code": "unreadable"}, single["unavailable_records"])
+        self.assertEqual(answer["responses"][0]["result"], single)
+        with patch("pod.admission._native_fence", side_effect=OSError("failed")), self.assertRaises(OSError):
+            self.batch({})  # A fault outside every read point stays fatal; nothing partial is returned.
+        self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
+
+    def test_a_late_run_owner_read_is_never_made_and_marks_the_result_incomplete(self):
+        self.intake(worktree=self.place)
+        real = admission._prefetch_native
+        def skip_owners(discovery):
+            discovery.owner_runs.clear()  # force the projection to ask for the owner after the fence starts
+            real(discovery)
+        with patch("pod.admission._prefetch_native", side_effect=skip_owners), \
+             patch("pod.admission._owner_observation") as owner:
+            answer = self.batch({"worktree": str(self.project), "branch": "main"})
+        owner.assert_not_called()
+        result = answer["responses"][0]["result"]
+        late = [row for row in result["unknowns"] if row["code"] == "native_read_after_fence"]
+        self.assertEqual([row["fact"] for row in late], ["current_run_owner"])
+        self.assertFalse(result["complete"])
+        ownership = next(claim for claim in result["claims"] if claim["kind"] == "ownership")
+        self.assertEqual(ownership["owner_observations"][0]["code"], "native_read_after_fence")
+        self.assertFalse(ownership["owner_identity_matches"])

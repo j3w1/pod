@@ -10384,7 +10384,11 @@
         "tests.test_admission_batch.PartitionTests.test_a_complete_partition_union_is_accepted_in_a_fixed_order",
         "tests.test_admission_batch.PartitionTests.test_every_partition_rejection_falls_back_to_the_sequential_walk",
         "tests.test_admission_batch.PartitionTests.test_a_bound_first_page_answers_none_without_a_fallback",
-        "tests.test_admission_batch.PartitionTests.test_the_allowlist_accepts_exactly_the_partition_and_count_reads"
+        "tests.test_admission_batch.PartitionTests.test_the_allowlist_accepts_exactly_the_partition_and_count_reads",
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_balanced_replacement_falls_back_and_keeps_the_new_claim",
+        "tests.test_admission_batch.CorrectionRoundTests.test_an_active_replacement_falls_back",
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_newest_row_whose_identity_differs_from_its_partition_copy_falls_back",
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_malformed_row_keeps_the_sequential_order_and_its_claims"
       ],
       "status": "NOT_RUN"
     },
@@ -10451,7 +10455,9 @@
         "tests.test_admission_batch.SharedReadTests.test_a_record_removed_during_discovery_is_an_inventory_change",
         "tests.test_admission_batch.SharedReadTests.test_an_effect_policy_change_during_the_call_is_reported",
         "tests.test_admission_batch.RequestTests.test_a_fault_inside_one_projection_prints_no_partial_batch",
-        "tests.test_admission_batch.PreexistingFaultTests.test_an_unlocated_foreign_worker_and_a_stale_runtime_answer_normally"
+        "tests.test_admission_batch.PreexistingFaultTests.test_an_unlocated_foreign_worker_and_a_stale_runtime_answer_normally",
+        "tests.test_admission_batch.CorrectionRoundTests.test_read_faults_stay_scoped_unknowns_in_both_forms",
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_late_run_owner_read_is_never_made_and_marks_the_result_incomplete"
       ],
       "status": "NOT_RUN"
     }

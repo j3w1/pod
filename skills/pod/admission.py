@@ -200,8 +200,8 @@ def _fleet() -> dict | None:
     if discovery is not None and discovery.partitioned:
         try:
             fleet = _fleet_partitioned(discovery)
-        except PodError as exc:
-            discovery.fleet_fallback = exc.code
+        except (PodError, OSError) as exc:
+            discovery.fleet_fallback = exc.code if isinstance(exc, PodError) else "inventory_unreadable"
         else:
             discovery.fleet_read = "partitioned" if fleet is not None else "bound"
             return fleet
@@ -293,6 +293,10 @@ def _fleet_partition(state: str, discovery) -> dict:
                 raise _rejected("A partition repeats or omits a Dispatch identity")
             if row.get("terminalState") != state:
                 raise _rejected("A Dispatch moved out of the partition it was listed in")
+            try:
+                _worker_fact(row)  # A row projection would refuse means the sequential order decides, as before.
+            except PodError:
+                raise _rejected("A partition row is malformed") from None
             workers[key] = row
             if row.get("workerState") == "abandoned":
                 discovery.prefetch_claim(row, runtime)
@@ -311,21 +315,35 @@ def _fleet_partitioned(discovery) -> dict | None:
     """The all-Run inventory as the union of its six terminal-state partitions, read in parallel.
 
     Completeness argument. Each partition is walked to its end with the sequential walk's cursor, runtime,
-    scope and identity checks, and it must hold exactly the rows its own `page.total` names, a total that
-    never changes across its pages. After every partition is done, one unfiltered read gives the fleet's
-    final `counts` and `page.total` T. The union is accepted only when every page of every partition and
-    the final read report scope `all` with one runtime; each partition's total equals the final
-    `counts[state]` (absent means 0); the final counts name no other state; no Dispatch appears in two
-    partitions; no page's counts add up to more than T; and the union holds exactly T distinct Dispatches.
+    scope and identity checks; every row must pass the same structural checks projection makes
+    (`_worker_fact`) and carry its partition's terminal state; and the partition must hold exactly the
+    rows its own `page.total` names, a total that never changes across its pages. After every partition
+    is done, one unfiltered newest-first page gives the fleet's final `counts`, its total T and its
+    newest rows. The union is accepted only when every page and the final read report scope `all` with
+    one runtime; each partition's total equals the final `counts[state]` (absent means 0); the final
+    counts name no other state; no Dispatch appears in two partitions; no page's counts add up to more
+    than T; the union holds exactly T distinct Dispatches; and every row of the newest page (min(T, 100)
+    of them) is in the union with an equal row identity (`_identity_row`).
 
-    Every Dispatch the partitions listed was read from the same runtime, and Orca keeps a Dispatch once
-    it exists: a page whose counts exceed T would show one leaving during the read, and refuses. So the
-    union is a subset of the T Dispatches that exist at the final read, and it has T members: it is all of
-    them. A Dispatch that moved between partitions during the read appears in two (a duplicate), or in
-    none, leaving its partition totals unequal to the final counts. A Dispatch created during the read
-    raises T above the union. A new terminal state is named by the final counts. Each refuses, and the
-    caller falls back to the sequential walk. Any partition's first page reporting a bound scope answers
-    None, exactly as the sequential walk's first page does.
+    Dispatches may be created, change state or be deleted while the partitions are read; nothing here
+    assumes Orca keeps a Dispatch. Take a Dispatch D that exists at the final read but is not in the union.
+    - D was created during the read. Rows are listed newest first, so D is on the newest page unless 100
+      newer Dispatches were created after it before the final read; on the page, it is missing from the
+      union and the read refuses. A Dispatch created after the final read is caught by the end fence's
+      newest page, and one with 100 newer creations is unreleased at the end, unless created released,
+      and so caught by the end fence's unreleased digest.
+    - D existed and changed state during the read, missing both its old and its new partition. Its new
+      partition's total then falls short of the final count, unless another row left that state after
+      its read. A row that moved out is listed twice (a duplicate) or is itself missing; a deleted row
+      lowers the total, so every page read before the deletion has a counts total above T and refuses,
+      unless a later creation restores the total, and that new row is on the newest page and must be in
+      the union. If D ends unreleased, the end fence's unreleased digest still differs from discovery's.
+    - A deletion alone lowers T below the union, and refuses.
+    What is left is a coincidence of a deletion, a later creation and a move of an older Dispatch into
+    `released`, all inside one discovery read, or more than 100 creations of already released
+    Dispatches; both stay within the fence's documented residual of released rows outside the newest
+    page. Each refusal falls back to the sequential walk, and any partition's first page reporting a
+    bound scope answers None, exactly as the sequential walk's first page does.
 
     The union is ordered by partition, in `TERMINAL_STATES` order, then in Orca's page order, so the
     same Orca state always gives the same order. The final read is the unfiltered newest-first page,
@@ -337,13 +355,13 @@ def _fleet_partitioned(discovery) -> dict | None:
     for future in futures:
         try:
             outcomes.append(future.result())
-        except PodError as exc:
+        except (PodError, OSError) as exc:
             outcomes.append(exc)
     if any(isinstance(row, dict) and row["bound"] for row in outcomes):
         discovery.fleet_start = PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
         return None
     for row in outcomes:
-        if isinstance(row, PodError):
+        if isinstance(row, (PodError, OSError)):
             raise row  # The first in partition order: deterministic, whichever thread failed first.
     runtimes = {row["runtime"] for row in outcomes}
     if len(runtimes) != 1:
@@ -372,6 +390,14 @@ def _fleet_partitioned(discovery) -> dict | None:
             workers.append(worker)
     if len(workers) != total:
         raise _rejected("The partitions do not hold every Dispatch")
+    newest = result.get("workers")
+    if not isinstance(newest, list) or len(newest) > 100 or len(newest) != min(total, 100):
+        raise _rejected("The newest page is incomplete")
+    union = {worker["dispatchId"]: worker for worker in workers}
+    for row in newest:
+        key = row.get("dispatchId") if isinstance(row, dict) else None
+        if key not in union or _identity_row(row) != _identity_row(union[key]):
+            raise _rejected("The newest page differs from the partition union")
     discovery.fleet_start = {"page": final, "rows": workers}
     return {"runtime": runtime, "workers": workers, "complete": True}
 
@@ -499,6 +525,9 @@ def _fleet_side(observed, claims) -> dict:
     except PodError as exc:
         return {"runtime": runtime if isinstance(runtime, str) and _passable(runtime) else None,
                 "complete": False, "code": exc.code}
+    except OSError:
+        return {"runtime": runtime if isinstance(runtime, str) and _passable(runtime) else None,
+                "complete": False, "code": "native_inventory_unreadable"}
     except (KeyError, TypeError, AttributeError, UnicodeError, ValueError, RecursionError):
         return {"runtime": None, "complete": False, "code": "native_inventory_incomplete"}
     return side
@@ -532,7 +561,7 @@ def _native_fence(discovery) -> dict:
         if key[:2] == ("first", "claim"):
             try:
                 claimed[key[2:]] = future.result()
-            except PodError as exc:
+            except (PodError, OSError) as exc:
                 claimed[key[2:]] = exc
     start = discovery.terminal_start
     if start is None:
@@ -554,7 +583,7 @@ def _native_fence(discovery) -> dict:
     for name, future in [*reads.items(), *(("claim:" + key, value) for key, value in claim_reads.items())]:
         try:
             observed[name] = future.result()
-        except PodError as exc:
+        except (PodError, OSError) as exc:
             observed[name] = exc
     end_claims = {dispatch: observed.get("claim:" + dispatch, PodError("native_identity_unverified", "No source row"))
                   for dispatch in start_claims}
@@ -1410,6 +1439,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             _owner_observation, run, terminals, terminals["runtime"]))
                     except PodError as exc:
                         owner_reads[run] = {"run": run, "status": "unknown", "code": exc.code}
+                        if exc.code == "native_read_after_fence":
+                            # A read the fence would not cover is never made: this result is incomplete.
+                            unknown(ownership["record"], exc.code, objective=ownership.get("objective"),
+                                    fact="current_run_owner", run=run, reconciliation={
+                                        "action": "repeat_admission_batch",
+                                        "condition": "Repeat the batch; every Run owner read precedes the end fence"})
                 observations.append(owner_reads[run])
             ownership["owner_observations"] = observations
             matches = bool(observations) and all(row.get("terminal") == ownership["recorded_owner"]
@@ -1822,8 +1857,8 @@ def _prefetch_native(discovery) -> None:
             return None
         try:
             return future.result()
-        except PodError:
-            return None
+        except (PodError, OSError):
+            return None  # The queries raise it where they read it.
     fleet, terminals = settled(("fleet",)), settled(("terminals",))
     if isinstance(fleet, dict) and isinstance(fleet.get("workers"), list) and fleet.get("complete") is True:
         for source in fleet["workers"]:
@@ -1838,7 +1873,7 @@ def _prefetch_native(discovery) -> None:
         if key[:2] in (("first", "claim"), ("first", "owner")):
             try:
                 future.result()
-            except PodError:
+            except (PodError, OSError):
                 pass
 
 
