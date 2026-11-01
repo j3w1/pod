@@ -55,13 +55,11 @@ class _Discovery:
     At most `MAX_ORCA_READS` Orca CLI subprocesses run at once. `close` waits for every thread.
     """
 
-    def __init__(self, *, partitioned: bool = True):
-        self.partitioned = partitioned
+    def __init__(self):
         self.stage = "first"
         self.gate = threading.BoundedSemaphore(MAX_ORCA_READS)
         self.closed = False
         self.fleet_read = None
-        self.fleet_fallback = None
         self.orca_reads = 0
         self.terminal_start = None
         self.fence_started = False  # After this, only the fence's own end reads may read Orca.
@@ -192,19 +190,18 @@ def _fleet() -> dict | None:
     Orca decides the scope. Omitting --run must never turn a bound Run's empty
     list into proof that the repository has no other worker. Every page is read, however many workers the fleet
     has (R206); a missing or repeated cursor still refuses, and the read deadline still applies.
-    Inside a shared admission call the terminal-state partitions are read in parallel (`_fleet_partitioned`);
-    when their union is not proved complete, the same call falls back to the sequential walk below, within the
-    same deadline, and records which read it used.
+
+    Discovery reads only this newest-first cursor walk. Its cursor is a keyset position, so every Dispatch
+    that exists for the whole walk is listed exactly once, whatever state it changes to. Inside a batch the
+    walk is also the fence's start (`fleet_start`): total and counts from its first page, the newest rows
+    from that page, the unreleased rows and the abandoned claims from the walk. The end fence compares it
+    with fresh reads, and every race shows there: a Dispatch created during the walk changes the end's
+    newest page (and its unreleased rows unless created released); a deletion lowers the end's total; a
+    state change alters the end's counts or unreleased rows. The end fence is a pure comparison, so a race
+    during its own reads only makes it unequal, which fails safe. What it leaves is v6's residual: a row
+    released at both ends, outside the newest 100 and not abandoned.
     """
     discovery = _SHARED.get()
-    if discovery is not None and discovery.partitioned:
-        try:
-            fleet = _fleet_partitioned(discovery)
-        except (PodError, OSError) as exc:
-            discovery.fleet_fallback = exc.code if isinstance(exc, PodError) else "inventory_unreadable"
-        else:
-            discovery.fleet_read = "partitioned" if fleet is not None else "bound"
-            return fleet
     fleet = _fleet_sequential(discovery)
     if discovery is not None:
         discovery.fleet_read = "sequential" if fleet is not None else "bound"
@@ -261,9 +258,10 @@ def _counts(value) -> dict:
 
 
 def _fleet_partition(state: str, discovery) -> dict:
-    """Every page of one terminal-state partition, with the sequential walk's cursor and identity checks."""
+    """The end fence's read of one unreleased terminal-state partition, every page, with the sequential walk's
+    cursor, runtime, scope and identity checks; any refusal makes that fence side incomplete."""
     prefix = [*WORKER_LIST, "--limit", "100", "--terminal-state", state]
-    cursor, seen, workers, runtime, total, totals = None, set(), {}, None, None, []
+    cursor, seen, workers, runtime, total = None, set(), {}, None, None
     while True:
         if discovery.closed:
             raise PodError(DEADLINE_SPENT, "The admission call has ended")
@@ -285,8 +283,6 @@ def _fleet_partition(state: str, discovery) -> dict:
         if total is not None and page["total"] != total:
             raise _rejected("A partition total changed between its pages")
         total = page["total"]
-        if "counts" in result:
-            totals.append(sum(_counts(result["counts"]).values()))
         for row in rows:
             key = row.get("dispatchId") if isinstance(row, dict) else None
             if not isinstance(key, str) or not key or key in workers:
@@ -294,127 +290,19 @@ def _fleet_partition(state: str, discovery) -> dict:
             if row.get("terminalState") != state:
                 raise _rejected("A Dispatch moved out of the partition it was listed in")
             try:
-                _worker_fact(row)  # A row projection would refuse means the sequential order decides, as before.
+                _worker_fact(row)
             except PodError:
                 raise _rejected("A partition row is malformed") from None
             workers[key] = row
-            if row.get("workerState") == "abandoned":
-                discovery.prefetch_claim(row, runtime)
         if not page["hasMore"]:
             if len(workers) != total:
                 raise _rejected("A partition's rows differ from its total")
             return {"state": state, "bound": False, "runtime": runtime, "total": total,
-                    "workers": list(workers.values()), "totals": totals}
+                    "workers": list(workers.values())}
         cursor = page.get("nextCursor")
         if not rows or not isinstance(cursor, str) or not cursor or cursor in seen:
             raise _rejected("A partition cursor is missing or repeated")
         seen.add(cursor)
-
-
-def _fleet_partitioned(discovery) -> dict | None:
-    """The all-Run inventory as the union of its six terminal-state partitions, read in parallel.
-
-    Completeness argument. The read is bracketed by two unfiltered newest-first pages of up to 100 rows:
-    the opening page is read before any partition, the closing page after every partition. Each partition
-    is walked to its end with the sequential walk's cursor, runtime, scope and identity checks; every row
-    must pass the structural checks projection makes (`_worker_fact`) and carry its partition's terminal
-    state; and the partition must hold exactly the rows its own `page.total` names, a total that never
-    changes across its pages. The union is accepted only when the opening and closing pages have equal
-    runtime, total, counts and row identities (`_identity_row`); every page reports scope `all` with that
-    runtime; each partition's total equals the closing `counts[state]` (absent means 0); the counts name
-    no other state; no Dispatch appears in two partitions; no page's counts add up to more than the
-    total; the union holds exactly the total; and every row of the closing page is in the union with an
-    equal identity.
-
-    Nothing here assumes Orca keeps a Dispatch. It relies only on each page's counts being Orca's own
-    snapshot at that read, and on a Dispatch id never naming two Dispatches. Within the bracket nothing
-    moved: a creation changes the
-    newest page, a deletion lowers the total unless a creation also changes the newest page, and a state
-    change alters the counts unless another change balances it, and a balanced pair still leaves a row
-    listed twice or a partition total unequal to the counts. A Dispatch that exists only between the
-    two pages is counted by every page read while it exists, beside every row the pages show, so that
-    page's counts exceed the closing total and refuse. Every partition read lies inside the bracket, so the union is the inventory as it stood throughout. A change after the closing page is
-    the end fence's to detect. Each refusal falls back to the sequential walk, and a bound scope on the
-    opening page or on any partition's first page answers None, exactly as the sequential walk's first
-    page does.
-
-    The union is ordered by partition, in `TERMINAL_STATES` order, then in Orca's page order, so the
-    same Orca state always gives the same order. The final read is the unfiltered newest-first page,
-    which the batch fence also digests.
-    """
-    opening = discovery.read([*WORKER_LIST, "--limit", "100"])  # Before any partition read.
-    scope = opening["result"].get("scope")
-    if isinstance(scope, dict) and scope.get("source") == "bound":
-        discovery.fleet_start = PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
-        return None
-    opened = _page_identity(opening)
-    futures = [discovery.submit(("partition", state), lambda state=state: _fleet_partition(state, discovery))
-               for state in TERMINAL_STATES]
-    outcomes = []
-    for future in futures:
-        try:
-            outcomes.append(future.result())
-        except (PodError, OSError) as exc:
-            outcomes.append(exc)
-    if any(isinstance(row, dict) and row["bound"] for row in outcomes):
-        discovery.fleet_start = PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
-        return None
-    for row in outcomes:
-        if isinstance(row, (PodError, OSError)):
-            raise row  # The first in partition order: deterministic, whichever thread failed first.
-    runtimes = {row["runtime"] for row in outcomes}
-    if len(runtimes) != 1:
-        raise _rejected("Partitions report different native runtimes")
-    final = discovery.read([*WORKER_LIST, "--limit", "100"])  # The closing page also carries total and counts.
-    if _page_identity(final) != opened:
-        raise _rejected("The inventory changed between the opening and closing pages")
-    result, runtime = final["result"], final["runtime"]
-    scope, page = result.get("scope"), result.get("page")
-    if not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None:
-        raise _rejected("The final count read does not prove all-Run coverage")
-    if runtimes != {runtime}:
-        raise _rejected("The final count read reports a different native runtime")
-    counts = _counts(result.get("counts"))
-    if not isinstance(page, dict) or type(page.get("total")) is not int or page["total"] < 0:
-        raise _rejected("The final count read has no total")
-    total = page["total"]
-    workers, seen = [], set()
-    for row in outcomes:
-        if row["total"] != counts.get(row["state"], 0):
-            raise _rejected("A partition total differs from the final counts")
-        if any(observed > total for observed in row["totals"]):
-            raise _rejected("A Dispatch left the inventory during the read")
-        for worker in row["workers"]:
-            if worker["dispatchId"] in seen:
-                raise _rejected("A Dispatch appears in two partitions")
-            seen.add(worker["dispatchId"])
-            workers.append(worker)
-    if len(workers) != total:
-        raise _rejected("The partitions do not hold every Dispatch")
-    newest = result.get("workers")
-    if not isinstance(newest, list) or len(newest) > 100 or len(newest) != min(total, 100):
-        raise _rejected("The newest page is incomplete")
-    union = {worker["dispatchId"]: worker for worker in workers}
-    for row in newest:
-        key = row.get("dispatchId") if isinstance(row, dict) else None
-        if key not in union or _identity_row(row) != _identity_row(union[key]):
-            raise _rejected("The newest page differs from the partition union")
-    discovery.fleet_start = {"page": final, "rows": workers}
-    return {"runtime": runtime, "workers": workers, "complete": True}
-
-
-def _page_identity(response: dict):
-    """An unfiltered newest-first page as compared across the partition read: runtime, total, counts and the
-    identity of every row, or a refusal when the page does not prove all-Run coverage."""
-    result = response["result"]
-    scope, page, rows = result.get("scope"), result.get("page"), result.get("workers")
-    if not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None:
-        raise _rejected("A newest page does not prove all-Run coverage")
-    if (not isinstance(page, dict) or type(page.get("total")) is not int or page["total"] < 0
-            or not isinstance(rows, list) or len(rows) > 100 or result.get("truncated", False) is not False):
-        raise _rejected("A newest page is incomplete")
-    identities = sorted((_identity_row(row) for row in rows), key=lambda row: str(row["dispatchId"]))
-    return response["runtime"], page["total"], _counts(result.get("counts")), identities
 
 
 def _worker_fact(row: dict) -> dict:

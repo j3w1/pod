@@ -274,8 +274,6 @@ WORKER_TERMINAL_STATES = ("active", "reclaimable", "retained", "release_pending"
 
 
 def _worker_list_tail(tail: list[str]) -> bool:
-    if tail == ["--limit", "1"]:
-        return True  # Admission's final counts read after its terminal-state partitions.
     bounded = tail[:2] == ["--limit", "100"]
     if bounded:
         tail = tail[2:]

@@ -1298,32 +1298,12 @@ worker's claim read starts as soon as its inventory row is listed. Every thread 
 call returns, and exhausting the shared deadline is `discovery_budget` exactly as in the single
 query.
 
-Inside a call the all-Run inventory is read as its six terminal-state partitions in parallel,
-each fully paged with the sequential walk's cursor, runtime, scope and identity checks, and every
-row passing the same structural checks projection makes, between two unfiltered newest-first
-pages, one read before any partition and one after them all. The union is used only when every
-page reports scope `all` with one runtime, each partition's rows equal its own unchanged
-`page.total` and the closing `counts` for its state, the counts name no other state, no Dispatch
-appears in two partitions, no page's counts exceed the total, the union holds exactly the total,
-and every row of the closing page is in the union with an equal row identity. Otherwise the call reads the sequential
-walk within the same deadline, so a malformed row fails where it always did, in newest-first order.
-
-Nothing assumes Orca keeps every Dispatch; the argument relies only on each page's counts being
-Orca's snapshot at that read and on a Dispatch id never naming two Dispatches. The partition read is bracketed by an unfiltered
-newest-first page read before any partition and the closing page read after them all, and the
-union is used only when both pages have equal runtime, total, counts and row identities. Within
-that bracket nothing moved: a creation changes the newest page, a deletion lowers the total unless
-a creation also changes the newest page, and a state change alters the counts unless another
-balances it, and a balanced pair still lists a row twice or leaves a partition total unequal to the
-counts. A Dispatch that exists only between the two pages is counted, beside every row the pages
-show, by each page read while it exists, whose counts then exceed the closing total. Every partition read lies inside the bracket, so the union is the inventory as it stood
-throughout; a change after the closing page is the end fence's to detect. A bound opening or
-first partition page answers as the sequential walk's first page does. `discovery.fleet_read` names the read used (`partitioned`, `sequential` or `bound`)
+Discovery reads the all-Run inventory with the newest-first cursor walk alone, the same reader and
+checks as the single query before 0.21.31. Its cursor is a keyset position, so every Dispatch that
+exists for the whole walk is listed exactly once, whatever state it changes to, and a malformed row
+fails where it always did. `discovery.fleet_read` is `sequential`, or `bound` for a bound caller,
 and `discovery.orca_reads` counts the call's Orca reads; `discovery` is diagnostic only. The
-union is ordered by partition, then page, so native-derived unknowns have a deterministic order
-that is not a contract; claims stay canonically sorted. The inventory's cost grows with the
-Dispatches Orca keeps, about 0.15 s per 100 finished Dispatches, and its released partition's
-sequential pages set the floor.
+inventory's cost grows with the Dispatches Orca keeps, about 0.15 s per 100 finished Dispatches.
 
 The change recheck runs once, after every query's first pass, beside the end reads (the
 stability predicate orders neither before the other), and never reuses a discovery read: each record or journal whose bytes still hash to the discovery
@@ -1349,9 +1329,8 @@ projection and the shared recheck run beside them, and a native read requested a
 is refused `native_read_after_fence` rather than made: a claim read becomes that scoped unknown, and
 a Run-owner read keeps its owner observation with that code, `owner_identity_matches` false, and
 also adds the scoped unknown, so the result is incomplete. Each side holds `total` and `counts` from the unfiltered newest-first
-page of up to 100 rows (the partition completeness read, or the sequential walk's first page on the
-fallback); `unreleased` and `unreleased_sha256` over every row whose terminal state is not
-`released` (discovery's complete read at the start; the five unreleased partitions, fully paged
+page of up to 100 rows (the walk's first page at the start; a fresh page at the end); `unreleased` and `unreleased_sha256` over every row whose terminal state is not
+`released` (the walk's rows at the start; the five unreleased partitions, fully paged
 with the usual cursor, scope and runtime checks, at the end); `newest` and `newest_sha256` over that
 page's rows; and `claims_read` and `claims_sha256` over the claim Pod derived,
 `{dispatch, process, effects}`, for every abandoned Dispatch whose current claim discovery read,
@@ -1378,7 +1357,10 @@ connected, writable or orphaned state; any row unreleased at either end appearin
 changing an identity field, including a Dispatch settling into `released` or leaving it; any change
 among the newest 100 rows, which holds every Dispatch created during the call; a deleted Dispatch,
 which lowers `total`; a change in an abandoned Dispatch's derived claim; and a runtime change.
-Balanced changes cannot cancel out: a created Dispatch shows in the newest page, a settled one
+A change during the discovery walk is one of these, since the start side is that walk: a Dispatch
+created during it is on the end's newest page, a deletion lowers the end's total, and a state change
+alters the end's counts or unreleased rows. The end fence is a pure comparison, so a race during its
+own reads only makes it unequal. Balanced changes cannot cancel out: a created Dispatch shows in the newest page, a settled one
 leaves the unreleased set, and a deleted one lowers the total, so creating, settling and deleting
 together still make the fence unstable.
 
@@ -1395,7 +1377,7 @@ largely overlapped with the projections and the recheck.
 - <a id="a779"></a>**A779** — Every request refusal is one `admission_batch_request` (or `admission_timeout`) error with no responses and exit 1; a per-query input fault names its query id before any discovery read; responses follow request order with their ids; the 8 MiB response limit refuses the whole batch; a factual batch answer exits zero.
 - <a id="a780"></a>**A780** — For the occupancy (worktree, branch, both), target with objective, candidate and target commit, effects, mismatched expect, native writer, bound caller, unreadable and unrelated records and projection-limit shapes, each batch result equals the single query with the same doubles.
 - <a id="a781"></a>**A781** — One batch of eight queries reads the fleet, the terminal inventory and each record once, plus one shared recheck that reads each rechecked file once; two calls each read afresh; an abandoned worker's claim is read once for every query and is started from its inventory row; no thread outlives the call.
-- <a id="a782"></a>**A782** — A complete partition union is used in partition order; a moved row (in two partitions or in none), a row outside its partition, a duplicate, a changed or short partition total, a count change, a creation, a deletion, a new terminal state, a runtime change and a failed partition read each fall back to the sequential walk and record it; a bound first page answers none without a fallback; the allowlist accepts exactly the partition and count reads; a newest-page row missing from the union or with a different identity (a balanced replacement, including an already released abandoned Dispatch with a pending effect) and a structurally malformed partition row fall back to the sequential walk, which keeps the new Dispatch's claim and the preceding newest-first failure point; an opening and a closing newest page that differ in runtime, total, counts or any row identity (a creation, a deletion, or an old abandoned Dispatch settling beside a deletion and a creation) fall back too, and a balanced state swap of two old rows is refused by the partition totals.
+- <a id="a782"></a>**A782** — Discovery reads the fleet with the sequential walk alone (`fleet_read` `sequential`, or `bound` with no further read) and the fence's start comes from that walk; the end fence's partition reads refuse a moved row, a row outside its partition, a duplicate, a changed or short partition total, a runtime change, a malformed row and a failed read, each making the fence's end incomplete; the allowlist accepts exactly the partition reads; a balanced replacement, an active replacement, a creation, a deletion, an old abandoned Dispatch settling beside a deletion and a creation, and a balanced state swap during discovery each give the changed Dispatch's claim or an unstable fence, never a complete stable answer without it.
 - <a id="a783"></a>**A783** — Exhausting the shared deadline during the call gives `discovery_budget` in every relevant result.
 - <a id="a784"></a>**A784** — A record changed during the call is `record_changed` only in the queries it is relevant to and unrelated uncertainty in the others; a record added during discovery is `inventory_changed` in every query.
 - <a id="a785"></a>**A785** — A stable fence's fingerprints equal an independent computation of the documented rule and the end returns the nine-field rows; a connected flip, a new terminal or a runtime change at the end, an incomplete end and a failed end each make the fence unstable and the batch `unknown` and incomplete while every result is unchanged.
