@@ -433,12 +433,12 @@ class FencedCase(BatchCase):
         row.update(fields)
         return row
 
-    def fenced(self, start=None, end=None, fleet_end=None, claims=None):
+    def fenced(self, start=None, end=None, fleet_end=None, claims=None, query=None):
         terminals = [terminal("a", self.root / "other")]
         self.native.pages = [start or terminal_page(terminals), end or terminal_page(terminals)]
         self.native.fleet = fleet_end or fleet_model(self.rows)
         self.claim_values = claims or {"t2": [LIVE_CLAIM]}
-        return self.batch({"branch": "main"})
+        return self.batch(query or {"branch": "main"})
 
     def assert_unstable(self, answer, stable):
         self.assertFalse(answer["native_fence"]["stable"])
@@ -507,6 +507,31 @@ class FleetFenceTests(FencedCase):
                     self.assertEqual((fence["fleet_end"]["total"], fence["fleet_end"]["counts"]),
                                      (fence["fleet_start"]["total"], fence["fleet_start"]["counts"]))
                     self.assertNotEqual(fence["fleet_end"]["unreleased_sha256"], fence["fleet_start"]["unreleased_sha256"])
+
+    def test_end_reads_start_only_after_every_native_read_a_result_uses(self):
+        events, lock = [], threading.Lock()
+        def logged(name, fn):
+            def call(*args):
+                with lock:
+                    events.append(("start", name, admission._FENCING.get()))
+                try:
+                    return fn(*args)
+                finally:
+                    with lock:
+                        events.append(("end", name, admission._FENCING.get()))
+            return call
+        claim = admission._native_claim  # FencedCase's claim double
+        owner = lambda run, terminals, runtime: {"status": "unknown", "code": "fixture_unobserved"}
+        with patch("pod.admission._read", side_effect=logged("orca", self.native)), \
+             patch("pod.admission._native_claim", side_effect=logged("claim", claim)), \
+             patch("pod.admission._owner_observation", side_effect=logged("owner", owner)):
+            answer = self.fenced(query={"worktree": str(self.project), "branch": "main"})
+        self.assertTrue(answer["native_fence"]["stable"])
+        first_fence = next(index for index, event in enumerate(events) if event[2])
+        used = [(index, event) for index, event in enumerate(events) if not event[2]]
+        self.assertEqual({event[1] for _, event in used}, {"orca", "claim", "owner"})  # terminals, claim, Run owner
+        self.assertTrue(all(index < first_fence for index, _ in used), events)
+        self.assertEqual({event[1] for event in events[first_fence:]}, {"orca", "claim"})  # end reads only
 
     def test_a_released_row_changing_outside_the_newest_page_is_the_documented_residual(self):
         changed = [dict(row, workerState="unsupervised") if row["dispatchId"] == "r110" else row for row in self.rows]

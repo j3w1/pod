@@ -41,6 +41,7 @@ def digest(value):
 # --------------------------------------------------------------------------- shared discovery
 
 _SHARED: contextvars.ContextVar = contextvars.ContextVar("pod_admission_discovery", default=None)
+_FENCING: contextvars.ContextVar = contextvars.ContextVar("pod_admission_fencing", default=False)
 
 
 class _Discovery:
@@ -63,14 +64,17 @@ class _Discovery:
         self.fleet_fallback = None
         self.orca_reads = 0
         self.terminal_start = None
+        self.fence_started = False  # After this, only the fence's own end reads may read Orca.
+        self.abandoned: set = set()  # Dispatches the queries' records account as abandoned.
+        self.owner_runs: set = set()  # Runs whose current owner some query observes.
         # The fleet read discovery used, for the batch fence: {"page": its newest-first page, "rows": every row}.
         self.fleet_start = None
         self._lock = threading.Lock()
         self._memo: dict = {}
         self._pool = ThreadPoolExecutor(max_workers=POOL_WORKERS, thread_name_prefix="pod-admission")
 
-    def memo(self, key, fn):
-        full = (self.stage, *key)
+    def memo(self, key, fn, *, stage=None):
+        full = (stage or self.stage, *key)
         with self._lock:
             future = self._memo.get(full)
             owner = future is None
@@ -83,8 +87,8 @@ class _Discovery:
                 future.set_exception(exc)
         return future.result()
 
-    def submit(self, key, fn) -> Future:
-        full = (self.stage, *key)
+    def submit(self, key, fn, *, stage=None) -> Future:
+        full = (stage or self.stage, *key)
         with self._lock:
             future = self._memo.get(full)
             if future is not None:
@@ -111,7 +115,13 @@ class _Discovery:
             return None
         return future.result()
 
+    def ordered(self):
+        """Every native read a result uses happens before the fence's end reads start."""
+        if self.fence_started and not _FENCING.get():
+            raise PodError("native_read_after_fence", "A native read was requested after the end fence started")
+
     def read(self, argv):
+        self.ordered()
         with self.gate:
             with self._lock:
                 self.orca_reads += 1
@@ -120,7 +130,7 @@ class _Discovery:
     def prefetch_claim(self, row, runtime):
         """Start an abandoned worker's current-claim read as soon as its inventory row is known."""
         key = row.get("dispatchId") if isinstance(row, dict) else None
-        if self.stage == "fence":
+        if _FENCING.get():
             return  # The fence re-reads exactly the claims discovery read, never new ones.
         if isinstance(key, str) and key and isinstance(runtime, str):
             self.submit(("claim", key, runtime), lambda: _native_claim(row, runtime))
@@ -156,6 +166,7 @@ def _gated(fn, *args):
     discovery = _SHARED.get()
     if discovery is None:
         return fn(*args)
+    discovery.ordered()
     with discovery.gate:
         with discovery._lock:
             discovery.orca_reads += 1
@@ -495,9 +506,9 @@ def _fleet_side(observed, claims) -> dict:
 
 def _fleet_end(discovery) -> dict:
     """A fresh complete fleet read for the fence: the newest page and every unreleased partition."""
-    page = discovery.submit(("fence", "page"), lambda: discovery.read([*WORKER_LIST, "--limit", "100"]))
-    partitions = [discovery.submit(("fence", "partition", state), lambda state=state: _fleet_partition(state, discovery))
-                  for state in TERMINAL_STATES if state != "released"]
+    page = discovery.submit(("page",), lambda: discovery.read([*WORKER_LIST, "--limit", "100"]), stage="fence")
+    partitions = [discovery.submit(("partition", state), lambda state=state: _fleet_partition(state, discovery),
+                                   stage="fence") for state in TERMINAL_STATES if state != "released"]
     first = page.result()
     rows, runtimes = [], {first["runtime"]}
     for future in partitions:
@@ -512,8 +523,9 @@ def _fleet_end(discovery) -> dict:
 
 
 def _native_fence(discovery) -> dict:
-    """The batch fence: discovery's terminal and fleet reads against fresh end reads, made in parallel
-    after every projection and the shared recheck, as the call's last native reads. Never cached."""
+    """The batch fence: discovery's terminal and fleet reads against fresh end reads. The call starts it
+    once every native read any result uses is done, so its reads are the call's last native reads, and
+    runs the remaining projection and the shared recheck beside it. Never cached."""
     # Every claim read discovery started is part of what it read; wait for each before fencing.
     claimed = {}
     for key, future in list(discovery._memo.items()):
@@ -522,7 +534,6 @@ def _native_fence(discovery) -> dict:
                 claimed[key[2:]] = future.result()
             except PodError as exc:
                 claimed[key[2:]] = exc
-    discovery.stage = "fence"
     start = discovery.terminal_start
     if start is None:
         future = discovery._memo.get(("first", "terminals"))
@@ -535,10 +546,10 @@ def _native_fence(discovery) -> dict:
     runtime = fleet["runtime"] if isinstance(fleet, dict) else None
     sources = {row.get("dispatchId"): row for row in (fleet or {}).get("workers", []) if isinstance(row, dict)}
     start_claims = {dispatch: value for (dispatch, observed), value in claimed.items() if observed == runtime}
-    reads = {"end": discovery.submit(("terminals",), lambda: complete_list("terminal", discovery.read)),
-             "fleet": discovery.submit(("fleet",), lambda: _fleet_end(discovery))}
+    reads = {"end": discovery.submit(("terminals",), lambda: complete_list("terminal", discovery.read), stage="fence"),
+             "fleet": discovery.submit(("fleet",), lambda: _fleet_end(discovery), stage="fence")}
     claim_reads = {dispatch: discovery.submit(("claim", dispatch, runtime), lambda dispatch=dispatch: _native_claim(
-                       sources[dispatch], runtime)) for dispatch in start_claims if dispatch in sources}
+                       sources[dispatch], runtime), stage="fence") for dispatch in start_claims if dispatch in sources}
     observed = {}
     for name, future in [*reads.items(), *(("claim:" + key, value) for key, value in claim_reads.items())]:
         try:
@@ -1359,14 +1370,19 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 (unavailable if reading and exc.code != "discovery_budget" else unknown)(record, exc.code)
             except OSError:
                 (unavailable if reading else unknown)(record, "unreadable")
+        if objective:
+            # The proof is read before the change recheck and the end fence, so a change during its read is found.
+            try:
+                budget.check()
+                proof_outcome = (_proof(project, objective, candidate), None)
+            except PodError as exc:
+                proof_outcome = ({"status": "unknown", "candidate": candidate, "reason": exc.code}, exc.code)
         discovery = _SHARED.get()
-        ready = discovery.done(("terminals",)) if discovery is not None else None
-        if isinstance(ready, dict) and isinstance(ready.get("runtime"), str):
-            # Start this query's Run owner reads now; the projection below uses the same shared reads.
+        if discovery is not None:
+            # The call reads these native facts once, for every query, before the end fence starts.
+            discovery.abandoned |= abandoned_dispatches
             for ownership in owner_claims():
-                for run in sorted({ref["runId"] for ref in ownership["recorded_native_refs"]}):
-                    discovery.submit(("owner", run, ready["runtime"]), lambda run=run: _gated(
-                        _owner_observation, run, ready, ready["runtime"]))
+                discovery.owner_runs |= {ref["runId"] for ref in ownership["recorded_native_refs"]}
         yield "native"  # Every query's record pass runs while the native inventory is read.
         # Prefer the installed all-Run inventory for CE's unbound caller.
         # A bound caller retains exact-Run reads and the same outer deadline.
@@ -1578,13 +1594,6 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 unknown(None, "target_unavailable")
             elif target_commit and target_commit != observed:
                 result["conflicts"].append({"kind": "target_changed", "expected": target_commit, "observed": observed})
-        if objective:
-            # The proof is read before the change recheck, so a change during its read is still found.
-            try:
-                budget.check()
-                proof_outcome = (_proof(project, objective, candidate), None)
-            except PodError as exc:
-                proof_outcome = ({"status": "unknown", "candidate": candidate, "reason": exc.code}, exc.code)
         yield "recheck"
         for record, directory, generation, journal_id in attribution_gaps:
             unchanged = (_after_context(directory / "context.json") == generation
@@ -1803,6 +1812,41 @@ def _bounded(result: dict, kwargs: dict) -> dict:
     return result
 
 
+def _prefetch_native(discovery) -> None:
+    """Read, in parallel, every native fact the projections will use: the fleet and terminals already
+    started, each abandoned or record-accounted abandoned Dispatch's claim, and each observed Run owner.
+    Faults are kept for the queries, which raise them where they read."""
+    def settled(key):
+        future = discovery._memo.get(("first", *key))
+        if future is None:
+            return None
+        try:
+            return future.result()
+        except PodError:
+            return None
+    fleet, terminals = settled(("fleet",)), settled(("terminals",))
+    if isinstance(fleet, dict) and isinstance(fleet.get("workers"), list) and fleet.get("complete") is True:
+        for source in fleet["workers"]:
+            if isinstance(source, dict) and (source.get("workerState") == "abandoned"
+                                             or source.get("dispatchId") in discovery.abandoned):
+                discovery.prefetch_claim(source, fleet["runtime"])
+    if isinstance(terminals, dict) and isinstance(terminals.get("runtime"), str):
+        for run in sorted(discovery.owner_runs):
+            discovery.submit(("owner", run, terminals["runtime"]), lambda run=run: _gated(
+                _owner_observation, run, terminals, terminals["runtime"]))
+    for key, future in list(discovery._memo.items()):
+        if key[:2] in (("first", "claim"), ("first", "owner")):
+            try:
+                future.result()
+            except PodError:
+                pass
+
+
+def _fenced(discovery) -> dict:
+    _FENCING.set(True)  # This task's context, and the reads it starts, are the fence's own.
+    return _native_fence(discovery)
+
+
 class _InputFault(Exception):
     def __init__(self, index: int, error: PodError):
         super().__init__(str(error))
@@ -1852,9 +1896,16 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
             discovery.submit(("terminals",), _terminals)
             for resolved in projects.values():
                 discovery.submit(("places", str(resolved)), lambda resolved=resolved: _places(resolved))
-            # Every query's record pass, then every query's native projection, then the one shared recheck.
-            for stage in ("first", "first", "recheck"):
+            # Every query's record pass; then every native read a result uses, after which the end fence
+            # starts; then, beside the fence, every query's native projection and the one shared recheck.
+            fenced = None
+            for step, stage in enumerate(("first", "first", "recheck")):
                 discovery.stage = stage
+                if step == 1:
+                    _prefetch_native(discovery)
+                    if fence:
+                        discovery.fence_started = True
+                        fenced = discovery.submit(("native",), lambda: _fenced(discovery), stage="fence")
                 for index, generator in enumerate(generators):
                     if generator is None or results[index] is not None:
                         continue
@@ -1872,8 +1923,8 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
                 "elapsed_s": None, "native_workers": len(fleet["workers"]) if isinstance(fleet, dict) else None,
                 "records": sum(len(discovery.done(("cohort", key)) or []) for key in roots),
                 "fleet_read": discovery.fleet_read, "orca_reads": None}}
-            if fence:
-                answer["native_fence"] = _native_fence(discovery)
+            if fenced is not None:
+                answer["native_fence"] = fenced.result()
     finally:
         for generator in generators:
             if generator is not None:
