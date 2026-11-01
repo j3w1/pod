@@ -8,6 +8,7 @@ import hashlib
 import math
 import os
 import re
+import stat
 import threading
 import time
 from collections import Counter
@@ -611,6 +612,136 @@ def _phase(raw: dict) -> str:
     return raw["_facts_phase"] if "_facts_phase" in raw else listing._phase(raw)
 
 
+TERMINAL_PHASES = ("closed", "retired", "continued")
+# A worker and Dispatch pair that ended: rule S settles only these, never running, ready, abandoned or unknown.
+_SETTLED_WORKERS = (("succeeded", "completed"), ("failed", "failed"))
+
+
+def _record_phase(raw: dict, directory: Path | None) -> str:
+    """The phase `status --list` reads (R108): a readable R145 evidence closure closes an otherwise open record.
+    An unreadable evidence closure leaves the record open here, so admission stays fail-closed."""
+    phase = _phase(raw)
+    if phase != "open" or directory is None:
+        return phase
+    from .evidence_closure import block
+    closure = _shared(("evidence-closure", str(directory)), lambda: block(directory))
+    return "closed" if isinstance(closure, dict) and closure.get("status") == "recorded" else phase
+
+
+def _retirement_preserved(project: Path, directory: Path) -> set[str] | None:
+    """The admissions a validated historical retirement preserved, or None when the entry is unproved.
+
+    Retirement refused while any Dispatch was live or unsettled or any start of a reserved or unresolved admission
+    was still pending (R112), and a `retired` record accepts no later write, so an admission it preserved can never
+    start or bind afterwards. A current record carries its entry; an older one has it certified beside it (R205)."""
+    from . import retirement
+    from .ledger import _read
+    try:
+        state = _read(directory / "context.json")
+        entry, older = (state.get(retirement.FIELD) if isinstance(state, dict) else None), False
+    except (PodError, OSError, ValueError):
+        entry = None
+    try:
+        if not isinstance(entry, dict):
+            found = retirement.older_state(directory, project)
+            entry, older = (found[0].get(retirement.FIELD) if found is not None else None), True
+        if not isinstance(entry, dict):
+            return None
+        retirement.validate_entry(entry, older=older)
+    except (PodError, OSError, ValueError):
+        return None
+    return {row["id"] for row in entry["preserved"] if row.get("kind") == "admission"}
+
+
+def _run_coordinators(runtime: str, check=None) -> dict | None:
+    """Every Run's current coordinator handle from Orca's whole paged Run list, or None unless the walk is provably
+    complete (rule S, 4): every page from this runtime, an explicit end cursor, no truncated, partial or incomplete
+    marker, no repeated cursor, no repeated or empty Run identity and no contradiction between a page's cursor and
+    its `hasMore`. The walk has no page count bound (R206); the call's deadline (`check`) and each read's byte bound
+    stay."""
+    found, cursor, seen = {}, None, set()
+    while True:
+        if check is not None:
+            check()
+        response = _gated_read(["orchestration", "run-list", "--limit", "100", "--json",
+                                *(["--cursor", cursor] if cursor else [])])
+        result = response.get("result") if isinstance(response, dict) else None
+        if (not isinstance(result, dict) or response.get("runtime") != runtime
+                or not isinstance(result.get("runs"), list) or "nextCursor" not in result
+                or result.get("truncated", False) is not False or result.get("partial", False) is not False
+                or result.get("complete", True) is not True
+                or "hasMore" in result and type(result["hasMore"]) is not bool):
+            return None
+        for row in result["runs"]:
+            if (not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+                    or row["id"] in found or "coordinator_handle" not in row):
+                return None
+            handle = row["coordinator_handle"]
+            if handle is not None and (not isinstance(handle, str) or not handle):
+                return None
+            found[row["id"]] = handle
+        cursor = result["nextCursor"]
+        if cursor is None:
+            return None if result.get("hasMore") is True else found
+        if (not isinstance(cursor, str) or not cursor or cursor in seen or not result["runs"]
+                or result.get("hasMore") is False):
+            return None
+        seen.add(cursor)
+
+
+def _settled_gone(source: dict, shown: dict, rows: list, terminals: dict, owner) -> bool:
+    """Rule S (R206): an ended Dispatch whose terminal, workspace and Run coordinator are all gone holds no current
+    resource. Every condition is read from this call's complete inventories; anything unproved keeps the gap."""
+    if (source.get("workerState"), source.get("dispatchStatus")) not in _SETTLED_WORKERS or shown["liveness"] == "live":
+        return False
+    handle, path = shown["terminal"], shown["worktree"]
+    if not isinstance(handle, str) or not handle or not isinstance(path, str) or not path:
+        return False
+    if any(isinstance(row, dict) and row.get("handle") == handle for row in terminals["terminals"]):
+        # The handle is in use again. Only a proven later Dispatch ends this one's hold: one that took over this
+        # Dispatch's own terminal resource (its origin) as owner, ended and released it, with no other holder.
+        if not _released_by_later(source, shown["dispatch"], handle, rows):
+            return False
+    try:
+        os.lstat(path)
+        return False  # The workspace still exists.
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return False  # An unreadable path proves nothing.
+    try:
+        coordinator = owner(shown["run"])
+    except PodError:
+        return False
+    # Only explicit absence or recognized exit proves the coordinator gone; a disconnected, orphaned or otherwise
+    # unverified coordinator keeps the gap.
+    return coordinator.get("state") in ("absent", "exited")
+
+
+def _released_by_later(source: dict, dispatch: str, handle: str, rows: list) -> bool:
+    """Rule S, 2: exactly one other ended Dispatch owns the terminal resource this Dispatch originated, on the same
+    handle, and released it; this Dispatch holds no unreleased resource of its own; nothing else holds the handle."""
+    def resource(row):
+        value = row.get("resource")
+        return value if isinstance(value, dict) else None
+
+    def ended_released(row):
+        held = resource(row)
+        return ((row.get("workerState"), row.get("dispatchStatus")) in _SETTLED_WORKERS and held is not None
+                and held.get("releaseState") == "released" and held.get("ownershipState") == "released")
+    own = resource(source)
+    if own is not None and not ended_released(source):
+        return False
+    later = [row for row in rows if isinstance(row, dict) and row is not source and isinstance(row.get("dispatchId"), str)
+             and row["dispatchId"] != dispatch and row.get("agentTerminalHandle") == handle and ended_released(row)
+             and resource(row).get("terminalHandle") == handle and resource(row).get("originDispatchId") == dispatch
+             and resource(row).get("ownerDispatchId") == row["dispatchId"]]
+    others = [row for row in rows if isinstance(row, dict) and row is not source and row not in later
+              and (row.get("agentTerminalHandle") == handle or (resource(row) or {}).get("terminalHandle") == handle)
+              and not ended_released(row)]
+    return len(later) == 1 and not others
+
+
 def _placement(row: dict) -> dict:
     recovery = row.get("recovery")
     if recovery is not None and not isinstance(recovery, dict):
@@ -685,20 +816,22 @@ def _membership(project: Path, context: dict, record: str, raw: dict, known=()) 
     raise PodError("record_attribution_unknown", "Record cannot be attributed or safely excluded")
 
 
-def _admissions(raw: dict, directory: Path) -> dict:
+def _admissions(raw: dict, directory: Path, *, placement_unknown: bool = False) -> dict:
+    """A record's validated admission inventory. `placement_unknown` (rule T only) also accepts an inventory whose
+    one missing fact is the record's own placement."""
     if "_facts_generation" not in raw or _SHARED.get() is None:
-        return _admission_rows(raw, directory)
+        return _admission_rows(raw, directory, placement_unknown=placement_unknown)
     def load():
         working = dict(raw)
-        return working, _admission_rows(working, directory)
+        return working, _admission_rows(working, directory, placement_unknown=placement_unknown)
     # One validation and archive expansion per record generation and call; each query gets its own copy.
-    current, rows = _shared(("admissions", str(directory), digest(raw["_facts_generation"])), load)
+    current, rows = _shared(("admissions", str(directory), digest(raw["_facts_generation"]), placement_unknown), load)
     raw.clear()
     raw.update(current)
     return dict(rows)
 
 
-def _admission_rows(raw: dict, directory: Path) -> dict:
+def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = False) -> dict:
     from .installer import STATE_SCHEMAS
     from .ledger import _CONTEXT_FIELDS, _SUCCESSION_FIELDS
     projected = "_facts_generation" in raw
@@ -708,7 +841,8 @@ def _admission_rows(raw: dict, directory: Path) -> dict:
         current = _facts_context(facts)
         closed_empty = (facts.get("phase") == "closed" and facts.get("admissions") == {}
                         and facts.get("errors") == [{"code": "objective_placement_unknown"}])
-        if (facts.get("complete") is not True and not closed_empty) or not isinstance(facts.get("admissions"), dict):
+        unplaced = placement_unknown and facts.get("errors") == [{"code": "objective_placement_unknown"}]
+        if (facts.get("complete") is not True and not closed_empty and not unplaced) or not isinstance(facts.get("admissions"), dict):
             raise PodError("admission_facts_incomplete", "Current claim inventory is incomplete")
         if current["_facts_generation"] != raw["_facts_generation"]:
             raise PodError("record_changed", "Attribution changed before current claims were read")
@@ -968,6 +1102,92 @@ def _claim_digest(raw: dict, rows: dict) -> str:
                        for key, row in rows.items()}})
 
 
+def _terminal_history(gap: dict, project: Path, fleet_facts: dict, unattributed_actor: bool, elsewhere=None) -> bool:
+    """Rule T (R206): a terminal record's settled history is no current claim. The caller has proved complete,
+    unbound fleet and terminal inventories; this proves the record unchanged, without an unsettled governed effect,
+    and every admission settled. Anything unproved keeps the gap."""
+    directory = gap["directory"]
+    if not _terminal_validated(project, directory, gap["phase"]):
+        return False
+    if (_after_context(directory / "context.json") != gap["identity"]
+            or _after_journal(directory / "governor.json") != gap["journal_id"]):
+        return False
+    try:
+        if _effects_pending(_journal(directory / "governor.json")[0]):
+            return False
+    except PodError:
+        return False
+    preserved = None
+    for key, row in gap["rows"].items():
+        state = row.get("state")
+        if state in ("closed", "deferred"):
+            continue
+        binding = row.get("native_binding")
+        if binding:
+            # Absent from a complete all-Run inventory, or shown settled: no current Dispatch.
+            if fleet_facts.get(binding.get("dispatchId")) in (None, "settled"):
+                continue
+            if elsewhere is not None and elsewhere(binding.get("dispatchId"), row):
+                continue  # 4b: current only in another repository's registered worktree, as the worker loop skips
+            return False
+        if state not in ("reserved", "unresolved", "bound"):
+            return False
+        if gap["phase"] == "retired":
+            if preserved is None:
+                preserved = _retirement_preserved(project, directory) or set()
+            if key in preserved:
+                continue  # (i) retirement certified no pending start, and the record accepts no later write
+        if unattributed_actor:
+            return False  # (ii) a current actor in this repository could be this reservation's
+    return True
+
+
+def _terminal_validated(project: Path, directory: Path, phase: str) -> bool:
+    """Rule T 1-2: the record's terminal status established from its own whole context through the validators the
+    ordinary context path uses, never from the selective facts reader's phase alone. A closed record has a valid
+    checkpoint closure or a readable R145 evidence closure; a continued one a valid R110 link; a `retired` one a
+    valid R112 entry or a certified R205 entry beside it. Anything unproved is not terminal."""
+    from . import retirement
+    from .ledger import _read
+    try:
+        state = _read(directory / "context.json")
+    except (PodError, OSError, ValueError):
+        state = None
+    state = state if isinstance(state, dict) else {}
+    try:
+        if phase == "continued":
+            from .succession import validate_link
+            link = state.get("continued_by")
+            if history.is_reference(link):
+                link = _claim_reference(link, directory)
+            validate_link("continued_by", link)
+            return isinstance(link, dict)
+        if phase == "retired":
+            entry = state.get(retirement.FIELD)
+            if history.is_reference(entry):
+                entry = _claim_reference(entry, directory)
+            if isinstance(entry, dict):
+                retirement.validate_entry(entry)
+                return True
+            return retirement.older_retirement(project, directory) == "retired"
+        if phase == "closed":
+            closure = (state.get("checkpoint") or {}).get("closure") if isinstance(state.get("checkpoint"), dict) else None
+            if closure is not None:
+                from .obligations import _closure_record
+                _closure_record(closure)
+                return True
+            from .evidence_closure import block
+            evidence = block(directory)
+            return isinstance(evidence, dict) and evidence.get("status") == "recorded"
+    except (PodError, KeyError, TypeError, ValueError, AttributeError):
+        return False
+    return False
+
+
+def _effects_pending(journal: dict) -> bool:
+    return any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN") for row in journal["actions"])
+
+
 def _effect_identity(journal: dict, *, open_objective: bool) -> str:
     return digest({"actions": [row for row in journal["actions"]
                               if row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")],
@@ -983,7 +1203,12 @@ def _proof(project: Path, objective: str, candidate: str) -> dict:
     checkpoint = state.get("checkpoint") or {}
     if checkpoint.get("candidate") != candidate:
         return {"status": "blocked", "candidate": candidate, "reason": "candidate_mismatch"}
-    view = kernel_view(project, objective, state=state, candidate=candidate)
+    # A root checked out at the candidate keeps judging bound sources by its working files, which is what a review
+    # binds, including bytes a clean checkout converts (eol, filters). Any other root, such as a canonical checkout on
+    # the target branch, judges them against the candidate's stored blobs instead of its own unrelated files (pod#184).
+    at_candidate = gitio.resolve_commit(project, "HEAD") == candidate
+    view = kernel_view(project, objective, state=state, candidate=candidate,
+                       sources_at=None if at_candidate else candidate)
     from .obligations import _persisted_rows, TERMINAL
     gaps, unavailable = [], []
     if view["map"] is None:
@@ -1054,6 +1279,11 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     owners, owner_reads = {}, {}
     placements_by_dispatch = {}
     scope_records_read, attribution_gaps = set(), []
+    # Rule T (R206): gaps on another objective's terminal record, judged after the complete native inventories.
+    terminal_gaps = []
+    # What those inventories show: each Dispatch settled or current, and whether any current actor in this repository
+    # is attributed to no open record.
+    fleet_facts, fleet_paths, open_handles, unattributed = {}, {}, set(), {"actor": False}
     abandoned_dispatches = set()
     physical_paths = {}
 
@@ -1207,13 +1437,22 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 try:
                     name = _membership(project, context, record, raw, known)
                 except PodError as exc:
-                    if exc.code == "record_attribution_unknown" and _phase(raw) == "closed":
-                        _admissions(raw, directory)  # Supported, structurally closed, and no hidden admission references.
-                        if raw.get("admissions") != {}:
-                            raise
-                        journal, journal_id = _journal(directory / "governor.json")
-                        if not any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN") for row in journal["actions"]):
-                            attribution_gaps.append((record, directory, identity, journal_id))
+                    phase = _record_phase(raw, directory)
+                    if (exc.code == "record_attribution_unknown" and phase in TERMINAL_PHASES
+                            and listing._name(raw) != objective):
+                        try:
+                            # Supported, terminal, and no hidden admission references; placement may be unrecorded.
+                            terminal_rows = _admissions(raw, directory, placement_unknown=True)
+                            journal, journal_id = _journal(directory / "governor.json")
+                        except PodError:
+                            raise exc from None
+                        if not _effects_pending(journal):
+                            if phase == "closed" and raw.get("admissions") == {}:
+                                attribution_gaps.append((record, directory, identity, journal_id))
+                            else:
+                                terminal_gaps.append({"record": record, "directory": directory, "identity": identity,
+                                    "journal_id": journal_id, "phase": phase, "rows": terminal_rows,
+                                    "codes": [("record_attribution_unknown", {}, None)]})
                             continue
                     raise
                 source = raw.get("_facts_attribution") or (raw.get("checkpoint") or {}).get("worktree")
@@ -1230,8 +1469,24 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         effect_claims(directory, raw, journal, source)
                         effect_sources.append((directory, journal_id, _effect_identity(journal, open_objective=False)))
                     continue
-                rows = _admissions(raw, directory)
-                phases[record] = _phase(raw) if raw["checkpoint"]["schema"] == "pod-checkpoint/v3" else "noncurrent"
+                phase = _record_phase(raw, directory)
+                try:
+                    rows = _admissions(raw, directory)
+                except PodError as exc:
+                    if exc.code != "admission_facts_incomplete" or phase not in TERMINAL_PHASES or name == objective:
+                        raise
+                    try:
+                        terminal_rows = _admissions(raw, directory, placement_unknown=True)
+                        journal, journal_id = _journal(directory / "governor.json")
+                    except PodError:
+                        raise exc from None
+                    if _effects_pending(journal):
+                        raise exc from None
+                    terminal_gaps.append({"record": record, "directory": directory, "identity": identity,
+                        "journal_id": journal_id, "phase": phase, "rows": terminal_rows,
+                        "codes": [("admission_facts_incomplete", {}, None)]})
+                    continue
+                phases[record] = phase if raw["checkpoint"]["schema"] == "pod-checkpoint/v3" else "noncurrent"
                 place = raw["checkpoint"].get("worktree") or {}
                 for row in rows.values():
                     placement = _placement(row)
@@ -1250,7 +1505,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                         "locations_complete": bool(paths) and all(paths)}
                 journal, journal_id = _journal(directory / "governor.json")
                 current_id = _claim_identity(raw, rows)
-                effect_id = _effect_identity(journal, open_objective=_phase(raw) == "open")
+                effect_id = _effect_identity(journal, open_objective=phase == "open")
                 selected = name == objective
                 stamps[record] = [identity, journal_id] if selected else [current_id, effect_id]
                 sources.append((directory, identity, journal_id, current_id, effect_id, selected))
@@ -1265,7 +1520,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     runs.setdefault(ref["runId"], [])
                     run_owners.setdefault(ref["runId"], []).append((record, name, ref["runtime"]))
                 place = checkpoint.get("worktree")
-                open_objective = _phase(raw) == "open"
+                open_objective = phase == "open"
                 if open_objective:
                     if not isinstance(place, dict) or not isinstance(place.get("path"), str):
                         unknown(record, "ownership_unavailable", objective=name)
@@ -1283,6 +1538,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             claim({"objective": name, "record": record, "kind": "ownership", "unit": unit_name,
                                    "branch": remote_branch["branch"], "remote": remote_branch["remote"],
                                    "worktree": None, "locations_complete": True})
+                unbound = []
                 for key, row in rows.items():
                     binding = row.get("native_binding")
                     if binding is not None:
@@ -1292,14 +1548,23 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             {"native_binding": binding, "runtime": row.get("runtime"), "boundary": row.get("boundary")}))
                         run_owners.setdefault(binding["runId"], []).append((record, name, row.get("runtime")))
                     elif row["state"] not in ("closed", "deferred"):
-                        claim({"objective": name, "record": record,
+                        held = {"objective": name, "record": record,
                             "kind": "writer" if row["role"] == "implement" else "assignment",
                             "admission": key, "worktree": listing._location(row.get("worktree"))
                                 or (_placement(row)).get("path"),
                             "branch": (_placement(row)).get("branch"),
                             "locations_complete": bool((_placement(row)).get("path")),
-                            "liveness": "unknown", "boundary": row.get("boundary")})
+                            "liveness": "unknown", "boundary": row.get("boundary")}
+                        if phase in TERMINAL_PHASES and name != objective and not _effects_pending(journal):
+                            unbound.append((key, row, held))  # Rule T judges it after the native inventories.
+                            continue
+                        claim(held)
                         unknown(record, "assignment_unbound", objective=name, admission=key)
+                if unbound:
+                    terminal_gaps.append({"record": record, "directory": directory, "identity": identity,
+                        "journal_id": journal_id, "phase": phase, "rows": {key: row for key, row, _ in unbound},
+                        "codes": [("assignment_unbound", {"objective": name, "admission": key}, held)
+                                  for key, _, held in unbound]})
                 effect_claims(directory, raw, journal, source or context)
             except PodError as exc:
                 # Only a record that cannot be read at all is named apart; a read deadline is no record's fault.
@@ -1337,6 +1602,51 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         else:
             native_groups = [(None, fleet)]
         places = _shared(("places", str(project)), lambda: _places(project))
+        # The Dispatches that rule T must find settled: those bound by a deferred terminal record's admissions.
+        gap_dispatches = {(row.get("native_binding") or {}).get("dispatchId") for gap in terminal_gaps
+                          for row in gap["rows"].values() if row.get("native_binding")}
+
+        def coordinator(run):
+            """The Run's current coordinator from one complete Run list per call, before the end fence (rule S, 4)."""
+            coordinators = _shared(("run-coordinators", terminals["runtime"]),
+                                   lambda: _run_coordinators(terminals["runtime"], budget.check))
+            if coordinators is None or run not in coordinators:
+                raise PodError("orca_contract", "The Run's current coordinator is unproved")
+            handle = coordinators[run]
+            terminal = next((row for row in terminals["terminals"] if row.get("handle") == handle), None) if handle else None
+            if terminal is None:
+                return {"terminal": handle, "state": "absent"}  # none recorded, or absent from the complete inventory
+            from .retirement import _exited
+            if _exited(terminal):
+                return {"terminal": handle, "state": "exited"}
+            live = (terminal.get("connected") is True and terminal.get("writable") is True
+                    and terminal.get("orphaned") is False)
+            return {"terminal": handle, "state": "live" if live else "unverified"}
+
+        def elsewhere(path):
+            """Rule T 4b: `path` is proven a registered worktree of another repository. It is an existing directory
+            reached without a symlink, outside this repository's worktrees, whose Git common directory differs from
+            this repository's and whose own worktree registry lists it. Anything unproved is not elsewhere."""
+            if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+                return False
+            try:
+                if not stat.S_ISDIR(os.lstat(path).st_mode) or str(Path(path).resolve(strict=True)) != path:
+                    return False
+                if workspace(path, places)[1]:
+                    return False
+                other = _context(Path(path))
+                if other.get("repo_key") is None or other["repo_key"] == context["repo_key"]:
+                    return False
+                registry = _shared(("places", path), lambda: _places(Path(path)))
+                return any(physical(root) == path for root in registry)
+            except (OSError, PodError, ValueError, RuntimeError):
+                return False
+
+        def names_here(row):
+            """Rule T 4b (3): the admission itself names this repository's workspace or the requested branch."""
+            placement = _placement(row)
+            location = listing._location(row.get("worktree")) or placement.get("path")
+            return bool(location and workspace(location, places)[1]) or bool(branch and placement.get("branch") == branch)
         for ownership in owner_claims():
             observations = []
             for run in sorted({ref["runId"] for ref in ownership["recorded_native_refs"]}):
@@ -1380,22 +1690,45 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     # A settled context-only Dispatch owns no supervised
                     # resource. Its terminal's current ownership is inventoried
                     # separately below; no process exit is inferred here.
+                    fleet_facts[source.get("dispatchId")] = "settled"
                     continue
                 shown = _worker_fact(source)
                 path = shown["worktree"]
                 run = shown["run"]
                 if shown["liveness"] == "exited" and source.get("workerState") != "abandoned" and shown["dispatch"] not in abandoned_dispatches:
                     workers[shown["dispatch"]] = shown
+                    fleet_facts[shown["dispatch"]] = "settled"
                     continue
+                fleet_facts[shown["dispatch"]] = "current"
+                fleet_paths[shown["dispatch"]] = path
                 registered, in_repository = workspace(path, places)
+                # Only a row this query would otherwise hold or read a record for is judged, so the Run coordinator
+                # reads stay bounded by this repository's own native actors.
+                if ((in_repository or path is None or run in runs or run in run_sources
+                        or shown["dispatch"] in gap_dispatches)
+                        and source.get("workerState") != "abandoned" and shown["dispatch"] not in abandoned_dispatches
+                        and _settled_gone(source, shown, native["workers"], terminals, coordinator)):
+                    # Rule S (R206): an ended Dispatch whose terminal, workspace and Run coordinator are all gone.
+                    workers[shown["dispatch"]] = shown
+                    fleet_facts[shown["dispatch"]] = "settled"
+                    result.setdefault("unrelated_unknowns", []).append({
+                        "record": "run:" + str(run), "code": "native_liveness_unverified", "fact": "process_liveness",
+                        "dispatch": shown["dispatch"], "scope": {"run": run, "worktree": path},
+                        "relevance": "settled_dispatch_gone_resources",
+                        "reconciliation": {"command": ["orca", "orchestration", "worker-show", "--dispatch",
+                                                       shown["dispatch"], "--json"],
+                                           "condition": "Settled with its terminal, workspace and Run coordinator gone; "
+                                                        "it holds no current resource"}})
+                    continue
                 branch_fact, branch_known = places.get(registered), registered is not None
                 binding, placement = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
                 if not branch_known and _placement_matches(binding, shown):
                     branch_fact, branch_known = placement["branch"], True
-                if path and not branch_known:
+                if path and not branch_known and not elsewhere(path):
                     # Native work in this repository may have been admitted by a
                     # different repository's objective. Inspect only that actual
                     # possible conflict, never every foreign admission history.
+                    # A workspace proven to be another repository's worktree is not this repository's work (T 4b).
                     for directory, generation in run_sources.get(run, []):
                         if directory.name in scope_records_read:
                             continue
@@ -1408,8 +1741,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         try:
                             candidate_rows = _admissions(candidate_raw, directory)
                         except PodError as exc:
-                            unknown(directory.name, exc.code, fact_scope={**scope, "worktree": path},
-                                    fact="worker_placement")
+                            # Its own fact, distinct from the record's own inventory gap (D2): this live or unverified
+                            # worker's placement cannot be read from the record that owns its Run.
+                            unknown(directory.name, "worker_placement_unknown", fact_scope={**scope, "worktree": path},
+                                    fact="worker_placement", dispatch=shown["dispatch"], cause=exc.code)
                             continue
                         for candidate_row in candidate_rows.values():
                             binding = candidate_row.get("native_binding") or {}
@@ -1468,6 +1803,11 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 workers[shown["dispatch"]] = shown
                 if shown["liveness"] == "exited" and not native_effects:
                     continue
+                open_run = any(phases.get(owner) == "open" for owner, _, _ in run_owners.get(run, []))
+                if open_run and shown["terminal"]:
+                    open_handles.add(shown["terminal"])
+                elif not open_run and (in_repository or path is None):
+                    unattributed["actor"] = True  # A current actor no open record accounts for (rule T, 4)
                 stamps["dispatch:" + shown["dispatch"]] = digest(shown)
                 claim({"kind": "writer", "run": run,
                     "dispatch": shown["dispatch"], "worktree": path,
@@ -1520,6 +1860,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             if not in_repository or _exited(terminal):
                 continue
             live = terminal.get("connected") is True and terminal.get("writable") is True and terminal.get("orphaned") is False
+            if terminal.get("handle") not in open_handles and terminal.get("handle") not in {
+                    row.get("recorded_owner") for row in result["claims"] if row.get("kind") == "ownership"}:
+                unattributed["actor"] = True
             claim({"kind": "writer", "native_terminal": terminal.get("handle"), "worktree": path,
                    "branch": places.get(registered), "locations_complete": registered is not None, "repo_key": context["repo_key"],
                    "liveness": "live" if live else "unverifiable", "source": "native_terminal_inventory"})
@@ -1548,6 +1891,24 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                        "condition": "Preserve source-proven repository attribution without inventing placement"}})
             else:
                 unknown(record, "record_attribution_unknown")
+        native_complete = (fleet is not None and fleet.get("complete") is True
+                           and terminals.get("complete") is True)
+        for gap in terminal_gaps:
+            if native_complete and _terminal_history(gap, project, fleet_facts, unattributed["actor"],
+                                                     lambda dispatch, row: (not names_here(row)
+                                                                            and elsewhere(fleet_paths.get(dispatch)))):
+                for code, extra, _ in gap["codes"]:
+                    result.setdefault("unrelated_unknowns", []).append({
+                        "record": gap["record"], "code": code, "fact": code, "scope": {"record": gap["record"]},
+                        **extra, "relevance": "terminal_record_history",
+                        "reconciliation": {"action": "inspect_record", "record": gap["record"],
+                            "condition": "Settled history of a terminal record; current native actors are inventoried "
+                                         "independently"}})
+            else:
+                for code, extra, held in gap["codes"]:
+                    if held is not None:
+                        claim(held)
+                    unknown(gap["record"], code, **extra)
         if objective:
             result["proof"], code = proof_outcome
             if code is not None:
@@ -1576,7 +1937,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 after_raw = _primary(directory / "context.json")[0]
                 after_journal = _journal(directory / "governor.json")[0]
                 if (selected or _claim_identity(after_raw, _admissions(after_raw, directory)) != current_id
-                        or _effect_identity(after_journal, open_objective=_phase(after_raw) == "open") != effect_id):
+                        or _effect_identity(after_journal, open_objective=_record_phase(after_raw, directory) == "open") != effect_id):
                     unknown(directory.name, "record_changed")
         after = _shared(("cohort-after", str(root)), lambda: _after_cohort(root, budget))
         before = {entry.name for entry in cohort}
@@ -1605,7 +1966,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     all_unknowns = result["unknowns"]
     unread = [{"record": row["record"], "code": row["code"]} for row in result.get("unrelated_unknowns", [])
               if row.get("status") == "unavailable"]
-    result["repository_complete"] = not all_unknowns and not unread
+    history_gaps = any(row.get("relevance") in ("terminal_record_history", "settled_dispatch_gone_resources")
+                       for row in result.get("unrelated_unknowns", []))
+    result["repository_complete"] = not all_unknowns and not unread and not history_gaps
     result["unavailable_records"] = unread
     result["unknowns"] = [row for row in all_unknowns if row.get("objective") == objective and objective
                           or relevant(row["scope"], request, context["repo_key"], row["fact"])]

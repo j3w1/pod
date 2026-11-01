@@ -93,6 +93,12 @@ def _read_allowed(argv: list[str]) -> bool:
     if (len(argv) == 5 and argv[:3] == ["orchestration", "run-show", "--id"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
+    # R206 rule S: the whole Run list, page by page, for each Run's current coordinator.
+    if argv == ["orchestration", "run-list", "--limit", "100", "--json"]:
+        return True
+    if (len(argv) == 7 and argv[:5] == ["orchestration", "run-list", "--limit", "100", "--json"]
+            and argv[5] == "--cursor" and _argument(argv[6], limit=1024)):
+        return True
     if (len(argv) == 5 and argv[:3] == ["orchestration", "request-show", "--request"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
