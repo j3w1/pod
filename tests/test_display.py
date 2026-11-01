@@ -369,6 +369,35 @@ class DisplayOpTests(TabCase):
         self.assertEqual(row["verdict"], "unreadable")
         self.assertEqual(row["read_command"], ["orca", "worktree", "list", "--limit", "1000", "--json"])
 
+    def test_a_paged_terminal_inventory_is_read_whole(self):
+        self.setup_display()
+        owner = self.terminals["result"]["terminals"][0]
+        others = [{"handle": f"t{index}", "worktreePath": "/elsewhere", "connected": True} for index in range(229)]
+        whole = {"result": {"terminals": [*others, owner], "totalCount": 230, "truncated": False,
+                            "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}}
+        self.terminals = {"result": {"terminals": others[:200], "totalCount": 230, "truncated": True}}
+        reads = {("terminal", "list", "--limit", "230", "--json"): whole}
+        with patch("pod.orca.read_command", side_effect=lambda argv, **kwargs: deepcopy(reads[tuple(argv)])
+                   if tuple(argv) in reads else self.display_read(argv)), patch("pod.orca.mutate_command"):
+            output = internal.run("display", {"project": str(self.project), "objective": "objective"})
+        self.assertEqual(output["rows"][1]["verdict"], "matches", output["rows"][1])
+        self.assertEqual(self.display_calls[0], ["terminal", "list", "--json"])
+
+    def test_an_incomplete_second_terminal_read_stays_unreadable(self):
+        from tests.common import bad_retries
+        self.setup_display()
+        owner = self.terminals["result"]["terminals"][0]
+        rows = [*({"handle": f"t{index}", "worktreePath": "/elsewhere", "connected": True} for index in range(229)), owner]
+        first = {"result": {"terminals": rows[:200], "totalCount": 230, "truncated": True}}
+        for label, second in bad_retries("terminals", rows, 230).items():
+            self.terminals = deepcopy(first)
+            answer = {"result": second}
+            with self.subTest(label), patch("pod.orca.mutate_command"), patch(
+                    "pod.orca.read_command", side_effect=lambda argv, **kwargs: deepcopy(answer)
+                    if argv[:3] == ["terminal", "list", "--limit"] else self.display_read(argv)):
+                row = internal.run("display", {"project": str(self.project), "objective": "objective"})["rows"][1]
+                self.assertEqual(row["verdict"], "unreadable", row)
+
     def bounded_worktrees(self, count):
         task = deepcopy(self.worktrees["result"]["worktrees"][0])
         task.update(displayNameMode="fixed", displayName="Parser repair (#17)", linkedIssue=17)

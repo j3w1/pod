@@ -344,3 +344,19 @@ def padded_worktrees(root: Path, count: int, *, target: str = "pod.cleanup.workt
 
     with patch(target, inventory):
         yield
+
+
+def bad_retries(kind: str, rows: list, total: int) -> dict:
+    """Second answers to a truncated Orca list that are not complete as a whole: each must leave the first page in
+    force (R113, A766). `rows` and `total` describe the whole inventory the second read was asking for."""
+    scope = {"hostIds": ["local"], "omittedHostIds": []}
+    good = {kind: rows, "totalCount": total, "truncated": False, "hostScope": scope}
+    missing = dict(good)
+    missing.pop("totalCount")
+    return {"false-total-empty": {**good, kind: [], "totalCount": False},
+            "false-total": {**good, "totalCount": False}, "float-total": {**good, "totalCount": float(total)},
+            "missing-total": missing, "recounted": {**good, "totalCount": total + 1},
+            "still-truncated": {**good, "truncated": True},
+            "omitted-host": {**good, "hostScope": {**scope, "omittedHostIds": ["ssh"]}},
+            "no-local-host": {**good, "hostScope": {"hostIds": ["ssh"], "omittedHostIds": []}},
+            "rows-not-a-list": {**good, kind: {"0": rows[0]}}, "row-not-a-record": {**good, kind: [*rows[:-1], None]}}

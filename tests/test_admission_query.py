@@ -684,6 +684,42 @@ class ReviewCorrectionTests(AdmissionQueryCase):
         with patch("pod.admission._read", return_value=result), self.assertRaises(PodError):
             self._real_terminals()
 
+    def test_terminal_reader_reads_past_the_default_page_once(self):
+        from pod.errors import PodError
+        live = {"connected": True, "writable": True, "orphaned": False}
+        rows = [{"handle": f"t{index}", "worktreePath": str(self.project), **live} for index in range(230)]
+        scope = {"hostIds": ["local"], "omittedHostIds": []}
+        for whole, complete in (({"truncated": False, "totalCount": 230}, True), ({"truncated": True, "totalCount": 230}, False),
+                                ({"truncated": False, "totalCount": 231}, False)):
+            calls = []
+
+            def read(argv):
+                calls.append(argv)
+                shown = rows if "--limit" in argv else rows[:200]
+                extra = whole if "--limit" in argv else {"truncated": True, "totalCount": 230}
+                return {"runtime": "runtime", "result": {"terminals": shown, "hostScope": scope, **extra}}
+            with self.subTest(whole=whole), patch("pod.admission._read", side_effect=read):
+                if complete:
+                    self.assertEqual(len(self._real_terminals()["terminals"]), 230)
+                else:
+                    with self.assertRaises(PodError) as caught:
+                        self._real_terminals()
+                    self.assertEqual(caught.exception.code, "native_resources_incomplete")
+                self.assertEqual(calls, [["terminal", "list", "--json"], ["terminal", "list", "--limit", "230", "--json"]])
+
+    def test_an_incomplete_second_terminal_read_leaves_admission_refusing(self):
+        from pod.errors import PodError
+        from tests.common import bad_retries
+        rows = [{"handle": f"t{index}", "worktreePath": str(self.project), "connected": True} for index in range(230)]
+        first = {"runtime": "runtime", "result": {"terminals": rows[:200], "truncated": True, "totalCount": 230,
+                                                  "hostScope": {"hostIds": ["local"], "omittedHostIds": []}}}
+        for label, second in bad_retries("terminals", rows, 230).items():
+            with self.subTest(label), patch("pod.admission._read",
+                                            side_effect=[first, {"runtime": "runtime", "result": second}]) as read:
+                with self.assertRaises(PodError) as caught:
+                    self._real_terminals()
+                self.assertEqual((caught.exception.code, read.call_count), ("native_resources_incomplete", 2))
+
     def test_positive_owner_identity_does_not_invent_a_different_writer_per_purpose(self):
         self.intake(worktree=self.place)
         self.write([self.criterion()], objective="retained-purpose", governance={"base_ref": "target"}, worktree=self.place)

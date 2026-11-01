@@ -21,18 +21,66 @@ class OrcaAdapterTests(unittest.TestCase):
         from pod.orca import _read_allowed
         self.assertTrue(_read_allowed(["worktree", "list", "--limit", "1000", "--json"]))
         self.assertTrue(_read_allowed(["worktree", "list", "--json"]))
-        for argv in (["worktree", "list", "--limit", "1001", "--json"],
-                     ["worktree", "list", "--limit", "999", "--json"],
-                     ["worktree", "list", "--limit", "01000", "--json"],
+        for argv in (["worktree", "list", "--limit", "01000", "--json"],
                      ["worktree", "list", "--json", "--limit", "1000"],
-                     ["worktree", "list", "--limit", "1000", "--cursor", "next", "--json"],
-                     ["terminal", "list", "--limit", "1000", "--json"]):
+                     ["worktree", "list", "--limit", "1000", "--cursor", "next", "--json"]):
             with self.subTest(argv=argv), patch("pod.orca.subprocess.run") as runner:
                 self.assertFalse(_read_allowed(argv))
                 with self.assertRaises(PodError) as caught:
                     read_command(argv)
                 self.assertEqual(caught.exception.code, "unsupported_orca_read")
                 runner.assert_not_called()
+
+    def test_a_whole_inventory_limit_is_a_positive_decimal_integer(self):
+        from pod.orca import _read_allowed
+        for kind in ("worktree", "terminal"):
+            for limit in ("1", "278", "1000", "1001"):
+                self.assertTrue(_read_allowed([kind, "list", "--limit", limit, "--json"]))
+            for argv in ([kind, "list", "--limit", "0", "--json"], [kind, "list", "--limit", "-1", "--json"],
+                         [kind, "list", "--limit", "01", "--json"], [kind, "list", "--limit", "many", "--json"],
+                         [kind, "list", "--limit", "2.5", "--json"], [kind, "list", "--limit", "\u0663", "--json"],
+                         [kind, "list", "--limit", " 3", "--json"], [kind, "list", "--limit", "", "--json"],
+                         [kind, "list", "--limit", "278", "--json", "--all"],
+                         [kind, "list", "--limit", "278", "--cursor", "next", "--json"],
+                         [kind, "list", "--repo", "path:/x", "--limit", "278", "--json"]):
+                with self.subTest(argv=argv), patch("pod.orca.subprocess.run") as runner:
+                    self.assertFalse(_read_allowed(argv))
+                    with self.assertRaises(PodError) as caught:
+                        read_command(argv)
+                    self.assertEqual(caught.exception.code, "unsupported_orca_read")
+                    runner.assert_not_called()
+        self.assertFalse(_read_allowed(["worktree", "show", "--limit", "3", "--json"]))
+
+    def test_a_whole_inventory_reads_past_the_default_page_once(self):
+        from pod.orca import complete_list
+        scope = {"hostIds": ["local"], "omittedHostIds": []}
+        page = {"worktrees": [{"id": str(index)} for index in range(200)], "totalCount": 278, "truncated": True,
+                "hostScope": scope}
+        whole = {"worktrees": [{"id": str(index)} for index in range(278)], "totalCount": 278, "truncated": False,
+                 "hostScope": scope}
+        calls = []
+
+        def read(argv):
+            calls.append(argv)
+            return {"runtime": "r", "result": whole if "--limit" in argv else page}
+        self.assertIs(complete_list("worktree", read)["result"], whole)
+        self.assertEqual(calls, [["worktree", "list", "--json"], ["worktree", "list", "--limit", "278", "--json"]])
+        for result in ({**whole, "truncated": False}, {**page, "totalCount": 200}, {**page, "totalCount": 150},
+                       {**page, "totalCount": "278"}, {**page, "totalCount": True}, {**page, "worktrees": None},
+                       {**page, "truncated": None}, {**page, "totalCount": None}):
+            calls.clear()
+            with self.subTest(result=result):
+                self.assertIs(complete_list("worktree", lambda argv: calls.append(argv) or
+                                            {"runtime": "r", "result": result})["result"], result)
+                self.assertEqual(calls, [["worktree", "list", "--json"]])
+        from tests.common import bad_retries
+        for label, second in bad_retries("worktrees", whole["worktrees"], 278).items():
+            calls.clear()  # Not complete as a whole: the first page stays in force, and nothing is read again.
+            with self.subTest(label):
+                self.assertIs(complete_list("worktree", lambda argv: calls.append(argv) or
+                                            {"runtime": "r", "result": second if "--limit" in argv else page})["result"],
+                              page)
+                self.assertEqual(len(calls), 2)
 
     def test_display_bounded_read_keeps_timeout_output_and_environment(self):
         from pod.orca import MAX_OUTPUT
