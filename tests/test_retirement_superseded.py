@@ -15,6 +15,7 @@ from pod import config, evidence_closure
 from pod.installer import STATE_SCHEMAS
 from pod.ledger import objective_root, state_root
 from pod.retirement import SIDECAR, SIDECAR_SCHEMA
+from pod.util import digest
 from tests.common import logical_json
 from tests.decision_policy_support import PERSON
 from tests.test_evidence_closure import ClosureCase
@@ -333,6 +334,53 @@ class SupersededEntryTests(SupersededCase):
         self.assertEqual(self.status()["phase"], "retired")
         receipt.unlink()
         self.uncertified("retirement_unverified")
+
+    def test_changed_result_facts_or_a_missing_publication_never_read_retired(self):
+        self.retire_older()
+        stored = json.loads(self.sidecar().read_text())
+        for name, change in {
+                "delivery": lambda doc: doc["historical_retirement"].update(delivery=["PR #1 merged"]),
+                "released": lambda doc: doc["historical_retirement"].update(released=["/elsewhere"],
+                                                                            locations=[{"path": "/elsewhere",
+                                                                                        "disposition": "absent"}]),
+                "preserved": lambda doc: doc["historical_retirement"].update(preserved=[])}.items():
+            with self.subTest(changed=name):
+                self.rewrite_entry(lambda doc: doc.update(deepcopy(stored)))
+                self.rewrite_entry(change)
+                self.uncertified("retirement_unverified")
+        self.rewrite_entry(lambda doc: doc.update(deepcopy(stored)))
+        self.assertEqual(self.status()["phase"], "retired")
+        published = [path for path in (state_root(self.project) / ".relay-authorizations").iterdir()
+                     if path.suffix == ".json" and json.loads(path.read_text()).get("objective") == "objective"]
+        self.assertEqual(len(published), 1)
+        published[0].unlink()
+        self.uncertified("retirement_unverified")
+
+    def test_a_certificate_copied_to_an_objective_the_same_decision_refused_never_reads_retired(self):
+        self.superseded()
+        self.successor(name="other", caller="other-owner", run_id="other-run")
+        self.run_holders["other-run"] = "other-owner"
+        self.terminals["other-owner"] = "live"
+        other = self.record_path("other")
+        other.write_text(json.dumps(_older_layout(logical_json(other), _previous(STATE_SCHEMAS["checkpoint"]),
+                                                  _previous(STATE_SCHEMAS["admission"]))))
+        objectives = [{"objective": name, "release": [self.where()]} for name in ("objective", "other")]
+        landed = self.retire(self.decide(objectives=objectives, delivery=NONE_RECORDED), objectives=objectives)
+        self.assertEqual([(row["status"], row["condition"]) for row in landed["objectives"]],
+                         [("retired", "retirable"), ("refused", "owner_not_lost")])
+        self.assertFalse(self.sidecar("other").exists())
+        certificate = json.loads(self.sidecar().read_text())
+        certificate["objective"] = "other"
+        certificate["record"]["context_sha256"] = hashlib.sha256(other.read_bytes()).hexdigest()
+        for row in certificate["decision_order"]:
+            row["key"] = row["key"].split(":", 1)[0] + ":" + digest("other")
+        self.sidecar("other").write_text(json.dumps(certificate))
+        shown = self.status(objective="other")
+        self.assertEqual((shown["status"], shown["blocker"], shown["readiness"]["state"]),
+                         ("blocked", "retirement_unverified", "unavailable"))
+        row = {"root": other.parent, "raw": json.loads(other.read_text()), "objective": "other"}
+        self.assertFalse(evidence_closure._settled_record(self.project, row))
+        self.assertEqual(self.status()["phase"], "retired")  # The objective that did retire still reads so.
 
     def test_a_stripped_or_stale_entry_never_reads_retired_or_settles(self):
         self.retire_older()

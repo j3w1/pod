@@ -10050,7 +10050,9 @@
         "tests.test_retirement_superseded.SupersededEntryTests.test_a_hand_placed_entry_without_a_decision_never_reads_retired",
         "tests.test_retirement_superseded.SupersededEntryTests.test_another_repository_another_scope_or_a_missing_receipt_never_reads_retired",
         "tests.test_retirement_superseded.SupersededEntryTests.test_a_stripped_or_stale_entry_never_reads_retired_or_settles",
-        "tests.test_retirement_superseded.LiveRecoveryTests.test_a_junk_or_uncertified_entry_never_ends_a_live_recovery_holding_the_run"
+        "tests.test_retirement_superseded.LiveRecoveryTests.test_a_junk_or_uncertified_entry_never_ends_a_live_recovery_holding_the_run",
+        "tests.test_retirement_superseded.SupersededEntryTests.test_changed_result_facts_or_a_missing_publication_never_read_retired",
+        "tests.test_retirement_superseded.SupersededEntryTests.test_a_certificate_copied_to_an_objective_the_same_decision_refused_never_reads_retired"
       ],
       "status": "NOT_RUN"
     }

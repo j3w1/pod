@@ -13,7 +13,8 @@ Run, Dispatch and start checks prove that.
 A record on an older version of a current schema family is read whole, through R146's documented fields and its
 format's allow-list, and keeps its bytes: its retirement entry is stored once beside it in
 `historical-retirement.json`, as an evidence closure is stored, bound to those bytes and to the decision's use
-receipt. Only a certified entry reads `retired`; its presence alone fences every write (R205).
+receipt, and the decision's publication record for that objective binds the exact entry. Only a certified entry
+reads `retired`; its presence alone fences every write (R205).
 """
 
 from __future__ import annotations
@@ -30,7 +31,8 @@ import stat
 import unicodedata
 
 from .errors import PodError
-from .util import bounded_text, digest, exact, owner_decision, channel_fields, decision_channel, CHANNEL_FIELDS
+from .util import (CHANNEL_FIELDS, atomic_json, bounded_json, bounded_text, channel_fields, decision_channel,
+                   digest, exact, owner_decision)
 
 FIELD = "historical_retirement"
 REQUEST = {"objective", "release"}
@@ -63,6 +65,7 @@ ACTION = ("Read it with pod status --objective {}; the owner's historical retire
 # An older record's retirement, stored beside its unchanged bytes (R205).
 SIDECAR = "historical-retirement.json"
 SIDECAR_SCHEMA = "pod-historical-retirement/v1"
+PUBLICATION_SCHEMA = "pod-historical-retirement-publication/v1"
 # What the retirement adds to an older record's logical view; the record itself never carries these.
 ADDED = (FIELD, "decision_order", "decision_channels")
 # The entry names the decision's durable use receipt; it has no older shape to stay compatible with.
@@ -375,12 +378,24 @@ def _unverified(reason: str) -> PodError:
                     {"next_action": "inspect the objective state; its record accepts no writes"})
 
 
+def _publication(capability, objective: str, document: dict) -> tuple[Path, dict]:
+    """The publication record of one objective's retirement under a decision: written beside the decision's use
+    receipt, under the same lock as the entry, binding the original record bytes and the exact entry (R205)."""
+    path = capability._receipt_path().parent / (
+        digest(f"pod-historical-retirement:{capability.binding['request_id']}:{objective}") + ".json")
+    return path, {"schema": PUBLICATION_SCHEMA, "request_id": capability.binding["request_id"],
+                  "authorization": digest(capability.verdict or capability.record), "objective": objective,
+                  "context_sha256": document["record"]["context_sha256"], "entry_sha256": digest(document)}
+
+
 def _certify(project: Path, stored: dict, objective: str) -> None:
     """Whether a stored entry certifies a retirement (R205): it names this repository and objective within its
-    decided scope, carries a complete stored decision of the retirement kind and category, ordered for this
-    objective, and the durable use receipt that decision's publication wrote names it. Under the policy revision
-    that accepted it, that policy must still permit its actor. This is Pod's cooperative check of its own persisted
-    evidence; it does not resist a writer who rewrites every store."""
+    decided scope, carries a complete stored decision of the retirement kind and category whose durable use receipt
+    exists, and the publication record that decision wrote for this objective, beside that receipt and under the
+    same lock, binds these exact record bytes and this exact entry. An objective only named in the request, or
+    refused in it, has no such record. Under the policy revision that accepted it, that policy must still permit
+    its actor. This is Pod's cooperative check of its own persisted evidence; it does not resist a writer who
+    rewrites every store."""
     from . import config, policy
     from .github import repository_context
     from .relay import Decision, validate_decision_record
@@ -399,11 +414,6 @@ def _certify(project: Path, stored: dict, objective: str) -> None:
     if (resources.get("repository") != repository or resources.get("objectives") != digest(entry["objectives"])
             or resources.get("primary") not in entry["objectives"] or binding["categories"] != ["scope_changes"]):
         raise _unverified("its decision binds another scope")
-    order = {row["key"]: row for row in stored["decision_order"]}
-    for prefix in ("ownership:", "retirement:"):
-        row = order.get(prefix + digest(objective))
-        if row is None or row["request_id"] != binding["request_id"] or row["actor"] != record["actor"]["kind"]:
-            raise _unverified("its decision order does not record this decision")
     snapshot = config.load(project)
     try:
         capability = Decision._recorded(project, resources["primary"], entry, snapshot=snapshot)
@@ -414,6 +424,13 @@ def _certify(project: Path, stored: dict, objective: str) -> None:
         if exc.code == "retirement_unverified":
             raise
         raise _unverified(f"its decision's use receipt does not certify it ({exc.code})") from None
+    path, expected = _publication(capability, objective, stored)
+    try:
+        published = bounded_json(path, limit=1024)
+    except (PodError, OSError, ValueError):
+        published = None
+    if published != expected:
+        raise _unverified("no publication of its decision records this objective's exact retirement")
     if (snapshot["status"] in ("valid", "missing")
             and digest(snapshot["decision_policy"]) == binding["decision_policy_revision"]):
         actor = record["actor"]
@@ -478,16 +495,27 @@ def read_state(path: Path) -> dict:
 
 def _write_older(path: Path, value: dict, data: bytes, repository: str) -> None:
     """An older record's single retirement write: its entry created once beside the record, whose bytes stay
-    unchanged, under that record's lock and the same decision publication as a current record's."""
+    unchanged, under that record's lock and the same decision publication as a current record's. Under the same
+    lock, and before the entry, the publication record binding this objective's exact entry is written beside the
+    decision's use receipt; it is what certifies the entry (`_certify`)."""
     from .evidence_closure import _create
-    from .relay import publish_decision, stamp_decision
+    from .ledger import _lock
+    from .relay import current_decision, publish_decision, stamp_decision
     from .util import protect_decision_record
     stamp_decision(value)
     protect_decision_record(value)
     validate_entry(value[FIELD], older=True)
     document = _older_document(value, data, repository)
+    record, published = _publication(current_decision(), document["objective"], document)
 
     def publish() -> None:
+        with _lock(record):
+            if record.exists() or record.is_symlink():
+                if bounded_json(record, limit=1024) != published:
+                    raise PodError("objective_retired", "Another publication of this objective's retirement is "
+                                   "recorded; nothing was written")
+            else:
+                atomic_json(record, published, limit=1024)
         if not _create(path.parent, document, name=SIDECAR):
             raise PodError("objective_retired", "A historical retirement of this objective is already recorded; "
                            "nothing was written")
