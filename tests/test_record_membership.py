@@ -164,6 +164,36 @@ class RunLookupStatusTests(KernelCase):
         self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "objective_superseded"))
         self.assertEqual([row["record"] for row in shown["superseded"]], ["earlier"])
 
+    def test_a_non_object_or_schema_less_record_is_never_superseded(self):
+        # Delta probe 1: only R90's superseded schema family reads objective_superseded.
+        for text in (json.dumps([RUN]), json.dumps(RUN), json.dumps({"checkpoint": {"native_refs": [{"runId": RUN}]}})):
+            record = ledger.state_root(self.project) / "earlier" / "context.json"
+            with self.subTest(text=text):
+                record.parent.mkdir(parents=True, exist_ok=True)
+                record.write_text(text)
+                shown = self.run_status()
+                self.assertEqual(shown["status"], "blocked")
+                self.assertNotEqual(shown["blocker"], "objective_superseded")
+                self.assertEqual([(row["record"], row["class"]) for row in shown["held_by"]], [("earlier", "unsupported")])
+
+    def test_a_missing_page_while_classifying_keeps_the_hold_and_its_reason(self):
+        # Delta probe 2: a production-writer record that names the Run loses its checkpoint page.
+        self.intake(objective="peer", next_safe_action="x" * 1024)  # Large enough for its own checkpoint page.
+        run = ledger.read(self.project, "peer")["checkpoint"]["native_refs"][0]["runId"]
+        path = ledger.objective_root(self.project, "peer") / "context.json"
+        physical, chunks = history.prepare_context(path, plain(ledger.read(self.project, "peer")), project=self.project)
+        history.ChunkStore(path.parent).put(chunks)
+        path.write_bytes(history._bytes(physical))
+        page = json.loads(chunks[physical["root"]["ref"]["sha256"]])
+        entry = next(entry for entry in page["entries"] if entry[0] == "checkpoint")
+        (path.parent / "history" / "sha256" / (entry[1]["ref"]["sha256"] + ".json")).unlink()
+        from pod.status import status
+        shown = status(self.project, run)
+        self.assertEqual(shown["status"], "blocked")
+        self.assertNotEqual(shown["blocker"], "objective_superseded")
+        self.assertEqual([(row["record"], row["class"], row["reason"]) for row in shown["held_by"]],
+                         [(path.parent.name, "undecodable", "history_missing")])
+
     def test_an_undecodable_record_that_names_the_run_still_holds(self):
         record = ledger.state_root(self.project) / "earlier" / "context.json"
         record.parent.mkdir(parents=True)
