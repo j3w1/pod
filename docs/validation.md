@@ -18,8 +18,9 @@ records an assignment outcome, not acceptance of the objective.
 | Terminal behavior | Required PTY suite, frame/size checks and affected visual snapshots. |
 | Installation or bundle inventory | Installer and copied-bundle tests in scrubbed disposable homes, including `tests.test_bundle_install`. |
 | Admission, assurance or closure governance | The preceding installed mechanism's independent final audit, with affected policy and production-boundary evidence. Candidate self-hosting evidence is separate. |
-| Admission, authority, persistence, recovery or test-isolation correction | Focused affected tests and boundary regressions locally, then the full suite once in hosted CI on the latest stable CPython (the `tests` matrix of `ci.yml`, every lane share once, `--strict --forbid-skips`). Local focused checks may run on the host's own Python (the owner accepts the host's current interpreter for them); hosted CI's one resolved latest stable CPython is the single qualification, and no local full suite or second interpreter is required; a source change after a hosted result needs a fresh result on the new head. |
-| Milestone | A change whose risk warrants the full gates (a release candidate, or a change the classes above name as wide or governance-affecting): all local gates below, except that the full-suite result of a change in the class above comes from hosted CI rather than a local run; then separate hosted, review, live and acceptance evidence as required. A root `VERSION` number alone never makes a milestone and never defeats risk-based verification; a version-only change keeps proof whose scope it does not touch. |
+| Admission, authority, persistence, recovery or test-isolation correction | Focused affected tests and boundary regressions locally, then the hosted static gate (`checks`, through the required `linux` job) on the exact head. Local focused checks may run on the host's own Python (the owner accepts the host's current interpreter for them); no second interpreter is required. The full suite runs at the release that ships the change (the release gate below) and in the weekly or dispatched hosted run (the `tests` matrix of `ci.yml`, every lane share once, `--strict --forbid-skips`, on the one resolved latest stable CPython); a source change after a hosted result needs a fresh result on the new head. |
+| Milestone | A change whose risk warrants the full gates (a release candidate, or a change the classes above name as wide or governance-affecting): all local gates below, including the full suite; then separate hosted, review, live and acceptance evidence as required. A root `VERSION` number alone never makes a milestone and never defeats risk-based verification; a version-only change keeps proof whose scope it does not touch. |
+| Release | A root `VERSION` change passes the release gate on its exact candidate before it merges: the local full gate (`python tools/gates.py --output DIR`, which runs the full suite) and the disposable clean-home installer trial below. Then the hosted static gate. The released changes' own review and focused proof are reused, not repeated. |
 
 Use cheap discriminating checks early and focused checks during development.
 Do not run the full suite after every small edit. At a milestone run all gates against
@@ -45,7 +46,7 @@ fabricate compatibility to make a result pass.
 | Installer/copied bundle | `PYTHONPATH=skills python -m unittest tests.test_installer tests.test_bundle_install -v` | Shell entrypoints, interruption/recovery, parity and an independent placed bundle. |
 | Disposable installer | `POD_INSTALL_SOURCE=file://… sh install.sh` in scrubbed temporary home; `--installed` parity and launcher checks | Dependencies, both skills, receipt, preferences, PATH and update. |
 | SHA-pinned public install | Fetch `install.sh` from `raw.githubusercontent.com` at candidate SHA and matching `codeload.github.com` tarball in hosted CI | Public endpoints serve the candidate. |
-| Hosted Linux | Every lane share of the `tests` matrix and the `checks` job for PRs and `main`, all on the one latest stable CPython that the `python` job resolves once per run (`actions/setup-python` selector `3.x`, `check-latest: true`, no prereleases) and passes as the exact version to every job and shard; the required `linux` job always reports and passes only when all of them passed | Exact-commit hosted result. |
+| Hosted Linux | Pull requests and `main` pushes run the static `checks` job only. A full run (weekly on schedule, or dispatched by hand: `gh workflow run ci.yml --ref BRANCH`) adds every lane share of the `tests` matrix. Both run on the one latest stable CPython that the `python` job resolves once per run (`actions/setup-python` selector `3.x`, `check-latest: true`, no prereleases) and passes as the exact version to every job and shard; the required `linux` job always reports and passes only when every job that ran passed, with `tests` skipped (never failed) on a static-only run | Exact-commit hosted result. |
 | Independent audit | Fresh reviewer, exact candidate and reproducible unprimed evidence | Findings and review proof under project governance. |
 | Live core/delegation | Codex and Claude Code separately on Linux with disposable objectives | Native launch/effective route, supervision, request recovery, continuation, Delivery and release. |
 | Public-source reads | One bounded real refresh in disposable `POD_CACHE_HOME`; manually compare representative rows, units and profile labels | Per-source availability and parser limits; a cached fetch is not fresh proof. |
@@ -75,8 +76,8 @@ argument, so authors classify those themselves. A flagged test needs an override
 `serial` needs the owner. Recorded CI durations of tests that take a second or more balance
 each lane's shards and workers longest-first; an unrecorded test is planned at the measured
 fast mean. Class and module fixtures are not timed, and a lane may repeat a class's setUpClass
-in several workers, so keep them cheap. Every pull request and `main` push runs the full suite:
-lanes decide where a test runs, never whether it runs. Every share computes the same plan from
+in several workers, so keep them cheap. Every full run (weekly, dispatched by hand, and the local
+release gate) runs the full suite: lanes decide where a test runs, never whether it runs. Every share computes the same plan from
 the checkout, so test definitions must not depend on the runner; `refresh` refuses a run whose
 shares disagree on the plan digest or commit identity, or have missing/inconsistent chunks, duplicate
 listed test IDs, invalid timings or incomplete passing-test accounting. Identical chunk replay is
@@ -100,8 +101,8 @@ recorded test at more than twice its recorded duration and 10 s over it, once ti
 again alone confirms it (up to five per share, ceiling breaches and new slow tests first; past
 that, those two fail unconfirmed and drift only warns);
 it also fails beyond twice its lane target. These limits govern the suite's own runtime, not product performance. Record a
-necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`
-and commit the manifest; `refresh` reads only that run's log lines. Each timing line records the exact
+necessarily slow test from a full hosted run with `python tools/suite_lanes.py refresh --run ID`
+(or `--pr N` once a dispatched full run exists on that pull request's head) and commit the manifest; `refresh` reads only that run's log lines. Each timing line records the exact
 interpreter version that ran it, and `refresh` requires the whole run to have used one; earlier logs
 without a version keep their own evidence, and no interpreter is preferred for calibration. Split a growing table into
 named group methods (`tests.common.GroupedTable`) before any method nears the ceiling. When
