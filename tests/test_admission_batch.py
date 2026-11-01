@@ -3,6 +3,7 @@ from contextlib import redirect_stdout
 import hashlib
 from io import BytesIO, StringIO, TextIOWrapper
 import json
+import shutil
 import threading
 from unittest.mock import patch
 
@@ -27,29 +28,25 @@ def terminal(handle, path, **fields):
             "executionHostId": "local", "agentIdentity": "codex", **LIVE, "preview": "PRIVATE", **fields}
 
 
-def fleet_page(total=3, counts=None, runtime="runtime", scope=None):
-    return {"runtime": runtime, "result": {"scope": scope or {"source": "all"}, "workers": [],
-            "counts": {"retained": 1, "released": 2} if counts is None else counts,
-            "page": {"limit": 1, "total": total, "hasMore": total > 1}}}
-
-
 class NativeDouble:
-    """Orca reads the batch makes past the patched inventories, served in order: the terminal list and
-    the fleet fence's unfiltered count read."""
+    """Orca reads the batch makes past the patched inventories: terminal lists, served in order, and the
+    fence's fleet reads, answered by a FleetDouble."""
 
     def __init__(self, *pages, fleet=None):
-        self.pages, self.fleet, self.calls, self.lock = list(pages), [fleet or fleet_page()], [], threading.Lock()
+        self.pages, self.fleet, self.calls, self.lock = list(pages), fleet, [], threading.Lock()
 
     def __call__(self, argv):
         with self.lock:
             self.calls.append(list(argv))
-            if argv == [*LIST, "--limit", "1"]:
-                queue = self.fleet
+            if argv[:len(LIST)] == LIST and self.fleet is not None:
+                fleet = self.fleet
             elif argv[:2] == ["terminal", "list"]:
-                queue = self.pages
+                page = self.pages.pop(0) if len(self.pages) > 1 else self.pages[0]
+                fleet = None
             else:
                 raise AssertionError(f"unexpected native read {argv}")
-            page = queue.pop(0) if len(queue) > 1 else queue[0]
+        if fleet is not None:
+            return fleet(argv)
         if isinstance(page, BaseException):
             raise page
         return page
@@ -58,7 +55,7 @@ class NativeDouble:
 class BatchCase(base.AdmissionQueryCase):
     def setUp(self):
         super().setUp()
-        self.native = NativeDouble(terminal_page([]))
+        self.native = NativeDouble(terminal_page([]), fleet=FleetDouble({}))
         reads = patch("pod.admission._read", side_effect=self.native)
         reads.start(); self.addCleanup(reads.stop)
 
@@ -179,8 +176,9 @@ class SharedReadTests(BatchCase):
         self.assertTrue(first_after)
         self.assertEqual(sorted(set(first_after)), sorted(first_after))
         self.assertEqual(answer["discovery"]["records"], 4)
-        # Discovery's terminal list, then the fence's terminal list and fleet count read; the fleet is a double.
-        self.assertEqual(answer["discovery"]["orca_reads"], 3)
+        # Discovery's terminal list, then the fence's terminal list, newest page and five unreleased
+        # partitions; the discovery fleet is a double.
+        self.assertEqual(answer["discovery"]["orca_reads"], 8)
         self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
 
     def test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to(self):
@@ -216,6 +214,35 @@ class SharedReadTests(BatchCase):
         for row in answer["responses"]:
             self.assertIn("inventory_changed", [unknown["code"] for unknown in row["result"]["unknowns"]])
 
+    def test_a_record_removed_during_discovery_is_an_inventory_change(self):
+        self.intake(worktree=self.place)
+        self.write([self.criterion()], objective="second", governance={"base_ref": "target"},
+                   worktree={**self.place, "branch": "second-branch"})
+        directory = objective_root(self.project, "second")
+        real = admission._after_cohort
+        def remove(root, budget):
+            shutil.rmtree(directory)
+            return real(root, budget)
+        with patch("pod.admission._after_cohort", side_effect=remove):
+            answer = self.batch({}, {"branch": "main"})
+        for row in answer["responses"]:
+            self.assertIn("inventory_changed", [unknown["code"] for unknown in row["result"]["unknowns"]])
+            self.assertFalse(row["result"]["complete"])
+
+    def test_an_effect_policy_change_during_the_call_is_reported(self):
+        self.intake(worktree=self.place)
+        base.ReviewCorrectionTests.journal(self, kind="push", target="main")  # mapped through the effect policy
+        def effective(project):
+            stage = admission._SHARED.get().stage
+            return {"revision": 1 if stage == "first" else 2, "policy": {"waste_governor": {"triggers": {}}}}
+        with patch("pod.config.effective", side_effect=effective) as reads:
+            answer = self.batch({"effects": ["push:main"]}, {"target": "main"})
+        self.assertEqual(reads.call_count, 2)  # once in discovery, once in the shared recheck
+        changed = [row["result"] for row in answer["responses"]
+                   if "effect_policy_changed" in [unknown["code"] for unknown in row["result"]["unknowns"]]]
+        self.assertTrue(changed)
+        self.assertTrue(all(result["complete"] is False for result in changed))
+
     def test_a_spent_shared_deadline_reaches_every_result(self):
         self.intake(worktree=self.place)
         def spend():
@@ -238,7 +265,8 @@ class SharedReadTests(BatchCase):
         with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": [source]}), \
              patch("pod.admission._native_claim", return_value=claim) as reader:
             answer = self.batch({"worktree": str(self.project)}, {"branch": "main"}, {})
-        reader.assert_called_once()  # One current-claim read, shared by every query that needs it.
+        # One current-claim read shared by every query that needs it, and the fence's fresh end read.
+        self.assertEqual(reader.call_count, 2)
         self.assertTrue(answer["responses"][0]["result"]["conflicts"])
 
 
@@ -318,6 +346,19 @@ class RequestTests(BatchCase):
             self.assertEqual((fleet.call_count, terminals.call_count), (0, 0))
         self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
 
+    def test_a_fault_inside_one_projection_prints_no_partial_batch(self):
+        self.intake(worktree=self.place)
+        request = json.dumps(self.request(queries=[{"id": "one", "repository": str(self.project)},
+                                                   {"id": "two", "repository": str(self.project), "branch": "main"}])).encode()
+        real = admission._claim_identity
+        def fail(raw, rows):
+            raise RuntimeError("projection fault")
+        with patch("pod.admission._claim_identity", side_effect=fail), self.assertRaises(RuntimeError):
+            self.run_cli(["--batch", "--json"], request)
+        self.assertEqual(self.last_output.getvalue(), "")  # nothing, not a partial answer, reached stdout
+        self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
+        self.assertIs(admission._claim_identity, real)
+
     def test_the_whole_response_limit_refuses_the_batch(self):
         self.intake(worktree=self.place)
         with patch("pod.admission.MAX_RESPONSE_BYTES", 1000), self.assertRaises(PodError) as caught:
@@ -326,7 +367,7 @@ class RequestTests(BatchCase):
 
     def run_cli(self, argv, data=b""):
         stdin = TextIOWrapper(BytesIO(data))
-        out = StringIO()
+        out = self.last_output = StringIO()
         with patch("sys.stdin", stdin), redirect_stdout(out):
             code = cli.main(["admission", *argv])
         return code, out.getvalue()
@@ -358,60 +399,144 @@ class RequestTests(BatchCase):
         self.assertNotIn("responses", out)
 
 
+LIVE_CLAIM = {"process": "live", "effects": []}
+
+
 class FencedCase(BatchCase):
+    """Discovery reads a start fleet; the fence's end reads come from a separate fleet double."""
+
     def setUp(self):
         super().setUp()
         real = patch("pod.admission._terminals", side_effect=self._real_terminals)
         real.start(); self.addCleanup(real.stop)
-        self.fleet_start = fleet_page()
+        self.rows = [self.row("a1", "active"), self.row("t1", "retained"), self.row("t2", "retained", workerState="abandoned"),
+                     *(self.row(f"r{index}", "released") for index in range(120))]
+        self.claim_values = {}
         def fleet():
-            admission._SHARED.get().fleet_start = self.fleet_start  # the read that closed discovery
-            return {"runtime": "runtime", "complete": True, "workers": []}
+            start = fleet_model(self.rows)
+            admission._SHARED.get().fleet_start = {"page": start([*LIST, "--limit", "100"]), "rows": list(self.rows)}
+            return {"runtime": "runtime", "complete": True, "workers": list(self.rows)}
         native = patch("pod.admission._fleet", side_effect=fleet)
         native.start(); self.addCleanup(native.stop)
+        def claim(source, runtime):
+            values = self.claim_values[source["dispatchId"]]
+            return values.pop(0) if len(values) > 1 else values[0]
+        claims = patch("pod.admission._native_claim", side_effect=claim)
+        claims.start(); self.addCleanup(claims.stop)
         self.intake(worktree=self.place)
 
-    def fenced(self, start, end, fleet_end=None):
-        self.native.pages, self.native.fleet = [start, end], [fleet_end or fleet_page()]
+    def row(self, dispatch, state, **fields):
+        """A worker of an unrecorded Run outside the repository: it holds no claim of these queries."""
+        row = base.ReviewCorrectionTests.writer(self, path=self.root / "elsewhere", verdict="exited", dispatch=dispatch)
+        row.update(runId="other-run", terminalState=state, workerState="ready", dispatchStatus="completed")
+        row["projection"]["runId"] = "other-run"
+        row.update(fields)
+        return row
+
+    def fenced(self, start=None, end=None, fleet_end=None, claims=None):
+        terminals = [terminal("a", self.root / "other")]
+        self.native.pages = [start or terminal_page(terminals), end or terminal_page(terminals)]
+        self.native.fleet = fleet_end or fleet_model(self.rows)
+        self.claim_values = claims or {"t2": [LIVE_CLAIM]}
         return self.batch({"branch": "main"})
+
+    def assert_unstable(self, answer, stable):
+        self.assertFalse(answer["native_fence"]["stable"])
+        self.assertEqual((answer["status"], answer["complete"]), ("unknown", False))
+        self.assertEqual(answer["responses"], stable["responses"])  # the results themselves are unchanged
+
+
+def identity(row):
+    """The documented row identity, computed independently of Pod."""
+    def part(value, *names):
+        return {name: (value or {}).get(name) for name in names}
+    projection = row.get("projection") or {}
+    return {**part(row, "dispatchId", "runId", "taskId", "terminalState", "workerState", "dispatchStatus",
+                   "agentTerminalHandle"),
+            "resource": part(row.get("resource"), "id", "ownerDispatchId", "ownershipState", "releaseState",
+                             "terminalHandle", "worktreeId"),
+            "projection": {"id": projection.get("id"), "liveness": part(projection.get("liveness"), "verdict"),
+                           "workspace": part(projection.get("workspace"), "id"),
+                           "resource": part(projection.get("resource"), "state")}}
+
+
+def canonical(runtime, rows):
+    return hashlib.sha256(json.dumps({"runtime": runtime, "rows": rows}, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 class FleetFenceTests(FencedCase):
-    def test_a_changed_or_unproved_fleet_makes_the_fence_unstable(self):
-        rows = [terminal("a", self.root / "other")]
-        stable = self.fenced(terminal_page(rows), terminal_page(rows))
-        self.assertTrue(stable["native_fence"]["stable"])
-        ends = {"total change": fleet_page(total=4, counts={"retained": 1, "released": 3}),
-                "counts change, same total": fleet_page(counts={"retained": 2, "released": 1}),
-                "runtime change": fleet_page(runtime="other-runtime"),
-                "bound fleet": fleet_page(scope={"source": "bound", "run": "run"}),
-                "failed": PodError("orca_read_failed", "Orca read did not succeed")}
-        for label, end in ends.items():
-            with self.subTest(label):
-                answer = self.fenced(terminal_page(rows), terminal_page(rows), end)
-                fence = answer["native_fence"]
-                self.assertTrue(fence["end"]["complete"])
-                self.assertFalse(fence["stable"])
-                self.assertEqual((answer["status"], answer["complete"]), ("unknown", False))
-                self.assertEqual(answer["responses"], stable["responses"])
-                if label == "bound fleet":
-                    self.assertEqual(fence["fleet_end"], {"runtime": "runtime", "complete": False,
-                                                          "code": "native_inventory_scope"})
-                if label == "failed":
-                    self.assertEqual(fence["fleet_end"]["code"], "orca_read_failed")
-
-    def test_a_bound_caller_has_an_incomplete_fleet_fence(self):
-        self.fleet_start = fleet_page(scope={"source": "bound", "run": "run"})
-        rows = [terminal("a", self.root / "other")]
-        answer = self.fenced(terminal_page(rows), terminal_page(rows), fleet_page(scope={"source": "bound", "run": "run"}))
+    def test_an_unchanged_fleet_fence_is_stable_and_digests_the_documented_rows(self):
+        answer = self.fenced()
         fence = answer["native_fence"]
-        self.assertEqual(fence["fleet_start"], {"runtime": "runtime", "complete": False, "code": "native_inventory_scope"})
-        self.assertFalse(fence["stable"])
-        self.assertEqual(answer["status"], "unknown")
+        self.assertTrue(fence["stable"], fence)
+        unreleased = sorted((identity(row) for row in self.rows if row["terminalState"] != "released"),
+                            key=lambda row: row["dispatchId"])
+        newest = sorted((identity(row) for row in self.rows[:100]), key=lambda row: row["dispatchId"])
+        self.assertEqual(fence["fleet_start"], {
+            "runtime": "runtime", "complete": True, "total": 123, "counts": {"active": 1, "retained": 2, "released": 120},
+            "unreleased": 3, "unreleased_sha256": canonical("runtime", unreleased),
+            "newest": 100, "newest_sha256": canonical("runtime", newest),
+            "claims_read": 1, "claims_sha256": canonical("runtime", [{"dispatch": "t2", **LIVE_CLAIM}])})
+        self.assertEqual(fence["fleet_end"], fence["fleet_start"])
+        self.assertTrue(answer["complete"])
+        reads = self.native.calls
+        self.assertIn([*LIST, "--limit", "100"], reads)
+        self.assertNotIn([*LIST, "--limit", "100", "--terminal-state", "released"], reads)  # released is never re-read
+
+    def test_each_fleet_change_between_discovery_and_the_end_is_unstable(self):
+        stable = self.fenced()
+        created = self.row("c1", "active")
+        settled = [dict(row, terminalState="released") if row["dispatchId"] == "t1" else row for row in self.rows]
+        changed = [dict(row, dispatchStatus="running") if row["dispatchId"] == "t1" else row for row in self.rows]
+        # A balanced sequence: create C (retained), settle A (t1), delete B (an old released row).
+        balanced = [self.row("c1", "retained"), *(row for row in settled if row["dispatchId"] != "r119")]
+        cases = {"created": (fleet_model([created, *self.rows]), None),
+                 "settled into released": (fleet_model(settled), None),
+                 "deleted": (fleet_model(self.rows[:-1]), None),
+                 "changed identity field": (fleet_model(changed), None),
+                 "changed abandoned claim": (None, {"t2": [LIVE_CLAIM, {"process": "exited", "effects": ["push:main"]}]}),
+                 "balanced create, settle and delete": (fleet_model(balanced), None),
+                 "runtime change": (fleet_model(self.rows, runtime="other-runtime"), None)}
+        for label, (fleet, claims) in cases.items():
+            with self.subTest(label):
+                answer = self.fenced(fleet_end=fleet, claims=claims)
+                fence = answer["native_fence"]
+                self.assert_unstable(answer, stable)
+                if label == "balanced create, settle and delete":
+                    self.assertEqual((fence["fleet_end"]["total"], fence["fleet_end"]["counts"]),
+                                     (fence["fleet_start"]["total"], fence["fleet_start"]["counts"]))
+                    self.assertNotEqual(fence["fleet_end"]["unreleased_sha256"], fence["fleet_start"]["unreleased_sha256"])
+
+    def test_a_released_row_changing_outside_the_newest_page_is_the_documented_residual(self):
+        changed = [dict(row, workerState="unsupervised") if row["dispatchId"] == "r110" else row for row in self.rows]
+        self.assertGreaterEqual(changed.index(next(row for row in changed if row["dispatchId"] == "r110")), 100)
+        answer = self.fenced(fleet_end=fleet_model(changed))
+        self.assertTrue(answer["native_fence"]["stable"])  # Not covered by design: see R207's residual.
+
+    def test_an_unproved_end_or_a_bound_caller_is_incomplete(self):
+        stable = self.fenced()
+        page = [*LIST, "--limit", "100"]
+        bound = {"runtime": "runtime", "result": {"scope": {"source": "bound", "run": "run"}}}
+        cases = {"bound end": (FleetDouble({}, overrides={tuple(page): bound}), "native_inventory_scope"),
+                 "failed end": (FleetDouble({}, overrides={tuple(page): PodError("orca_read_failed", "no")}), "orca_read_failed"),
+                 "failed partition": (fleet_model(self.rows, overrides={tuple([*page, "--terminal-state", "retained"]):
+                                                                        PodError("orca_read_failed", "no")}), "orca_read_failed")}
+        for label, (fleet, code) in cases.items():
+            with self.subTest(label):
+                answer = self.fenced(fleet_end=fleet)
+                self.assertEqual(answer["native_fence"]["fleet_end"]["code"], code)
+                self.assertFalse(answer["native_fence"]["fleet_end"]["complete"])
+                self.assert_unstable(answer, stable)
+        with patch("pod.admission._fleet", side_effect=lambda: setattr(admission._SHARED.get(), "fleet_start",
+                   PodError("native_inventory_scope", "bound"))):
+            answer = self.fenced()
+        self.assertEqual(answer["native_fence"]["fleet_start"],
+                         {"runtime": None, "complete": False, "code": "native_inventory_scope"})
+        self.assertFalse(answer["native_fence"]["stable"])
 
 
 class FenceTests(FencedCase):
-
     def test_a_stable_fence_fingerprints_the_documented_rule(self):
         rows = [terminal("b", self.root / "elsewhere"), terminal("a", self.root / "other", agentIdentity=None)]
         answer = self.fenced(terminal_page(rows), terminal_page(list(reversed(rows))))
@@ -424,20 +549,21 @@ class FenceTests(FencedCase):
                                              ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
         self.assertEqual(fence["start"], {"runtime": "runtime", "complete": True, "count": 2, "sha256": expected})
         self.assertEqual(fence["end"], {**fence["start"], "terminals": expected_rows})
-        self.assertEqual(fence["fleet_start"], {"runtime": "runtime", "complete": True, "total": 3,
-                                                "counts": {"retained": 1, "released": 2}})
-        self.assertEqual(fence["fleet_end"], fence["fleet_start"])
         self.assertNotIn("PRIVATE", json.dumps(answer))
-        self.assertCountEqual(self.native.calls, [["terminal", "list", "--json"]] * 2 + [[*LIST, "--limit", "1"]])
+        terminal_reads = [call for call in self.native.calls if call[:2] == ["terminal", "list"]]
+        self.assertEqual(terminal_reads, [["terminal", "list", "--json"]] * 2)
         self.assertEqual(self.native.calls[0], ["terminal", "list", "--json"])  # the end reads come last
         self.assertTrue(answer["complete"])
         self.assertEqual(answer["status"], answer["responses"][0]["result"]["status"])
 
-    def test_a_changed_or_incomplete_end_is_unstable_and_leaves_results_unchanged(self):
+    def test_each_terminal_change_or_an_incomplete_end_is_unstable(self):
         rows = [terminal("a", self.root / "other")]
         stable = self.fenced(terminal_page(rows), terminal_page(rows))
         ends = {"connected flip": terminal_page([terminal("a", self.root / "other", connected=False)]),
                 "new terminal": terminal_page([*rows, terminal("c", self.root / "other")]),
+                "terminal gone": terminal_page([]),
+                "incarnation change": terminal_page([terminal("a", self.root / "other", incarnationId="inc-2")]),
+                "location change": terminal_page([terminal("a", self.root / "moved")]),
                 "runtime change": terminal_page(rows, runtime="other-runtime"),
                 "incomplete": terminal_page(rows, totalCount=2),
                 "failed": PodError("orca_read_failed", "Orca read did not succeed")}
@@ -445,9 +571,7 @@ class FenceTests(FencedCase):
             with self.subTest(label):
                 answer = self.fenced(terminal_page(rows), end)
                 fence = answer["native_fence"]
-                self.assertFalse(fence["stable"])
-                self.assertEqual((answer["status"], answer["complete"]), ("unknown", False))
-                self.assertEqual(answer["responses"], stable["responses"])
+                self.assert_unstable(answer, stable)
                 if label in ("incomplete", "failed"):
                     self.assertFalse(fence["end"]["complete"])
                     self.assertNotIn("terminals", fence["end"])
@@ -460,6 +584,14 @@ class FenceTests(FencedCase):
 
 def worker(dispatch, state, **fields):
     return {"dispatchId": dispatch, "terminalState": state, "workerState": "ready", **fields}
+
+
+def fleet_model(rows, **fields):
+    """A consistent fleet whose newest-first order is `rows`."""
+    partitions = {}
+    for row in rows:
+        partitions.setdefault(row["terminalState"], []).append(row)
+    return FleetDouble(partitions, sequential=list(rows), **fields)
 
 
 class FleetDouble:
@@ -490,15 +622,13 @@ class FleetDouble:
             return value
         tail = argv[len(LIST):]
         index = int(tail[tail.index("--cursor") + 1][1:]) if "--cursor" in tail else 0
-        if tail == ["--limit", "1"]:
-            return {"runtime": self.runtime, "result": {"scope": {"source": "all"}, "counts": dict(self.counts),
-                    "workers": [], "page": {"limit": 1, "total": self.total, "hasMore": self.total > 1}}}
         if "--terminal-state" in tail:
             state = tail[tail.index("--terminal-state") + 1]
             rows = self.partitions.get(state, [])
             return self.page(rows, index, len(rows))
+        # Unfiltered pages: Orca's newest-first walk, carrying the fleet's total and counts.
         rows = self.sequential if self.sequential is not None else [row for rows in self.partitions.values() for row in rows]
-        return self.page(rows, index, len(rows))
+        return self.page(rows, index, self.total)
 
 
 class PartitionTests(base.AdmissionQueryCase):
@@ -524,8 +654,8 @@ class PartitionTests(base.AdmissionQueryCase):
         self.assertEqual([row["dispatchId"] for row in fleet["workers"]],
                          ["a1", *(f"t{i}" for i in range(130)), *(f"r{i}" for i in range(250))])
         self.assertEqual(fleet["runtime"], "runtime")
-        self.assertNotIn([*LIST, "--limit", "100"], double.calls)  # no sequential walk
-        self.assertEqual(double.calls[-1], [*LIST, "--limit", "1"])  # the count read comes after every partition
+        self.assertNotIn([*LIST, "--limit", "100", "--cursor", "c1"], double.calls)  # no sequential walk
+        self.assertEqual(double.calls[-1], [*LIST, "--limit", "100"])  # the newest page comes after every partition
         self.assertEqual(len(double.calls), 1 + 1 + 1 + 2 + 3 + 1 + 1)  # six partitions' pages and the count read
 
     def test_every_partition_rejection_falls_back_to_the_sequential_walk(self):
@@ -559,7 +689,7 @@ class PartitionTests(base.AdmissionQueryCase):
                 fleet, discovery = self.read(double)
                 self.assertEqual(discovery.fleet_read, "sequential")
                 self.assertIsNotNone(discovery.fleet_fallback)
-                self.assertIn([*LIST, "--limit", "100"], double.calls)
+                self.assertIn([*LIST, "--limit", "100", "--cursor", "c1"], double.calls)  # the sequential walk
                 self.assertEqual(len(fleet["workers"]), 381)
 
     def test_a_bound_first_page_answers_none_without_a_fallback(self):
@@ -569,7 +699,6 @@ class PartitionTests(base.AdmissionQueryCase):
         self.assertIsNone(fleet)
         self.assertEqual(discovery.fleet_read, "bound")
         self.assertNotIn([*LIST, "--limit", "100"], double.calls)
-        self.assertNotIn([*LIST, "--limit", "1"], double.calls)
 
     def test_abandoned_rows_start_their_claim_reads_during_the_walk(self):
         rows = self.fleet()
@@ -588,6 +717,7 @@ class PartitionTests(base.AdmissionQueryCase):
     def test_the_allowlist_accepts_exactly_the_partition_and_count_reads(self):
         from pod.orca import _read_allowed
         self.assertTrue(_read_allowed([*LIST, "--limit", "1"]))
+        self.assertTrue(_read_allowed([*LIST, "--limit", "100"]))
         self.assertTrue(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "released"]))
         self.assertTrue(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "released", "--cursor", "c"]))
         self.assertFalse(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "paused"]))
@@ -596,12 +726,34 @@ class PartitionTests(base.AdmissionQueryCase):
         self.assertFalse(_read_allowed([*LIST, "--limit", "1", "--cursor", "c"]))
 
     def test_the_fleet_start_is_the_read_that_closed_discovery(self):
-        double = FleetDouble({"retained": [worker("t1", "retained")]})
-        _, discovery = PartitionTests.read(self, double)
-        self.assertEqual(admission._fleet_side(discovery.fleet_start),
-                         {"runtime": "runtime", "complete": True, "total": 1, "counts": {"retained": 1}})
+        double = FleetDouble({"retained": [worker("t1", "retained")], "released": [worker("r1", "released")]})
+        _, discovery = self.read(double)
+        side = admission._fleet_side(discovery.fleet_start, {})
+        self.assertEqual((side["total"], side["counts"], side["unreleased"], side["newest"], side["claims_read"]),
+                         (2, {"retained": 1, "released": 1}, 1, 2, 0))
+        self.assertEqual(discovery.fleet_start["page"], double([*LIST, "--limit", "100"]))  # the newest page closed it
         double = FleetDouble({"retained": [worker("t1", "retained")]}, total=2)  # partitions refused
-        _, discovery = PartitionTests.read(self, double)
+        _, discovery = self.read(double)
         self.assertEqual(discovery.fleet_read, "sequential")
-        self.assertEqual(admission._fleet_side(discovery.fleet_start)["total"], 1)  # the sequential first page
+        self.assertEqual(admission._fleet_side(discovery.fleet_start, {})["total"], 2)  # the sequential first page
 
+
+class PreexistingFaultTests(BatchCase):
+    def test_an_unlocated_foreign_worker_and_a_stale_runtime_answer_normally(self):
+        """Before 0.21.31 the unlocated worker rebound the owners map to a set and the stale runtime
+        check then raised AttributeError, taking down the query (and in a batch, every query)."""
+        self.intake(worktree=self.place)
+        path, raw = self.raw()
+        raw["checkpoint"]["native_refs"][0]["runtime"] = "previous-runtime"
+        self.save(path, raw)
+        unlocated = base.ReviewCorrectionTests.writer(self, verdict="live", dispatch="unlocated")
+        unlocated.update(runId="other-run", resource={"worktreeId": None})
+        unlocated["projection"].update(runId="other-run", workspace={"id": None})
+        with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": [unlocated]}):
+            single = self.query()
+            answer = self.batch({}, {"worktree": str(self.project), "branch": "main"})
+        self.assertEqual(answer["responses"][0]["result"], single)
+        for result in (single, answer["responses"][1]["result"]):
+            codes = [row["code"] for row in result["unknowns"]] + list(result["unrelated_unknowns"]["by_code"])
+            self.assertIn("native_location_unavailable", codes)
+            self.assertIn("native_runtime_changed", codes)

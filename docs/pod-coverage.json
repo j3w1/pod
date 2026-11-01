@@ -10419,7 +10419,7 @@
       ],
       "offline_test": [
         "tests.test_admission_batch.FenceTests.test_a_stable_fence_fingerprints_the_documented_rule",
-        "tests.test_admission_batch.FenceTests.test_a_changed_or_incomplete_end_is_unstable_and_leaves_results_unchanged"
+        "tests.test_admission_batch.FenceTests.test_each_terminal_change_or_an_incomplete_end_is_unstable"
       ],
       "status": "NOT_RUN"
     },
@@ -10430,10 +10430,27 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_admission_batch.FleetFenceTests.test_a_changed_or_unproved_fleet_makes_the_fence_unstable",
-        "tests.test_admission_batch.FleetFenceTests.test_a_bound_caller_has_an_incomplete_fleet_fence",
-        "tests.test_admission_batch.PartitionTests.test_the_fleet_start_is_the_read_that_closed_discovery",
-        "tests.test_admission_batch.FenceTests.test_a_stable_fence_fingerprints_the_documented_rule"
+        "tests.test_admission_batch.FleetFenceTests.test_an_unchanged_fleet_fence_is_stable_and_digests_the_documented_rows",
+        "tests.test_admission_batch.FleetFenceTests.test_each_fleet_change_between_discovery_and_the_end_is_unstable",
+        "tests.test_admission_batch.FleetFenceTests.test_a_released_row_changing_outside_the_newest_page_is_the_documented_residual",
+        "tests.test_admission_batch.FleetFenceTests.test_an_unproved_end_or_a_bound_caller_is_incomplete",
+        "tests.test_admission_batch.PartitionTests.test_the_fleet_start_is_the_read_that_closed_discovery"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A787",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.SharedReadTests.test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to",
+        "tests.test_admission_batch.SharedReadTests.test_a_record_added_during_discovery_is_an_inventory_change_for_every_query",
+        "tests.test_admission_batch.SharedReadTests.test_a_record_removed_during_discovery_is_an_inventory_change",
+        "tests.test_admission_batch.SharedReadTests.test_an_effect_policy_change_during_the_call_is_reported",
+        "tests.test_admission_batch.RequestTests.test_a_fault_inside_one_projection_prints_no_partial_batch",
+        "tests.test_admission_batch.PreexistingFaultTests.test_an_unlocated_foreign_worker_and_a_stale_runtime_answer_normally"
       ],
       "status": "NOT_RUN"
     }

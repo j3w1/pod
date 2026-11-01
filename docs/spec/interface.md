@@ -1253,7 +1253,7 @@ full audit and explicit migration are separate operations.
 
 ### R207 — Answer many admission queries over one shared discovery
 
-Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786)
+Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787)
 
 `pod admission --batch --timeout SECONDS --json` reads one `pod-admission-batch-request/v1`
 object from stdin and answers `pod-admission-batch/v1`. With `--batch` every per-query flag is
@@ -1327,29 +1327,51 @@ rows have exactly `handle`, `incarnationId`, `worktreePath`, `worktreeId`, `exec
 `sha256` is the SHA-256 of `json.dumps({"runtime": RUNTIME, "terminals": ROWS}, sort_keys=True,
 ensure_ascii=False, separators=(",", ":"))` in UTF-8, where `RUNTIME` is the read's runtime. `end`
 also returns its rows. A side that is not provably whole or failed has `complete: false` and a
-`code` in place of `sha256`, and `end` then has no rows. `fleet_start` is the unfiltered all-Run
-`worker-list --include-remote --limit 1` read that closed fleet discovery (the partition count
-read, or the sequential walk's own first page on the fallback) and `fleet_end` one fresh read of
-the same command; each gives the read's runtime, `total` and `counts`, or `complete: false` and a
-`code` for a bound caller, a read that is not scope `all`, or a failed read. The two end reads run
-in parallel after every projection and the shared recheck, as the call's last native reads.
-`stable` is true only when all four sides are complete, the terminal fingerprints are equal, the
-fleet totals and counts are equal, and all four reads report one runtime. An unstable fence
-makes the batch `unknown` and incomplete and leaves every result unchanged.
+`code` in place of `sha256`, and `end` then has no rows.
+
+`fleet_start` describes the complete all-Run worker read discovery used, and `fleet_end` a fresh
+one made with the terminal `end` read, both after every projection and the shared recheck, as the
+call's last native reads. Each side holds `total` and `counts` from the unfiltered newest-first
+page of up to 100 rows (the partition completeness read, or the sequential walk's first page on the
+fallback); `unreleased` and `unreleased_sha256` over every row whose terminal state is not
+`released` (discovery's complete read at the start; the five unreleased partitions, fully paged
+with the usual cursor, scope and runtime checks, at the end); `newest` and `newest_sha256` over that
+page's rows; and `claims_read` and `claims_sha256` over the claim Pod derived,
+`{dispatch, process, effects}`, for every abandoned Dispatch whose current claim discovery read,
+read again at the end (a claim that is gone reads as process `exited` with no effects). A row's
+identity is `dispatchId`, `runId`, `taskId`, `terminalState`, `workerState`, `dispatchStatus` and
+`agentTerminalHandle`, with `resource` holding `id`, `ownerDispatchId`, `ownershipState`,
+`releaseState`, `terminalHandle` and `worktreeId`, and `projection` holding `id`,
+`liveness.verdict`, `workspace.id` and `resource.state`, each null when absent. Rows are sorted by
+`dispatchId`, claims by `dispatch`, and each digest is the SHA-256 of the canonical JSON of
+`{"runtime": RUNTIME, "rows": ROWS}` under the terminal fingerprint's rule. A bound caller, a read
+that is not scope `all`, a missing or repeated cursor, a runtime change between pages, a failed
+read or a failed claim read gives `complete: false` with a `code`. `stable` is true only when every
+side is complete, the terminal fingerprints are equal, every fleet field is equal, and all reads
+share one runtime. An unstable fence makes the batch `unknown` and incomplete and leaves every
+result unchanged.
 
 Stability predicate. Take the start of discovery (T0), the shared recheck (Tr) and the end reads
 (T1). A complete result in a batch with a stable fence reports every change in [T0, Tr] to a
 record it relied on, to the record inventory or to an effect policy (`record_changed`,
-`inventory_changed`, `effect_policy_changed`), and any change in [T0, T1] that could add a writer
-claim makes the fence unstable: a terminal appearing, disappearing or changing incarnation,
-location, agent, host, connected, writable or orphaned state; a Dispatch created or deleted; any
-Dispatch changing terminal state; or a runtime change. Three things are not covered, by design.
-First, the liveness or effect detail of an existing Dispatch that keeps its terminal state while
-the total and the terminals stay the same: such a change can only keep or remove a claim, since an
-exited process returns only through a new Dispatch or terminal incarnation, which the fences see,
-and an abandoned attempt's effects only resolve. Second, the target ref after a query resolved
-it: the consumer keeps `target_commit` and `expect` for later checks. Third, anything after T1:
-work done later rechecks with a fresh batch and `expect`.
+`inventory_changed`, `effect_policy_changed`). And each of these changes in [T0, T1] makes the
+fence unstable: a terminal appearing, disappearing or changing incarnation, location, agent, host,
+connected, writable or orphaned state; any row unreleased at either end appearing, disappearing or
+changing an identity field, including a Dispatch settling into `released` or leaving it; any change
+among the newest 100 rows, which holds every Dispatch created during the call; a deleted Dispatch,
+which lowers `total`; a change in an abandoned Dispatch's derived claim; and a runtime change.
+Balanced changes cannot cancel out: a created Dispatch shows in the newest page, a settled one
+leaves the unreleased set, and a deleted one lowers the total, so creating, settling and deleting
+together still make the fence unstable.
+
+Three things are not covered, by design. First, a row that is `released` at both ends, outside the
+newest 100 and not abandoned, changing without leaving `released`: to add a claim it would have to
+report a positively exited process live again for the same Dispatch within one runtime, while a
+new process is a new Dispatch or terminal incarnation, which the fences see; re-reading every
+released row would add about 3 s. Second, the target ref after a query resolved it: the consumer
+keeps `target_commit` and `expect` for later checks. Third, anything after T1: work done later
+rechecks with a fresh batch and `expect`. The end fleet read re-reads the unreleased rows in
+parallel with the terminal list, which costs about 1.5 s on a fleet of about 900 unreleased rows.
 
 - <a id="a779"></a>**A779** — Every request refusal is one `admission_batch_request` (or `admission_timeout`) error with no responses and exit 1; a per-query input fault names its query id before any discovery read; responses follow request order with their ids; the 8 MiB response limit refuses the whole batch; a factual batch answer exits zero.
 - <a id="a780"></a>**A780** — For the occupancy (worktree, branch, both), target with objective, candidate and target commit, effects, mismatched expect, native writer, bound caller, unreadable and unrelated records and projection-limit shapes, each batch result equals the single query with the same doubles.
@@ -1358,4 +1380,5 @@ work done later rechecks with a fresh batch and `expect`.
 - <a id="a783"></a>**A783** — Exhausting the shared deadline during the call gives `discovery_budget` in every relevant result.
 - <a id="a784"></a>**A784** — A record changed during the call is `record_changed` only in the queries it is relevant to and unrelated uncertainty in the others; a record added during discovery is `inventory_changed` in every query.
 - <a id="a785"></a>**A785** — A stable fence's fingerprints equal an independent computation of the documented rule and the end returns the nine-field rows; a connected flip, a new terminal or a runtime change at the end, an incomplete end and a failed end each make the fence unstable and the batch `unknown` and incomplete while every result is unchanged.
-- <a id="a786"></a>**A786** — The fleet fence's start is the read that closed discovery (the partition count read, or the sequential first page on the fallback); with unchanged inventories the fence is stable; a fleet total change, a counts change with the same total, a runtime change, a bound end read and a failed end read each make it unstable and the batch `unknown` while every result is unchanged; a bound caller's fleet sides are incomplete with `native_inventory_scope`.
+- <a id="a786"></a>**A786** — The fleet fence digests the documented row identities of every unreleased row, the newest page and every abandoned claim, from discovery's own reads and fresh end reads; with unchanged inventories it is stable; a created, settled, deleted or changed row, a changed abandoned claim, a balanced create, settle and delete with equal totals and counts, a runtime change, a bound or failed end read and a failed end partition each make it unstable and the batch `unknown` while every result is unchanged; a released row changing outside the newest page stays stable, the documented residual; a bound caller's fleet start is incomplete with `native_inventory_scope`.
+- <a id="a787"></a>**A787** — During one call, a changed record is `record_changed` and incomplete only in the results it is relevant to, an added or removed record is `inventory_changed`, and a changed effect policy is `effect_policy_changed`; a fault inside one query's projection prints no partial batch; an unlocated foreign worker together with an open record's stale runtime answers normally in both forms.
