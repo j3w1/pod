@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from pod import config, governance
 from pod.errors import PodError
-from pod.gitio import blob, is_ancestor, read as read_git, resolve_commit, tree_entry
+from pod.gitio import blob, git_bool, is_ancestor, partial_clone, read as read_git, resolve_commit, tree_entry
 from pod.governance import delivered_source_reader, scope_resolver
 from pod.ledger import checkpoint, closed_snapshot_context, objective_root, read
 from pod.obligations import validate_closed_snapshot
@@ -474,6 +474,40 @@ class GitObjectTrustTests(unittest.TestCase):
         self.assertIsNone(blob(self.project, obj, limit=64))  # a direct read does not fetch either
         self.assertFalse(marker.exists())
         self.assertEqual(packs(self.project), [])
+
+    def promisor_value(self, line):
+        """Give remote `p` the raw config line `line` (pod#167); returns the delivered reader's view of a file."""
+        self.run_git("config", "--remove-section", "remote.p", check=False)
+        with open(self.project / ".git" / "config", "a") as config:
+            config.write('[remote "p"]\n\t' + line + "\n")
+        return delivered_source_reader(self.project, self.run_git("rev-parse", "HEAD"))("source.txt")
+
+    def test_a_valueless_promisor_key_refuses_as_a_promisor_repository(self):
+        self.commit({"source.txt": "delivered bytes\n"})
+        self.assertEqual(self.promisor_value("url = /nowhere")["state"], "present")  # control: no promisor key
+        self.assertIsNone(self.promisor_value("promisor"))
+        self.assertIs(partial_clone(self.project), True)
+        self.assertEqual(self.run_git("config", "--type=bool", "--get", "remote.p.promisor"), "true")
+
+    def test_promisor_spellings_follow_gits_boolean_rules(self):
+        self.commit({"source.txt": "delivered bytes\n"})
+        for value, expected in (("TrUe", True), ("YES", True), ("On", True), ("1", True),
+                                ("FaLsE", False), ("No", False), ("OFF", False), ("0", False), ("", False)):
+            with self.subTest(value=value):
+                seen = self.promisor_value("promisor = " + value if value else "promisor =")
+                self.assertIs(partial_clone(self.project), expected)
+                self.assertIs(git_bool(value), expected)
+                self.assertEqual(self.run_git("config", "--type=bool", "--get", "remote.p.promisor"),
+                                 "true" if expected else "false")
+                self.assertEqual(seen is None, expected)
+
+    def test_an_unrecognized_promisor_value_refuses(self):
+        self.commit({"source.txt": "delivered bytes\n"})
+        for value in ("maybe", "2", '" true"'):
+            with self.subTest(value=value):
+                self.assertIsNone(self.promisor_value("promisor = " + value))
+                self.assertIsNone(partial_clone(self.project))
+        self.assertIsNone(git_bool("maybe"))
 
     def test_blob_bytes_must_match_their_object_id(self):
         commit = self.commit({"file.txt": "real\n"})
