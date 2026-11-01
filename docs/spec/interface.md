@@ -350,7 +350,8 @@ present decision. An unreadable Governor journal cannot turn a committed checkpo
 into a refusal: its acknowledgement uses a journal-less standing projection, as the
 other ledger readers do. Each standing decision is also listed among the owner decisions of
 status and the closure report, as kind `standing_authorization` with its channel (R120).
-`delivery_authorization` is current applicable consent; effects completed under yolo
+`delivery_authorization` is current applicable consent (a recorded closure's report keeps the
+consent its closing write judged, R155, while closure ends yolo for every new effect); effects completed under yolo
 are listed under `standing_authorization.effects`, even after consent becomes MISSING.
 The closure owner-decision rows are compact references (id, operation, channel and
 decision time), without full verdicts. Its responder text uses at most 256 encoded

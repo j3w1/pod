@@ -25,6 +25,10 @@ PACKET_SCHEMA = TABLE["packet"]["fields"]["schema"]["allowed"][0]
 PACKET_FIELDS = fields("packet")
 PACKET_REQUIRED = required("packet")
 REPORT_FIELDS = fields("report")
+# The scope deviations a report can carry; a consumed reconciliation_required report's digest binds a sorted,
+# nonempty subset of them.
+SCOPE_CHANGED, OUTSIDE_ASSIGNMENT = "reported_scope_changed", "file_outside_assignment"
+REPORT_DEVIATIONS = (OUTSIDE_ASSIGNMENT, SCOPE_CHANGED)
 EVIDENCE_FIELDS = fields("evidence")
 
 
@@ -252,10 +256,10 @@ def report(value: Any, frozen: dict, native_binding: dict) -> dict:
     assigned = frozen["body"]["scope"]
     deviations = []
     if set(r["scope"]) != set(assigned):
-        deviations.append("reported_scope_changed")
+        deviations.append(SCOPE_CHANGED)
     for path in r["files"]:
         if not _safe_relative(path) or not any(path == base or path.startswith(base.rstrip("/") + "/") for base in assigned):
-            deviations.append("file_outside_assignment")
+            deviations.append(OUTSIDE_ASSIGNMENT)
     if deviations:
         return {"status": "reconciliation_required", "deviations": sorted(set(deviations)),
                 "observation": r, "native_binding": binding}

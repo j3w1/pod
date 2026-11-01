@@ -1614,16 +1614,57 @@ def _source_closure(project: Path, objective: str, root: Path, raw: dict, before
     state = _read(root / "context.json")
     mapped = map_of(state)
     validate_checkpoint_snapshot(project, state)
-    if not (mapped or {}).get("closure") or validate_closed_snapshot(mapped, closed_snapshot_context(project, objective, state)):
+    if not (mapped or {}).get("closure"):
         raise PodError("closure_unverified", "A required recorded closure fact is unavailable")
+    unverifiable = validate_closed_snapshot(mapped, closed_snapshot_context(project, objective, state))
+    if unverifiable:
+        raise PodError("closure_unverified", "A required recorded closure fact is unavailable",
+                       {"detail": "receipt_unverifiable", "referent": {"obligations": ",".join(unverifiable)}})
     return True
 
 
-def _source_failure(objective: str, reason: str) -> dict:
-    outcome = "refused" if reason in ("objective_unknown", "objective_not_closed", "closure_changed", "chain_changed") else "unverified"
-    return {"source_issues": [{"objective": objective, "locator": None, "outcome": outcome, "reason": reason,
-            "next_action": "the project lead resolves the named closure or chain condition before source completion"}],
-            "parents_open": []}
+_CHAIN_REFUSALS = ("objective_unknown", "objective_not_closed", "closure_changed", "chain_changed")
+
+
+def _bound_locator(raw: object) -> str | None:
+    """The record's own bound source, read before the closure is validated, so a refusal names it (R155)."""
+    source = ((raw.get("checkpoint") or {}) if isinstance(raw, dict) else {}).get("objective_source")
+    if not isinstance(source, dict):
+        return None
+    from .github import validate_issue_binding
+    try:
+        return validate_issue_binding(source)["locator"]
+    except PodError:
+        return None
+
+
+def _source_failure(objective: str, reason: str, *, error: PodError | None = None,
+                    locator: str | None = None) -> dict:
+    """A closure or chain refusal that names its record, cause and the lead's step (R155)."""
+    from .term import clean
+    row = {"objective": objective, "locator": locator,
+           "outcome": "refused" if reason in _CHAIN_REFUSALS else "unverified", "reason": reason}
+    detail = error.detail if error is not None and isinstance(error.detail, dict) else {}
+    if isinstance(detail.get("detail"), str):
+        row["detail"] = clean(detail["detail"])[:128]
+    referent = detail.get("referent")
+    if isinstance(referent, dict):
+        # The named admission, obligation or record; nested diagnostics stay in the record itself.
+        named = {clean(str(key))[:64]: clean(value)[:256] if isinstance(value, str) else value
+                 for key, value in list(referent.items())[:8]
+                 if isinstance(value, (str, int, bool)) or value is None}
+        if named:
+            row["referent"] = named
+    if error is not None:
+        row["message"] = clean(str(error))[:512]
+    row["next_action"] = (
+        "the project lead resolves the named closure or chain condition before source completion"
+        if reason in _CHAIN_REFUSALS or error is None else
+        "the project lead checks the named record against the accepted closure: replaying the closed record "
+        "refused it, so Pod sends nothing and pod sweep repeats the same check. The lead completes the source "
+        "issue through the project's supported process, with this refusal as its evidence; no owner decision "
+        "is needed")
+    return {"source_issues": [row], "parents_open": []}
 
 
 def close_source_issues(project: Path, objective: str, *, remote=None, locked: bool = False,
@@ -1640,9 +1681,13 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
         return _source_failure(objective, "objective_unknown")
     try:
         raw, before = _read_record(root)
+    except PodError as exc:
+        return _source_failure(objective, exc.code, error=exc)
+    locator = _bound_locator(raw)
+    try:
         chain, problem = _lineage(project, raw)
     except PodError as exc:
-        return _source_failure(objective, exc.code)
+        return _source_failure(objective, exc.code, error=exc, locator=locator)
     roots = {root, *[row["root"] for row in chain]}
     if not locked:
         with ExitStack() as stack:
@@ -1650,9 +1695,9 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
                 stack.enter_context(_lock(path / "context.json"))
             return close_source_issues(project, objective, remote=remote, locked=True, _roots=roots)
     if _roots != roots:
-        return _source_failure(objective, "chain_changed")
+        return _source_failure(objective, "chain_changed", locator=locator)
     if problem is not None and present(root):
-        return _source_failure(objective, problem[1])
+        return _source_failure(objective, problem[1], locator=locator)
     try:
         writable = _source_closure(project, objective, root, raw, before)
         closed_at = (load(root)["tail"].get("at") if present(root)
@@ -1666,7 +1711,7 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
                 raise PodError("closure_changed", "A chain member changed during closure validation")
             members.append((row["objective"], row["root"], member, data))
     except PodError as exc:
-        return _source_failure(objective, exc.code)
+        return _source_failure(objective, exc.code, error=exc, locator=locator)
     snapshots = [(path, data) for _, path, _, data in members]
     out = {"source_issues": [], "parents_open": []}
     for name, path, record, data in members:

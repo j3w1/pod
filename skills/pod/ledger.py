@@ -1035,8 +1035,14 @@ def map_of(state: dict | None) -> dict | None:
     return None
 
 
-def _outstanding_ids(state: dict, native: dict | None) -> list[str]:
-    """Objective-local outstanding admissions; without native evidence nothing is settled."""
+def _outstanding_ids(state: dict, native: dict | None, *, recorded: set[str] | None = None) -> list[str]:
+    """Objective-local outstanding admissions; without native evidence nothing is settled.
+
+    This is the one settlement rule for an ordinary write and for the replay of a recorded closure (R155).
+    A write reads native settlement. A replay passes ``recorded`` (the runtimes the record's reports may
+    carry) and reads the durable record each settled admission carries instead, which Pod writes only after
+    this same native check held for that exact Dispatch, so the replay settles what the closing write settled.
+    """
     evidence: dict[str, list[dict]] = {}
     for row in (native or {}).get("assignments", []) if isinstance(native, dict) else []:
         if isinstance(row, dict) and isinstance(row.get("admission_id"), str):
@@ -1046,18 +1052,52 @@ def _outstanding_ids(state: dict, native: dict | None) -> list[str]:
         if admission["state"] in ("closed", "deferred"):
             continue
         binding = admission.get("native_binding")
-        matches = evidence.get(key, [])
-        settled = bool(admission["state"] == "bound" and binding_valid(binding) and len(matches) == 1
-                       and isinstance(native, dict)
-                       and matches[0].get("settled") is True
-                       and matches[0].get("runtime") == admission["runtime"] == native.get("runtime")
-                       and matches[0].get("run_id") == binding["runId"]
-                       and matches[0].get("task_id") == binding["taskId"]
-                       and matches[0].get("dispatch_id") == binding["dispatchId"]
-                       and matches[0].get("worker_id") == binding["workerId"])
+        if not (admission["state"] == "bound" and binding_valid(binding)):
+            settled = False
+        elif recorded is not None:
+            settled = _settlement_recorded(admission, recorded)
+        else:
+            matches = evidence.get(key, [])
+            settled = bool(len(matches) == 1 and isinstance(native, dict)
+                           and matches[0].get("settled") is True
+                           and matches[0].get("runtime") == admission["runtime"] == native.get("runtime")
+                           and matches[0].get("run_id") == binding["runId"]
+                           and matches[0].get("task_id") == binding["taskId"]
+                           and matches[0].get("dispatch_id") == binding["dispatchId"]
+                           and matches[0].get("worker_id") == binding["workerId"])
         if not settled:
             outstanding.append(key)
     return outstanding
+
+
+def _settlement_recorded(admission: dict, runtimes: set[str]) -> bool:
+    """The durable record of a bound admission's native settlement.
+
+    Each is written only after native readback showed the exact Dispatch settled: a consumed report
+    (`report_attempt_unverified` refuses an unsettled one), a disposition (only a settled implementation
+    result takes one) and abandoned accounting (its fence requires a settled readback). A consumed report
+    counts with either status, its observation digest verified: `validated_observation`, or
+    `reconciliation_required` with the recorded scope deviations it was consumed with.
+    """
+    if admission.get("disposition") is not None or "abandoned_accounting" in admission:
+        return True
+    try:
+        value = _consumed_report(admission, runtimes)
+    except PodError:
+        return False
+    if value is None:
+        return False
+    if value["status"] == "validated_observation":
+        return True  # `_consumed_report` verified this digest.
+    from itertools import combinations
+    from .records import REPORT_DEVIATIONS, report_record
+    observation = report_record(value["observation"])
+    binding = {key: admission["native_binding"][key] for key in ("runId", "taskId", "dispatchId", "workerId")}
+    return any(digest({"status": value["status"], "deviations": list(codes), "observation": observation,
+                       "native_binding": {"runtime": runtime, **binding}}) == value["observation_digest"]
+               for size in range(1, len(REPORT_DEVIATIONS) + 1)
+               for codes in combinations(REPORT_DEVIATIONS, size)
+               for runtime in runtimes | {admission["runtime"]})
 
 
 def _governor_pending(project: Path, objective: str, excluded: frozenset = frozenset()) -> bool:
@@ -1254,9 +1294,8 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
         ctx["closure_preserved"] = preserved
         ctx["governor_pending"] = _governor_pending(project, objective, excluded=frozenset(
             row.get("record") for row in preserved if isinstance(row, dict)))
-    ctx["outstanding"] = [key for key in ctx["outstanding"]
-                          if state["admissions"][key]["state"] != "bound"
-                          or (state["admissions"][key].get("report") or {}).get("status") != "validated_observation"]
+    # R155: the closing write's settlement rule, read from each admission's durable settlement record.
+    ctx["outstanding"] = _outstanding_ids(state, None, recorded=set(ctx["report_runtimes"]))
     # R204: proof a recorded delivery relied on replays against the delivered candidate's tree, as it was
     # judged on the closing route, not against whatever the worktree holds now.
     return delivered_read_context(project, state, ctx)

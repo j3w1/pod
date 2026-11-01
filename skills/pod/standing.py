@@ -208,6 +208,30 @@ def state(context: dict, *, now: datetime | None = None) -> str:
     return "active"
 
 
+def closure_instant(context: dict, *, closure_utc: str | None = None, now: datetime | None = None) -> str:
+    """The recorded instant a closure judged the mode at; a new closure takes its own closing time."""
+    record = context.get("standing_authorization", {})
+    closure = (context.get("checkpoint") or {}).get("closure") or {}
+    stored = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {})
+    return normalize_timestamp(stored.get("utc") or record.get("closed_at") or closure_utc or _timestamp(_clock(now)),
+                               field="Standing closure time", code="state_unsupported")
+
+
+def closing_state(context: dict, *, closure_utc: str | None = None, now: datetime | None = None) -> str:
+    """The mode as the closing write judged it (R155).
+
+    An open record has its current mode. A recorded closure ends yolo for every later effect, so `state` reads
+    `ended`; what the closure judged is replayed instead: this record without its closure, at the closure's
+    recorded instant. Consent revoked, expired, suspended or replaced before closure still reads so here.
+    """
+    checkpoint = context.get("checkpoint") or {}
+    if not checkpoint.get("closure"):
+        return state(context, now=now)
+    stamp = closure_instant(context, closure_utc=closure_utc, now=now)
+    before = {**context, "checkpoint": {**checkpoint, "closure": None}}
+    return state(before, now=datetime.fromisoformat(stamp.replace("Z", "+00:00")))
+
+
 def _names(value: object, allowed: tuple, *, nonempty: bool = False) -> list:
     if (not isinstance(value, list) or len(value) > len(allowed) or nonempty and not value
             or any(not isinstance(item, str) or item not in allowed for item in value)
@@ -762,11 +786,8 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
     checkpoint = context.get("checkpoint") or {}
     closure = checkpoint.get("closure")
     if closure and (decisions or record.get("closed_at")):
-        stored = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {})
-        stamp = normalize_timestamp(stored.get("utc") or record.get("closed_at") or closure_utc or _timestamp(_clock(now)),
-                                    field="Standing closure time", code="state_unsupported")
-        before = {**context, "checkpoint": {**checkpoint, "closure": None}}
-        active = state(before, now=datetime.fromisoformat(stamp.replace("Z", "+00:00"))) == "active"
+        stamp = closure_instant(context, closure_utc=closure_utc, now=now)
+        active = closing_state(context, closure_utc=closure_utc, now=now) == "active"
         result["at_closure"] = {"utc": stamp, "mode": "yolo" if active else "normal",
                                 "ran_in_yolo": latest is not None,
                                 "decision": latest["id"] if latest else None, "active_until_closure": active}
