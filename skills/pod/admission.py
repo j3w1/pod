@@ -653,51 +653,54 @@ def _retirement_preserved(project: Path, directory: Path) -> set[str] | None:
     return {row["id"] for row in entry["preserved"] if row.get("kind") == "admission"}
 
 
-MAX_RUN_PAGES = 64
-
-
-def _run_coordinators(runtime: str) -> dict | None:
-    """Every Run's current coordinator handle from Orca's whole paged Run list, or None unless that list is provably
-    complete and from this runtime (rule S, 4)."""
-    found, cursor = {}, None
-    for _ in range(MAX_RUN_PAGES):
+def _run_coordinators(runtime: str, check=None) -> dict | None:
+    """Every Run's current coordinator handle from Orca's whole paged Run list, or None unless the walk is provably
+    complete (rule S, 4): every page from this runtime, an explicit end cursor, no truncated, partial or incomplete
+    marker, no repeated cursor, no repeated or empty Run identity and no contradiction between a page's cursor and
+    its `hasMore`. The walk has no page count bound (R206); the call's deadline (`check`) and each read's byte bound
+    stay."""
+    found, cursor, seen = {}, None, set()
+    while True:
+        if check is not None:
+            check()
         response = _gated_read(["orchestration", "run-list", "--limit", "100", "--json",
                                 *(["--cursor", cursor] if cursor else [])])
         result = response.get("result") if isinstance(response, dict) else None
-        if response.get("runtime") != runtime or not isinstance(result, dict) or not isinstance(result.get("runs"), list):
+        if (not isinstance(result, dict) or response.get("runtime") != runtime
+                or not isinstance(result.get("runs"), list) or "nextCursor" not in result
+                or result.get("truncated", False) is not False or result.get("partial", False) is not False
+                or result.get("complete", True) is not True
+                or "hasMore" in result and type(result["hasMore"]) is not bool):
             return None
         for row in result["runs"]:
-            if not isinstance(row, dict) or not isinstance(row.get("id"), str) or "coordinator_handle" not in row:
+            if (not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+                    or row["id"] in found or "coordinator_handle" not in row):
                 return None
             handle = row["coordinator_handle"]
             if handle is not None and (not isinstance(handle, str) or not handle):
                 return None
             found[row["id"]] = handle
-        cursor = result.get("nextCursor")
+        cursor = result["nextCursor"]
         if cursor is None:
-            return found
-        if not isinstance(cursor, str) or not cursor:
+            return None if result.get("hasMore") is True else found
+        if (not isinstance(cursor, str) or not cursor or cursor in seen or not result["runs"]
+                or result.get("hasMore") is False):
             return None
-    return None
+        seen.add(cursor)
 
 
 def _settled_gone(source: dict, shown: dict, rows: list, terminals: dict, owner) -> bool:
     """Rule S (R206): an ended Dispatch whose terminal, workspace and Run coordinator are all gone holds no current
     resource. Every condition is read from this call's complete inventories; anything unproved keeps the gap."""
-    if (source.get("workerState"), source.get("dispatchStatus")) not in _SETTLED_WORKERS:
+    if (source.get("workerState"), source.get("dispatchStatus")) not in _SETTLED_WORKERS or shown["liveness"] == "live":
         return False
     handle, path = shown["terminal"], shown["worktree"]
     if not isinstance(handle, str) or not handle or not isinstance(path, str) or not path:
         return False
     if any(isinstance(row, dict) and row.get("handle") == handle for row in terminals["terminals"]):
-        # The handle is in use again: only another ended Dispatch on it that released or exited ends this one's hold.
-        def ended(row):
-            resource = row.get("resource") if isinstance(row.get("resource"), dict) else {}
-            liveness = ((row.get("projection") or {}).get("liveness") or {}) if isinstance(row.get("projection"), dict) else {}
-            return (row is not source and row.get("agentTerminalHandle") == handle
-                    and (row.get("workerState"), row.get("dispatchStatus")) in _SETTLED_WORKERS
-                    and (resource.get("releaseState") == "released" or liveness.get("verdict") == "exited"))
-        if not any(isinstance(row, dict) and ended(row) for row in rows):
+        # The handle is in use again. Only a proven later Dispatch ends this one's hold: one that took over this
+        # Dispatch's own terminal resource (its origin) as owner, ended and released it, with no other holder.
+        if not _released_by_later(source, shown["dispatch"], handle, rows):
             return False
     try:
         os.lstat(path)
@@ -710,7 +713,33 @@ def _settled_gone(source: dict, shown: dict, rows: list, terminals: dict, owner)
         coordinator = owner(shown["run"])
     except PodError:
         return False
-    return coordinator.get("terminal") is None or coordinator.get("live") is False
+    # Only explicit absence or recognized exit proves the coordinator gone; a disconnected, orphaned or otherwise
+    # unverified coordinator keeps the gap.
+    return coordinator.get("state") in ("absent", "exited")
+
+
+def _released_by_later(source: dict, dispatch: str, handle: str, rows: list) -> bool:
+    """Rule S, 2: exactly one other ended Dispatch owns the terminal resource this Dispatch originated, on the same
+    handle, and released it; this Dispatch holds no unreleased resource of its own; nothing else holds the handle."""
+    def resource(row):
+        value = row.get("resource")
+        return value if isinstance(value, dict) else None
+
+    def ended_released(row):
+        held = resource(row)
+        return ((row.get("workerState"), row.get("dispatchStatus")) in _SETTLED_WORKERS and held is not None
+                and held.get("releaseState") == "released" and held.get("ownershipState") == "released")
+    own = resource(source)
+    if own is not None and not ended_released(source):
+        return False
+    later = [row for row in rows if isinstance(row, dict) and row is not source and isinstance(row.get("dispatchId"), str)
+             and row["dispatchId"] != dispatch and row.get("agentTerminalHandle") == handle and ended_released(row)
+             and resource(row).get("terminalHandle") == handle and resource(row).get("originDispatchId") == dispatch
+             and resource(row).get("ownerDispatchId") == row["dispatchId"]]
+    others = [row for row in rows if isinstance(row, dict) and row is not source and row not in later
+              and (row.get("agentTerminalHandle") == handle or (resource(row) or {}).get("terminalHandle") == handle)
+              and not ended_released(row)]
+    return len(later) == 1 and not others
 
 
 def _placement(row: dict) -> dict:
@@ -1078,6 +1107,8 @@ def _terminal_history(gap: dict, project: Path, fleet_facts: dict, unattributed_
     unbound fleet and terminal inventories; this proves the record unchanged, without an unsettled governed effect,
     and every admission settled. Anything unproved keeps the gap."""
     directory = gap["directory"]
+    if not _terminal_validated(project, directory, gap["phase"]):
+        return False
     if (_after_context(directory / "context.json") != gap["identity"]
             or _after_journal(directory / "governor.json") != gap["journal_id"]):
         return False
@@ -1109,6 +1140,48 @@ def _terminal_history(gap: dict, project: Path, fleet_facts: dict, unattributed_
         if unattributed_actor:
             return False  # (ii) a current actor in this repository could be this reservation's
     return True
+
+
+def _terminal_validated(project: Path, directory: Path, phase: str) -> bool:
+    """Rule T 1-2: the record's terminal status established from its own whole context through the validators the
+    ordinary context path uses, never from the selective facts reader's phase alone. A closed record has a valid
+    checkpoint closure or a readable R145 evidence closure; a continued one a valid R110 link; a `retired` one a
+    valid R112 entry or a certified R205 entry beside it. Anything unproved is not terminal."""
+    from . import retirement
+    from .ledger import _read
+    try:
+        state = _read(directory / "context.json")
+    except (PodError, OSError, ValueError):
+        state = None
+    state = state if isinstance(state, dict) else {}
+    try:
+        if phase == "continued":
+            from .succession import validate_link
+            link = state.get("continued_by")
+            if history.is_reference(link):
+                link = _claim_reference(link, directory)
+            validate_link("continued_by", link)
+            return isinstance(link, dict)
+        if phase == "retired":
+            entry = state.get(retirement.FIELD)
+            if history.is_reference(entry):
+                entry = _claim_reference(entry, directory)
+            if isinstance(entry, dict):
+                retirement.validate_entry(entry)
+                return True
+            return retirement.older_retirement(project, directory) == "retired"
+        if phase == "closed":
+            closure = (state.get("checkpoint") or {}).get("closure") if isinstance(state.get("checkpoint"), dict) else None
+            if closure is not None:
+                from .obligations import _closure_record
+                _closure_record(closure)
+                return True
+            from .evidence_closure import block
+            evidence = block(directory)
+            return isinstance(evidence, dict) and evidence.get("status") == "recorded"
+    except (PodError, KeyError, TypeError, ValueError, AttributeError):
+        return False
+    return False
 
 
 def _effects_pending(journal: dict) -> bool:
@@ -1531,14 +1604,19 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         def coordinator(run):
             """The Run's current coordinator from one complete Run list per call, before the end fence (rule S, 4)."""
             coordinators = _shared(("run-coordinators", terminals["runtime"]),
-                                   lambda: _run_coordinators(terminals["runtime"]))
+                                   lambda: _run_coordinators(terminals["runtime"], budget.check))
             if coordinators is None or run not in coordinators:
                 raise PodError("orca_contract", "The Run's current coordinator is unproved")
             handle = coordinators[run]
             terminal = next((row for row in terminals["terminals"] if row.get("handle") == handle), None) if handle else None
-            return {"terminal": handle, "live": bool(terminal and terminal.get("connected") is True
-                                                     and terminal.get("writable") is True
-                                                     and terminal.get("orphaned") is False)}
+            if terminal is None:
+                return {"terminal": handle, "state": "absent"}  # none recorded, or absent from the complete inventory
+            from .retirement import _exited
+            if _exited(terminal):
+                return {"terminal": handle, "state": "exited"}
+            live = (terminal.get("connected") is True and terminal.get("writable") is True
+                    and terminal.get("orphaned") is False)
+            return {"terminal": handle, "state": "live" if live else "unverified"}
 
         def elsewhere(path):
             """Rule T 4b: `path` is proven a registered worktree of another repository. It is an existing directory

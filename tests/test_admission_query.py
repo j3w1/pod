@@ -977,31 +977,47 @@ class ReviewCorrectionTests(AdmissionQueryCase):
 class TerminalHistoryTests(AdmissionQueryCase):
     """R206 rules T and S, with D1 and D2: a terminal record's settled history and an ended Dispatch whose resources
     are gone make no current admission claim, while anything unproved keeps its unknown. Another objective's record,
-    `old`, is written for real; its admission facts are then shaped by patching the facts reader for that record."""
+    `old`, is written for real with real terminal metadata; only its admission inventory and placement are shaped by
+    the facts reader patch. The Run list is served page by page to the production parser."""
 
     GONE = "/nonexistent/pod-terminal-history-workspace"
     writer = ReviewCorrectionTests.writer
     journal = ReviewCorrectionTests.journal
+    LINK = {"fixture": "continued_by"}
+    ENTRY = {"fixture": "historical_retirement"}
 
     def setUp(self):
         super().setUp()
         self.intake(worktree=self.place)
-        self.write([self.criterion()], objective="old", governance={"base_ref": "target"}, worktree=self.place)
         self.old = objective_root(self.project, "old")
         self.real_facts = history.load_admission_facts
         self.shape = None
         facts = patch("pod.history.load_admission_facts", create=True, side_effect=self.facts_for)
         facts.start(); self.addCleanup(facts.stop)
-        self.coordinators = {}
-        runs = patch("pod.admission._run_coordinators", create=True, side_effect=lambda runtime: self.coordinators)
-        runs.start(); self.addCleanup(runs.stop)
+        self.run_pages = {}
+        real = admission._gated_read
+        def gated(argv):
+            if argv[:2] == ["orchestration", "run-list"]:
+                cursor = argv[argv.index("--cursor") + 1] if "--cursor" in argv else None
+                if cursor not in self.run_pages:
+                    raise PodError("orca_unavailable", "fixture: no such Run page")
+                from copy import deepcopy
+                return deepcopy(self.run_pages[cursor])
+            return real(argv)
+        pages = patch("pod.admission._gated_read", side_effect=gated)
+        pages.start(); self.addCleanup(pages.stop)
+
+    def runs(self, coordinators, **extra):
+        """One complete Run list page with an explicit end cursor."""
+        self.run_pages = {None: {"runtime": "runtime", "result": {
+            "runs": [{"id": run, "coordinator_handle": handle} for run, handle in coordinators.items()],
+            "nextCursor": None, **extra}}}
 
     def facts_for(self, path, *, include_admissions):
         facts = self.real_facts(path, include_admissions=include_admissions)
         if self.shape is None or facts["context"]["checkpoint"]["objective"] != "old":
             return facts
-        phase, rows, placed = self.shape
-        facts["phase"] = phase
+        rows, placed = self.shape
         facts["context"]["checkpoint"]["native_refs"] = [{"runId": "old-run", "runtime": "runtime"}]
         if not placed:
             facts["context"]["checkpoint"]["worktree"] = None
@@ -1013,14 +1029,36 @@ class TerminalHistoryTests(AdmissionQueryCase):
         return facts
 
     def terminal(self, phase="closed", rows=None, placed=False, unattributed=False):
-        """Shape `old` as a terminal record; `unattributed` makes its repository attribution unprovable."""
-        self.shape = (phase, rows if rows is not None else {"a": self.bound("a")}, placed)
+        """Write `old` for real in `phase`: a genuine closure, or a continuation or retirement entry whose production
+        validator this test accepts; then shape its admission inventory. `unattributed` makes its repository
+        attribution unprovable."""
+        rows = rows if rows is not None else {"a": self.bound("a")}
+        if phase == "closed":
+            self.write([self.criterion("satisfied", evidence=[self.proof("O1")])], objective="old",
+                       governance={"base_ref": "target"}, close=True, worktree=self.place)
+        else:
+            self.write([self.criterion()], objective="old", governance={"base_ref": "target"}, worktree=self.place)
+        if phase in ("continued", "retired"):
+            path, raw = self.raw("old")
+            field, value, target = (("continued_by", self.LINK, "pod.succession.validate_link") if phase == "continued"
+                                    else ("historical_retirement", self.ENTRY, "pod.retirement.validate_entry"))
+            raw[field] = value
+            self.save(path, raw)
+            real = __import__("pod.succession" if phase == "continued" else "pod.retirement",
+                              fromlist=["x"]).__dict__[target.rsplit(".", 1)[1]]
+            def accept(*args, **kwargs):
+                if value in args:
+                    return None
+                return real(*args, **kwargs)
+            accepted = patch(target, side_effect=accept)
+            accepted.start(); self.addCleanup(accepted.stop)
+        self.shape = (rows, placed)
         if unattributed:
-            real = admission._membership
+            real_membership = admission._membership
             def membership(project, context, record, raw, known=()):
                 if record == self.old.name:
                     raise PodError("record_attribution_unknown", "fixture: attribution unprovable")
-                return real(project, context, record, raw, known)
+                return real_membership(project, context, record, raw, known)
             unknown = patch("pod.admission._membership", side_effect=membership)
             unknown.start(); self.addCleanup(unknown.stop)
 
@@ -1055,7 +1093,7 @@ class TerminalHistoryTests(AdmissionQueryCase):
     def codes(self, result):
         return [row["code"] for row in result["unknowns"]]
 
-    def moved(self, result, code, relevance="terminal_record_history"):
+    def moved(self, result, code):
         self.assertTrue(result["complete"], result["unknowns"])
         self.assertFalse(result["repository_complete"])
         self.assertIn(code, result["unrelated_unknowns"]["by_code"])
@@ -1110,6 +1148,39 @@ class TerminalHistoryTests(AdmissionQueryCase):
         self.terminal("open")
         self.assertIn("admission_facts_incomplete", self.codes(self.read()))
 
+    def test_invalid_terminal_metadata_keeps_the_gap(self):
+        # The production validators, unpatched: the facts reader's truthy phase alone is never terminal status.
+        self.write([self.criterion()], objective="old", governance={"base_ref": "target"}, worktree=self.place)
+        self.shape = ({"a": self.bound("a")}, False)
+        for field, value in (("historical_retirement", {"invalid": "certificate"}), ("continued_by", {"invalid": "link"})):
+            with self.subTest(field):
+                path, raw = self.raw("old")
+                raw.pop("historical_retirement", None); raw.pop("continued_by", None)
+                raw[field] = value
+                self.save(path, raw)
+                self.assertIn("admission_facts_incomplete", self.codes(self.read()))
+
+    def test_invalid_terminal_metadata_on_a_genuine_admission_keeps_the_gap(self):
+        # Production reader and membership, no shaping: a real admission in a record with no coordinator placement.
+        from copy import deepcopy
+        from pod import ledger
+        self.start("genuine", self.packet(["O1"], worktree=self.place))
+        _, raw = self.raw()
+        raw["checkpoint"]["objective"] = "old"
+        raw["checkpoint"]["worktree"] = None
+        for row in raw["admissions"].values():
+            row["objective"] = "old"
+        ledger._validate_context(deepcopy(raw))
+        self.old.mkdir(parents=True, exist_ok=True)
+        for field, value in (("historical_retirement", {"invalid": "certificate"}), ("continued_by", {"invalid": "link"})):
+            with self.subTest(field):
+                candidate = deepcopy(raw)
+                candidate[field] = value
+                self.save(self.old / "context.json", candidate)
+                result = self.read()
+                self.assertNotIn("admission_facts_incomplete", result["unrelated_unknowns"]["by_code"], result)
+                self.assertFalse(result["complete"])
+
     # Rule T, unbound reservations: (i) a retirement certificate, or (ii) no unattributed current actor.
 
     def test_an_unbound_reservation_on_a_closed_record_without_unattributed_actors_is_history(self):
@@ -1162,11 +1233,11 @@ class TerminalHistoryTests(AdmissionQueryCase):
         unregistered = self.root / "other-repository" / "plain"
         unregistered.mkdir()
         git(self.project, "worktree", "add", "-q", str(self.root / "own-worktree"), "-b", "own")
+        self.terminal("closed")
         cases = {"symlinked": str(link), "same repository": str((self.root / "own-worktree").resolve()),
                  "unregistered": str(unregistered.resolve()), "unreadable": self.GONE + "-unreadable"}
         for name, path in cases.items():
             with self.subTest(name):
-                self.terminal("closed")
                 self.assertIn("admission_facts_incomplete", self.codes(self.read(workers=[self.worker(path)])))
 
     def test_an_admission_naming_this_repository_keeps_the_gap_elsewhere(self):
@@ -1177,14 +1248,12 @@ class TerminalHistoryTests(AdmissionQueryCase):
 
     # D1: a readable evidence closure closes the record in admission.
 
-    def stale_runtime(self):
+    def test_an_evidence_closed_record_reads_closed_in_admission(self):
+        self.write([self.criterion()], objective="old", governance={"base_ref": "target"}, worktree=self.place)
         path, raw = self.raw("old")
         for ref in raw["checkpoint"]["native_refs"]:
             ref["runtime"] = "previous-runtime"
         self.save(path, raw)
-
-    def test_an_evidence_closed_record_reads_closed_in_admission(self):
-        self.stale_runtime()
         self.assertIn("native_runtime_changed", self.codes(self.read()))
         with patch("pod.evidence_closure.block", side_effect=lambda root: {"status": "recorded"} if root == self.old
                    else None):
@@ -1199,8 +1268,7 @@ class TerminalHistoryTests(AdmissionQueryCase):
 
     def test_an_unplaceable_worker_is_its_own_fact(self):
         self.terminal("closed")
-        outside = str(self.root / "unregistered-place")
-        result = self.read(workers=[self.worker(outside, verdict="live")])
+        result = self.read(workers=[self.worker(str(self.root / "unregistered-place"), verdict="live")])
         rows = [row for row in result["unknowns"] if row["code"] == "worker_placement_unknown"]
         self.assertEqual([(row["dispatch"], row["cause"]) for row in rows], [("old-dispatch", "admission_facts_incomplete")])
         self.assertIn("admission_facts_incomplete", self.codes(result))
@@ -1212,36 +1280,109 @@ class TerminalHistoryTests(AdmissionQueryCase):
                   "handle": "gone-terminal", **fields}
         return self.worker(str(self.project / "gone-workspace"), **values)
 
-    def test_an_ended_dispatch_with_gone_resources_makes_no_claim(self):
-        self.coordinators = {"ended-run": None}
-        result = self.read(workers=[self.ended()])
+    def outside(self, handle, **fields):
+        folder = self.root / "foreign-folder"
+        folder.mkdir(exist_ok=True)
+        return {"handle": handle, "worktreePath": str(folder), "connected": True, "writable": True, "orphaned": False,
+                **fields}
+
+    def settled(self, result):
         self.assertTrue(result["complete"], result["unknowns"])
         self.assertFalse([row for row in result["claims"] if row.get("dispatch") == "ended"])
         self.assertIn("native_liveness_unverified", result["unrelated_unknowns"]["by_code"])
         self.assertFalse(result["repository_complete"])
 
+    def kept(self, result):
+        """The ended Dispatch still holds: a claim or an unknown names it."""
+        return (any(row.get("dispatch") == "ended" for row in result["claims"])
+                or any(row.get("dispatch") == "ended" for row in result["unknowns"])
+                or any(row.get("code") == "native_writer_scope_unknown"
+                       and "ended" in row.get("references", {}).get("dispatches", []) for row in result["unknowns"]))
+
+    def test_an_ended_dispatch_with_gone_resources_makes_no_claim(self):
+        self.runs({"ended-run": None})
+        self.settled(self.read(workers=[self.ended()]))
+
+    def test_an_exited_coordinator_is_gone(self):
+        self.runs({"ended-run": "coordinator"})
+        exited = self.outside("coordinator", connected=False, writable=False, exitCause={"kind": "exited"})
+        from pod.orca import EXIT_KINDS
+        exited["exitCause"]["kind"] = sorted(EXIT_KINDS)[0]
+        self.settled(self.read(workers=[self.ended()], terminals=[exited]))
+
     def test_an_ended_dispatch_keeps_its_gap_unless_every_resource_is_gone(self):
         live = {"handle": "gone-terminal", "worktreePath": str(self.project), "connected": True, "writable": True,
                 "orphaned": False}
-        coordinator = {"handle": "coordinator", "worktreePath": str(self.project), "connected": True, "writable": True,
-                       "orphaned": False}
         cases = {"live terminal": ({}, [live], {"ended-run": None}),
                  "existing workspace": ("exists", [], {"ended-run": None}),
-                 "live coordinator": ({}, [coordinator], {"ended-run": "coordinator"}),
+                 "live coordinator": ({}, [self.outside("coordinator")], {"ended-run": "coordinator"}),
+                 "disconnected coordinator": ({}, [self.outside("coordinator", connected=False)], {"ended-run": "coordinator"}),
+                 "orphaned coordinator": ({}, [self.outside("coordinator", connected=False, orphaned=True)],
+                                          {"ended-run": "coordinator"}),
                  "unsettled status": ({"state": "running", "status": "running"}, [], {"ended-run": None}),
-                 "incomplete Run list": ({}, [], None)}
+                 "live projection": ({"verdict": "live"}, [], {"ended-run": None})}
         for name, (fields, terminals, coordinators) in cases.items():
             with self.subTest(name):
-                self.coordinators = coordinators
+                self.runs(coordinators)
                 if fields == "exists":
                     (self.project / "gone-workspace").mkdir(exist_ok=True)
                     fields = {}
                 result = self.read(workers=[self.ended(**fields)], terminals=terminals)
                 (self.project / "gone-workspace").exists() and (self.project / "gone-workspace").rmdir()
-                self.assertFalse(result["complete"], name)
+                self.assertTrue(self.kept(result), name)
+
+    def test_the_run_list_must_be_provably_complete(self):
+        page = {"runs": [{"id": "ended-run", "coordinator_handle": None}], "nextCursor": None}
+        cases = {"truncated": {None: {**page, "truncated": True}},
+                 "partial": {None: {**page, "partial": True}},
+                 "incomplete": {None: {**page, "complete": False}},
+                 "missing end cursor": {None: {"runs": page["runs"]}},
+                 "more without cursor": {None: {**page, "hasMore": True}},
+                 "duplicate Run": {None: {"runs": [{"id": "ended-run", "coordinator_handle": "coordinator"}],
+                                          "nextCursor": "c1"},
+                                   "c1": {"runs": [{"id": "ended-run", "coordinator_handle": None}], "nextCursor": None}},
+                 "repeated cursor": {None: {**page, "nextCursor": "c1"}, "c1": {"runs": [{"id": "x", "coordinator_handle": None}],
+                                     "nextCursor": "c1"}},
+                 "empty Run id": {None: {"runs": [{"id": "", "coordinator_handle": None}, *page["runs"]], "nextCursor": None}},
+                 "runtime change": {None: {**page, "nextCursor": "c1"}, "c1": {"runs": [{"id": "y", "coordinator_handle": None}],
+                                    "nextCursor": None, "_runtime": "other"}}}
+        terminals = [self.outside("coordinator")]
+        for name, pages in cases.items():
+            with self.subTest(name):
+                from copy import deepcopy
+                self.run_pages = {cursor: {"runtime": value.pop("_runtime", "runtime"), "result": value}
+                                  for cursor, value in deepcopy(pages).items()}
+                self.assertIsNone(admission._run_coordinators("runtime"), name)
+                self.assertTrue(self.kept(self.read(workers=[self.ended()], terminals=terminals)), name)
+
+    def test_a_complete_paged_run_list_is_read_whole(self):
+        self.run_pages = {None: {"runtime": "runtime", "result": {"runs": [{"id": "a", "coordinator_handle": "x"}],
+                                                                  "nextCursor": "c1", "hasMore": True}},
+                          "c1": {"runtime": "runtime", "result": {"runs": [{"id": "ended-run", "coordinator_handle": None}],
+                                                                  "nextCursor": None, "hasMore": False}}}
+        self.assertEqual(admission._run_coordinators("runtime"), {"a": "x", "ended-run": None})
+        self.settled(self.read(workers=[self.ended()]))
+
+    def test_an_older_release_never_clears_a_newer_holder(self):
+        self.runs({"ended-run": None})
+        current = self.ended(dispatch="ended", handle="shared")
+        older = self.ended(dispatch="older", handle="shared")
+        older["resource"].update(terminalHandle="shared", releaseState="released", ownershipState="released",
+                                 originDispatchId="older", ownerDispatchId="older")
+        result = self.read(workers=[current, older], terminals=[self.outside("shared")])
+        self.assertTrue(self.kept(result))
+
+    def test_a_proven_later_release_clears_a_reused_terminal(self):
+        self.runs({"ended-run": None})
+        source = self.ended(dispatch="ended", handle="shared")
+        source["resource"] = None
+        later = self.ended(dispatch="later", handle="shared", verdict="exited")
+        later["resource"].update(terminalHandle="shared", releaseState="released", ownershipState="released",
+                                 originDispatchId="ended", ownerDispatchId="later")
+        self.settled(self.read(workers=[source, later], terminals=[self.outside("shared")]))
 
     def test_a_bound_caller_never_settles_an_ended_dispatch(self):
-        self.coordinators = {"ended-run": None}
+        self.runs({"ended-run": None})
         result = self.read(workers=[self.ended()], fleet=False)
         self.assertIn("native_inventory_scope", self.codes(result))
         self.assertNotIn("native_liveness_unverified", result["unrelated_unknowns"]["by_code"])

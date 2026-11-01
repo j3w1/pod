@@ -10382,7 +10382,9 @@
         "tests.test_admission_query.TerminalHistoryTests.test_a_closed_record_takes_no_certificate",
         "tests.test_admission_query.TerminalHistoryTests.test_a_dispatch_current_in_another_repositorys_registered_worktree_is_history",
         "tests.test_admission_query.TerminalHistoryTests.test_another_repository_must_be_proven",
-        "tests.test_admission_query.TerminalHistoryTests.test_an_admission_naming_this_repository_keeps_the_gap_elsewhere"
+        "tests.test_admission_query.TerminalHistoryTests.test_an_admission_naming_this_repository_keeps_the_gap_elsewhere",
+        "tests.test_admission_query.TerminalHistoryTests.test_invalid_terminal_metadata_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_invalid_terminal_metadata_on_a_genuine_admission_keeps_the_gap"
       ],
       "status": "NOT_RUN"
     },
@@ -10417,7 +10419,12 @@
       "offline_test": [
         "tests.test_admission_query.TerminalHistoryTests.test_an_ended_dispatch_with_gone_resources_makes_no_claim",
         "tests.test_admission_query.TerminalHistoryTests.test_an_ended_dispatch_keeps_its_gap_unless_every_resource_is_gone",
-        "tests.test_admission_query.TerminalHistoryTests.test_a_bound_caller_never_settles_an_ended_dispatch"
+        "tests.test_admission_query.TerminalHistoryTests.test_a_bound_caller_never_settles_an_ended_dispatch",
+        "tests.test_admission_query.TerminalHistoryTests.test_an_exited_coordinator_is_gone",
+        "tests.test_admission_query.TerminalHistoryTests.test_the_run_list_must_be_provably_complete",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_complete_paged_run_list_is_read_whole",
+        "tests.test_admission_query.TerminalHistoryTests.test_an_older_release_never_clears_a_newer_holder",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_proven_later_release_clears_a_reused_terminal"
       ],
       "status": "NOT_RUN"
     },
