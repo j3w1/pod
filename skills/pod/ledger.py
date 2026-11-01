@@ -391,7 +391,9 @@ def _write_retirement(path: Path, value: dict) -> None:
     value["revision"] += 1
     _validate_context(value, full_history=False)
     record, chunks = prepare_context(path, value)
-    publish_decision(path, value, lambda: publish_context(path, record, chunks))
+    from .retirement import read_state
+    # One decision may also retire older records, whose transition state is their logical view (R205).
+    publish_decision(path, value, lambda: publish_context(path, record, chunks), read=read_state)
 
 
 def _run_references(state: dict) -> dict[str, str]:

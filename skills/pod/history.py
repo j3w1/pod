@@ -798,7 +798,15 @@ def _load(path, *, limit=MAINTENANCE_LIMIT, validate=True):
         state, receipts = _hydrate(physical, read_chunk)
     if validate:
         from .ledger import _validate_context
-        _validate_context(state)
+        try:
+            _validate_context(state)
+        except PodError as exc:
+            if exc.code == "state_unsupported":
+                # An older record under historical retirement names that retirement to every writer (R205).
+                from .retirement import sidecar_presence, refuse_sidecar
+                if sidecar_presence(path.parent) == "present":
+                    refuse_sidecar(path.parent)
+            raise
     return state, receipts, raw
 
 
