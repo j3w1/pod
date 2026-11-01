@@ -314,13 +314,20 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     record_root = None
     try:
         if objective is None:
+            held = None
             try:
                 matches = contexts_for_run(run)
             except PodError as exc:
-                # A superseded record that names this Run holds the lookup (R206); it reads as that record's own
-                # condition, objective_superseded below, never as a generic unsupported state.
-                if exc.code != "state_unsupported" or not superseded_for_run(run):
+                # The records holding this lookup, classified in the same read (R206). Only when every one is
+                # superseded does status read their own condition, objective_superseded; otherwise the refusal keeps
+                # its code and names them. Nothing is read again, so a later look can never clear the hold.
+                holding = (exc.detail or {}).get("holding")
+                if not holding or any(row.get("class") != "superseded" for row in holding):
+                    if holding:
+                        result["held_by"] = holding
                     raise
+                held = [{"record": row["record"], "objective": row["objective"], "schemas": row["schemas"],
+                         "blocked": True, "converted": False} for row in holding]
                 matches = []
             if len(matches) > 1:
                 result.update({"run": run, "choices": sorted([
@@ -339,7 +346,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 # Closed by evidence: read from its closure record, never written or converted (R145, R146).
                 result.update(run=run, **status_fields(project, name, record_root))
                 return result
-            superseded = superseded_for_run(run) if context_root is None else []
+            superseded = held if held is not None else superseded_for_run(run) if context_root is None else []
         else:
             from .evidence_closure import older_predecessor_fields, status_fields, tail_closed
             from .ledger import objective_root

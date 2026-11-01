@@ -10289,7 +10289,10 @@
         "tests.test_owner_handoff.TransitionTableTests.test_pending_unreadable_scope_and_nonlive_success_do_not_abort",
         "tests.test_record_membership.RunLookupStatusTests.test_a_superseded_record_reads_objective_superseded",
         "tests.test_record_membership.RunLookupStatusTests.test_an_undecodable_record_that_names_the_run_still_holds",
-        "tests.test_kernel_boundaries.StatusAndCutoverTests.test_superseded_objectives_are_listed_blocked_and_never_converted"
+        "tests.test_kernel_boundaries.StatusAndCutoverTests.test_superseded_objectives_are_listed_blocked_and_never_converted",
+        "tests.test_record_membership.RunLookupStatusTests.test_a_mixed_hold_keeps_its_code_and_names_every_record",
+        "tests.test_record_membership.RunLookupStatusTests.test_the_condition_comes_from_the_same_read",
+        "tests.test_issue41_corrections.OfflineOmissionTests.test_status_state_read_error_and_released_superseded_entries_are_read_only"
       ],
       "status": "NOT_RUN"
     },

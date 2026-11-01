@@ -135,6 +135,35 @@ class RunLookupStatusTests(KernelCase):
         self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "objective_superseded"))
         self.assertIn("start a new objective", shown["next_safe_action"])
 
+    def current_unsupported(self):
+        """A current-schema record that does not validate, naming the Run."""
+        from pod.installer import STATE_SCHEMAS
+        record = ledger.state_root(self.project) / "current-broken" / "context.json"
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({"schema": STATE_SCHEMAS["context"], "owner": 7,
+                                      "checkpoint": {"schema": STATE_SCHEMAS["checkpoint"], "objective": "broken",
+                                                     "native_refs": [{"runId": RUN, "runtime": "runtime"}]},
+                                      "admissions": {}}))
+
+    def test_a_mixed_hold_keeps_its_code_and_names_every_record(self):
+        # Reviewer probe 1: an unrelated superseded peer never relabels a current record's refusal.
+        self.peer("pod-context/v4", "pod-checkpoint/v2")
+        self.current_unsupported()
+        shown = self.run_status()
+        self.assertEqual(shown["status"], "blocked")
+        self.assertNotEqual(shown["blocker"], "objective_superseded")
+        self.assertNotIn("start a new objective", shown["next_safe_action"])
+        self.assertEqual(sorted((row["record"], row["class"]) for row in shown["held_by"]),
+                         [("current-broken", "unsupported"), ("earlier", "superseded")])
+
+    def test_the_condition_comes_from_the_same_read(self):
+        # Reviewer probe 2: status reads nothing again, so a peer removed afterwards cannot clear the hold.
+        self.peer("pod-context/v4", "pod-checkpoint/v2")
+        with patch("pod.ledger.superseded_for_run", side_effect=AssertionError("second read")):
+            shown = self.run_status()
+        self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "objective_superseded"))
+        self.assertEqual([row["record"] for row in shown["superseded"]], ["earlier"])
+
     def test_an_undecodable_record_that_names_the_run_still_holds(self):
         record = ledger.state_root(self.project) / "earlier" / "context.json"
         record.parent.mkdir(parents=True)
