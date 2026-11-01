@@ -10158,6 +10158,36 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A767",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_with_current_governance_keeps_reused_proof_the_delivery_relied_on",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_with_current_governance_refuses_proof_the_delivered_tree_lacks",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_closing_write_with_current_governance_uses_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_an_omitted_boundary_is_not_bookkeeping_so_the_worktree_judges_delivered_proof",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_an_omitted_boundary_with_nothing_stale_is_an_ordinary_write",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_bookkeeping_proposal_whose_stored_result_is_not_bookkeeping_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A768",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_plain_close_after_an_earlier_withdrawal_keeps_the_bound_baseline",
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_minimal_close_after_an_earlier_withdrawal_keeps_the_bound_baseline",
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_plain_close_that_omits_a_recorded_field_keeps_ordinary_checks",
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_an_all_satisfied_record_without_a_withdrawal_keeps_ordinary_checks"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A770",
       "required_evidence": [
         "unit",
@@ -10259,7 +10289,15 @@
         "tests.test_handoff_scope.OlderSchemaScopeShapeTests.test_the_scope_table_runs_every_row_once",
         "tests.test_record_membership.MembershipTests.test_each_record_shape_holds_only_what_it_could_name",
         "tests.test_evidence_closure.UnreadableRecordProofTests.test_an_unreadable_record_holds_only_a_run_it_could_name",
-        "tests.test_owner_handoff.TransitionTableTests.test_pending_unreadable_scope_and_nonlive_success_do_not_abort"
+        "tests.test_owner_handoff.TransitionTableTests.test_pending_unreadable_scope_and_nonlive_success_do_not_abort",
+        "tests.test_record_membership.RunLookupStatusTests.test_a_superseded_record_reads_objective_superseded",
+        "tests.test_record_membership.RunLookupStatusTests.test_an_undecodable_record_that_names_the_run_still_holds",
+        "tests.test_kernel_boundaries.StatusAndCutoverTests.test_superseded_objectives_are_listed_blocked_and_never_converted",
+        "tests.test_record_membership.RunLookupStatusTests.test_a_mixed_hold_keeps_its_code_and_names_every_record",
+        "tests.test_record_membership.RunLookupStatusTests.test_the_condition_comes_from_the_same_read",
+        "tests.test_issue41_corrections.OfflineOmissionTests.test_status_state_read_error_and_released_superseded_entries_are_read_only",
+        "tests.test_record_membership.RunLookupStatusTests.test_a_non_object_or_schema_less_record_is_never_superseded",
+        "tests.test_record_membership.RunLookupStatusTests.test_a_missing_page_while_classifying_keeps_the_hold_and_its_reason"
       ],
       "status": "NOT_RUN"
     },

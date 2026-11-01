@@ -113,6 +113,95 @@ class MembershipTests(KernelCase):
         self.assertEqual(caught.exception.code, "discovery_budget")
 
 
+class RunLookupStatusTests(KernelCase):
+    """A record that names the selected Run holds `pod status --run`; a superseded one reads as its own condition."""
+
+    def peer(self, context, checkpoint):
+        record = ledger.state_root(self.project) / "earlier" / "context.json"
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({"schema": context, "revision": 1, "owner": "owner",
+                                      "checkpoint": {"schema": checkpoint, "objective": "earlier",
+                                                     "native_refs": [{"runId": RUN, "runtime": "runtime"}]},
+                                      "admissions": {}, "interventions": {}, "source_rejections": {},
+                                      "constraints": []}))
+
+    def run_status(self):
+        from pod.status import status
+        return status(self.project, RUN)
+
+    def test_a_superseded_record_reads_objective_superseded(self):
+        self.peer("pod-context/v4", "pod-checkpoint/v2")
+        shown = self.run_status()
+        self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "objective_superseded"))
+        self.assertIn("start a new objective", shown["next_safe_action"])
+
+    def current_unsupported(self):
+        """A current-schema record that does not validate, naming the Run."""
+        from pod.installer import STATE_SCHEMAS
+        record = ledger.state_root(self.project) / "current-broken" / "context.json"
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({"schema": STATE_SCHEMAS["context"], "owner": 7,
+                                      "checkpoint": {"schema": STATE_SCHEMAS["checkpoint"], "objective": "broken",
+                                                     "native_refs": [{"runId": RUN, "runtime": "runtime"}]},
+                                      "admissions": {}}))
+
+    def test_a_mixed_hold_keeps_its_code_and_names_every_record(self):
+        # Reviewer probe 1: an unrelated superseded peer never relabels a current record's refusal.
+        self.peer("pod-context/v4", "pod-checkpoint/v2")
+        self.current_unsupported()
+        shown = self.run_status()
+        self.assertEqual(shown["status"], "blocked")
+        self.assertNotEqual(shown["blocker"], "objective_superseded")
+        self.assertNotIn("start a new objective", shown["next_safe_action"])
+        self.assertEqual(sorted((row["record"], row["class"]) for row in shown["held_by"]),
+                         [("current-broken", "unsupported"), ("earlier", "superseded")])
+
+    def test_the_condition_comes_from_the_same_read(self):
+        # Reviewer probe 2: status reads nothing again, so a peer removed afterwards cannot clear the hold.
+        self.peer("pod-context/v4", "pod-checkpoint/v2")
+        with patch("pod.ledger.superseded_for_run", side_effect=AssertionError("second read")):
+            shown = self.run_status()
+        self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "objective_superseded"))
+        self.assertEqual([row["record"] for row in shown["superseded"]], ["earlier"])
+
+    def test_a_non_object_or_schema_less_record_is_never_superseded(self):
+        # Delta probe 1: only R90's superseded schema family reads objective_superseded.
+        for text in (json.dumps([RUN]), json.dumps(RUN), json.dumps({"checkpoint": {"native_refs": [{"runId": RUN}]}})):
+            record = ledger.state_root(self.project) / "earlier" / "context.json"
+            with self.subTest(text=text):
+                record.parent.mkdir(parents=True, exist_ok=True)
+                record.write_text(text)
+                shown = self.run_status()
+                self.assertEqual(shown["status"], "blocked")
+                self.assertNotEqual(shown["blocker"], "objective_superseded")
+                self.assertEqual([(row["record"], row["class"]) for row in shown["held_by"]], [("earlier", "unsupported")])
+
+    def test_a_missing_page_while_classifying_keeps_the_hold_and_its_reason(self):
+        # Delta probe 2: a production-writer record that names the Run loses its checkpoint page.
+        self.intake(objective="peer", next_safe_action="x" * 1024)  # Large enough for its own checkpoint page.
+        run = ledger.read(self.project, "peer")["checkpoint"]["native_refs"][0]["runId"]
+        path = ledger.objective_root(self.project, "peer") / "context.json"
+        physical, chunks = history.prepare_context(path, plain(ledger.read(self.project, "peer")), project=self.project)
+        history.ChunkStore(path.parent).put(chunks)
+        path.write_bytes(history._bytes(physical))
+        page = json.loads(chunks[physical["root"]["ref"]["sha256"]])
+        entry = next(entry for entry in page["entries"] if entry[0] == "checkpoint")
+        (path.parent / "history" / "sha256" / (entry[1]["ref"]["sha256"] + ".json")).unlink()
+        from pod.status import status
+        shown = status(self.project, run)
+        self.assertEqual(shown["status"], "blocked")
+        self.assertNotEqual(shown["blocker"], "objective_superseded")
+        self.assertEqual([(row["record"], row["class"], row["reason"]) for row in shown["held_by"]],
+                         [(path.parent.name, "undecodable", "history_missing")])
+
+    def test_an_undecodable_record_that_names_the_run_still_holds(self):
+        record = ledger.state_root(self.project) / "earlier" / "context.json"
+        record.parent.mkdir(parents=True)
+        record.write_text('{"native_refs": [{"runId": "%s"}], ' % RUN)  # Not in the superseded inventory.
+        shown = self.run_status()
+        self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "invalid_record"))
+
+
 class ListDeadlineTests(KernelCase):
     def test_an_outer_deadline_at_the_first_record_read_refuses_the_whole_list(self):
         self.intake(objective=TARGET)
