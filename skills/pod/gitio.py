@@ -169,16 +169,34 @@ def _tree_rows(data: bytes, width: int) -> dict[str, tuple[str, str, str]] | Non
     return rows
 
 
+_GIT_TRUE = frozenset({"true", "yes", "on", "1"})
+_GIT_FALSE = frozenset({"false", "no", "off", "0", ""})
+
+
+def git_bool(value: str | None) -> bool | None:
+    """A boolean Git setting under Git's rules, case-insensitively: a valueless key (None) and `true`, `yes`, `on`
+    or `1` are true; `false`, `no`, `off`, `0` and the empty string are false; anything else is unknown (None)."""
+    if value is None:
+        return True
+    lowered = value.lower()
+    return True if lowered in _GIT_TRUE else False if lowered in _GIT_FALSE else None
+
+
 def partial_clone(root: Path, *, reader: Callable | None = None) -> bool | None:
-    """Whether the repository is a partial clone or has a promisor remote; None when its config is unreadable."""
-    listed = (reader or read)(root, ["config", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.promisor)$"])
+    """Whether the repository is a partial clone or has a promisor remote; None when its config is unreadable or a
+    remote's `promisor` is not a Git boolean. Entries are read with `--null`, so a valueless key stays distinct
+    from an empty value."""
+    listed = (reader or read)(root, ["config", "--null", "--get-regexp",
+                                     r"^(extensions\.partialclone|remote\..*\.promisor)$"])
     if listed is None or listed.returncode not in (0, 1) or not isinstance(listed.stdout, str):
         return None
-    for line in listed.stdout.splitlines():
-        key, _, value = line.partition(" ")
-        if key == "extensions.partialclone" or value.strip().lower() in ("true", "yes", "on", "1"):
-            return True
-    return False
+    flags = []
+    for entry in listed.stdout.split("\0"):
+        if not entry:
+            continue
+        key, newline, value = entry.partition("\n")
+        flags.append(True if key == "extensions.partialclone" else git_bool(value if newline else None))
+    return True if True in flags else None if None in flags else False
 
 
 class TreeView:
