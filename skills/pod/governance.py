@@ -560,6 +560,75 @@ def scope_resolver(project: Path, commits: list[str]):
     return resolved
 
 
+MAX_SOURCE_BYTES = 1_048_576  # source_identity's read limit
+
+
+def delivered_source_reader(project: Path, commit: str):
+    """R204: what a bound evidence source is in the delivered candidate's Git tree, read only.
+
+    Returns a reader from a path to `{path, state: present, sha256}`, `{path, state: absent}`, or None when Pod
+    cannot read it: an unsafe or secret-bearing path, an unreadable tree or blob, a blob over the source read
+    limit, or a path whose final component is not a regular file (`100644`/`100755`) or whose parents are not
+    all trees, so a committed symlink or gitlink is never followed, as `source_identity` refuses one on the host
+    and R203's resolver refuses an opaque mode. The worktree, host paths and remotes are never read; the tree
+    inventory and blobs are cached for one write.
+    """
+    from hashlib import sha256
+    from .records import _safe_relative
+    table: list[dict[str, tuple[str, str]] | None] = []
+    found: dict[str, dict | None] = {}
+
+    def entries():
+        if not table:
+            listed = (_git(project, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit])
+                      if isinstance(commit, str) and _OBJECT.fullmatch(commit) else None)
+            rows = None
+            if listed is not None and listed.returncode == 0:
+                rows = {}
+                for entry in listed.stdout.split("\0"):
+                    meta, _, name = entry.partition("\t")
+                    parts = meta.split()
+                    if len(parts) == 3 and name:
+                        rows[name] = (parts[0], parts[2])
+            table.append(rows)
+        return table[0]
+
+    def blob(obj):
+        size = _git(project, ["cat-file", "-s", obj])
+        if size is None or size.returncode != 0 or not size.stdout.strip().isdigit() \
+                or int(size.stdout.strip()) > MAX_SOURCE_BYTES:
+            return None
+        shown = _git(project, ["cat-file", "blob", obj], binary=True)
+        return shown.stdout if shown is not None and shown.returncode == 0 else None
+
+    def read(path):
+        rows = entries()
+        if rows is None or not isinstance(path, str) or "\0" in path or not _safe_relative(path):
+            return None
+        parts = path.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            return None
+        for depth in range(1, len(parts)):
+            mode, _ = rows.get("/".join(parts[:depth]), (None, None))
+            if mode is None:
+                return {"path": path, "state": "absent"}
+            if mode != "040000":
+                return None  # a symlink, gitlink or file as a parent is never followed
+        mode, obj = rows.get(path, (None, None))
+        if mode is None:
+            return {"path": path, "state": "absent"}
+        if mode not in ("100644", "100755") or not _OBJECT.fullmatch(obj):
+            return None
+        data = blob(obj)
+        return None if data is None else {"path": path, "state": "present", "sha256": sha256(data).hexdigest()}
+
+    def reader(path):
+        if path not in found:
+            found[path] = read(path)
+        return found[path]
+    return reader
+
+
 MAX_STAMP_BASES = 64
 
 

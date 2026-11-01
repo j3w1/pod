@@ -9984,6 +9984,46 @@
         "tests.test_governance_delta_rebind.QuestionTests.test_an_answer_records_but_using_the_approval_still_needs_current_governance"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A756",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_keeps_proof_the_delivery_relied_on",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_the_closing_write_and_its_replay_use_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_recorded_closure_replays_against_the_delivered_tree_after_the_worktree_moves"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A757",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_changed_candidate_or_new_satisfaction_keeps_todays_refusal",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_row_re_satisfied_in_the_closing_write_is_judged_against_the_worktree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_writes_outside_the_bookkeeping_route_judge_the_worktree"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A758",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_bound_source_that_differs_from_the_delivered_tree_refuses",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_compared_row_the_kernel_changes_refuses_after_the_kernel",
+        "tests.test_delivered_proof_sources.DeliveredSourceReaderTests.test_regular_blobs_are_read_from_the_commit_and_absence_is_absent",
+        "tests.test_delivered_proof_sources.DeliveredSourceReaderTests.test_links_gitlinks_trees_unsafe_and_oversized_paths_are_unreadable"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
