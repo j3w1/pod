@@ -15,9 +15,6 @@ from .errors import PodError
 from .history import load_context
 from .util import public_decisions
 
-MAX_SCAN = 1024
-MAX_ROWS = 128
-MAX_DIAGNOSTICS = 32
 
 
 def _location(selector: object) -> str | None:
@@ -132,8 +129,9 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
                 "next_safe_action": "the Pod state root cannot be enumerated; nothing can be proven absent"}
     rows, unreadable, unattributed = [], [], []
     directories = [entry for entry in directories if not entry.name.startswith(".")]
-    result["scan"] = {"directories": len(directories), "scanned": min(len(directories), MAX_SCAN)}
-    for entry in directories[:MAX_SCAN]:
+    # Every record directory is read, however many the state root holds (R206).
+    result["scan"] = {"directories": len(directories), "scanned": len(directories)}
+    for entry in directories:
         try:
             if entry.is_symlink():
                 unreadable.append({"record": entry.name, "code": "unsafe_state"})
@@ -208,25 +206,23 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     rows.sort(key=lambda row: (row["objective"], row["record"]))
     if delivered:
         from .evidence_closure import prove
-        for row in rows[:MAX_ROWS]:
+        for row in rows:
             if row["phase"] == "open":
                 proof = prove(target, row["objective"], readback=False)
                 row["delivery_proof"] = {"status": proof["status"], "conditions": proof["conditions"]}
     # Open objectives whose coordinator a verified Orca window ended show their supported continuation step; this
     # reads Orca and the host verifier only for open rows, inside a live Orca terminal, within a bounded budget.
     from .window import discover
-    discover(rows[:MAX_ROWS], project=target)
-    truncated = len(rows) > MAX_ROWS or len(directories) > MAX_SCAN
-    result.update(objectives=rows[:MAX_ROWS], total=len(rows), truncated=truncated,
-                  unreadable_records=unreadable[:MAX_DIAGNOSTICS],
-                  unattributed_records=unattributed[:MAX_DIAGNOSTICS],
-                  complete=not truncated and not unreadable and not unattributed)
-    if len(unreadable) > MAX_DIAGNOSTICS or len(unattributed) > MAX_DIAGNOSTICS:
-        result["diagnostics_omitted"] = (max(0, len(unreadable) - MAX_DIAGNOSTICS)
-                                         + max(0, len(unattributed) - MAX_DIAGNOSTICS))
+    discover(rows, project=target)
+    # One record Pod cannot read holds only its own resources (R206): it is named `unavailable` with its code, and
+    # the list of every other objective stays complete.
+    result.update(objectives=rows, total=len(rows), truncated=False,
+                  unreadable_records=[{**item, "status": "unavailable"} for item in unreadable],
+                  unattributed_records=unattributed, complete=True)
     result["next_safe_action"] = (
-        "every record under the state root was read; this list is complete" if result["complete"]
-        else "treat unreadable, unattributed or unscanned records as possibly touching this scope")
+        "every record under the state root was read; this list is complete" if not unreadable and not unattributed
+        else "every readable record is listed; each unreadable or unattributed record is unavailable and holds only "
+             "its own resources: repair or remove it")
     return public_decisions(result)
 
 
@@ -235,7 +231,7 @@ def render(result: dict) -> None:
     scope = result["scope"]
     where = scope.get("worktree") or scope.get("repository") or scope.get("repo_key") or "this directory"
     print(f"Pod objectives for {clean(str(where))}: {result['status']}; {result['total']} recorded"
-          + ("; truncated" if result["truncated"] else "") + ("" if result["complete"] else "; incomplete"))
+          + ("" if result["complete"] else "; incomplete"))
     for row in result["objectives"]:
         link = (f" -> {clean(row['continued_by'])}" if row.get("continued_by") else "")
         if row.get("closure_basis") == "evidence":
@@ -257,7 +253,7 @@ def render(result: dict) -> None:
             print(f"    Delivery proof: {proof['status'].replace('_', ' ')}"
                   + "".join(f"; {clean(item['code'])}" for item in proof["conditions"][:4]))
     for item in result["unreadable_records"]:
-        print(f"  Unreadable record {clean(item['record'])}: {clean(item['code'])}")
+        print(f"  Unavailable record {clean(item['record'])}: {clean(item['code'])}; it holds only its own resources")
     for record in result["unattributed_records"]:
         print(f"  Unattributed record {clean(record)}")
     print(f"State root: {clean(scope['state_root'])}")
