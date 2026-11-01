@@ -129,6 +129,55 @@ class ConsumedReconciliationTests(TickCase):
                             earlier=False, detail="settlement_changed", key="closure", label="changed settled-set digest")
         self.assert_replays(path, earlier=False)
 
+    def test_an_edited_admission_identity_is_refused_by_the_recorded_settled_set(self):
+        from pod.ledger import settlement_facts
+        key = self.reconciled_worker(scope=["a prose summary of the assigned work"])
+        path = self.closed_with_open_source()
+        def binding(field):
+            return lambda raw: raw["admissions"][key]["native_binding"].update({field: "edited-" + field})
+        def field(name, value):
+            return lambda raw: raw["admissions"][key].update({name: value})
+        # Identity only the settled set binds: each edit is refused as `settlement_changed`.
+        bound = [(f"native {name}", binding(name)) for name in ("runId", "taskId", "workerId", "terminalHandle", "worktreeId")]
+        bound += [("worktree", field("worktree", "/elsewhere")), ("request", field("request_uuid", "0" * 32)),
+                  # A writer eligibility input: the recorded result paths a disposition is judged on.
+                  ("changed paths", field("changed_paths", ["edited/path.py"]))]
+        for label, tamper in bound:
+            self.assert_refused(path, tamper, earlier=False, detail="settlement_changed", key=key, label=label)
+        self.assert_replays(path, earlier=False)
+
+    def test_identity_the_stored_record_already_joins_is_refused_before_replay(self):
+        from pod.ledger import settlement_facts
+        key = self.reconciled_worker(scope=["a prose summary of the assigned work"])
+        path = self.closed_with_open_source()
+        def binding(field):
+            return lambda raw: raw["admissions"][key]["native_binding"].update({field: "edited-" + field})
+        def field(name, value):
+            return lambda raw: raw["admissions"][key].update({name: value})
+        # Identity the stored record's own validation already joins (the report's attempt and assignment, the
+        # runtime's authority) is refused before replay, with no write; the settled set binds it as well.
+        joined = [("native dispatchId", binding("dispatchId")), ("runtime", field("runtime", "another-runtime")),
+                  ("role", field("role", "review")), ("serves", field("serves", ["another"])),
+                  ("packet", field("packet_id", "0" * 64)), ("candidate", field("candidate", "0" * 40))]
+        original = logical_json(path)
+        recorded = original["checkpoint"]["closure"]["settlement_digest"]
+        runtimes, seq = set(), original["checkpoint"]["seq"]
+        for label, tamper in joined:
+            with self.subTest(label):
+                raw = logical_json(path); tamper(raw)
+                self.assertNotEqual(settlement_facts(raw["admissions"], runtimes=runtimes, seq=seq)[0], recorded)
+                before = path.read_bytes()
+                try:
+                    path.write_text(json.dumps(raw))
+                    closes = len(self.issue.closes)
+                    row = close_source_issues(self.project, "objective")["source_issues"][0]
+                    self.assertNotIn(row["outcome"], ("closed", "already_completed"))
+                    self.assertEqual(len(self.issue.closes), closes)
+                finally:
+                    path.write_bytes(before)
+        self.assertEqual(settlement_facts(original["admissions"], runtimes=runtimes, seq=seq)[0], recorded)
+        self.assert_replays(path, earlier=False)
+
     def test_a_closure_without_the_recorded_settled_set_checks_each_settlement_record(self):
         key = self.reconciled_worker(scope=["a prose summary of the assigned work"])
         path = self.closed_with_open_source()
@@ -164,6 +213,9 @@ class ConsumedReconciliationTests(TickCase):
         # The result commit is not an ancestor of its base: the writer would refuse this target.
         retarget = lambda raw: raw["admissions"][key]["disposition"].update(candidate=self.base)  # noqa: E731
         self.assert_refused(path, retarget, earlier=False, detail="settlement_changed", key=key, label="recorded set")
+        # The recorded result paths the writer judged the integration on: without them it needs an attestation.
+        self.assert_refused(path, lambda raw: raw["admissions"][key].update(changed_paths=None), earlier=False,
+                            detail="settlement_changed", key=key, label="changed paths removed")
         self.assert_refused(path, retarget, earlier=True, detail="outstanding_unaccounted", key=key, label="Git check")
         self.assert_replays(path, earlier=True)
         self.assert_replays(path, earlier=False)
@@ -227,6 +279,36 @@ class RecordedDispositionTests(unittest.TestCase):
                                                                             "validated": "attestation"}}, 5))
         self.assertFalse(_recorded_disposition({**ancestry, "disposition": {}}, 5))
         self.assertFalse(_recorded_disposition({**ancestry, "boundary_exceeded": ["elsewhere"]}, 5))
+
+
+class RouteDiscardSettlementTests(unittest.TestCase):
+    """An R160 terminal discard is bound into the settled set with its decision inputs (R155)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_route_settlements import SettlementCase
+        cls.case_class = SettlementCase
+        SettlementCase.setUpClass()
+        cls.addClassCleanup(SettlementCase.doClassCleanups)
+
+    def test_a_pending_discard_matches_its_written_form_and_its_decision_inputs_are_bound(self):
+        from pod.ledger import settlement_facts
+        case = self.case_class(); case.setUp(); self.addCleanup(case.doCleanups)
+        admission, _ = case.original(role="investigate", resolves="one question", stop_condition="one answer")
+        entry = case.lead(admission, corrections=[])
+        before = case.state(); seq = before["checkpoint"]["seq"] + 1
+        pending = settlement_facts(before["admissions"], runtimes=set(), seq=seq, pending=[entry])
+        case.c.write(**case.parked(), route_settlements=[entry])
+        after = case.state()
+        self.assertEqual(settlement_facts(after["admissions"], runtimes=set(), seq=after["checkpoint"]["seq"]), pending)
+        written = after["admissions"][admission["admission_id"]]["route_decision"]["settlements"][-1]
+        self.assertEqual((written["basis"], written["decision"]), ("lead_decision", "discard"))
+        for change in ({"reason": "another reason"}, {"source": {"reference": "another"}}, {"corrections": ["C9"]}):
+            with self.subTest(change):
+                edited = json.loads(json.dumps(after["admissions"]))
+                edited[admission["admission_id"]]["route_decision"]["settlements"][-1].update(change)
+                self.assertNotEqual(settlement_facts(edited, runtimes=set(), seq=after["checkpoint"]["seq"])[0],
+                                    pending[0])
 
 
 class YoloDeliveryReplayTests(StandingCase):

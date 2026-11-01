@@ -1128,12 +1128,21 @@ def _report_deviations(admission: dict, runtimes: set[str]) -> list[str] | None:
     return None
 
 
+# Admission fields a closure's settled set leaves out (R155), each because it legitimately changes after the
+# closure is built: `updated_at` is stamped by every later admission update, and a checkpoint's route settlements
+# (`route_decision.settlements` and its `mismatch_occurrence`) land after the closure in the same write; an R160
+# terminal discard is bound through the evidence instead.
+SETTLEMENT_EXCLUDED = ("updated_at",)
+SETTLEMENT_ROUTE_EXCLUDED = ("settlements", "mismatch_occurrence")
+
+
 def settlement_facts(admissions: dict, *, runtimes: set[str], seq: int, pending=()) -> tuple[str, dict]:
     """R155: the canonical settled set a closing write accepts, and its replay recomputes.
 
     Every admission a closure counts (all but closed and deferred ones, each of which the closing write saw
-    settled) with its full settlement evidence: the consumed report's identity and the deviations its digest
-    verifies with, the result commits, the disposition, abandoned accounting and an R160 terminal discard
+    settled): its full stored row, which binds its identity (role, state, native binding, runtime, worktree,
+    placement, boundary, serves, packet, candidate and request), apart from `SETTLEMENT_EXCLUDED`, with its
+    settlement evidence: the deviations its consumed report's digest verifies with and an R160 terminal discard
     (judged with this write's pending settlements, which land after the closure is built). Returns the digest of
     that set with the closed map's `seq`, and a short digest per admission so a mismatch names the admission."""
     from .util import route_discarded
@@ -1143,19 +1152,25 @@ def settlement_facts(admissions: dict, *, runtimes: set[str], seq: int, pending=
         if not isinstance(row, dict) or row.get("state") in ("closed", "deferred"):
             continue
         report = row.get("report") if isinstance(row.get("report"), dict) else None
-        result = row.get("result") if isinstance(row.get("result"), dict) else {}
         try:
             discarded = route_discarded(row, pending=list(pending or ()))
         except PodError:
             discarded = None
-        entries[key] = {
-            "state": row.get("state"), "role": row.get("role"),
-            "report": None if report is None else {
-                **{field: report.get(field) for field in ("status", "outcome", "observation_digest", "result_commit")},
-                "deviations": _report_deviations(row, runtimes)},
-            "result": {field: result.get(field) for field in ("base", "head")},
-            "disposition": row.get("disposition"), "abandoned_accounting": row.get("abandoned_accounting"),
-            "route_discarded": discarded}
+        # R160 decision inputs: each terminal discard as recorded, or as this write's pending input records it.
+        decision = ("basis", "decision", "source", "reason", "corrections")
+        recorded = [entry for entry in (row.get("route_decision") or {}).get("settlements", [])
+                    if isinstance(entry, dict)]
+        recorded += [entry for entry in pending or () if isinstance(entry, dict) and entry.get("admission") == key]
+        discards = sorted(({field: entry[field] for field in decision if field in entry} for entry in recorded
+                           if entry.get("basis") == "lead_decision" and entry.get("decision") == "discard"),
+                          key=lambda entry: digest(entry))
+        stored = {field: value for field, value in row.items() if field not in SETTLEMENT_EXCLUDED}
+        if isinstance(stored.get("route_decision"), dict):
+            stored["route_decision"] = {field: value for field, value in stored["route_decision"].items()
+                                        if field not in SETTLEMENT_ROUTE_EXCLUDED}
+        entries[key] = {"admission": stored, "evidence": {
+            "deviations": None if report is None else _report_deviations(row, runtimes),
+            "route_discarded": discarded, "route_discards": discards}}
     return (digest({"seq": seq, "admissions": entries}),
             {key[:16]: digest(value)[:16] for key, value in entries.items()})
 
