@@ -10175,6 +10175,7 @@
       ],
       "offline_test": [
         "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_plain_close_after_an_earlier_withdrawal_keeps_the_bound_baseline",
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_minimal_close_after_an_earlier_withdrawal_keeps_the_bound_baseline",
         "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_plain_close_that_omits_a_recorded_field_keeps_ordinary_checks",
         "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_an_all_satisfied_record_without_a_withdrawal_keeps_ordinary_checks"
       ],

@@ -318,6 +318,17 @@ class EarlierWithdrawalClosureTests(KernelCase):
         self.assertEqual((adoption["base"], adoption["target"]), (self.bound["base"], self.target))
         self.assertEqual([row["obligation"] for row in stored["closure"]["report"]["withdrawn"]], ["R"])
 
+    def test_a_minimal_close_after_an_earlier_withdrawal_keeps_the_bound_baseline(self):
+        self.withdraw()
+        self.move_target()
+        seq = read(self.project, "objective")["checkpoint"]["seq"] + 1
+        result = checkpoint(self.project, "objective", owner="owner", value=self.core(seq=seq, close=True),
+                            native={"runtime": "runtime", "delegation": "available"})
+        self.assertTrue(result["checkpoint"]["closure"])
+        self.assertEqual(result["checkpoint"]["governance"], self.bound)
+        self.assertEqual((result["governance_adoption"]["adopted"], result["governance_adoption"]["closure"]),
+                         (False, "withdrawn"))
+
     def test_a_plain_close_that_omits_a_recorded_field_keeps_ordinary_checks(self):
         self.withdraw()
         self.move_target()

@@ -1518,7 +1518,8 @@ def _withdrawal_only(prior_map: dict, proposed: dict, core: dict, previous: dict
             or core.get("criteria") != previous.get("criteria")):
         return False
     try:
-        rows = expand_update(prior_map, proposed).get("obligations")
+        # A close that sends neither rows nor an update keeps the recorded rows, as the kernel does.
+        rows = expand_update(prior_map, proposed).get("obligations", prior_map["obligations"])
     except PodError:
         return False
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
