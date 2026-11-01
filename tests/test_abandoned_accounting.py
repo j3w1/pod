@@ -1012,6 +1012,25 @@ class TerminalReadTests(unittest.TestCase):
             with patch.object(orca, '_read', return_value={'runtime': 'r', 'result': result}):
                 self.assertEqual(orca.terminal_inventory(), expected)
 
+    def test_the_terminal_inventory_reads_past_the_default_page_and_still_checks_rows(self):
+        from pod import orca
+        rows = [{'handle': f'term-{index}', 'incarnationId': 'i'} for index in range(230)]
+        for whole, expected in (({'terminals': rows, 'truncated': False, 'totalCount': 230}, rows),
+                                ({'terminals': rows, 'truncated': True, 'totalCount': 230}, None),
+                                ({'terminals': rows, 'truncated': False, 'totalCount': 231}, None),
+                                ({'terminals': [*rows[:229], {'handle': 'term-x'}], 'truncated': False,
+                                  'totalCount': 230}, None)):
+            calls = []
+
+            def read(argv):
+                calls.append(argv)
+                result = whole if '--limit' in argv else {'terminals': rows[:200], 'truncated': True, 'totalCount': 230}
+                return {'runtime': 'r', 'result': result}
+            with self.subTest(whole=whole['truncated'], total=whole['totalCount']), \
+                    patch.object(orca, '_read', side_effect=read):
+                self.assertEqual(orca.terminal_inventory(), expected)
+                self.assertEqual(calls, [['terminal', 'list', '--json'], ['terminal', 'list', '--limit', '230', '--json']])
+
 
     def test_an_unreadable_owner_or_a_permission_error_other_than_eacces_leaves_the_carrier_scan_unknown(self):
         from pod.orca import handle_carriers

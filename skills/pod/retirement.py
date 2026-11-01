@@ -836,10 +836,10 @@ class _Host:
 
     def inventory(self, kind: str) -> dict | None:
         if kind not in self._reads:
-            from .orca import read_command
+            from .orca import complete_list, read_command
             self._reads[kind] = None
             try:
-                result = read_command([kind.removesuffix("s"), "list", "--json"])["result"]
+                result = complete_list(kind.removesuffix("s"), read_command)["result"]
             except (PodError, KeyError, TypeError):
                 return None
             rows = _complete(result, kind)

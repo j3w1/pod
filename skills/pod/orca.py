@@ -78,6 +78,9 @@ def _read_allowed(argv: list[str]) -> bool:
                 # R113: the complete inventories that prove a released path absent.
                 ["worktree", "list", "--json"], ["terminal", "list", "--json"]):
         return True
+    if (len(argv) == 5 and argv[0] in ("worktree", "terminal") and argv[1:3] == ["list", "--limit"]
+            and isinstance(argv[3], str) and re.fullmatch(r"[1-9][0-9]*", argv[3]) and argv[4] == "--json"):
+        return True  # R113: the same inventory read past Orca's default page (`complete_list`).
     if (len(argv) == 5 and argv[:3] == ["terminal", "show", "--terminal"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
@@ -545,9 +548,24 @@ def worker_show(dispatch: str) -> dict:
     return _read(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
 
 
+def complete_list(kind: str, read=None) -> dict:
+    """Orca's whole `worktree` or `terminal` inventory (R113). Orca answers one default page; when that page reports
+    itself truncated short of an integer total, Pod reads once more asking for exactly that many rows. The caller's
+    own completeness check decides: a second answer still truncated, or whose total no longer equals its rows
+    because the inventory changed in between, stays incomplete. There is no loop and no fixed cap."""
+    read = _read if read is None else read
+    response = read([kind, "list", "--json"])
+    result = response.get("result") if isinstance(response, dict) else None
+    rows = result.get(kind + "s") if isinstance(result, dict) else None
+    total = result.get("totalCount") if isinstance(result, dict) else None
+    if isinstance(rows, list) and result.get("truncated") is True and type(total) is int and total > len(rows):
+        return read([kind, "list", "--limit", str(total), "--json"])
+    return response
+
+
 def terminal_inventory() -> list[dict] | None:
     """Orca's complete live terminal records, or None when the read is not provably complete."""
-    result = _read(["terminal", "list", "--json"])["result"]
+    result = complete_list("terminal")["result"]
     rows = result.get("terminals") if isinstance(result, dict) else None
     if (not isinstance(rows, list) or result.get("truncated") is not False
             or result.get("totalCount", len(rows)) != len(rows)

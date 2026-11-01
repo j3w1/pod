@@ -369,6 +369,19 @@ class DisplayOpTests(TabCase):
         self.assertEqual(row["verdict"], "unreadable")
         self.assertEqual(row["read_command"], ["orca", "worktree", "list", "--limit", "1000", "--json"])
 
+    def test_a_paged_terminal_inventory_is_read_whole(self):
+        self.setup_display()
+        owner = self.terminals["result"]["terminals"][0]
+        others = [{"handle": f"t{index}", "worktreePath": "/elsewhere", "connected": True} for index in range(229)]
+        whole = {"result": {"terminals": [*others, owner], "totalCount": 230, "truncated": False}}
+        self.terminals = {"result": {"terminals": others[:200], "totalCount": 230, "truncated": True}}
+        reads = {("terminal", "list", "--limit", "230", "--json"): whole}
+        with patch("pod.orca.read_command", side_effect=lambda argv, **kwargs: deepcopy(reads[tuple(argv)])
+                   if tuple(argv) in reads else self.display_read(argv)), patch("pod.orca.mutate_command"):
+            output = internal.run("display", {"project": str(self.project), "objective": "objective"})
+        self.assertEqual(output["rows"][1]["verdict"], "matches", output["rows"][1])
+        self.assertEqual(self.display_calls[0], ["terminal", "list", "--json"])
+
     def bounded_worktrees(self, count):
         task = deepcopy(self.worktrees["result"]["worktrees"][0])
         task.update(displayNameMode="fixed", displayName="Parser repair (#17)", linkedIssue=17)
