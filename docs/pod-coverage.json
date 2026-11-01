@@ -9992,8 +9992,9 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_retirement_superseded.SupersededRetirementTests.test_detection_reads_documented_fields_and_retirement_keeps_the_record_bytes",
-        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_agent_decision_the_hands_off_policy_accepts_retires"
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_detection_reads_the_whole_record_and_retirement_keeps_its_bytes",
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_agent_decision_the_hands_off_policy_accepts_retires",
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_owner_decision_relayed_without_verification_refuses"
       ],
       "status": "NOT_RUN"
     },
@@ -10005,7 +10006,7 @@
       ],
       "offline_test": [
         "tests.test_retirement_superseded.SupersededRetirementTests.test_status_and_list_read_retired_and_every_write_refuses",
-        "tests.test_retirement_superseded.SupersededRefusalTests.test_a_malformed_stored_entry_never_reads_retired"
+        "tests.test_retirement_superseded.SupersededEntryTests.test_a_malformed_stored_entry_never_reads_retired"
       ],
       "status": "NOT_RUN"
     },
@@ -10019,6 +10020,37 @@
         "tests.test_retirement_superseded.SupersededRefusalTests.test_a_live_coordinator_or_live_work_still_refuses",
         "tests.test_retirement_superseded.SupersededRefusalTests.test_a_present_path_that_is_no_worktree_of_this_repository_refuses",
         "tests.test_retirement_superseded.SupersededRefusalTests.test_an_unknown_schema_or_a_malformed_older_record_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A764",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_superseded.SupersededScopeTests.test_a_binding_on_another_run_than_its_admission_refuses_before_any_native_read",
+        "tests.test_retirement_superseded.SupersededScopeTests.test_every_run_the_record_names_has_its_complete_worker_list_read",
+        "tests.test_retirement_superseded.SupersededScopeTests.test_a_malformed_binding_refuses_in_every_admission_state",
+        "tests.test_retirement_superseded.SupersededScopeTests.test_a_native_reference_in_assignments_refuses",
+        "tests.test_retirement_superseded.SupersededScopeTests.test_a_start_request_held_only_in_recovery_refuses",
+        "tests.test_retirement_superseded.SupersededScopeTests.test_a_first_format_record_with_effects_refuses",
+        "tests.test_retirement_superseded.SupersededScopeTests.test_an_unknown_key_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A765",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_superseded.SupersededEntryTests.test_a_hand_placed_entry_without_a_decision_never_reads_retired",
+        "tests.test_retirement_superseded.SupersededEntryTests.test_another_repository_another_scope_or_a_missing_receipt_never_reads_retired",
+        "tests.test_retirement_superseded.SupersededEntryTests.test_a_stripped_or_stale_entry_never_reads_retired_or_settles",
+        "tests.test_retirement_superseded.LiveRecoveryTests.test_a_junk_or_uncertified_entry_never_ends_a_live_recovery_holding_the_run"
       ],
       "status": "NOT_RUN"
     }

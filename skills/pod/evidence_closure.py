@@ -380,23 +380,24 @@ def _gone(identity: dict) -> bool:
     return identity["state"] == "lost" or bool(identity.get("exited"))
 
 
-def _phase(root: Path, raw: dict) -> str:
+def _phase(project: Path, root: Path, raw: dict) -> str:
     from .listing import _phase as listed
-    phase = listed(raw, root)
+    phase = listed(raw, root, project)
     return "closed" if present(root) and phase == "open" else phase
 
 
 def _settled_record(project: Path, row: dict, *, frozen: frozenset[str] = frozenset()) -> bool:
     """Whether a recovery coordinator's own record is finished: closed, closed by evidence, ended by the owner's
-    historical retirement, or continued along a chain that ended closed (R110). A certified frozen predecessor in
-    this proof's complete chain has also ended authority; its native work is still checked. A record on a schema
-    Pod does not know proves nothing finished, whatever its raw fields say."""
+    historical retirement (an older record's only through its certified entry, R205), or continued along a chain
+    that ended closed (R110). A certified frozen predecessor in this proof's complete chain has also ended
+    authority; its native work is still checked. A record on a schema Pod does not know proves nothing finished,
+    whatever its raw fields say."""
     from .succession import chain_state
     if present(row["root"]):
         return True
     if _record_class(row["raw"]) not in SUPPORTED:
         return False
-    phase = _phase(row["root"], row["raw"])
+    phase = _phase(project, row["root"], row["raw"])
     if phase in ("closed", "retired"):
         return True
     return phase == "continued" and (row["objective"] in frozen
@@ -451,7 +452,13 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
     if present(root):
         proof.add("not_applicable", "objective_closed", "The objective is already closed by evidence.")
         return proof.result()
-    phase = _phase(root, raw)
+    from .retirement import older_retirement
+    if older_retirement(project, root) == "unverified":
+        # Its presence fences every write, yet it proves no retirement and no delivery (R205).
+        proof.add("unverified", "retirement_unverified", "A historical retirement entry stands beside the record "
+                  "but cannot be read or certified.")
+        return proof.result()
+    phase = _phase(project, root, raw)
     if phase != "open":
         code = {"closed": "objective_closed", "retired": "objective_retired",
                 "continued": "objective_continued"}[phase]
@@ -878,7 +885,7 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
                 pending.append(members[row["objective"]])
     rows = list(members.values())
     proof.facts["chain"] = [{"objective": row["objective"], "relation": row["relation"],
-                             "phase": _phase(row["root"], row["raw"])} for row in rows][:MAX_MEMBERS]
+                             "phase": _phase(project, row["root"], row["raw"])} for row in rows][:MAX_MEMBERS]
     if len(rows) > MAX_MEMBERS:
         proof.add("not_proved", "scope_too_large", f"The delivery chain has more than {MAX_MEMBERS} objectives.")
         return None
@@ -1273,7 +1280,8 @@ def close_by_evidence(project: Path, objective: str, *, caller: str, port=None, 
             return _closed_effects(project, objective, _replay(project, root, chain, caller=caller, port=port),
                                    chain, remote=remote)
         raw, _ = _read_record(root)
-        if _phase(root, raw) == "closed" and (isinstance((raw.get("checkpoint") or {}).get("objective_source"), dict)
+        if _phase(project, root, raw) == "closed" and (
+                isinstance((raw.get("checkpoint") or {}).get("objective_source"), dict)
                 or any(row["doc"]["issue"] is not None for row in chain)):
             return _closed_effects(project, objective, {"objective": objective, "status": "replayed",
                                    "closure": {"basis": "obligations"}}, chain, remote=remote)
@@ -1918,7 +1926,7 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
                 continue
             try:
                 raw, _ = _read_record(root)
-                phase = _phase(root, raw)
+                phase = _phase(target, root, raw)
             except PodError:
                 phase = "open"  # Its closure reports why it cannot be read.
             rows.append({"objective": name, "phase": phase})
@@ -1930,7 +1938,8 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
                     rows.append({"objective": tail, "phase": "closed"})
         return rows, missing, []
     found, problems = _scan(target, orphans=True)
-    return [{"objective": row["objective"], "phase": _phase(row["root"], row["raw"])} for row in found], [], problems
+    rows = [{"objective": row["objective"], "phase": _phase(target, row["root"], row["raw"])} for row in found]
+    return rows, [], problems
 
 
 def _scope_reason(problems: list[dict]) -> str:

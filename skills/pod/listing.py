@@ -72,24 +72,19 @@ def _facts(raw: dict) -> dict:
     return {"worktrees": sorted(worktrees), "runs": sorted(runs), "locations_complete": complete}
 
 
-def _phase(raw: dict, root: Path | None = None) -> str:
-    """The recorded phase; with the record's directory, an older record's retirement stored beside it counts."""
+def _phase(raw: dict, root: Path | None = None, project: Path | None = None) -> str:
+    """The recorded phase; with the record's directory and project, an older record's retirement certified beside
+    it counts (R205). An entry's mere presence never reads `retired`."""
     if isinstance(raw.get("continued_by"), dict):
         return "continued"
     if isinstance(raw.get("historical_retirement"), dict):
         return "retired"  # Released by the owner; never closed or completed (R112).
-    if root is not None and _older_retired(root, raw):
-        return "retired"  # Its entry is stored beside the unchanged older record (R205).
+    if root is not None and project is not None:
+        from .retirement import older_retirement
+        if older_retirement(project, root) == "retired":
+            return "retired"
     checkpoint = raw.get("checkpoint")
     return "closed" if isinstance(checkpoint, dict) and checkpoint.get("closure") else "open"
-
-
-def _older_retired(root: Path, raw: dict) -> bool:
-    from .retirement import sidecar_presence
-    if sidecar_presence(root) == "absent":
-        return False
-    from .evidence_closure import _record_class
-    return _record_class(raw) == "older"
 
 
 def _schema(raw: dict) -> str:
@@ -171,7 +166,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
         facts = _facts(raw)
         from .evidence_closure import block as closure_block, compact
         closure = closure_block(Path(entry.path))
-        phase = _phase(raw, Path(entry.path))
+        phase = _phase(raw, Path(entry.path), target)
         if closure is not None and phase == "open":
             phase = "closed"  # Closed by evidence, whatever the record's schema (R145, R146).
         row = {"objective": name, "record": entry.name, "phase": phase, "schema": _schema(raw),
@@ -192,10 +187,10 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
             from .retirement import status_block
             row["retirement"] = status_block(raw)
         elif row["phase"] == "retired" and row["schema"] == "superseded":
-            # An older record's entry stored beside it (R205); an unreadable one gives no block.
+            # An older record's entry certified beside it (R205).
             from .retirement import older_state, status_block
             try:
-                found = older_state(Path(entry.path))
+                found = older_state(Path(entry.path), target)
             except PodError:
                 found = None
             if found is not None:
