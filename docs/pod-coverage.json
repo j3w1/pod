@@ -3244,7 +3244,7 @@
       "offline_test": [
         "tests.test_listing.ListingTests.test_absent_state_root_is_distinct_from_an_empty_list",
         "tests.test_listing.ListingTests.test_unreadable_unattributed_and_superseded_records_are_reported_not_hidden",
-        "tests.test_listing.ListingTests.test_unenumerable_root_and_truncation_are_explicit",
+        "tests.test_listing.ListingTests.test_unenumerable_root_is_explicit_and_every_record_is_listed",
         "tests.test_listing.ListingTests.test_worktree_scope_matches_recorded_locations_and_holds_unplaced_work",
         "tests.test_listing.ListingTests.test_cli_lists_without_orca_and_refuses_mixed_selectors"
       ],
@@ -3344,7 +3344,10 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_handoff_scope.OlderSchemaScopeTests.test_older_schema_records_prove_nonmembership_only_without_the_run"
+        "tests.test_handoff_scope.OlderSchemaScopeTests.test_older_records",
+        "tests.test_handoff_scope.OlderSchemaScopeTests.test_unproved_layouts",
+        "tests.test_handoff_scope.OlderSchemaScopeTests.test_records_that_could_name_the_run",
+        "tests.test_handoff_scope.OlderSchemaScopeShapeTests.test_the_scope_table_runs_every_row_once"
       ],
       "status": "NOT_RUN"
     },
@@ -3535,7 +3538,7 @@
       "offline_test": [
         "tests.test_retirement_absent.DecisionTests.test_a_reappearing_or_recreated_path_refuses_and_stable_facts_retire",
         "tests.test_retirement_absent.DecisionTests.test_a_decision_without_dispositions_or_claiming_more_refuses",
-        "tests.test_retirement_absent.DecisionTests.test_a_record_another_writer_widened_refuses",
+        "tests.test_retirement_absent.DecisionTests.test_a_record_another_writer_widened_still_retires",
         "tests.test_retirement_absent.DecisionTests.test_a_mixed_batch_reports_each_objective_and_later_retires_the_other",
         "tests.test_retirement_absent.ConcurrencyTests.test_a_path_that_appears_while_pod_reads_is_never_proven_absent",
         "tests.test_retirement_absent.ConcurrencyTests.test_a_path_that_changes_after_detection_refuses_before_the_write",
@@ -6760,7 +6763,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_evidence_closure.SweepTests.test_the_sweep_reads_every_record_past_the_list_bound_and_names_what_it_cannot_read",
+        "tests.test_evidence_closure.SweepTests.test_the_sweep_reads_every_record_and_names_what_it_cannot_read",
         "tests.test_closure_fixes_c1.ClaimedSweepTests.test_narrowed_predecessor_sweep_retries_its_source_through_the_closed_tail"
       ],
       "status": "NOT_RUN"
@@ -6801,7 +6804,7 @@
       "offline_test": [
         "tests.test_cleanup_plan.CleanupScaleTests.test_large_inventory_plan_expect_apply_only_objective_resources",
         "tests.test_cleanup_plan.CleanupScaleTests.test_shared_branch_beyond_the_old_inventory_bound_remains_protected",
-        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_still_has_a_resource_bound",
+        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_has_no_resource_count",
         "tests.test_github.StreamingRepositoryTests.test_canonical_and_linked_identity_keep_the_common_dir_key_and_full_shape",
         "tests.test_github.StreamingRepositoryTests.test_detached_identity_preserves_its_path_with_no_branch",
         "tests.test_github.StreamingRepositoryTests.test_bare_backed_worktree_uses_the_bare_common_dir_and_first_inventory_entry",
@@ -6811,7 +6814,7 @@
         "tests.test_github.StreamingRepositoryTests.test_discovery_and_cleanup_refuse_failed_empty_or_incomplete_native_inventory",
         "tests.test_github.StreamingRepositoryTests.test_discovery_refuses_a_complete_inventory_that_omits_the_current_worktree",
         "tests.test_github.StreamingRepositoryTests.test_other_discovery_reads_keep_their_output_bound_and_allowlist",
-        "tests.test_cleanup_plan.CleanupScaleTests.test_full_registry_consumer_bound_does_not_bound_objective_plan"
+        "tests.test_cleanup_plan.CleanupScaleTests.test_full_registry_byte_bound_does_not_bound_objective_plan"
       ],
       "status": "NOT_RUN"
     },
@@ -9475,8 +9478,8 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_admission_query.AdmissionQueryTests.test_unreadable_and_unattributed_are_scoped_unknowns",
-        "tests.test_admission_query.AdmissionQueryTests.test_unsupported_schema_is_a_scoped_unknown",
+        "tests.test_admission_query.AdmissionQueryTests.test_unreadable_and_unattributed_records_hold_only_themselves",
+        "tests.test_admission_query.AdmissionQueryTests.test_an_unsupported_schema_is_named_unavailable_and_holds_only_itself",
         "tests.test_admission_query.AdmissionQueryTests.test_incomplete_inventory_never_proves_absence",
         "tests.test_admission_query.AdmissionQueryTests.test_incomplete_native_inventory_never_becomes_empty",
         "tests.test_admission_query.AdmissionQueryTests.test_native_scope_pages_and_replay_are_verified",
@@ -10178,6 +10181,143 @@
         "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_minimal_close_after_an_earlier_withdrawal_keeps_the_bound_baseline",
         "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_plain_close_that_omits_a_recorded_field_keeps_ordinary_checks",
         "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_an_all_satisfied_record_without_a_withdrawal_keeps_ordinary_checks"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A770",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_absent.DetectionTests.test_a_mixed_release_names_each_disposition_and_writes_nothing",
+        "tests.test_retirement_absent.DecisionTests.test_a_held_location_no_read_could_release_is_echoed_and_retires",
+        "tests.test_retirement_absent.DecisionTests.test_a_record_another_writer_widened_still_retires",
+        "tests.test_retirement_absent.DecisionTests.test_a_decision_without_dispositions_or_claiming_more_refuses",
+        "tests.test_retirement_absent.PreservationTests.test_retiring_an_absent_path_keeps_history_and_reads_back_its_reservations",
+        "tests.test_retirement_absent.LocatedEntryShapeTests.test_the_block_derives_reservations_from_the_record"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A771",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_status_and_list_read_retired_and_every_write_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A772",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_absent.RepositorySizeTests.test_more_than_ninety_six_unrelated_worktrees_still_prove_absence",
+        "tests.test_cleanup_plan.CleanupPlanTests.test_more_than_ninety_six_unrelated_worktrees_never_bound_the_plan",
+        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_has_no_resource_count",
+        "tests.test_retirement_absent.LocatedEntryShapeTests.test_preserved_records_have_no_count_bound"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A773",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_listing.ListingTests.test_unenumerable_root_is_explicit_and_every_record_is_listed",
+        "tests.test_evidence_closure.SweepTests.test_the_sweep_reads_every_record_and_names_what_it_cannot_read",
+        "tests.test_admission_query.AdmissionQueryTests.test_every_native_page_is_read_however_many_and_a_repeated_cursor_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A774",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.AdmissionQueryTests.test_unreadable_and_unattributed_records_hold_only_themselves",
+        "tests.test_admission_query.AdmissionQueryTests.test_an_unsupported_schema_is_named_unavailable_and_holds_only_itself",
+        "tests.test_admission_query.AdmissionQueryTests.test_concurrent_inventory_addition_and_symlink_are_unknown",
+        "tests.test_listing.ListingTests.test_unreadable_unattributed_and_superseded_records_are_reported_not_hidden"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A775",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_an_unstarted_objective_and_any_closure",
+        "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_before_an_unreadable_record",
+        "tests.test_historical_retirement.UnreadableRecordTests.test_a_decodable_record_that_names_nothing_here_never_refuses_detection",
+        "tests.test_evidence_closure.UnreadableRecordProofTests.test_an_unreadable_record_holds_only_a_run_it_could_name",
+        "tests.test_carried_claim.ReservationTests.test_a_decodable_record_holds_only_the_objective_it_names",
+        "tests.test_historical_retirement.UnreadableRecordTests.test_a_decodable_record_that_names_the_objective_holds_its_detection",
+        "tests.test_historical_retirement.RefusalTableTests.test_other_records_refuse",
+        "tests.test_record_membership.MembershipTests.test_each_record_shape_holds_only_what_it_could_name",
+        "tests.test_record_membership.MembershipTests.test_an_outer_deadline_still_refuses_on_its_own",
+        "tests.test_record_membership.LazyPageTests.test_a_missing_descendant_page_stays_inside_its_record",
+        "tests.test_record_membership.ListDeadlineTests.test_an_outer_deadline_at_the_first_record_read_refuses_the_whole_list"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A776",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_scope.OlderSchemaScopeTests.test_older_records",
+        "tests.test_handoff_scope.OlderSchemaScopeTests.test_unproved_layouts",
+        "tests.test_handoff_scope.OlderSchemaScopeTests.test_records_that_could_name_the_run",
+        "tests.test_handoff_scope.OlderSchemaScopeShapeTests.test_the_scope_table_runs_every_row_once",
+        "tests.test_record_membership.MembershipTests.test_each_record_shape_holds_only_what_it_could_name",
+        "tests.test_evidence_closure.UnreadableRecordProofTests.test_an_unreadable_record_holds_only_a_run_it_could_name",
+        "tests.test_owner_handoff.TransitionTableTests.test_pending_unreadable_scope_and_nonlive_success_do_not_abort"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A777",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_historical_retirement.DecisionWordingTests.test_status_readiness_and_detection_word_an_agent_decision_neutrally",
+        "tests.test_historical_retirement.DecisionWordingTests.test_the_write_refusal_and_handoff_word_an_agent_decision_neutrally",
+        "tests.test_historical_retirement.DecisionWordingTests.test_handoff_window_and_claim_word_an_agent_decision_neutrally",
+        "tests.test_historical_retirement.DecisionWordingTests.test_an_owner_decision_still_names_the_owner",
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_agent_decision_the_hands_off_policy_accepts_retires",
+        "tests.test_retirement_absent.LocationWordingTests.test_an_agent_decision",
+        "tests.test_retirement_absent.LocationWordingTests.test_an_owner_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A778",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_absent.RecordOnlyTests.test_an_empty_release_retires_beside_another_objectives_live_terminal",
+        "tests.test_retirement_absent.RecordOnlyTests.test_an_empty_release_still_refuses_a_live_owner",
+        "tests.test_retirement_absent.RecordOnlyTests.test_an_empty_release_still_refuses_an_unsettled_run",
+        "tests.test_historical_retirement.RecordShapeTests.test_a_malformed_entry_makes_the_record_unsupported"
       ],
       "status": "NOT_RUN"
     }

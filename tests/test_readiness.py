@@ -404,7 +404,7 @@ class CompatibilityTests(ReadinessCase):
     ROUTE_FIELDS = ("route_holds", "route_holds_truncated", "route_settlements", "route_settlements_truncated",
                     "route_settlement_authority")
 
-    def compare(self, caller, objective="objective", changed=()):
+    def compare(self, caller, objective="objective", changed=(), revised_text=((), ())):
         if caller is None:
             os.environ.pop("ORCA_TERMINAL_HANDLE", None)
         else:
@@ -436,6 +436,12 @@ class CompatibilityTests(ReadinessCase):
                                     if not line.startswith(revised))
             observed_text = "".join(line for line in observed_text.splitlines(keepends=True)
                                     if not line.startswith(revised))
+        # `revised_text`: (earlier, current) text line prefixes a later requirement deliberately reworded.
+        earlier, current = revised_text
+        expected_text = "".join(line for line in expected_text.splitlines(keepends=True)
+                                if not earlier or not line.startswith(earlier))
+        observed_text = "".join(line for line in observed_text.splitlines(keepends=True)
+                                if not current or not line.startswith(current))
         lines = observed_text.splitlines(keepends=True)
         self.assertEqual(lines[0].rstrip("\n"), observed["readiness"]["summary"])
         added = ("Successor claim: ", "Decision ", "Derived governance adoption: ", "Worker tab: ", "PoD#", "Mode: ",
@@ -483,7 +489,11 @@ class CompatibilityTests(ReadinessCase):
     def test_a_retired_objective(self):
         self.delivered()
         self.retire(self.decide())
-        self.assertEqual(self.compare("next")["readiness"]["state"], "retired")
+        # R206: retirement holds nothing, so the held and ended-hold lines became also-released and holds-nothing,
+        # and each released path reads as it stood when the decision was recorded.
+        revised = (("  Still held: ", "  Its record does not list every location", "  Released "),
+                   ("  Also released: ", "  Pod's record holds no worktree", "  Released "))
+        self.assertEqual(self.compare("next", revised_text=revised)["readiness"]["state"], "retired")
 
 
 if __name__ == "__main__":

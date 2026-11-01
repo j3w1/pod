@@ -499,6 +499,22 @@ class ReservationTests(CarriedCase):
         self.close_successor()
         self.assertTrue(read(self.project, "successor")["checkpoint"]["closure"])
 
+    def test_a_decodable_record_holds_only_the_objective_it_names(self):
+        """R206: a record the scan cannot use as one, but can decode whole, holds the claim decision of an objective
+        its decoded record names; another objective proceeds, and the refusal names the record."""
+        self.lost_with(lambda: None)
+        self.successor()
+        broken = state_root(self.project) / "zz-unreadable"
+        broken.mkdir()
+        (broken / "context.json").write_text('["succ\\u0065ssor"]')  # Not a record object; it names the successor.
+        before = self.snapshot()
+        refused = self.refused(self.own_work()["prepare"], code="claim_unverified")
+        self.assertEqual((refused.detail["unreadable"], refused.detail["next_action"]),
+                         ([str(broken)], "repair or remove the unreadable record, then retry"))
+        self.assertEqual(before, self.snapshot())
+        self.successor(name="other", caller="other", run_id="run-o")  # B's first write proceeds.
+        self.assertIsNotNone(read(self.project, "other"))
+
     def test_a_repeated_close_answers_from_the_recorded_closure(self):
         """R117/A300: an unreadable record never changes the answer once closure is recorded."""
         self.lost_with(lambda: None)

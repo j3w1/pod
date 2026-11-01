@@ -286,7 +286,6 @@ def _journal_bytes(root: Path) -> bytes | None:
 
 
 ROOT_UNREADABLE = "state_root_unreadable"
-BEYOND_BOUND = "beyond_scan_bound"
 UNATTRIBUTED = "unattributed"
 
 
@@ -294,12 +293,12 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
     """Every readable record of this repository, any schema, and what kept the scan from reading all of them.
 
     The second list names each problem as `{record, code}`: a record directory that could not be read, one whose
-    record names no objective (`unattributed`), the state root itself (`state_root_unreadable`), or the directories
-    past the scan's own bound (`beyond_scan_bound` with their `count`). `orphans` also names a directory holding
-    Pod files without the record that names them, as R108's list does."""
+    record names no objective (`unattributed`) or the state root itself (`state_root_unreadable`). Every directory
+    is read, however many there are (R206). `orphans` also names a directory holding Pod files without the record
+    that names them, as R108's list does."""
     from .github import repository_context
     from .ledger import _record_exists, record_name, state_root
-    from .listing import MAX_SCAN, _name
+    from .listing import _name
     context = repository_context(project)
     root = state_root(project)
     try:
@@ -313,9 +312,8 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
     except OSError:
         return [], [{"record": None, "code": ROOT_UNREADABLE}]
     found = []
-    unreadable = ([] if len(entries) <= MAX_SCAN
-                  else [{"record": None, "code": BEYOND_BOUND, "count": len(entries) - MAX_SCAN}])
-    for entry in entries[:MAX_SCAN]:
+    unreadable = []
+    for entry in entries:
         try:
             if entry.is_symlink():
                 unreadable.append({"record": entry.name, "code": "unsafe_state"})
@@ -329,17 +327,22 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
                             unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
                 continue
             raw, _ = _read_record(Path(entry.path))
+            # Lazy reads of this record stay inside its own boundary (R206).
+            name = _name(raw)
+            member = name is not None and record_name(project, context, name) == entry.name
         except PodError as exc:
+            from .orca import DEADLINE_SPENT
+            if exc.code == DEADLINE_SPENT:
+                raise
             unreadable.append({"record": entry.name, "code": exc.code})
             continue
-        except OSError:
+        except (OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unreadable.append({"record": entry.name, "code": "unreadable"})
             continue
-        name = _name(raw)
         if name is None:
             unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
             continue
-        if record_name(project, context, name) == entry.name:
+        if member:
             found.append({"objective": name, "root": Path(entry.path), "raw": raw})
     return found, unreadable
 
@@ -462,8 +465,10 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
     if phase != "open":
         code = {"closed": "objective_closed", "retired": "objective_retired",
                 "continued": "objective_continued"}[phase]
+        from .retirement import entry_of, named
+        ended_by = f"{named(entry_of(project, root, raw), capital=True)} covers it." if phase == "retired" else ""
         proof.add("not_applicable", code, {"closed": "Its coordinator recorded its closure.",
-                                           "retired": "The owner's historical retirement covers it.",
+                                           "retired": ended_by,
                                            "continued": "A successor continues it; its chain tail closes it."}[phase])
         return proof.result()
     try:
@@ -525,16 +530,17 @@ def _claims(project: Path, objective: str, raw: dict, kind: str, proof: _Proof) 
         elif found["predecessor"] is not None:
             proof.add("unverified", "claim_incomplete", f"An incomplete claim of {found['predecessor']} names it.")
         else:
-            proof.add("unverified", "claim_unverified", "A Pod record that could name it as a claimed successor "
-                      "is unreadable.")
+            proof.add("unverified", "claim_unverified", "A Pod record that names it, and so could name it as a "
+                      "claimed successor, is unreadable.")
         return
-    from .retirement import _claimants
+    from .retirement import _claimants, could_claim
     claimants, unreadable = _claimants(project, objective)
     if claimants:
         proof.add("unverified", "claim_incomplete", f"Objective {claimants[0]} records it as its successor.")
-    elif unreadable:
-        proof.add("unverified", "claim_unverified", "A Pod record that could name it as a claimed successor is "
-                  "unreadable.")
+    elif unreadable and could_claim(project, unreadable, objective):
+        # Only an unreadable record that names it could hold a claim of it (R206).
+        proof.add("unverified", "claim_unverified", "A Pod record that names it, and so could name it as a claimed "
+                  "successor, is unreadable.")
 
 
 def _coordinator(doc: dict, proof: _Proof):
@@ -561,6 +567,15 @@ def _coordinator(doc: dict, proof: _Proof):
         proof.add("unverified", "owner_unverified", "Orca cannot prove the coordinator gone ("
                   + str(identity.get("code") or identity["state"]) + ").")
     return owner
+
+
+def _could_name(project: Path, unreadable: list[dict], run: str) -> bool:
+    """Whether any record the scan could not read could name this Run: its stored bytes mention it or cannot be
+    read, or the state root itself is unreadable (R206)."""
+    from .handoff import record_mentions
+    from .ledger import state_root
+    root = state_root(project)
+    return any(row.get("record") is None or record_mentions(root / row["record"], run) for row in unreadable)
 
 
 def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *,
@@ -603,7 +618,8 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *
             found, unreadable = records()
             mine = [row for row in found if row["raw"].get("owner") == holder and run in _record_runs(row["raw"])
                     and not (claimed_owner and row["objective"] == whose)]
-            if ((not mine and not claimed_owner) or unreadable
+            # An unreadable record holds this Run only when its bytes could name it (R206).
+            if ((not mine and not claimed_owner) or _could_name(project, unreadable, run)
                     or not all(_settled_record(project, row, frozen=frozen) for row in mine)):
                 held.append(run)
             elif mine:
@@ -1938,21 +1954,25 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
                     rows.append({"objective": tail, "phase": "closed"})
         return rows, missing, []
     found, problems = _scan(target, orphans=True)
-    rows = [{"objective": row["objective"], "phase": _phase(target, row["root"], row["raw"])} for row in found]
+    rows = []
+    for row in found:
+        try:
+            rows.append({"objective": row["objective"], "phase": _phase(target, row["root"], row["raw"])})
+        except PodError as exc:
+            from .orca import DEADLINE_SPENT
+            if exc.code == DEADLINE_SPENT:
+                raise
+            problems.append({"record": row["root"].name, "code": exc.code})  # Its own fault holds only itself (R206).
     return rows, [], problems
 
 
 def _scope_reason(problems: list[dict]) -> str:
     """Plain words for what kept a sweep from reading every record of a repository."""
-    from .listing import MAX_SCAN
-    beyond = sum(row.get("count", 0) for row in problems if row["code"] == BEYOND_BOUND)
     orphaned = [row["record"] for row in problems if row["code"] == UNATTRIBUTED]
-    unread = [row for row in problems if row["code"] not in (BEYOND_BOUND, UNATTRIBUTED)]
+    unread = [row for row in problems if row["code"] != UNATTRIBUTED]
     parts = []
     if any(row["code"] == ROOT_UNREADABLE for row in problems):
         return "the Pod state root cannot be enumerated; nothing can be proven absent"
-    if beyond:
-        parts.append(f"{beyond} record directory(ies) lie beyond the sweep's {MAX_SCAN}-directory scan bound")
     if unread:
         parts.append(f"{len(unread)} record(s) cannot be read ("
                      + ", ".join(f"{row['record'][:16]}: {row['code']}" for row in unread[:4])
@@ -2008,7 +2028,15 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
             if row["objective"] in done:
                 continue
             done.add(row["objective"])
-            verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=reader)
+            try:
+                verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=reader)
+            except PodError as exc:
+                from .orca import DEADLINE_SPENT
+                if exc.code == DEADLINE_SPENT:
+                    raise
+                # One record's own fault holds only that objective; the sweep goes on (R206).
+                verdict = {"status": "unverified", "conditions": [
+                    {"code": exc.code, "message": "Its record could not be read whole: " + str(exc)[:256]}]}
             results.append(_outcome(row["objective"], verdict))
             # A predecessor entry this sweep wrote, with its tail or completing an interrupted closure, closed that
             # predecessor now: it is reported as its own `closed` row, never as an earlier closure replayed.

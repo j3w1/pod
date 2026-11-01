@@ -5,6 +5,7 @@ from copy import deepcopy
 from io import StringIO
 import json
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -313,11 +314,6 @@ def _no_run(case):
     path.write_text(json.dumps(raw))
 
 
-def _too_many_records(case):
-    bound = patch("pod.retirement.MAX_RECORDS", 1)
-    bound.start(); case.addCleanup(bound.stop)
-
-
 def _request_failure(code):
     def arrange(case):
         if code == "pending":
@@ -361,7 +357,6 @@ REFUSALS = {
     "journal-unreadable": (_journal_unreadable, "scope_unreadable"),
     "record-unsupported": (_record_unsupported, "scope_unreadable"),
     "no-run": (_no_run, "scope_unreadable"),
-    "too-many-records": (_too_many_records, "scope_unreadable"),
 }
 
 
@@ -370,7 +365,7 @@ class RefusalTableTests(GroupedTable):
     GROUPS = {"test_lifecycle_refuses": ["closed", "continued", "continues"],
               "test_unreadable_records_refuse": ["record-unsupported", "journal-unreadable"],
               "test_handoff_refuses": ["handoff-pending"],
-              "test_scope_refuses": ["no-run", "too-many-records"],
+              "test_scope_refuses": ["no-run"],
               "test_other_records_refuse": ["record-unreadable-elsewhere", "record-directory-unreadable"],
               "test_claims_refuse": ["claimed-by-another"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
@@ -441,6 +436,85 @@ class RefusalTableTests(GroupedTable):
 
     def test_paths_refuse(self):
         self.rows()
+
+
+class DecisionWordingTests(RetirementCase):
+    """Retirement text names the owner only when the owner decided; an agent decision reads neutrally."""
+    AGENT = "historical retirement (agent decision under the decision policy)"
+
+    def agent_retired(self):
+        from pod import config
+        from tests.decision_policy_support import PERSON
+        self.delivered()
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        decision = {key: value for key, value in self.decide().items() if key != "provenance"}
+        decision.update(provenance="agent_decision", channel="agent_session")
+        self.assertEqual(self.retire(decision)["status"], "retired")
+
+    def test_status_readiness_and_detection_word_an_agent_decision_neutrally(self):
+        self.agent_retired()
+        shown = self.status()
+        self.assertEqual(shown["retirement"]["decided_by"], "agent")
+        self.assertTrue(shown["readiness"]["summary"].startswith(
+            f"Ended by a {self.AGENT}: not completed or closed, and its record accepts no writes."))
+        self.assertIn(self.AGENT, shown["next_action"])
+        self.assertIn("Historical retirement by an agent decision under the decision policy", self.text_status())
+        self.assertEqual(self.retire()["objectives"][0]["message"], f"A {self.AGENT} already covers this objective.")
+        self.assertNotIn("owner's", json.dumps(shown) + self.text_status())
+
+    def test_the_write_refusal_and_handoff_word_an_agent_decision_neutrally(self):
+        self.agent_retired()
+        self.returning()
+        refused = self.refused(lambda: self.op("checkpoint", value=self.core()), code="objective_retired")
+        self.assertTrue(str(refused).startswith(f"A {self.AGENT} of this objective at "), str(refused))
+        self.assertIn(self.AGENT, refused.detail["next_action"])
+
+    def test_handoff_window_and_claim_word_an_agent_decision_neutrally(self):
+        from pod import handoff, window
+        self.agent_retired()
+        state = read(self.project, "objective")
+        for verdict in (handoff.detect(self.project, "objective", state, port=self.port, caller="next"),
+                        window.detect(self.project, "objective", state, port=self.port, objective_only=True)):
+            self.assertEqual(verdict["condition"], "objective_retired")
+            self.assertIn(self.AGENT, verdict["message"])
+            self.assertNotIn("owner's", verdict["message"] + verdict.get("next_action", ""))
+        self.successor()
+        claimed = self.claim()
+        self.assertEqual(claimed["condition"], "predecessor_retired")
+        self.assertTrue(claimed["message"].startswith(f"A {self.AGENT} covers the predecessor"), claimed["message"])
+
+    def test_an_owner_decision_still_names_the_owner(self):
+        self.delivered()
+        self.assertEqual(self.retire(self.decide())["status"], "retired")
+        shown = self.status()
+        self.assertEqual(shown["retirement"]["decided_by"], "owner")
+        self.assertTrue(shown["readiness"]["summary"].startswith("Ended by the owner's historical retirement"))
+        self.assertIn("Historical retirement by the owner at", self.text_status())
+
+
+class UnreadableRecordTests(RetirementCase):
+    """R206: another record Pod can decode whole but cannot use holds detection only of an objective it names."""
+
+    def stray(self, text):
+        stray = objective_root(self.project, "objective").parent / "stray"
+        stray.mkdir()
+        (stray / "context.json").write_text(text)
+
+    def test_a_decodable_record_that_names_nothing_here_never_refuses_detection(self):
+        self.delivered()
+        decision = self.decide()
+        self.stray('["elsewhere"]')  # Not a record object, decoded whole; it names no objective here.
+        verdict = self.retire()["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+        self.assertEqual([Path(path).name for path in verdict["unavailable_records"]], ["stray"])
+        self.assertEqual(self.retire(decision)["status"], "retired")
+
+    def test_a_decodable_record_that_names_the_objective_holds_its_detection(self):
+        self.delivered()
+        self.stray('["obj\\u0065ctive"]')  # Its decoded string is this objective's exact name.
+        verdict = self.retire()["objectives"][0]
+        self.assertEqual((verdict["status"], verdict["condition"]), ("refused", "scope_unreadable"))
+        self.assertEqual([Path(path).name for path in verdict["unavailable_records"]], ["stray"])
 
 
 class RefusalTableShapeTests(unittest.TestCase):
@@ -693,7 +767,8 @@ class RecordShapeTests(unittest.TestCase):
     def test_a_malformed_entry_makes_the_record_unsupported(self):
         reported_unbound = [{"kind": "admission", "id": "a", "role": "review", "state": "reserved", "dispatch": None,
                              "reported": True}]
-        for changes in ({"released": []}, {"released": ["relative"]}, {"delivery": []}, {"preserved": reported_unbound},
+        # An empty release is a record-only retirement (R206); more paths than one request names is malformed.
+        for changes in ({"released": [f"/w/{index}" for index in range(65)]}, {"released": ["relative"]}, {"delivery": []}, {"preserved": reported_unbound},
                         {"preserved": [{"kind": "governor", "id": "g", "action": "x", "candidate": "c", "outcome": "PASS"}]},
                         {"native": {}}, {"extra": 1}):
             with self.subTest(changes=changes), self.assertRaises(PodError) as caught:

@@ -700,7 +700,8 @@ def _op_cleanup_plan(request: dict) -> dict:
     result = plan(Path(request["project"]), request.get("objective"),
                   expect=request.get("expect"), archives=request.get("archives"), worker=request.get("worker"),
                   observe=request.get("observe"))
-    if len(json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True).encode()) > 2_000_000:
+    from .cleanup import MAX_RESPONSE
+    if len(json.dumps({"schema": "pod-cli/v5", "status": "ok", "result": result}, sort_keys=True).encode()) > MAX_RESPONSE:
         raise PodError("cleanup_unavailable", "Cleanup observation exceeds its output bound")
     return result
 

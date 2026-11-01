@@ -19,7 +19,6 @@ from .util import digest
 
 PROFILE = "git-local-ref-delete/v1"
 WORKTREE_PROFILE = "git-worktree-remove/v1"
-MAX_HOLDER_REFS = 100_000
 REASONS = frozenset({"snapshot_unavailable", "snapshot_incomplete", "malformed_stash", "stash_changed",
     "resource_identity_unavailable", "resource_changed", "storage_unavailable", "storage_overlap",
     "unsupported_storage", "ref_alias_overlap", "private_ref_dependency", "effect_footprint_unavailable",
@@ -370,8 +369,8 @@ def _holder_refs(path: Path, common: Path, admin: Path, deadline: float) -> list
             raise archives.Unavailable("Holder reference catalog is incomplete")
         name, oid, kind, target = parts
         archives._oid(oid)
-        if name in catalog or len(catalog) >= MAX_HOLDER_REFS:
-            raise archives.Unavailable("Holder reference catalog is duplicate or over its bound")
+        if name in catalog:
+            raise archives.Unavailable("Holder reference catalog is duplicate")
         catalog[name] = (oid, kind, target)
     refs = []
     for name, (oid, kind, target) in catalog.items():
@@ -405,8 +404,6 @@ def _catalog(project: Path, context: dict, deadline: float) -> list[dict]:
                 raise archives.Unavailable("Holder inventory repeats a worktree")
             paths_seen.add(path)
             rows.append(row)
-            if len(rows) > observations.MAX_ITEMS:
-                raise archives.Unavailable("Holder inventory exceeds its bound")
     checkouts = []
     for row in rows:
         path, branch = row.get("worktree"), row.get("branch")

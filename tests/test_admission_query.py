@@ -93,16 +93,21 @@ class AdmissionQueryTests(AdmissionQueryCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual({row["claim"]["dispatch"] for row in result["conflicts"]}, {"dispatch", "unrecorded"})
 
-    def test_unreadable_and_unattributed_are_scoped_unknowns(self):
+    def test_unreadable_and_unattributed_records_hold_only_themselves(self):
+        # R206: one unreadable record, plus one healthy objective whose query proceeds.
         self.intake(worktree=self.place)
         root = state_root(self.project)
-        (root / "broken").mkdir(); (root / "broken" / "context.json").write_text("{")
+        (root / "broken").mkdir(); (root / "broken" / "context.json").write_text("")
         (root / "journal-only").mkdir(); (root / "journal-only" / "governor.json").write_text("{}")
         result = self.query()
-        self.assertFalse(result["complete"])
-        self.assertEqual(result["status"], "unknown")
-        self.assertEqual({row["code"] for row in result["unknowns"]}, {"invalid_record", "unattributed"})
-        self.assertTrue(all(row["scope"] == result["scope"] for row in result["unknowns"]))
+        self.assertEqual(result["unknowns"], [])
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["status"], "observed")
+        self.assertEqual([row["objective"] for row in result["claims"]], ["objective"])
+        self.assertEqual(result["unavailable_records"], [{"record": "broken", "code": "invalid_record"},
+                                                         {"record": "journal-only", "code": "unattributed"}])
+        self.assertFalse(result["repository_complete"])
+        self.assertEqual(result["unrelated_unknowns"]["references"]["records"], ["broken", "journal-only"])
 
     def test_incomplete_inventory_never_proves_absence(self):
         self.intake(worktree=self.place)
@@ -167,15 +172,14 @@ class AdmissionQueryTests(AdmissionQueryCase):
                 self.assertIn("Pod admission facts: observed", out.getvalue())
         self.assertEqual(path.read_bytes(), before)
 
-    def test_unsupported_schema_is_a_scoped_unknown(self):
+    def test_an_unsupported_schema_is_named_unavailable_and_holds_only_itself(self):
         self.intake(worktree=self.place)
         path, raw = self.raw()
         raw["schema"] = "pod-context/v99"
         self.save(path, raw)
         result = self.query()
-        self.assertEqual(result["status"], "unknown")
-        self.assertEqual(result["unknowns"][0]["record"], path.parent.name)
-        self.assertEqual(result["unknowns"][0]["code"], "state_unsupported")
+        self.assertEqual((result["status"], result["unknowns"]), ("observed", []))
+        self.assertEqual(result["unavailable_records"], [{"record": path.parent.name, "code": "state_unsupported"}])
 
     def test_native_scope_pages_and_replay_are_verified(self):
         from pod.errors import PodError
@@ -192,6 +196,20 @@ class AdmissionQueryTests(AdmissionQueryCase):
                     {**last, "result": {**last["result"], "workers": [{"dispatchId": "one"}]}}):
             with self.subTest(bad=bad), patch("pod.admission._read", side_effect=[first, bad]), self.assertRaises(PodError):
                 real_fleet()
+
+    def test_every_native_page_is_read_however_many_and_a_repeated_cursor_refuses(self):
+        # R206: the all-Run inventory has no page count; a repeated cursor still refuses.
+        from pod.errors import PodError
+        def pages(count, cursor=lambda index: f"c{index}"):
+            return [{"runtime": "runtime", "result": {"scope": {"source": "all"},
+                     "workers": [{"dispatchId": f"d{index}"}],
+                     "page": {"hasMore": index < count - 1, "nextCursor": cursor(index)}}} for index in range(count)]
+        with patch("pod.admission._read", side_effect=pages(101)):
+            self.assertEqual(len(self._real_fleet()["workers"]), 101)
+        with patch("pod.admission._read", side_effect=pages(3, cursor=lambda index: "same")), \
+                self.assertRaises(PodError) as caught:
+            self._real_fleet()
+        self.assertEqual(caught.exception.code, "orca_pagination")
 
     def test_bound_native_inventory_reports_coverage_without_history_reads(self):
         self.intake(worktree=self.place)
@@ -271,7 +289,9 @@ class AdmissionQueryTests(AdmissionQueryCase):
         self.assertIn("inventory_changed", [row["code"] for row in result["unknowns"]])
         (root / "redirect").symlink_to(root / "late")
         result = self.query()
-        self.assertIn("unsafe_state", [row["code"] for row in result["unknowns"]])
+        # A redirected record directory is unreadable: it is named and holds only itself (R206).
+        self.assertIn({"record": "redirect", "code": "unsafe_state"}, result["unavailable_records"])
+        self.assertNotIn("unsafe_state", [row["code"] for row in result["unknowns"]])
 
     def test_snapshot_recheck_detects_new_ownership_claim(self):
         self.intake(worktree=self.place)
@@ -806,7 +826,8 @@ class ReviewCorrectionTests(AdmissionQueryCase):
 
     def test_successful_fact_read_exits_zero_for_intersections_and_uncertainty(self):
         self.intake(worktree=self.place)
-        for invalid, expected in ((False, "blocked"), (True, "unknown")):
+        # An unreadable record holds only its own resources (R206); the healthy read still exits zero.
+        for invalid, expected in ((False, "blocked"), (True, "observed")):
             if invalid:
                 path, _ = self.raw()
                 path.write_text("{")

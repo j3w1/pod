@@ -324,6 +324,28 @@ def authority_files(root):
     return {p: raw for p, raw in files.items() if p.parent.name != "sha256" or p in reached}
 
 
+@contextmanager
+def padded_worktrees(root: Path, count: int, *, target: str = "pod.cleanup.worktree_inventory"):
+    """Git's real worktree listing plus `count` unrelated synthetic worktrees, read through Pod's own reader.
+
+    R206 removed every repository-size bound; real worktrees would make such a fixture slow, so the extra rows are
+    porcelain records for paths that do not exist beneath `root`."""
+    from io import StringIO
+    from pod import gitio
+    real = gitio.worktree_inventory
+    extra = "".join(f"worktree {root / 'unrelated' / f'u{index:04}'}\0HEAD {'a' * 40}\0"
+                    f"branch refs/heads/unrelated-{index:04}\0\0" for index in range(count))
+
+    @contextmanager
+    def inventory(project, **kwargs):
+        with real(project, **kwargs) as stream:
+            data = stream.read()
+        yield StringIO(data + extra)
+
+    with patch(target, inventory):
+        yield
+
+
 def bad_retries(kind: str, rows: list, total: int) -> dict:
     """Second answers to a truncated Orca list that are not complete as a whole: each must leave the first page in
     force (R113, A766). `rows` and `total` describe the whole inventory the second read was asking for."""

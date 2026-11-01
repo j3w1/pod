@@ -13,7 +13,7 @@ from pod.errors import PodError
 from pod.ledger import objective_root, read
 from pod.operations import OrcaPort, guarded_start
 from pod.retirement import status_block, validate_entry
-from tests.common import GroupedTable, assert_grouped_table
+from tests.common import GroupedTable, assert_grouped_table, padded_worktrees
 from tests.kernel_support import git
 from tests import test_historical_retirement as earlier  # Its test classes would be discovered twice if imported.
 from tests.test_historical_retirement import RetirementCase
@@ -68,14 +68,17 @@ class DetectionTests(AbsentCase):
         facts = verdict["facts"]
         self.assertEqual(facts["locations"], [{"path": self.gone, "disposition": "absent"},
                                               {"path": self.kept, "disposition": "existing", "worktree": "wt2:local:kept"}])
-        self.assertEqual((facts["retained"], facts["unrecorded_locations"]), ([self.where()], "none"))
+        self.assertEqual((facts["retained"], facts["unrecorded_locations"]), ([], "hold_ends"))
+        self.assertEqual(verdict["also_released"], [self.where()])  # Computed, never part of the decided facts.
+        self.assertNotIn("also_released", facts)
         evidence = self.located(found)[self.gone]["evidence"]
         self.assertEqual(evidence, {"filesystem": "absent", "git": "unregistered", "orca": "unlisted",
                                     "hosts": ["local"], "exited_terminals": 1})
         self.assertEqual(verdict["native"]["exited_terminals"], 1)
         question = found["question"]
         for words in (self.gone + " (absent)", self.kept + " (existing worktree)",
-                      "keeps holding its recorded worktree(s) it does not release: " + self.where(),
+                      "Retirement ends objective objective's reservation of every worktree it records, including "
+                      "the ones not named above: " + self.where(),
                       "its missing directory does not prove that work stopped",
                       "An existing worktree is one of this repository that stands at the recorded path now"):
             self.assertIn(words, question)
@@ -89,8 +92,8 @@ class DetectionTests(AbsentCase):
         found = self.retire()
         facts = found["objectives"][0]["facts"]
         self.assertEqual((facts["unrecorded_locations"], facts["retained"]), ("hold_ends", []))
-        self.assertIn("record does not list every location its work used, so while it is open cleanup holds every "
-                      "task worktree of this repository for it; retirement ends that hold", found["question"])
+        self.assertIn("its record holds nothing afterwards, including any location it never listed",
+                      found["question"])
         decision = self.decide()
         self.assertEqual(decision["objectives"][0]["unrecorded_locations"], "hold_ends")
         self.assertEqual(self.retire(decision)["status"], "retired")
@@ -633,8 +636,9 @@ class DecisionTests(AbsentCase):
         for changes, changed in (
                 ({"locations": [{"path": self.gone, "disposition": "existing", "worktree": "wt2:local:x"},
                                 block["locations"][1]]}, ["locations"]),
-                ({"retained": []}, ["retained"]),
-                ({"unrecorded_locations": "hold_ends"}, ["unrecorded_locations"])):
+                # A decision made before R206, which left a recorded worktree held or no hold to end (R206).
+                ({"retained": [self.where()]}, ["retained"]),
+                ({"unrecorded_locations": "none"}, ["unrecorded_locations"])):
             with self.subTest(changes=changes):
                 self.refused_for({**decision, "objectives": [{**block, **changes}]}, changed)
         for changes in ({"locations": [{"path": self.gone, "disposition": "unknown"}, block["locations"][1]]},
@@ -647,16 +651,18 @@ class DecisionTests(AbsentCase):
         self.assertEqual(caught.exception.code, "retirement_decision_mismatch")
 
     def test_a_held_location_no_read_could_release_is_echoed_and_retires(self):
-        # Final audit 2 K1: detection and the decision agree on a recorded location kept held, whatever its text.
+        # Final audit 2 K1: a recorded location no read could release is echoed as recorded, whatever its text, and
+        # retirement releases it too (R206).
         self.placed()
         held = str(self.root / "coord\x00x")
         self.coordinator_at(held)
         release = self.request(self.gone)
-        self.assertEqual(self.retire(objectives=release)["objectives"][0]["facts"]["retained"],
-                         sorted([held, self.kept]))
+        found = self.retire(objectives=release)["objectives"][0]
+        self.assertEqual((found["facts"]["retained"], found["also_released"]), ([], sorted([held, self.kept])))
         decision = self.decide(objectives=release)
         self.assertEqual(self.retire(decision, objectives=release)["status"], "retired")
-        self.assertEqual(self.status()["retirement"]["retained"], sorted([held, self.kept]))
+        block = self.status()["retirement"]
+        self.assertEqual((block["retained"], block["also_released"]), ([], sorted([held, self.kept])))
 
     def test_text_that_cannot_be_encoded_refuses_the_whole_request(self):
         # Review 4 J1: a lone surrogate JSON can carry never reaches a digest or a record; nor does a NUL release.
@@ -672,12 +678,13 @@ class DecisionTests(AbsentCase):
         self.assertEqual(before, self.snapshot())
         self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
 
-    def test_a_record_another_writer_widened_refuses(self):
+    def test_a_record_another_writer_widened_still_retires(self):
         decision = self.decided()
         path, raw = _raw(self, "objective")
-        raw["checkpoint"].pop("worktree")  # Now the record no longer lists every location: a broader hold.
+        raw["checkpoint"].pop("worktree")  # Now the record no longer lists every location.
         path.write_text(json.dumps(raw))
-        self.refused_for(decision, ["retained", "unrecorded_locations"])
+        # Nothing it holds changes (an objective under historical retirement holds nothing), so the decided facts still match (R206).
+        self.assertEqual(self.retire(decision, objectives=self.release)["status"], "retired")
 
     def test_a_mixed_batch_reports_each_objective_and_later_retires_the_other(self):
         decision = self.decided()
@@ -693,6 +700,86 @@ class DecisionTests(AbsentCase):
         os.rmdir(self.gone)
         later = {row["objective"]: row["status"] for row in self.retire(decision, objectives=both)["objectives"]}
         self.assertEqual(later, {"objective": "retired", "reconcile": "replayed"})
+
+
+class RepositorySizeTests(AbsentCase):
+    """R206: no repository-size bound on R113's registry read."""
+
+    def test_more_than_ninety_six_unrelated_worktrees_still_prove_absence(self):
+        from pod.cleanup import _worktrees
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        with padded_worktrees(self.root, 120):
+            self.assertGreaterEqual(len(_worktrees(self.project)), 122)
+            found = self.retire(objectives=self.request(self.gone, self.kept))
+        verdict = found["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+        self.assertEqual(self.located(found)[self.gone]["evidence"]["git"], "unregistered")
+
+
+class LocationWordingTests(AbsentCase):
+    """Released-path text names no decider: it reads when the decision was recorded, for an agent or the owner."""
+
+    def released_text(self, *, agent):
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        release = self.request(self.gone, self.kept)
+        decision = self.decide(objectives=release)
+        if agent:
+            from pod import config
+            from tests.decision_policy_support import PERSON
+            config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+            decision = {key: value for key, value in decision.items() if key != "provenance"}
+            decision.update(provenance="agent_decision", channel="agent_session")
+        self.assertEqual(self.retire(decision, objectives=release)["status"], "retired")
+        return self.text_status()
+
+    def assert_both_dispositions(self, text):
+        self.assertIn(f"Released {self.gone}: absent from this host, Git and Orca when the decision was recorded", text)
+        self.assertIn(f"Released {self.kept}: an existing worktree of this repository when the decision was recorded",
+                      text)
+        self.assertNotIn("when the owner decided", text)
+
+    def test_an_agent_decision(self):
+        self.assert_both_dispositions(self.released_text(agent=True))
+
+    def test_an_owner_decision(self):
+        self.assert_both_dispositions(self.released_text(agent=False))
+
+
+class RecordOnlyTests(AbsentCase):
+    """R206: `release: []` retires the record without checking any path; it never claims a worktree is free."""
+
+    def test_an_empty_release_retires_beside_another_objectives_live_terminal(self):
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        # Another objective's live terminal works in this record's only remaining worktree.
+        self.inventory["terminals"] = [{"handle": "other", "connected": True, "writable": True, "orphaned": False,
+                                        "worktreePath": self.kept}]
+        found = self.retire(objectives=self.request())
+        verdict = found["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+        self.assertEqual((verdict["facts"]["release"], verdict["facts"]["locations"]), ([], []))
+        self.assertIn(self.kept, verdict["also_released"])
+        for words in ("releasing no named worktree (a record-only retirement)",
+                      "This never says a worktree is free: another objective's record and CE's own cleanup "
+                      "protections still hold it."):
+            self.assertIn(words, found["question"])
+        decision = self.decide(objectives=self.request())
+        self.assertEqual(self.retire(decision, objectives=self.request())["status"], "retired")
+        block = self.status()["retirement"]
+        self.assertEqual((block["released"], block["locations"], block["retained"]), ([], [], []))
+        self.assertIn(self.kept, block["also_released"])
+
+    def test_an_empty_release_still_refuses_a_live_owner(self):
+        self.delivered()
+        self.terminals.update(owner="live")
+        self.assertEqual(self.retire(objectives=self.request())["objectives"][0]["condition"], "owner_not_lost")
+
+    def test_an_empty_release_still_refuses_an_unsettled_run(self):
+        self.delivered()
+        self.port.workers["dispatch-1"].update(outcome="in_progress", state="ready")
+        self.assertEqual(self.retire(objectives=self.request())["objectives"][0]["condition"], "work_live")
 
 
 class ReleaseCapacityTests(AbsentCase):
@@ -730,7 +817,7 @@ class ReleaseCapacityTests(AbsentCase):
         found = self.retire(objectives=self.request(*release))
         verdict = found["objectives"][0]
         self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
-        self.assertEqual((verdict["facts"]["retained"], verdict["facts"]["unrecorded_locations"]), ([], "none"))
+        self.assertEqual((verdict["facts"]["retained"], verdict["facts"]["unrecorded_locations"]), ([], "hold_ends"))
         self.assertEqual([row["path"] for row in verdict["facts"]["locations"]], release)
         decision = self.decide(objectives=self.request(*release))
         self.assertEqual(self.retire(decision, objectives=self.request(*release))["status"], "retired")
@@ -744,7 +831,7 @@ class ReleaseCapacityTests(AbsentCase):
         found = self.retire(objectives=[{"objective": "unknown", "release": paths[:64]}])
         self.assertEqual(found["objectives"][0]["condition"], "objective_unknown")  # Sixty-four pass validation.
         for objectives, words in (
-                (self.request(*paths), "1 to 64"),
+                (self.request(*paths), "0 to 64"),
                 ([{"objective": "first", "release": paths[:33]}, {"objective": "second", "release": paths[33:]}],
                  "at most 64 paths across its objectives")):
             with self.subTest(words=words), self.assertRaises(PodError) as caught:
@@ -819,8 +906,8 @@ class ConcurrencyTests(AbsentCase):
         for words in ("objective releasing " + self.gone + " (absent) (path_in_use; 2 pending, unknown, failed or "
                       "unreported record(s) of it would stay as recorded)",
                       "its missing directory does not prove that work stopped",
-                      "Objective objective keeps holding its recorded worktree(s) it does not release: " + self.kept,
-                      "Objective objective's record does not list every location its work used"):
+                      "Retirement ends objective objective's reservation of every worktree it records, including the "
+                      "ones not named above: " + self.kept):
             self.assertIn(words, question)
 
 
@@ -944,13 +1031,14 @@ class PreservationTests(AbsentCase):
         shown = self.status()
         block = shown["retirement"]
         self.assertEqual((shown["phase"], block["completed"], block["released"], block["retained"],
-                          block["unrecorded_locations"]),
-                         ("retired", False, [self.gone], sorted([self.where(), self.kept]), "none"))
+                          block["also_released"], block["unrecorded_locations"]),
+                         ("retired", False, [self.gone], [], sorted([self.where(), self.kept]), "hold_ends"))
         self.assertEqual(self.listed()["objective"]["retirement"], block)
         text = self.text_status()
-        self.assertIn(f"Released {self.gone}: absent from this host, Git and Orca when the owner decided", text)
-        self.assertIn(f"Still held: {self.kept}, a recorded worktree this retirement did not release", text)
-        self.assertNotIn("retirement ended cleanup's hold", text)
+        self.assertIn(f"Released {self.gone}: absent from this host, Git and Orca when the decision was recorded", text)
+        self.assertIn(f"Also released: {self.kept}, a recorded worktree the decision did not name", text)
+        self.assertIn("Pod's record holds no worktree of this objective", text)
+        self.assertNotIn("Still held", text)
         self.returning()
         self.refused(lambda: self.op("checkpoint", value=self.core()), code="objective_retired")
 
@@ -961,8 +1049,8 @@ class PreservationTests(AbsentCase):
         raw["historical_retirement"].pop("locations")  # As Pod 0.11.0 recorded it.
         path.write_text(json.dumps(raw))
         block = self.status()["retirement"]
-        self.assertEqual((block["locations"], block["released"], block["retained"], block["unrecorded_locations"]),
-                         (None, [self.where()], [], "hold_ends"))
+        self.assertEqual((block["locations"], block["released"], block["retained"], block["also_released"],
+                          block["unrecorded_locations"]), (None, [self.where()], [], [], "hold_ends"))
         self.assertEqual(self.listed()["objective"]["retirement"], block)
         self.assertEqual(self.retire()["objectives"][0]["facts"]["locations"], None)
 
@@ -1223,14 +1311,26 @@ class LocatedEntryShapeTests(unittest.TestCase):
                 validate_entry({**self.ENTRY, "locations": locations})
             self.assertEqual(caught.exception.code, "state_unsupported")
 
+    def test_preserved_records_have_no_count_bound(self):
+        # R206: real records preserve more than 64 rows; an entry and a decision part carrying 156 stay valid.
+        from pod.retirement import _block_valid
+        rows = [{"kind": "admission", "id": f"a{index}", "role": "implement", "state": "unresolved",
+                 "dispatch": None, "reported": False} for index in range(156)]
+        validate_entry({**self.ENTRY, "preserved": rows})
+        block = {"objective": "o", "owner": "h", "runs": [{"run": "r", "generation": 1}], "release": ["/w/one"],
+                 "locations": [{"path": "/w/one", "disposition": "absent"}], "retained": [],
+                 "unrecorded_locations": "hold_ends", "records": rows, "delivery": ["none recorded"]}
+        self.assertTrue(_block_valid(block))
+
     def test_the_block_derives_reservations_from_the_record(self):
         state = {"historical_retirement": self.ENTRY,
                  "checkpoint": {"worktree": {"path": "/w/coordinator"}},
                  "admissions": {"a": {"native_binding": {"worktreeId": "repo::/w/one"}},
                                 "b": {"worktree": "path:/w/two"}}}
         block = status_block(state)
-        self.assertEqual((block["retained"], block["unrecorded_locations"], block["locations"]),
-                         (["/w/coordinator"], "none", self.ENTRY["locations"]))
+        # Computed on read from the whole record: an objective under historical retirement holds no worktree (R206).
+        self.assertEqual((block["retained"], block["also_released"], block["unrecorded_locations"], block["locations"]),
+                         ([], ["/w/coordinator"], "hold_ends", self.ENTRY["locations"]))
         state["admissions"]["c"] = {"worktree": "current"}
         self.assertEqual(status_block(state)["unrecorded_locations"], "hold_ends")
 

@@ -25,7 +25,7 @@ from pod.ledger import objective_root
 from pod.ledger import read
 from pod.operations import guarded_start, OrcaPort
 from tests.kernel_support import KernelCase, git
-from tests.common import receipt
+from tests.common import padded_worktrees, receipt
 
 
 @contextmanager
@@ -325,6 +325,14 @@ class CleanupPlanTests(KernelCase):
             self.observed(expect=expect, **kwargs)
         self.assertEqual(error.exception.code, "cleanup_changed")
         return {"resources": resources}
+
+    def test_more_than_ninety_six_unrelated_worktrees_never_bound_the_plan(self):
+        # R206: the repository's size never refuses; the plan still names only the objective's own resources.
+        with padded_worktrees(self.root, 120):
+            result = self.observed()
+        ids = {row["id"] for row in result["resources"]}
+        self.assertIn("worktree:" + str(self.child), ids)
+        self.assertFalse([name for name in ids if "unrelated" in name])
 
     def test_clean_integrated_worktree_and_branch_have_guarded_commands_without_writes(self):
         state_path = objective_root(self.project, "objective") / "context.json"
@@ -762,24 +770,32 @@ class CleanupScaleTests(unittest.TestCase):
         self.assertEqual(branch["identity"]["checked_out"], [str(case.child), str(foreign)])
         self.assertIsNone(branch["delete_argv"])
 
-    def test_one_plan_still_has_a_resource_bound(self):
-        # Integration plus 47 placements: 48 worktrees, 48 local branches and one published remote.
-        # These are actual fixture worktrees, without altering the production bound of 96.
+    def test_one_plan_has_no_resource_count(self):
+        # R206: integration plus 47 placements, 48 worktrees, 48 local branches and one published remote: more than the
+        # 96 rows an earlier bound allowed, all observed and named.
         state = read(self.case.project, "objective")
         for index, path in enumerate(self.unrelated[:47]):
             state["admissions"][f"scope-{index}"] = {"recovery": {"placement_binding": {
                 "path": str(path), "branch": f"unrelated-{index:03}"}}}
-        with patch("pod.cleanup.read", return_value=state), \
-                patch("pod.cleanup._terminal_facts", side_effect=AssertionError("over-bound native read")), \
-                patch("pod.cleanup._dirt", side_effect=AssertionError("over-bound status read")), \
-                self.assertRaises(PodError) as refused:
-            self.case.observed()
-        self.assertEqual(refused.exception.code, "cleanup_unavailable")
-        self.assertEqual(str(refused.exception), "Objective cleanup resource bound is exceeded")
+        from pod.cleanup import _objective_plan
 
-    def test_full_registry_consumer_bound_does_not_bound_objective_plan(self):
+        def unread(path, ref, tip, repository):  # An incomplete observation: the resource stays protected.
+            return {"kind": "reference", "observation_path": str(path), "complete": False, "holds": ["fixture"],
+                    "repository": repository, "source_ref": ref, "source_tip": tip, "private_refs": {},
+                    "reflogs": {}, "required_objects": {}}
+        # Per-resource Git, native and stash reads are covered elsewhere; here they are stubbed to keep this fast.
+        with patch("pod.cleanup.read", return_value=state), patch("pod.cleanup._dirt", return_value=([], False)), \
+                patch("pod.cleanup._terminal_facts", return_value=([], False)), \
+                patch.object(cleanup_archives, "resource_observation", side_effect=unread), \
+                patch.object(cleanup_archives, "reference_observation", side_effect=unread), repository_reads():
+            result = _objective_plan(self.case.project, "objective", orca_reader=self.case.orca_read,
+                                     native_port=self.case.port, stash_observations=False)
+        self.assertGreater(len(result["resources"]), 96)
+        self.assertEqual(len(result["expect"]["resources"]), len(result["resources"]))
+
+    def test_full_registry_byte_bound_does_not_bound_objective_plan(self):
         from pod.cleanup import _worktrees
-        with self.assertRaises(PodError) as refused:
+        with self.assertRaises(PodError) as refused:  # This porcelain exceeds the byte bound on Git's output.
             _worktrees(self.case.project)
         self.assertEqual(refused.exception.code, "cleanup_unavailable")
         result = self.case.observed()

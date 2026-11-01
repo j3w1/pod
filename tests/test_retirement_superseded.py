@@ -158,6 +158,10 @@ class SupersededRetirementTests(SupersededCase):
         row = self.listed()["objective"]
         self.assertEqual((row["phase"], row["schema"], row["readiness"]), ("retired", "superseded", "retired"))
         self.assertEqual(row["retirement"]["released"], [self.where()])
+        # R206: computed from the unchanged record on read; an objective under historical retirement holds nothing.
+        for block in (shown["retirement"], row["retirement"]):
+            self.assertEqual((block["retained"], block["also_released"], block["unrecorded_locations"]),
+                             ([], [], "hold_ends"))
         self.returning()
         for name, call in {"checkpoint": lambda: self.op("checkpoint", value=self.core()),
                            "governor-prepare": lambda: self.op("governor-prepare", unit="next")}.items():
@@ -174,6 +178,16 @@ class SupersededRetirementTests(SupersededCase):
         self.assertEqual(result["status"], "retired", result)
         self.assertEqual(self.status()["retirement"]["channel"], "agent_session")
         self.assertEqual(self.retire(decision)["objectives"][0]["status"], "replayed")
+        # Its text never says the owner decided: the sidecar's write fence, status and proof read neutrally.
+        agent = "historical retirement (agent decision under the decision policy)"
+        shown = self.status()
+        self.assertEqual(shown["retirement"]["decided_by"], "agent")
+        self.assertTrue(shown["readiness"]["summary"].startswith(f"Ended by a {agent}"))
+        conditions = evidence_closure.prove(self.project, "objective")["conditions"]
+        self.assertEqual([row["message"] for row in conditions], [f"A {agent} covers it."])
+        self.returning()
+        refused = self.refused(lambda: self.op("checkpoint", value=self.core()), code="objective_retired")
+        self.assertTrue(str(refused).startswith(f"A {agent} of this objective at "), str(refused))
 
     def test_an_owner_decision_relayed_without_verification_refuses(self):
         self.superseded()
