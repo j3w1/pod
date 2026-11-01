@@ -602,7 +602,7 @@ def _recorded(state: dict) -> tuple[set[str], bool]:
 
 
 def _reservations(state: dict, release: list[str]) -> dict:
-    """What retirement holds and ends, computed from the whole record on every read (R206): a retired objective holds
+    """What retirement holds and ends, computed from the whole record on every read (R206): an objective under historical retirement holds
     no worktree, so `retained` is empty, `also_released` lists the recorded worktrees the decision did not name, and
     cleanup's hold on locations the record never listed ends. Nothing is stored, so a retirement recorded before
     this rule, current entry or older record's sidecar alike, reads the same way."""
@@ -634,9 +634,9 @@ def _governor_rows(project: Path, objective: str) -> list[dict]:
 
 
 def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
-    """Objectives of this repository whose claim names this one as successor, and the records that could hold
-    such a claim but are unreadable, by path. Every readable record is read whatever the others are, so an
-    unreadable record never hides a readable claim. Directories without a record carry no claim and are skipped."""
+    """Objectives of this repository whose claim names this one as successor, and the records Pod cannot read, by
+    path, for callers to name. Every readable record is read whatever the others are, so an unreadable record never
+    hides a readable claim, and it holds only its own resources (R206). Directories without a record are skipped."""
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
@@ -1133,8 +1133,8 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         return fail("objective_continues", f"Objective {claimants[0]} records this objective as its successor; "
                     "historical retirement never ends a successor that holds a claim.")
     if unreadable:
-        return fail("scope_unreadable", "A Pod record that could name this objective as a claimed successor is "
-                    "unreadable.")
+        # An unreadable record holds only its own resources (R206); it is named, and detection goes on.
+        verdict["unavailable_records"] = unreadable[:MAX_LISTED]
     named = None
     if doc is not None:
         # An older record is read whole: a field detection does not prove refuses before any native read (R205).
@@ -1313,7 +1313,7 @@ def _released(locations: list[dict]) -> str:
 
 
 def _effects(row: dict) -> str:
-    """What else retirement releases for one objective (R113, R206): a retired objective holds no worktree."""
+    """What else retirement releases for one objective (R113, R206): an objective under historical retirement holds no worktree."""
     also = row.get("also_released") or []
     said = f" Retirement releases every worktree objective {row['objective']} records"
     if also:

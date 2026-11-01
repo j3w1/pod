@@ -5,6 +5,7 @@ from copy import deepcopy
 from io import StringIO
 import json
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -338,8 +339,6 @@ REFUSALS = {
     "continued": (_continued, "objective_continued"),
     "continues": (_continues, "objective_continues"),
     "claimed-by-another": (_claimed_by_another, "objective_continues"),
-    "record-unreadable-elsewhere": (_record_unreadable_elsewhere, "scope_unreadable"),
-    "record-directory-unreadable": (_record_directory_unreadable, "scope_unreadable"),
     "owner-live": (lambda case: case.terminals.update(owner="live"), "owner_not_lost"),
     "owner-unreadable": (lambda case: case.terminals.update(owner="unreadable"), "owner_not_lost"),
     "owner-stop-unconfirmed": (lambda case: case.terminals.update(owner="stop-unconfirmed"), "owner_not_lost"),
@@ -371,7 +370,6 @@ class RefusalTableTests(GroupedTable):
               "test_unreadable_records_refuse": ["record-unsupported", "journal-unreadable"],
               "test_handoff_refuses": ["handoff-pending"],
               "test_scope_refuses": ["no-run", "too-many-records"],
-              "test_other_records_refuse": ["record-unreadable-elsewhere", "record-directory-unreadable"],
               "test_claims_refuse": ["claimed-by-another"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
               "test_run_binding_refuses": ["run-rebound", "generation-changed"],
@@ -415,9 +413,6 @@ class RefusalTableTests(GroupedTable):
     def test_handoff_refuses(self):
         self.rows()
 
-    def test_other_records_refuse(self):
-        self.rows()
-
     def test_claims_refuse(self):
         self.rows()
 
@@ -441,6 +436,25 @@ class RefusalTableTests(GroupedTable):
 
     def test_paths_refuse(self):
         self.rows()
+
+
+class UnreadableRecordTests(RetirementCase):
+    """R206: another Pod record that cannot be read holds only itself; detection names it and goes on."""
+
+    def test_an_unreadable_record_beside_it_never_refuses_detection_or_the_decision(self):
+        for arrange in (_record_unreadable_elsewhere, _record_directory_unreadable):
+            case = RetirementCase(); case.setUp()
+            try:
+                with self.subTest(arrange=arrange.__name__):
+                    case.delivered()
+                    decision = case.decide()
+                    arrange(case)
+                    verdict = case.retire()["objectives"][0]
+                    self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+                    self.assertEqual([Path(path).name for path in verdict["unavailable_records"]], ["stray"])
+                    self.assertEqual(case.retire(decision)["status"], "retired")
+            finally:
+                case.doCleanups()
 
 
 class RefusalTableShapeTests(unittest.TestCase):

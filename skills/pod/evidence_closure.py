@@ -522,17 +522,11 @@ def _claims(project: Path, objective: str, raw: dict, kind: str, proof: _Proof) 
             proof.add("unverified", "claim_ambiguous", "More than one predecessor names it as successor.")
         elif found["predecessor"] is not None:
             proof.add("unverified", "claim_incomplete", f"An incomplete claim of {found['predecessor']} names it.")
-        else:
-            proof.add("unverified", "claim_unverified", "A Pod record that could name it as a claimed successor "
-                      "is unreadable.")
         return
     from .retirement import _claimants
-    claimants, unreadable = _claimants(project, objective)
+    claimants, _ = _claimants(project, objective)  # An unreadable record holds only itself (R206).
     if claimants:
         proof.add("unverified", "claim_incomplete", f"Objective {claimants[0]} records it as its successor.")
-    elif unreadable:
-        proof.add("unverified", "claim_unverified", "A Pod record that could name it as a claimed successor is "
-                  "unreadable.")
 
 
 def _coordinator(doc: dict, proof: _Proof):
@@ -559,6 +553,15 @@ def _coordinator(doc: dict, proof: _Proof):
         proof.add("unverified", "owner_unverified", "Orca cannot prove the coordinator gone ("
                   + str(identity.get("code") or identity["state"]) + ").")
     return owner
+
+
+def _could_name(project: Path, unreadable: list[dict], run: str) -> bool:
+    """Whether any record the scan could not read could name this Run: its stored bytes mention it or cannot be
+    read, or the state root itself is unreadable (R206)."""
+    from .handoff import record_mentions
+    from .ledger import state_root
+    root = state_root(project)
+    return any(row.get("record") is None or record_mentions(root / row["record"], run) for row in unreadable)
 
 
 def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *,
@@ -601,7 +604,8 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *
             found, unreadable = records()
             mine = [row for row in found if row["raw"].get("owner") == holder and run in _record_runs(row["raw"])
                     and not (claimed_owner and row["objective"] == whose)]
-            if ((not mine and not claimed_owner) or unreadable
+            # An unreadable record holds this Run only when its bytes could name it (R206).
+            if ((not mine and not claimed_owner) or _could_name(project, unreadable, run)
                     or not all(_settled_record(project, row, frozen=frozen) for row in mine)):
                 held.append(run)
             elif mine:

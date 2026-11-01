@@ -847,7 +847,10 @@ def owner_continuity(project: Path, objective: str, *, owner: str, decision: obj
 
 
 def contexts_for_run(run_id: str) -> list[tuple[Path, dict]]:
-    """Read every objective bound to one Run without choosing among them."""
+    """Read every objective bound to one Run without choosing among them.
+
+    A record Pod cannot read holds only what it could name (R206): it refuses this lookup only when its stored bytes
+    mention the Run or cannot be read; any other is skipped, as an unsupported one is."""
     root = state_root()
     if not root.exists():
         return []
@@ -858,7 +861,8 @@ def contexts_for_run(run_id: str) -> list[tuple[Path, dict]]:
         try:
             state = _read(path)
         except PodError as exc:
-            if exc.code == "state_unsupported":
+            from .handoff import record_mentions
+            if exc.code == "state_unsupported" or not record_mentions(path.parent, run_id):
                 continue
             raise
         checkpoint_value = state.get("checkpoint")

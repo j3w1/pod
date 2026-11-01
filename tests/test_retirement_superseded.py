@@ -158,6 +158,10 @@ class SupersededRetirementTests(SupersededCase):
         row = self.listed()["objective"]
         self.assertEqual((row["phase"], row["schema"], row["readiness"]), ("retired", "superseded", "retired"))
         self.assertEqual(row["retirement"]["released"], [self.where()])
+        # R206: computed from the unchanged record on read; an objective under historical retirement holds nothing.
+        for block in (shown["retirement"], row["retirement"]):
+            self.assertEqual((block["retained"], block["also_released"], block["unrecorded_locations"]),
+                             ([], [], "hold_ends"))
         self.returning()
         for name, call in {"checkpoint": lambda: self.op("checkpoint", value=self.core()),
                            "governor-prepare": lambda: self.op("governor-prepare", unit="next")}.items():

@@ -84,11 +84,43 @@ def _mentions(value: object, text: str, depth: int = 0) -> bool:
     return False
 
 
+def record_mentions(directory: Path, text: str, check=None) -> bool:
+    """Whether a record Pod cannot read could name `text`, such as a Run id (R206): its stored bytes mention it, or
+    some of them cannot be read. Every file under the record's directory is read without following a link; a link,
+    a special file or a failed read counts as mentioning it. Pod stores records and history chunks as plain JSON, so
+    a record whose bytes never mention a Run cannot bind it."""
+    import json
+    needles = {text.encode("utf-8", "surrogatepass"), json.dumps(text)[1:-1].encode("ascii")}
+    pending = [Path(directory)]
+    try:
+        while pending:
+            if check is not None:
+                check()
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    if entry.is_symlink():
+                        return True
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        return True
+                    fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    with os.fdopen(fd, "rb") as file:
+                        data = file.read()
+                    if any(needle in data for needle in needles):
+                        return True
+    except OSError:
+        return True
+    return False
+
+
 def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_closure: bool = True) -> dict:
     """Prove scope without the diagnostic reader's unsupported-record skip.
 
     A positive raw reference blocks unless a supported record proves closure.
-    Unknown membership holds; no record is converted, locked or rewritten.
+    Unknown membership holds only for a record that could name this Run: one whose stored bytes mention it or cannot
+    be read (R206). No record is converted, locked or rewritten.
     Discovery may supply a budget; exhaustion raises rather than returning a partial
     scope. Without it, continuation and owner handoff still require the complete proof.
     Discovery also passes `prove_closure=False`: a closed peer that records the Run is then
@@ -135,7 +167,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         check()
         try:
             if directory.is_symlink():
-                unknown += 1
+                unknown += 1  # A redirected record directory cannot be read in place.
                 continue
             check()
             if not directory.is_dir(follow_symlinks=False):
@@ -153,10 +185,10 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         except PodError as exc:
             if exc.code == DEADLINE_SPENT:
                 raise
-            unknown += 1
+            unknown += record_mentions(path.parent, run_id, check)
             continue
         if not isinstance(raw, dict):
-            unknown += 1
+            unknown += record_mentions(path.parent, run_id, check)
             continue
         checkpoint = raw.get("checkpoint")
         admissions = raw.get("admissions")
@@ -210,9 +242,9 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                     continue
             name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
             others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
-        elif not readable or not supported and not (_older_schema(raw) and not _mentions(raw, run_id)):
-            # Only documented reference layouts can prove non-membership; an older-schema record
-            # proves it only when its Run id appears nowhere in the record.
+        elif (not readable or not supported) and _mentions(raw, run_id):
+            # A record outside the documented reference layouts holds this Run only when it names it somewhere
+            # (R206); one that never mentions the Run cannot bind it, whatever its schema.
             unknown += 1
     check()
     result = {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}

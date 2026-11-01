@@ -631,6 +631,22 @@ class LostCoordinatorTests(GroupedTable):
     def test_an_older_schema_record(self): self.rows()
 
 
+class UnreadableRecordProofTests(ClosureCase):
+    """R206: an unreadable record holds a Run another live coordinator holds only when it could name that Run."""
+
+    def test_an_unreadable_record_holds_only_a_run_it_could_name(self):
+        from pod.ledger import state_root
+        self.shipped(unknown_start=False)
+        _rebound("closed")(self)  # The Run is held by a live recovery whose own record is closed.
+        stray = state_root(self.project) / "zz-stray"
+        stray.mkdir()
+        (stray / "context.json").write_text("{")
+        self.assertEqual(prove(self.project, "objective")["status"], "proved")
+        (stray / "context.json").write_text('{"runId": "run"')
+        verdict = prove(self.project, "objective")
+        self.assertIn("run_held", [row["code"] for row in verdict["conditions"]])
+
+
 class UndeliveredTests(ClosureCase):
     """R145: undelivered or live work is never closed; it stays open as a task for the project lead."""
 

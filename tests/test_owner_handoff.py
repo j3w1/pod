@@ -1340,7 +1340,8 @@ class TransitionTableTests(HandoffCase):
         self.establish(); self.lose(); self.mode = "lost"
         self.refused(lambda:self.handoff()); self.mode = "success"
         unknown = objective_root(self.project, "unknown-record") / "context.json"
-        unknown.parent.mkdir(parents=True); unknown.write_text("incomplete{")
+        # An unreadable record that names this Run holds its handoff (R206).
+        unknown.parent.mkdir(parents=True); unknown.write_text('incomplete{"runId": "run"')
         before = self.snapshot()
         self.assertEqual(self.status()["owner_handoff"]["condition"], "scope_unreadable")
         self.refused(lambda:self.handoff())
