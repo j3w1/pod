@@ -78,6 +78,9 @@ def _read_allowed(argv: list[str]) -> bool:
                 # R113: the complete inventories that prove a released path absent.
                 ["worktree", "list", "--json"], ["terminal", "list", "--json"]):
         return True
+    if (len(argv) == 5 and argv[0] in ("worktree", "terminal") and argv[1:3] == ["list", "--limit"]
+            and isinstance(argv[3], str) and re.fullmatch(r"[1-9][0-9]*", argv[3]) and argv[4] == "--json"):
+        return True  # R113: the same inventory read past Orca's default page (`complete_list`).
     if (len(argv) == 5 and argv[:3] == ["terminal", "show", "--terminal"]
             and _argument(argv[3]) and argv[4] == "--json"):
         return True
@@ -545,12 +548,42 @@ def worker_show(dispatch: str) -> dict:
     return _read(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
 
 
+def _whole(response: object, kind: str) -> bool:
+    """Whether an Orca list answer is complete as a whole: its rows a list of records, untruncated, an integer
+    total (never a bool or float) equal to its rows, covering the local execution host and omitting none."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return False
+    rows, total, scope = result.get(kind + "s"), result.get("totalCount"), result.get("hostScope")
+    hosts = scope.get("hostIds") if isinstance(scope, dict) else None
+    return (isinstance(rows, list) and all(isinstance(row, dict) for row in rows) and result.get("truncated") is False
+            and type(total) is int and total == len(rows)
+            and isinstance(hosts, list) and "local" in hosts and scope.get("omittedHostIds") == [])
+
+
+def complete_list(kind: str, read=None) -> dict:
+    """Orca's whole `worktree` or `terminal` inventory (R113). Orca answers one default page; when that page reports
+    itself truncated short of an integer total, Pod reads once more asking for exactly that many rows. That answer
+    replaces the first only when it is complete as a whole (`_whole`); otherwise the first page is returned
+    unchanged, so the caller's own completeness check refuses it as before. No loop, no third read, no fixed cap."""
+    read = _read if read is None else read
+    response = read([kind, "list", "--json"])
+    result = response.get("result") if isinstance(response, dict) else None
+    rows = result.get(kind + "s") if isinstance(result, dict) else None
+    total = result.get("totalCount") if isinstance(result, dict) else None
+    if isinstance(rows, list) and result.get("truncated") is True and type(total) is int and total > len(rows):
+        retried = read([kind, "list", "--limit", str(total), "--json"])
+        if _whole(retried, kind):
+            return retried
+    return response
+
+
 def terminal_inventory() -> list[dict] | None:
     """Orca's complete live terminal records, or None when the read is not provably complete."""
-    result = _read(["terminal", "list", "--json"])["result"]
+    result = complete_list("terminal")["result"]
     rows = result.get("terminals") if isinstance(result, dict) else None
     if (not isinstance(rows, list) or result.get("truncated") is not False
-            or result.get("totalCount", len(rows)) != len(rows)
+            or type(result.get("totalCount")) is not int or result["totalCount"] != len(rows)
             or not all(isinstance(row, dict) and all(isinstance(row.get(key), str) and row[key]
                                                       for key in ("handle", "incarnationId")) for row in rows)):
         return None  # a record that cannot be identified cannot show the terminal absent

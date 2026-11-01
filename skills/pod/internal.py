@@ -725,7 +725,7 @@ def _op_contract(request: dict) -> dict:
 def _op_display(request: dict) -> dict:
     exact(request, {"project", "objective"}, {"project", "objective"}, name="request")
     from .ledger import read
-    from .orca import display_worktree_argv, read_command
+    from .orca import complete_list, display_worktree_argv, read_command
     from .display import projection
     state = read(Path(request["project"]), request["objective"])
     if state is None:
@@ -739,9 +739,10 @@ def _op_display(request: dict) -> dict:
                                        "pending": snapshot["pending_decisions"],
                                        "generation": snapshot["decision_generation"]}}
     reads = []
-    for argv in (["terminal", "list", "--json"], display_worktree_argv(), ["--version"]):
+    for reader in (lambda: complete_list("terminal", read_command), lambda: read_command(display_worktree_argv()),
+                   lambda: read_command(["--version"])):
         try:
-            reads.append(read_command(argv))
+            reads.append(reader())
         except PodError:
             reads.append(None)
     return projection(state, *reads)

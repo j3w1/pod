@@ -12,7 +12,7 @@ from .errors import PodError
 from . import gitio, history, listing
 from .github import repository_context
 from .ledger import binding_valid, record_name, state_root
-from .orca import _read, _passable, read_deadline
+from .orca import _read, _passable, complete_list, read_deadline
 from .util import digest as _digest, public_decisions
 from .window import Budget
 
@@ -108,7 +108,7 @@ def _worker_fact(row: dict) -> dict:
 def _terminals() -> dict:
     """Current native ownership also covers terminals outside supervised workers."""
     from .retirement import _complete
-    response = _read(["terminal", "list", "--json"])
+    response = complete_list("terminal", _read)
     rows = _complete(response["result"], "terminals")
     if rows is None:
         raise PodError("native_resources_incomplete", "Native terminal ownership inventory is incomplete")
