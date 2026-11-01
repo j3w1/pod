@@ -69,9 +69,17 @@ class DeliveredProofSourceTests(KernelCase):
     prepare_result = delivery.VerifiedDeliveryTests.prepare_result
     move_target = delivery.VerifiedDeliveryTests.move_target
 
+    assurance = False  # add an unsatisfied assurance with a non-empty editing boundary
+
     def intake(self, *rows, **fields):
-        return self.write([self.criterion(), self.sub("R", state="blocked_external", external=dict(EXTERNAL))],
-                          governance={"base_ref": "target"})
+        extra = [{"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1", "check": "review src",
+                  "scope": {"paths": ["src"], "surfaces": []},
+                  "boundary": {"paths": ["src"], "surfaces": ["ownership"]},
+                  "question": "is src correct?", "candidate": self.candidate, "existing_evidence": "unit",
+                  "insufficiency": "review needed", "state": "blocked_external",
+                  "external": dict(EXTERNAL)}] if self.assurance else []
+        return self.write([self.criterion(), self.sub("R", state="blocked_external", external=dict(EXTERNAL)),
+                           *extra], governance={"base_ref": "target"})
 
     def setUp(self):
         super().setUp()
@@ -351,6 +359,49 @@ class DeliveredProofSourceTests(KernelCase):
         self.assertEqual(validate_closed_snapshot(state["checkpoint"],
                                                   closed_snapshot_context(self.project, "objective", state)), ())
         self.assertTrue(_closure_recorded(self.project, "objective", state))
+
+    def without_boundary(self):
+        rows = self.stored()
+        rows[2].pop("boundary")  # full rows that omit the assurance's editing boundary
+        return rows
+
+    def test_an_omitted_boundary_is_not_bookkeeping_so_the_worktree_judges_delivered_proof(self):
+        self.assurance = True
+        self.deliver(move=False)  # currency holds; the worktree's README.md differs from the delivered tree
+        error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                       lambda: self.write(self.without_boundary()))
+        self.assertIn("O1: binding change", str(error))
+        self.assertNotIn("delivered candidate", str(error))
+
+    def test_an_omitted_boundary_with_nothing_stale_is_an_ordinary_write(self):
+        self.assurance = True
+        self.deliver(move=False, later=False)  # the worktree still holds the delivered bytes
+        import pod.obligations as kernel
+        original, seen = kernel.accept_write, []
+
+        def traced(prior, proposed, ctx):
+            seen.append("delivered_sources" in ctx)
+            return original(prior, proposed, ctx)
+        with patch.object(kernel, "accept_write", traced):
+            stored = self.write(self.without_boundary())["checkpoint"]
+        # As on main: no R204 route is taken, the worktree check passes and the kernel records the empty boundary.
+        self.assertEqual(seen, [False])
+        self.assertEqual(stored["obligations"][2]["boundary"], {"paths": [], "surfaces": []})
+
+    def test_a_bookkeeping_proposal_whose_stored_result_is_not_bookkeeping_refuses(self):
+        self.deliver(move=False)
+        import pod.obligations as kernel
+        original = kernel.accept_write
+
+        def changing(prior, proposed, ctx):
+            stored = original(prior, proposed, ctx)
+            self.assertIn("O1", ctx["delivered_sources"]["rows"])
+            stored["obligations"][1] = {**stored["obligations"][1], "check": "changed by the kernel"}
+            return stored
+        with patch.object(kernel, "accept_write", changing):
+            error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                           lambda: self.update(self.external_evidence()))
+        self.assertIn("changes more than post-delivery bookkeeping", str(error))
 
     def test_a_closing_write_with_current_governance_uses_the_delivered_tree(self):
         self.deliver(move=False)  # currency holds; the worktree has moved on and edited README.md
