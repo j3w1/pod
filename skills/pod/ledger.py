@@ -1158,8 +1158,11 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
 
 
 def kernel_view(project: Path, objective: str, *, native: dict | None = None,
-                candidate: str | None = None, state: dict | None = None) -> dict:
-    """Read-only map, facts and derived projections for status, acceptance and reports."""
+                candidate: str | None = None, state: dict | None = None, delivered: bool = False) -> dict:
+    """Read-only map, facts and derived projections for status, acceptance and reports.
+
+    `delivered` (map and status reads) judges proof a recorded delivery relied on against the delivered
+    candidate's tree (R204); acceptance, admission and Governor qualification keep the worktree."""
     from .obligations import label_qualification, report_projection, status_projection
     state = read(project, objective) if state is None else state
     if state is None:
@@ -1177,6 +1180,8 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
             native, settlement, failure = None, "unverified", exc.code
             runtime_changed = (exc.detail or {}).get("reason") == "runtime_changed"
     ctx = kernel_context(project, objective, state, native)
+    if delivered:
+        ctx = delivered_read_context(project, state, ctx)
     map_state = map_of(state)
     view = {"state": state, "map": map_state, "ctx": ctx, "settlement": settlement,
             "settlement_failure": failure,
@@ -1217,11 +1222,20 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
                           or (state["admissions"][key].get("report") or {}).get("status") != "validated_observation"]
     # R204: proof a recorded delivery relied on replays against the delivered candidate's tree, as it was
     # judged on the closing route, not against whatever the worktree holds now.
-    delivery = state["checkpoint"].get("delivery")
+    return delivered_read_context(project, state, ctx)
+
+
+def delivered_read_context(project: Path, state: dict, ctx: dict) -> dict:
+    """R204 on reads: after a recorded delivery, the rows it relied on are judged against the delivered
+    candidate's tree, so map, status and PoD tick reads agree with the bookkeeping and closing writes.
+
+    A read changes no row, so every relied-on row qualifies; a moved checkpoint candidate grants nothing."""
+    checkpoint_value = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
+    delivery = checkpoint_value.get("delivery")
     if isinstance(delivery, dict) and type(delivery.get("seq")) is int:
         delivered = _delivered_sources(
-            project, delivery, state["checkpoint"].get("candidate"),
-            [row["id"] for row in state["checkpoint"].get("obligations", [])
+            project, delivery, checkpoint_value.get("candidate"),
+            [row["id"] for row in checkpoint_value.get("obligations") or []
              if isinstance(row, dict) and _relied_on(row, delivery["seq"])])
         if delivered is not None:
             ctx["delivered_sources"] = delivered
@@ -1232,7 +1246,7 @@ def map_read(project: Path, objective: str) -> dict:
     """Read one restatable map and its exact objective-local attempt evidence."""
     from .assurance import evidence_valid, review_completed
     from .obligations import bound_governance_digest, restatable_rows, retained_history, undispositioned
-    view = kernel_view(project, objective)
+    view = kernel_view(project, objective, delivered=True)
     state, map_state, ctx = view["state"], view["map"], view["ctx"]
     if state is None or map_state is None:
         raise PodError("map_unavailable", "This objective has no recorded obligation map")
@@ -1750,6 +1764,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         kept = None
         bookkeeping = False
         delivered = None
+        settling = False  # R204's route: closing, delivery-only or post-delivery bookkeeping
         withdrawing = (prior_map is not None and not refresh and proposed.get("close") is True
                        and not prior_map.get("closure")
                        and _withdrawal_only(prior_map, proposed, core, previous, dispositions, verified_delivery))
@@ -1774,6 +1789,9 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                     if kept is None:
                         raise
                     unchanged, withdrawal_refusal = None, exc
+                # With governance current, only a delivery already recorded counts: the write that records it
+                # keeps judging the worktree, as it did before R204.
+                settling = kept is not None or prior_map.get("delivery") is not None
             else:
                 try:
                     unchanged = require_governance_current(project, current_map, checkpoint=True)
@@ -1786,13 +1804,17 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                                       verified_delivery) else None)
                     if kept is None:
                         raise
-                    unchanged, bookkeeping = None, True
+                    unchanged, bookkeeping, settling = None, True, True
+                else:
+                    settling = _delivery_bookkeeping(prior_map, proposed, core, previous, dispositions,
+                                                     verified_delivery)
             if unchanged is not None:
                 adopted_observation, derived_adoption = unchanged
-            if (kept is not None and "closure" not in kept and "delivery_proof" not in kept
-                    and current_map.get("delivery") is not None):
-                # R204: on the bookkeeping or completion route, proof the delivery relied on is judged against
-                # the delivered candidate's tree while the write leaves its row unchanged.
+            if (settling and current_map.get("delivery") is not None
+                    and not (kept is not None and ("closure" in kept or "delivery_proof" in kept))):
+                # R204: on the bookkeeping or completion route, whether governance currency held or R202 kept
+                # the delivered baseline, proof the delivery relied on is judged against the delivered
+                # candidate's tree while the write leaves its row unchanged.
                 delivered = _delivered_sources(
                     project, current_map["delivery"], core.get("candidate"),
                     _unchanged_delivered_rows(prior_map, proposed, current_map["delivery"]))

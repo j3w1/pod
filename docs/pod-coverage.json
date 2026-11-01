@@ -10150,6 +10150,19 @@
         "tests.test_display.DisplayOpTests.test_an_incomplete_second_terminal_read_stays_unreadable"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A767",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_with_current_governance_keeps_reused_proof_the_delivery_relied_on",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_with_current_governance_refuses_proof_the_delivered_tree_lacks",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_closing_write_with_current_governance_uses_the_delivered_tree"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

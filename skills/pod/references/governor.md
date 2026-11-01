@@ -40,7 +40,8 @@ decision policy names for scope changes; the refusal says which applies. An hone
 relayed snapshot decision remains relayed. Satisfied proof crosses changed governance only by an attested rebind in that refresh (see the proof reference). The completion-bookkeeping exception above retains the
 trusted baseline and adopts no later policy, and so does a checkpoint that only records post-delivery
 bookkeeping (acceptance, external evidence, questions, next action) with the same candidate, rows and
-settled proof. Both judge the settled proof's bound files against the delivered candidate's Git tree, so
+settled proof. Both, and the same writes while governance is still current, judge the settled proof's
+bound files against the delivered candidate's Git tree, so
 later work in a shared worktree does not invalidate it; keep the checkpoint candidate on the delivered one
 and leave the worktree where it is.
 
