@@ -909,14 +909,16 @@ def stamp_decision(value: dict) -> None:
     value["decision_order"] = validate_order([index[key] for key in sorted(index)])
 
 
-def publish_decision(path: Path, proposed: dict, publish) -> None:
-    """The publication callback executes while config authority is still locked."""
+def publish_decision(path: Path, proposed: dict, publish, *, read=None) -> None:
+    """The publication callback executes while config authority is still locked. `read` reads each transition
+    record as its writer does (historical retirement reads an older record's logical view, R205)."""
     capability = current_decision()
     if capability is None:
         publish()
         return
     from . import config
-    from .ledger import _read
+    from .ledger import _read as validated
+    _read = read or validated
     if capability.phase_paths:
         from copy import deepcopy
         labels = [key for key, target in capability.phase_paths.items() if target == path]

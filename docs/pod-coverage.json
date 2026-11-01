@@ -9984,6 +9984,43 @@
         "tests.test_governance_delta_rebind.QuestionTests.test_an_answer_records_but_using_the_approval_still_needs_current_governance"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A760",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_detection_reads_documented_fields_and_retirement_keeps_the_record_bytes",
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_agent_decision_the_hands_off_policy_accepts_retires"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A761",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_status_and_list_read_retired_and_every_write_refuses",
+        "tests.test_retirement_superseded.SupersededRefusalTests.test_a_malformed_stored_entry_never_reads_retired"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A762",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_superseded.SupersededRefusalTests.test_a_live_coordinator_or_live_work_still_refuses",
+        "tests.test_retirement_superseded.SupersededRefusalTests.test_a_present_path_that_is_no_worktree_of_this_repository_refuses",
+        "tests.test_retirement_superseded.SupersededRefusalTests.test_an_unknown_schema_or_a_malformed_older_record_refuses"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

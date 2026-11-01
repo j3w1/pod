@@ -9,13 +9,19 @@ A released worktree is either an existing worktree of this repository or one pro
 this host's filesystem, from the repository's Git worktree registry and from Orca's complete worktree
 and terminal inventories (R113). A missing directory never proves that work stopped; the coordinator,
 Run, Dispatch and start checks prove that.
+
+A record on an older version of a current schema family is read through R146's documented fields and keeps its
+bytes: its retirement entry is stored once beside it in `historical-retirement.json`, bound to those bytes, as an
+evidence closure is stored (R205).
 """
 
 from __future__ import annotations
 
 from contextlib import ExitStack
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -52,6 +58,12 @@ MAX_PATHS = MAX_LISTED
 MAX_DELIVERY = 16
 ACTION = ("Read it with pod status --objective {}; the owner's historical retirement released its worktrees: "
           "it is not completed, and its record accepts no writes.")
+# An older record's retirement, stored beside its unchanged bytes (R205).
+SIDECAR = "historical-retirement.json"
+SIDECAR_SCHEMA = "pod-historical-retirement/v1"
+# What the retirement adds to an older record's logical view; the record itself never carries these.
+ADDED = (FIELD, "decision_order", "decision_channels")
+SIDECAR_FIELDS = {"schema", "objective", "repository", "record"}
 
 
 def _encodable(value: str) -> bool:
@@ -79,14 +91,16 @@ def _path_text(value: object) -> bool:
             and ".." not in Path(value).parts)
 
 
-def _record_row(row: object) -> bool:
+def _record_row(row: object, older: bool = False) -> bool:
+    """One preserved record. An older record documents no admission role (R146), so its role reads null."""
     if not isinstance(row, dict):
         return False
     if row.get("kind") == "governor":
         return (set(row) == GOVERNOR_ROW and all(_text(row[key], 256) for key in ("id", "action", "candidate"))
                 and row["outcome"] in PRESERVED_OUTCOMES)
     if row.get("kind") == "admission":
-        return (set(row) == ADMISSION_ROW and all(_text(row[key], 256) for key in ("id", "role", "state"))
+        return (set(row) == ADMISSION_ROW and all(_text(row[key], 256) for key in ("id", "state"))
+                and (_text(row["role"], 256) or older and row["role"] is None)
                 and row["state"] in ("reserved", "unresolved", "bound")
                 and (row["dispatch"] is None or _text(row["dispatch"], 256))
                 and type(row["reported"]) is bool and (row["state"] == "bound" or not row["reported"]))
@@ -114,7 +128,7 @@ def _locations_valid(value: object, released: list) -> bool:
             and all(_location_fact(row, path) for row, path in zip(value, released)))
 
 
-def _facts_valid(value: dict) -> bool:
+def _facts_valid(value: dict, older: bool = False) -> bool:
     return (_text(value["objective"], 256) and _text(value["owner"], 256) and _runs(value["runs"])
             and isinstance(value["release"], list) and 0 < len(value["release"]) <= MAX_PATHS
             and all(_path_text(path) for path in value["release"])
@@ -126,10 +140,10 @@ def _facts_valid(value: dict) -> bool:
             and not set(value["retained"]) & set(value["release"])
             and value["unrecorded_locations"] in UNRECORDED
             and isinstance(value["records"], list) and len(value["records"]) <= MAX_RECORDS
-            and all(_record_row(row) for row in value["records"]))
+            and all(_record_row(row, older) for row in value["records"]))
 
 
-def validate_entry(value: object) -> None:
+def validate_entry(value: object, *, older: bool = False) -> None:
     """The stored shape of a retirement; anything else makes the record unsupported."""
     native = value.get("native") if isinstance(value, dict) else None
     modern = isinstance(value, dict) and "decision_binding" in value and "provenance" in value
@@ -141,7 +155,7 @@ def validate_entry(value: object) -> None:
             or not isinstance(value["released"], list) or not 0 < len(value["released"]) <= MAX_PATHS
             or not all(_path_text(path) for path in value["released"])
             or not isinstance(value["preserved"], list) or len(value["preserved"]) > MAX_RECORDS
-            or not all(_record_row(row) for row in value["preserved"])
+            or not all(_record_row(row, older) for row in value["preserved"])
             or not _texts(value["unfinished"], MAX_LISTED, 256)
             or not _texts(value["delivery"], MAX_DELIVERY, 512) or not value["delivery"]
             or not isinstance(native, dict) or set(native) != NATIVE
@@ -161,6 +175,182 @@ def refuse_retired(state: dict | None) -> None:
                        f"The owner's historical retirement of this objective at {entry['at']} released its worktrees; "
                        "it is not completed, and its record accepts no writes",
                        {"retired_at": entry["at"], "next_action": ACTION.format(name)})
+
+
+# --------------------------------------------------------------------------- an older record's retirement (R205)
+
+
+def sidecar_presence(root: Path) -> str:
+    """`present`, `absent`, or `unknown` when this host cannot inspect the objective's directory."""
+    try:
+        os.lstat(root / SIDECAR)
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unknown"
+    return "present"
+
+
+def refuse_sidecar(root: Path) -> None:
+    """The write fence of an older record under historical retirement: every write refuses, as R112 requires of a
+    current one. A retirement Pod cannot rule out is never written past."""
+    presence = sidecar_presence(root)
+    if presence == "absent":
+        return
+    if presence == "unknown":
+        raise PodError("unsafe_state", "Whether this objective is under historical retirement cannot be read; "
+                       "nothing was written", {"next_action": "restore access to the objective's state directory, "
+                                                              "then retry"})
+    try:
+        at = _sidecar(root)[FIELD]["at"]
+    except PodError:
+        at = None
+    raise PodError("objective_retired",
+                   "The owner's historical retirement of this objective" + (f" at {at}" if at else "")
+                   + " released its worktrees; it is not completed, and its record accepts no writes",
+                   {"retired_at": at, "next_action": "Read it with pod status --objective NAME; nothing remains to "
+                                                     "record."})
+
+
+def _sidecar(root: Path) -> dict:
+    """The stored entry document, read bounded and without following a link; anything else raises."""
+    from .evidence_closure import MAX_FILE
+    try:
+        fd = os.open(root / SIDECAR, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                raise PodError("state_unsupported", "The historical retirement entry is not a regular file")
+            data = file.read(MAX_FILE + 1)
+    except OSError as exc:
+        raise PodError("state_unsupported", "The historical retirement entry cannot be read") from exc
+    try:
+        value = json.loads(data.decode("utf-8")) if len(data) <= MAX_FILE else None
+    except (ValueError, UnicodeError, RecursionError):
+        value = None
+    record = value.get("record") if isinstance(value, dict) else None
+    if (not isinstance(value, dict) or not SIDECAR_FIELDS | {FIELD} <= set(value) <= SIDECAR_FIELDS | set(ADDED)
+            or value["schema"] != SIDECAR_SCHEMA or not _text(value["objective"], 256)
+            or not _text(value["repository"], 1024) or not isinstance(record, dict)
+            or set(record) != {"context_sha256"} or not _text(record["context_sha256"], 64)):
+        raise PodError("state_unsupported", "The historical retirement entry is malformed")
+    validate_entry(value[FIELD], older=True)
+    if "decision_order" in value:
+        from .relay import validate_order
+        validate_order(value["decision_order"])
+    if "decision_channels" in value and value["decision_channels"] not in (1, 2, 3, 4, 5):
+        raise PodError("state_unsupported", "The historical retirement entry's decision channels are unsupported")
+    return value
+
+
+def older_state(root: Path) -> tuple[dict, dict, bytes] | None:
+    """An older record's logical view, its documented fields and its exact bytes; None for any other record.
+
+    The view is the record as read, never validated as current or converted, plus the entry its retirement stored
+    beside it, which must name these exact bytes. A record that already carries a field retirement adds, or whose
+    documented fields are unreadable, refuses."""
+    from .evidence_closure import _documented, _read_record, _record_class, _sha
+    raw, data = _read_record(root)
+    if _record_class(raw) != "older":
+        return None
+    if set(ADDED) & set(raw):
+        raise PodError("state_unsupported", "The older record already carries a field historical retirement adds")
+    try:
+        doc = _documented(raw, current=False)
+    except PodError as exc:
+        raise PodError("state_unsupported", f"The older record's documented fields are unreadable ({exc.code})") \
+            from exc
+    view = deepcopy(raw)
+    if sidecar_presence(root) != "absent":
+        stored = _sidecar(root)
+        if stored["record"]["context_sha256"] != _sha(data) or stored["objective"] != doc["objective"]:
+            raise PodError("state_unsupported", "The historical retirement entry names another record")
+        view.update({key: deepcopy(stored[key]) for key in ADDED if key in stored})
+    return view, doc, data
+
+
+def read_state(path: Path) -> dict:
+    """A record as retirement and its decision publication read it: an older record's logical view, any other
+    through the ordinary validating reader."""
+    from .ledger import _read, _record_exists
+    if _record_exists(path):
+        found = older_state(path.parent)
+        if found is not None:
+            return found[0]
+    return _read(path)
+
+
+def _write_older(path: Path, value: dict, data: bytes, repository: str) -> None:
+    """An older record's single retirement write: its entry created once beside the record, whose bytes stay
+    unchanged, under that record's lock and the same decision publication as a current record's."""
+    from .evidence_closure import _create
+    from .relay import publish_decision, stamp_decision
+    from .util import protect_decision_record
+    stamp_decision(value)
+    protect_decision_record(value)
+    validate_entry(value[FIELD], older=True)
+    document = _older_document(value, data, repository)
+
+    def publish() -> None:
+        if not _create(path.parent, document, name=SIDECAR):
+            raise PodError("objective_retired", "A historical retirement of this objective is already recorded; "
+                           "nothing was written")
+
+    publish_decision(path, value, publish, read=read_state)
+
+
+def older_status(project: Path, objective: str, root: Path) -> dict | None:
+    """What status shows for an older record under historical retirement (R205): read-only, from the record's
+    documented fields and its stored entry, as a current record under historical retirement reads. None when no entry is stored or the
+    record is not an older one; the ordinary reader then answers."""
+    from .evidence_closure import _record_class, _read_record
+    from .readiness import CONTRACT, unavailable
+    if sidecar_presence(root) == "absent":
+        return None
+    try:
+        raw, _ = _read_record(root)
+    except PodError:
+        raw = None
+    if not isinstance(raw, dict) or _record_class(raw) != "older":
+        return None
+    out = {"objective": objective, "record_class": "older", "schema": "superseded"}
+    try:
+        view, doc, _ = older_state(root)
+    except PodError as exc:
+        return {**out, "status": "blocked", "phase": "retired", "blocker": exc.code,
+                "next_safe_action": "inspect the objective state; its record accepts no writes",
+                "readiness": unavailable(exc.code, f"the historical retirement entry cannot be read ({exc.code})")}
+    entry, block = view[FIELD], status_block(view)
+    settled, preserved = [], []
+    for key, row in sorted(doc["admissions"].items()):
+        item = {"admission": key, "role": row["role"], "dispatch": (row["native_binding"] or {}).get("dispatchId"),
+                "state": row["state"]}
+        if row["state"] == "bound":
+            settled.append({**item, "settlement": "retirement", "retired_at": entry["at"]})
+        elif row["state"] not in ("closed", "deferred"):
+            preserved.append({**item, "outcome": "unknown", "retired_at": entry["at"]})
+        else:
+            settled.append(item)
+    checkpoint = view["checkpoint"]
+    action = ACTION.format(objective)
+    runs = doc["runs"]
+    return {**out, "status": "observed", "phase": "retired", "blocker": "objective_retired",
+            "source": checkpoint.get("objective_source", "direct_objective"),
+            "selected_worktree": checkpoint.get("worktree"),
+            "documented": {"owner": doc["owner"], "runs": runs, "worktree": doc["worktree"], "issue": doc["issue"]},
+            "checkpoint_join": {"native_refs": doc["native_refs"], "assignments": [],
+                                "plan_revision": checkpoint.get("plan_revision"),
+                                "candidate": checkpoint.get("candidate")},
+            "assignments": {"active": [], "unverified": [], "settled": settled[:MAX_LISTED],
+                            "preserved": preserved[:MAX_LISTED]},
+            "retained_terminals": [], "worker_tabs": [], "native": None, "retirement": block,
+            "readiness": {"contract": CONTRACT, "state": "retired", "acts_next": "none", "coordinator_needed": False,
+                          "coordinator": {"handle": doc["owner"], "run": runs[0] if len(runs) == 1 else None,
+                                          "runs": runs[:32], "generation": None, "runtime": None,
+                                          "liveness": "not_read", "code": None},
+                          "finalization": None, "reason": {"retired_at": entry["at"], "reason": entry["reason"]},
+                          "summary": "Ended by the owner's historical retirement: not completed or closed, and its "
+                                     "record accepts no writes."},
+            "next_safe_action": action, "next_action": action}
 
 
 def counts(rows: list[dict]) -> dict:
@@ -665,8 +855,9 @@ def work_activity(admissions: dict, dispatches: dict, *, port) -> tuple[tuple | 
 
 
 def _detect(project: Path, objective: str, release: list[str], state: dict | None, *, port,
-            repository: str, host: _Host) -> dict:
-    """Fresh facts for one objective, read-only; an unproven fact refuses it alone."""
+            repository: str, host: _Host, doc: dict | None = None) -> dict:
+    """Fresh facts for one objective, read-only; an unproven fact refuses it alone. An older record (`doc`, its
+    documented fields) takes its Runs and admissions from those fields alone (R205)."""
     from .handoff import unfinished
     from .ledger import _run_references, map_of
     from .obligations import TERMINAL
@@ -725,11 +916,13 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         from .window import unfinished as window_unfinished
         if (window_unfinished(state) or {}).get("state") == "pending":
             return fail("handoff_pending", "The objective has a pending window continuation.")
-        refs = sorted(_run_references(state))
+        refs = sorted(doc["runs"]) if doc is not None else sorted(_run_references(state))
         recorded, _ = _recorded(state)
         records = _governor_rows(project, objective)
     except PodError as exc:
         return fail("scope_unreadable", f"The objective's record or Governor journal is unreadable ({exc.code}).")
+    except (KeyError, TypeError, AttributeError):
+        return fail("scope_unreadable", "The objective's record is malformed.")
     for path in release:
         if path not in recorded:
             return fail("path_not_recorded", "A path to release is not one of the objective's recorded worktrees.",
@@ -741,13 +934,15 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     verdict["facts"].update(retained=retained, unrecorded_locations=unrecorded)
     if not refs:
         return fail("scope_unreadable", "The objective records no Run whose work could be proven settled.")
-    for key in sorted(state["admissions"]):
-        row = state["admissions"][key]
+    admissions = doc["admissions"] if doc is not None else state["admissions"]
+    for key in sorted(admissions):
+        row = admissions[key]
         if row["state"] in ("closed", "deferred"):
             continue
         records.append({"kind": "admission", "id": key, "role": row["role"], "state": row["state"],
                         "dispatch": (row.get("native_binding") or {}).get("dispatchId"),
-                        "reported": row["state"] == "bound"
+                        # An older record's report is never read: its bound start counts as unreported (R146).
+                        "reported": row["reported"] if doc is not None else row["state"] == "bound"
                         and (row.get("report") or {}).get("status") == "validated_observation"})
     if len(records) > MAX_RECORDS:
         return fail("scope_unreadable", f"More than {MAX_RECORDS} preserved records cannot be bound to one decision.")
@@ -782,7 +977,7 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
             dispatches[dispatch] = None
     verdict["facts"]["runs"] = runs
     # Every remaining fact is read before any refusal, so a refusal from here on keeps complete facts.
-    activity, settled = work_activity(state["admissions"], dispatches, port=port)
+    activity, settled = work_activity(admissions, dispatches, port=port)
     entries = _recorded_entries(state)
     located = [_locate(path, repository, host, entries.get(path, set())) for path in release]
     verdict["locations"] = located
@@ -797,6 +992,8 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
                   else "Resolve what each location names, then detect again; nothing was written.")
         return fail(blocked["condition"], f"Path {blocked['path']}: {blocked['reason']}", action)
     obligations = (map_state or {}).get("obligations", [])
+    if doc is not None:
+        verdict["record_class"] = "older"
     verdict.update(status="eligible", condition="retirable",
                    unfinished=[ob["id"] for ob in obligations if ob["state"] not in TERMINAL][:MAX_LISTED],
                    native={"runtime": runtime or "unknown",
@@ -866,9 +1063,9 @@ def _retirement_entry(decision, requested, repository, facts, verdict, block, at
             "preserved": facts["records"], "unfinished": verdict["unfinished"], "delivery": list(block["delivery"]), "native": verdict["native"]}
 
 
-def _block_valid(block: dict) -> bool:
+def _block_valid(block: dict, older: bool = False) -> bool:
     """One objective's part of the decision; a malformed one refuses only that objective."""
-    return (set(block) == DECIDED and _facts_valid(block) and _texts(block["delivery"], MAX_DELIVERY, 512)
+    return (set(block) == DECIDED and _facts_valid(block, older) and _texts(block["delivery"], MAX_DELIVERY, 512)
             and bool(block["delivery"]))
 
 
@@ -911,6 +1108,16 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
         question += (" An existing worktree is one of this repository that stands at the recorded path now; Pod "
                      "cannot prove it is the one the work used.")
     question += "".join(_effects(row) for row in eligible)
+    older = [row["objective"] for row in eligible if row.get("record_class") == "older"]
+    if older:
+        question += (f" {', '.join(older)} {'uses' if len(older) == 1 else 'use'} a superseded record schema: the "
+                     "record is read through its documented fields and stays byte-identical; the retirement is "
+                     "stored beside it.")
+    undelivered = [row["objective"] for row in eligible if any(
+        item.get("code") == "delivery_unrecorded" for item in (row.get("completion") or {}).get("conditions", []))]
+    if undelivered:
+        question += (f" No delivery is recorded for {', '.join(undelivered)}: a decision states that plainly in "
+                     "its delivery references (such as \"none recorded\") and never names a delivery.")
     held = sum(tally.values())
     question += (f" Retirement does not close or complete {'it' if len(names) == 1 else 'them'}: {held} pending, "
                  "unknown, failed or unreported record(s) stay exactly as recorded, and the record will accept no "
@@ -1003,6 +1210,26 @@ def _delivered(project: Path, verdict: dict, *, port) -> dict:
             "next_action": DELIVERED_ACTION}
 
 
+def _load_record(path: Path) -> tuple[dict, dict | None, bytes | None]:
+    """A record for retirement: an older one as its logical view with its documented fields and exact bytes, any
+    other through the ordinary validating reader, which still refuses an unknown or malformed record."""
+    from .ledger import _read
+    found = older_state(path.parent)
+    return found if found is not None else (_read(path), None, None)
+
+
+def _older_document(value: dict, data: bytes, repository: str) -> dict:
+    """The stored entry of an older record: what retirement adds to its view, bound to its exact bytes."""
+    from .evidence_closure import MAX_FILE, _sha
+    from .util import encoded
+    added = {key: value[key] for key in ADDED if key in value}
+    document = {"schema": SIDECAR_SCHEMA, "objective": value["checkpoint"]["objective"], "repository": repository,
+                "record": {"context_sha256": _sha(data)}, **added}
+    if len(encoded(document, compact=True)) > MAX_FILE:
+        raise PodError("record_too_large", "The historical retirement entry exceeds its bound; nothing was written")
+    return document
+
+
 def historical_retirement(project: Path, objectives: object, *, decision: object | None = None,
                           port=None, proof: object | None = None) -> dict:
     """Detect without a decision; retire with an exact one. Each objective succeeds or refuses alone.
@@ -1011,7 +1238,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
     proved objective by evidence instead of retiring it (R147). An owner decision keeps working exactly as before.
     """
     from .github import repository_context
-    from .ledger import _lock, _path, _read, _write_retirement, record_name
+    from .ledger import _lock, _path, _write_retirement, record_name
     from .operations import OrcaPort
     if proof is not None:
         if decision is not None or proof != "delivery":
@@ -1040,19 +1267,20 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
         for path in sorted((path for path in paths.values() if path.exists()), key=str):
             stack.enter_context(_lock(path))
         if generic:
-            states, planned = {}, []
+            states, docs, planned = {}, {}, []
             for index, item in enumerate(requested):
                 name, candidate_path = item["objective"], paths[item["objective"]]
                 if not candidate_path.exists():
                     continue
                 try:
-                    saved = _read(candidate_path)
+                    saved, docs[name], _ = _load_record(candidate_path)
                 except PodError:
                     continue  # The ordinary per-objective refusal below remains authoritative.
                 states[name] = saved
-                checked = _detect(project, name, item["release"], saved, port=port, repository=repository, host=_Host(project))
+                checked = _detect(project, name, item["release"], saved, port=port, repository=repository,
+                                  host=_Host(project), doc=docs[name])
                 block = decision["objectives"][index]
-                if (checked["status"] == "eligible" and _block_valid(block)
+                if (checked["status"] == "eligible" and _block_valid(block, docs[name] is not None)
                         and {key: block.get(key) for key in FACTS} == checked["facts"] and not _moved(checked["locations"])):
                     planned.append((index, checked))
             recorded = next((saved[FIELD] for saved in states.values()
@@ -1085,7 +1313,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                     item = requested[index]
                     name = item["objective"]
                     fresh = _detect(project, name, item["release"], states[name], port=port,
-                                    repository=repository, host=_Host(project))
+                                    repository=repository, host=_Host(project), doc=docs[name])
                     if fresh["status"] != "eligible" or fresh["facts"] != checked["facts"] or _moved(fresh["locations"]):
                         raise PodError("decision_stale", "Retirement eligibility changed during verification")
                     probe = deepcopy(states[name])
@@ -1093,13 +1321,19 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
                                                      decision["objectives"][index], capability.commit_clock())
                     stamp_decision(probe)
                     protect_decision_record(probe)
+                    if docs[name] is not None:
+                        # An older record's bytes stay as they are; only its entry beside it is checked (R205).
+                        validate_entry(probe[FIELD], older=True)
+                        _older_document(probe, b"", repository)
+                        continue
                     probe["revision"] += 1
                     _validate_context(probe)
                     prepare_context(paths[name], probe)
         for index, row in enumerate(requested):
             name, path = row["objective"], paths[row["objective"]]
+            doc = data = None
             try:
-                state = _read(path) if path.exists() else None
+                state, doc, data = _load_record(path) if path.exists() else (None, None, None)
             except PodError as exc:
                 verdict = {"objective": name, "status": "refused", "condition": "scope_unreadable",
                            "facts": {"objective": name, "owner": None, "runs": [], "release": row["release"],
@@ -1112,7 +1346,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             else:
                 # Each objective reads the host afresh: an earlier objective's inventory is never its proof.
                 verdict = _detect(project, name, row["release"], state, port=port, repository=repository,
-                                  host=_Host(project))
+                                  host=_Host(project), doc=doc)
                 if (decision is None and verdict["status"] in ("eligible", "refused")
                         and verdict["condition"] not in _RECORD_REFUSALS):
                     # A delivered objective closes by evidence instead, outside the owner question (R147). The
@@ -1144,10 +1378,10 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             if verdict["status"] != "eligible":
                 results.append(verdict)
                 continue
-            if not _block_valid(block) or facts != verdict["facts"]:
+            if not _block_valid(block, doc is not None) or facts != verdict["facts"]:
                 # A decision made before R113 names no dispositions or reservations, so it never binds them (R113).
                 changed = sorted(key for key in FACTS if facts[key] != verdict["facts"][key]) \
-                    if _block_valid(block) else ["malformed"]
+                    if _block_valid(block, doc is not None) else ["malformed"]
                 results.append({**verdict, "status": "refused", "condition": "retirement_decision_mismatch",
                                 "changed": changed,
                                 "message": "The decision differs from fresh owner, Run, path, disposition, "
@@ -1164,7 +1398,10 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             entry = _retirement_entry(decision, requested, repository, facts, verdict, block,
                                       capability.commit_clock() if capability else datetime.now(timezone.utc).isoformat())
             state[FIELD] = entry
-            _write_retirement(path, state)
+            if doc is not None:
+                _write_older(path, state, data, repository)
+            else:
+                _write_retirement(path, state)
             results.append({**verdict, "status": "retired", "retirement": status_block(state),
                             "message": "Historical retirement recorded: the record is kept, not completed, and "
                                        "accepts no writes.",

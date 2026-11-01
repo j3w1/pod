@@ -116,7 +116,10 @@ def tail_closed(root: Path) -> bool:
 
 
 def refuse_closed(root: Path) -> None:
-    """Every write of an objective closed by evidence refuses, its own coordinator's included (R145, C4)."""
+    """Every write of an objective closed by evidence refuses, its own coordinator's included (R145, C4). So does
+    every write of an older record under historical retirement, whose entry is stored beside it (R205)."""
+    from .retirement import refuse_sidecar
+    refuse_sidecar(root)
     presence = _presence(root)
     if presence == "absent":
         return
@@ -379,7 +382,8 @@ def _gone(identity: dict) -> bool:
 
 def _phase(root: Path, raw: dict) -> str:
     from .listing import _phase as listed
-    return "closed" if present(root) and listed(raw) == "open" else listed(raw)
+    phase = listed(raw, root)
+    return "closed" if present(root) and phase == "open" else phase
 
 
 def _settled_record(project: Path, row: dict, *, frozen: frozenset[str] = frozenset()) -> bool:
@@ -1176,14 +1180,15 @@ def _content(project: Path, objective: str, facts: dict, *, caller: str, at: str
             "worktrees": list(facts["worktrees"])[:MAX_LISTED], "locations_complete": facts["locations_complete"]}
 
 
-def _create(root: Path, content: dict) -> bool:
+def _create(root: Path, content: dict, *, name: str = FILE) -> bool:
     """Write the closure once: a complete, synced file linked into place, so it is either whole or absent.
-    Returns False when one already exists; nothing is ever rewritten or removed."""
+    Returns False when one already exists; nothing is ever rewritten or removed. An older record's retirement
+    entry is written the same way under its own name (R205)."""
     from .util import encoded
     data = encoded(content, compact=True)
     if len(data) > MAX_FILE:
         raise PodError("record_too_large", "The evidence closure exceeds its bound; nothing was written")
-    temporary = root / f".{FILE}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    temporary = root / f".{name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "wb") as file:
@@ -1191,7 +1196,7 @@ def _create(root: Path, content: dict) -> bool:
             file.flush()
             os.fsync(file.fileno())
         try:
-            os.link(temporary, root / FILE, follow_symlinks=False)
+            os.link(temporary, root / name, follow_symlinks=False)
         except FileExistsError:
             return False
     finally:

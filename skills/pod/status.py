@@ -347,6 +347,13 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 # path; a current one reads below as before (R146).
                 result.update(continued)
                 return result
+            from .retirement import older_status
+            ended = older_status(project, objective, closed)
+            if ended is not None:
+                # An older record under historical retirement reads from its documented fields and stored entry,
+                # never converted (R205).
+                result.update(ended)
+                return result
             state = read(project, objective)
             result["recorded_questions"] = recorded_questions(state.get("checkpoint") if state else None)
             result.update(decision_status(preferences, state.get("checkpoint") if state else None, objective=True))
