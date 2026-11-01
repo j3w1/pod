@@ -69,7 +69,7 @@ class AdmissionQueryTests(AdmissionQueryCase):
              self.current_chunks_only() as chunks:
             result = self.query()
         self.assertTrue(result["complete"])
-        self.assertEqual(reads.call_count, 4)  # primary plus concurrency recheck, each record
+        self.assertEqual(reads.call_count, 2)  # one primary per record; the recheck compares bytes before decoding
         self.assertGreater(len(chunks), 0)
         self.assertEqual([row["objective"] for row in result["claims"]], ["objective"])
 

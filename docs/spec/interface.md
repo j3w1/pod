@@ -1148,6 +1148,7 @@ uncertainty, never guessed clearance or a replacement effect vocabulary.
 
 The query reads bounded primary facts, current Governor journals, a paginated
 native all-Run inventory, and a complete native terminal ownership inventory.
+It is a one-query call over the same shared discovery as the batch form (R207).
 The latter includes sessions outside supervised workers, including folder contexts
 inside a repository; physical workspace overlap is checked, not just literal
 path equality. Worker facts retain their current terminal/resource owner and
@@ -1249,3 +1250,135 @@ settled action history is excluded. Existing context and Governor writers remain
 the sole atomic authorities. There is no second writable claim index. The bounded
 preceding primary/journal readers remain usable before storage APIs are installed;
 full audit and explicit migration are separate operations.
+
+### R207 — Answer many admission queries over one shared discovery
+
+Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787)
+
+`pod admission --batch --timeout SECONDS --json` reads one `pod-admission-batch-request/v1`
+object from stdin and answers `pod-admission-batch/v1`. With `--batch` every per-query flag is
+refused and `--json` is required. `--timeout` is one deadline for the whole call, greater than 0
+and at most 30 seconds, default 10: discovery, every query, the change recheck and the fence
+spend it together.
+
+The request, at most 1 MiB of UTF-8 JSON, has exactly `schema`, optional `known_repositories`
+(at most 512 absolute paths of 1-4096 characters, no NUL, no `..` component, shared by every
+query as repeated `--known-repository` flags) and `queries`: 1 to 512 objects, each with a
+unique `id` of 1-128 characters from `[A-Za-z0-9._:-]`, an absolute `repository`, and the
+optional `worktree`, `branch`, `objective`, `candidate`, `target`, `target_commit` and `expect`
+(nonempty strings of at most 4096 characters without NUL) and `effects` (at most 64 such
+strings). `null` is the same as an absent optional field. An unknown or repeated key, a non-standard
+JSON constant, a bad type or bound, or a missing, invalid or repeated `id` refuses the whole batch
+with `admission_batch_request`; so do per-query flags with `--batch`, `--batch` without `--json`
+and missing stdin. A timeout outside the bound refuses `admission_timeout`. Each query means
+exactly the single query with the same flags. The single query's input faults
+(`admission_candidate`, `admission_target`, `admission_scope_unavailable`,
+`repository_identity_unavailable`, `git_unavailable`) refuse the batch with a message naming the
+query `id`. All of these are found before any discovery read. A response over 8 MiB refuses
+`admission_batch_projection_limit`. A refusal prints only Pod's error object and exits 1, so no
+partial answer exists.
+
+`responses` holds one `{id, result}` per query in request order; each `result` is an unchanged
+`pod-admission-query/v1` object with its own scope, unknowns, conflicts, claims, proof, target,
+snapshot, `expect` comparison and per-result projection limit, and `authorization` is always
+false. The batch `status` is `unknown` when any result is unknown or the fence is unstable, else
+`blocked` when any result is blocked, else `observed`; `complete` is true only when every result
+is complete and the fence is stable. A factual batch answer exits zero; it is never permission.
+
+One call reads each fact once and shares it with every query: the record cohort, each record's
+primary facts, claims and journal, the all-Run worker inventory, the terminal inventory, each
+abandoned worker's current claim, each Run's owner observation, each repository's identity and
+worktree inventory, each effect policy revision and each target resolution. Each query receives
+the value or the fault of that one read at the point where the single query would read it, so a
+read fault stays a scoped unknown of every result it is relevant to, never a batch failure.
+Nothing is cached across calls. A bound caller keeps the `native_inventory_scope` unknown. The
+fleet, the terminal inventory and the worktree inventories are read in a bounded pool of threads,
+at most eight Orca reads at once, while the queries read their records, and an abandoned
+worker's claim read starts as soon as its inventory row is listed. Every thread ends before the
+call returns, and exhausting the shared deadline is `discovery_budget` exactly as in the single
+query.
+
+Discovery reads the all-Run inventory with the newest-first cursor walk alone, the same reader and
+checks as the single query before 0.21.31. Its cursor is a keyset position, so every Dispatch that
+exists for the whole walk is listed exactly once, whatever state it changes to, and a malformed row
+fails where it always did. `discovery.fleet_read` is `sequential`, or `bound` for a bound caller,
+and `discovery.orca_reads` counts the call's Orca reads; `discovery` is diagnostic only. The
+inventory's cost grows with the Dispatches Orca keeps, about 0.15 s per 100 finished Dispatches.
+
+The change recheck runs once, after every query's first pass, beside the end reads (the
+stability predicate orders neither before the other), and never reuses a discovery read: each record or journal whose bytes still hash to the discovery
+generation keeps its identity without a decode, and only a changed one is read again in full.
+Each query then reports `record_changed` or `inventory_changed` for its own sources exactly as
+the single query does, so a change reaches only the queries it is relevant to.
+
+`native_fence` binds the native inventories to the moment the answer was made. `start`
+fingerprints the terminal read discovery made and every result used; `end` is a fresh complete
+terminal read, never cached or supplied by the caller. Each side's
+rows have exactly `handle`, `incarnationId`, `worktreePath`, `worktreeId`, `executionHostId`,
+`agentIdentity`, `connected`, `writable` and `orphaned` (null when absent), sorted by `handle`;
+`sha256` is the SHA-256 of `json.dumps({"runtime": RUNTIME, "terminals": ROWS}, sort_keys=True,
+ensure_ascii=False, separators=(",", ":"))` in UTF-8, where `RUNTIME` is the read's runtime. `end`
+also returns its rows. A side that is not provably whole or failed has `complete: false`, `count: null` and a
+`code` in place of `sha256`, and `end` then has no rows.
+
+`fleet_start` describes the complete all-Run worker read discovery used, and `fleet_end` a fresh
+one made with the terminal `end` read. The end reads start once every native read any result uses
+has finished (the fleet, the terminal list, every abandoned Dispatch's claim, every observed Run
+owner and each candidate proof's reads), so they are the call's last native reads; the remaining
+projection and the shared recheck run beside them, and a native read requested after they start
+is refused `native_read_after_fence` rather than made: a claim read becomes that scoped unknown, and
+a Run-owner read keeps its owner observation with that code, `owner_identity_matches` false, and
+also adds the scoped unknown, so the result is incomplete. Each side holds `total` and `counts` from the unfiltered newest-first
+page of up to 100 rows (the walk's first page at the start; a fresh page at the end); `unreleased` and `unreleased_sha256` over every row whose terminal state is not
+`released`, and `released` and `released_sha256` over every row whose terminal state is `released`
+(both from the walk's rows at the start; all six terminal-state partitions, fully paged with the usual cursor,
+scope and runtime checks and read in parallel, at the end); `newest` and `newest_sha256` over that
+page's rows; and `claims_read` and `claims_sha256` over the claim Pod derived,
+`{dispatch, process, effects}`, for every abandoned Dispatch whose current claim discovery read,
+read again at the end (a claim that is gone reads as process `exited` with no effects). A row's
+identity is `dispatchId`, `runId`, `taskId`, `terminalState`, `workerState`, `dispatchStatus` and
+`agentTerminalHandle`, with `resource` holding `id`, `ownerDispatchId`, `ownershipState`,
+`releaseState`, `terminalHandle` and `worktreeId`, and `projection` holding `id`,
+`liveness.verdict`, `workspace.id` and `resource.state`, each null when absent. Rows are sorted by
+`dispatchId`, claims by `dispatch`, and each digest is the SHA-256 of the canonical JSON of
+`{"runtime": RUNTIME, "rows": ROWS}` under the terminal fingerprint's rule. A bound caller, a read
+that is not scope `all`, a missing or repeated cursor, a runtime change between pages, a failed
+read or a failed claim read gives `complete: false` with a `code`. `stable` is true only when every
+side is complete, the terminal fingerprints are equal, every fleet field is equal, and all reads
+share one runtime. An unstable fence makes the batch `unknown` and incomplete and leaves every
+result unchanged.
+
+Stability predicate. Take the start of discovery (T0), the shared recheck (Tr) and the end reads
+(T1); the predicate needs no order between Tr and T1, only that T1 follows every native read a
+result used. A complete result in a batch with a stable fence reports every change in [T0, Tr] to a
+record it relied on, to the record inventory or to an effect policy (`record_changed`,
+`inventory_changed`, `effect_policy_changed`). And each of these changes in [T0, T1] makes the
+fence unstable: a terminal appearing, disappearing or changing incarnation, location, agent, host,
+connected, writable or orphaned state; any row, in any terminal state, appearing, disappearing or
+changing an identity field, including a Dispatch settling into `released` or leaving it, or a
+released Dispatch becoming abandoned; any change
+among the newest 100 rows, which holds every Dispatch created during the call; a deleted Dispatch,
+which lowers `total`; a change in an abandoned Dispatch's derived claim; and a runtime change.
+A change during the discovery walk is one of these, since the start side is that walk: a Dispatch
+created during it is on the end's newest page, a deletion lowers the end's total, and any identity
+change alters the end's counts or row digests. The end fence is a pure comparison, so a race during its
+own reads only makes it unequal. Balanced changes cannot cancel out: a created Dispatch shows in the newest page, a settled one
+leaves the unreleased set, and a deleted one lowers the total, so creating, settling and deleting
+together still make the fence unstable.
+
+Every Dispatch's identity is compared at both ends, so two things are not covered, by design.
+First, the target ref after a query resolved it: the consumer keeps `target_commit` and `expect`
+for later checks. Second, anything after T1: work done later rechecks with a fresh batch and
+`expect`. The end fleet read re-reads every partition in parallel with the terminal list; its
+released partition (about 20 pages on a fleet of about 2,000 released rows) sets its floor, partly
+overlapped with the projections and the recheck.
+
+- <a id="a779"></a>**A779** — Every request refusal is one `admission_batch_request` (or `admission_timeout`) error with no responses and exit 1; a per-query input fault names its query id before any discovery read; responses follow request order with their ids; the 8 MiB response limit refuses the whole batch; a factual batch answer exits zero.
+- <a id="a780"></a>**A780** — For the occupancy (worktree, branch, both), target with objective, candidate and target commit, effects, mismatched expect, native writer, bound caller, unreadable and unrelated records and projection-limit shapes, each batch result equals the single query with the same doubles.
+- <a id="a781"></a>**A781** — One batch of eight queries reads the fleet, the terminal inventory and each record once, plus one shared recheck that reads each rechecked file once; two calls each read afresh; an abandoned worker's claim is read once for every query and is started from its inventory row; no thread outlives the call.
+- <a id="a782"></a>**A782** — Discovery reads the fleet with the sequential walk alone (`fleet_read` `sequential`, or `bound` with no further read) and the fence's start comes from that walk; the end fence's partition reads refuse a moved row, a row outside its partition, a duplicate, a changed or short partition total, a runtime change, a malformed row and a failed read, each making the fence's end incomplete; the allowlist accepts exactly the partition reads; a balanced replacement, an active replacement, a creation, a deletion, an old abandoned Dispatch settling beside a deletion and a creation, and a balanced state swap during discovery each give the changed Dispatch's claim or an unstable fence, never a complete stable answer without it.
+- <a id="a783"></a>**A783** — Exhausting the shared deadline during the call gives `discovery_budget` in every relevant result.
+- <a id="a784"></a>**A784** — A record changed during the call is `record_changed` only in the queries it is relevant to and unrelated uncertainty in the others; a record added during discovery is `inventory_changed` in every query.
+- <a id="a785"></a>**A785** — A stable fence's fingerprints equal an independent computation of the documented rule and the end returns the nine-field rows; a connected flip, a new terminal or a runtime change at the end, an incomplete end and a failed end each make the fence unstable and the batch `unknown` and incomplete while every result is unchanged.
+- <a id="a786"></a>**A786** — The fleet fence digests the documented row identities of every unreleased row, every released row, the newest page and every abandoned claim, from discovery's own reads and fresh end reads; with unchanged inventories it is stable; a created, settled, deleted or changed row, a changed abandoned claim, a balanced create, settle and delete with equal totals and counts, a runtime change, a bound or failed end read and a failed end partition each make it unstable and the batch `unknown` while every result is unchanged; a released row outside the newest page that becomes abandoned with a pending effect, or changes any other identity field, makes it unstable; a bound caller's fleet start is incomplete with `native_inventory_scope`; the end reads start only after every native read a result uses has finished.
+- <a id="a787"></a>**A787** — During one call, a changed record is `record_changed` and incomplete only in the results it is relevant to, an added or removed record is `inventory_changed`, and a changed effect policy is `effect_policy_changed`; a fault inside one query's projection prints no partial batch; an unlocated foreign worker together with an open record's stale runtime answers normally in both forms; an OSError from the fleet or from a record read stays the scoped `inventory_unreadable` or `unreadable` answer in both forms; a Run-owner read asked for after the end fence started is never made and adds a scoped `native_read_after_fence` unknown.
