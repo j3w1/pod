@@ -61,37 +61,121 @@ class ConsumedReconciliationTests(TickCase):
         self.reconciled_worker(files=["elsewhere/changed.py"])
         self.close_in_one_step()
 
-    def test_a_report_without_a_verifiable_settlement_record_stays_outstanding_and_is_named(self):
-        key = self.reconciled_worker(scope=["a prose summary of the assigned work"])
+    def closed_with_open_source(self):
+        """Close normally while the fake source refuses its first close, so the issue stays open."""
         self.issue.close_result = "refused"
         self.tick()
         self.assertEqual(self.write(close=True)["source_issues"][0]["outcome"], "refused")
-        path = objective_root(self.project, "objective") / "context.json"
+        self.issue.close_result = "accepted"
+        return objective_root(self.project, "objective") / "context.json"
+
+    def assert_refused(self, path, tamper, *, earlier, detail, key, label):
+        """Apply one edit to the closed record (and, for `earlier`, drop the recorded settled set as a closure
+        written before it had one); the replay refuses, names `key` and sends nothing."""
         original = path.read_bytes()
-        seq = read(self.project, "objective")["checkpoint"]["seq"]
-        corrupt = lambda row: row["report"].update(observation_digest="0" * 64)  # noqa: E731
-        for label, tamper in (
-                ("changed digest", corrupt),
-                ("no consumed report", lambda row: row.update(report=None)),
-                # A disposition never stands in for a corrupted report, nor settles a review or investigation.
-                ("changed digest with an empty disposition", lambda row: (corrupt(row), row.update(disposition={}))),
-                ("no report with an invented discard", lambda row: row.update(
-                    report=None, disposition={"kind": "discarded", "reason": "invented", "seq": seq}))):
-            with self.subTest(label):
-                raw = logical_json(path); tamper(raw["admissions"][key])
+        try:
+            with self.subTest(label, earlier=earlier):
+                raw = logical_json(path)
+                if earlier:
+                    raw["checkpoint"]["closure"].pop("settlement_digest")
+                    raw["checkpoint"]["closure"].pop("settlement_admissions")
+                tamper(raw)
                 path.write_text(json.dumps(raw))
                 closes = len(self.issue.closes)
                 row = close_source_issues(self.project, "objective")["source_issues"][0]
                 self.assertEqual(len(self.issue.closes), closes)
                 self.assertEqual((row["outcome"], row.get("reason"), row.get("detail"), row["locator"]),
-                                 ("unverified", "obligation_unaccounted", "outstanding_unaccounted", self.locator))
-                self.assertEqual(row["referent"]["admission"], key)
-                self.assertIn("obligation", row["referent"])
+                                 ("unverified", "obligation_unaccounted", detail, self.locator))
+                self.assertEqual(row["referent"].get("admission", row["referent"].get("record")), key)
                 self.assertIn(key, row["message"])
                 self.assertIn("project lead", row["next_action"])
                 self.assertIn("no owner decision is needed", row["next_action"])
-                self.assertEqual(len(self.issue.closes), closes)
-                path.write_bytes(original)
+        finally:
+            path.write_bytes(original)
+
+    def assert_replays(self, path, *, earlier):
+        """The intact record (as written, or without its recorded settled set) closes its source."""
+        original = path.read_bytes()
+        try:
+            raw = logical_json(path)
+            if earlier:
+                raw["checkpoint"]["closure"].pop("settlement_digest")
+                raw["checkpoint"]["closure"].pop("settlement_admissions")
+                path.write_text(json.dumps(raw))
+            row = close_source_issues(self.project, "objective")["source_issues"][0]
+            self.assertEqual(row["outcome"], "closed", row)
+        finally:
+            path.write_bytes(original)
+            self.issue.state, self.issue.state_reason = "OPEN", None
+
+    def tampers(self, key, seq):
+        corrupt = lambda raw: raw["admissions"][key]["report"].update(observation_digest="0" * 64)  # noqa: E731
+        return (
+            ("changed digest", corrupt),
+            ("no consumed report", lambda raw: raw["admissions"][key].update(report=None)),
+            # A disposition never stands in for a corrupted report, nor settles a review or investigation.
+            ("changed digest with an empty disposition",
+             lambda raw: (corrupt(raw), raw["admissions"][key].update(disposition={}))),
+            ("no report with an invented discard", lambda raw: raw["admissions"][key].update(
+                report=None, disposition={"kind": "discarded", "reason": "invented", "seq": seq})))
+
+    def test_an_edited_settlement_record_is_refused_by_the_recorded_settled_set(self):
+        key = self.reconciled_worker(scope=["a prose summary of the assigned work"])
+        path = self.closed_with_open_source()
+        seq = read(self.project, "objective")["checkpoint"]["seq"]
+        for label, tamper in self.tampers(key, seq):
+            self.assert_refused(path, tamper, earlier=False, detail="settlement_changed", key=key, label=label)
+        self.assert_refused(path, lambda raw: raw["checkpoint"]["closure"].update(settlement_digest="0" * 64),
+                            earlier=False, detail="settlement_changed", key="closure", label="changed settled-set digest")
+        self.assert_replays(path, earlier=False)
+
+    def test_a_closure_without_the_recorded_settled_set_checks_each_settlement_record(self):
+        key = self.reconciled_worker(scope=["a prose summary of the assigned work"])
+        path = self.closed_with_open_source()
+        seq = read(self.project, "objective")["checkpoint"]["seq"]
+        for label, tamper in self.tampers(key, seq):
+            self.assert_refused(path, tamper, earlier=True, detail="outstanding_unaccounted", key=key, label=label)
+        self.assert_replays(path, earlier=True)
+
+    def implementation(self, *, result=True):
+        """A settled implementation admission, with a real Git result commit and its consumed report, or
+        report-less."""
+        self.bind("- [ ] **PoD#1", self.sub("S", boundary={"paths": ["src"]}))
+        frozen = self.packet(["S"], role="implement", boundary={"paths": ["src"]})
+        admission = self.start("writer", frozen)["admission"]
+        head = None
+        if result:
+            (self.project / "src" / "new.py").write_text("new\n")
+            git(self.project, "add", "."); git(self.project, "commit", "-qm", "worker result")
+            head = git(self.project, "rev-parse", "HEAD")
+        self.settle(admission)
+        if result:
+            rows = self.stored()
+            served = next(row for row in rows if row["id"] == "S")
+            served.pop("executor", None); served.update(state="waiting", wait={"class": "sequenced", "referent": "O1"})
+            self.report(admission, frozen, result_commit=head, map={"obligations": rows})
+        return admission["admission_id"], head
+
+    def test_an_edited_integration_target_is_refused_and_the_genuine_one_closes(self):
+        key, head = self.implementation()
+        self.write(tick_closure.ClosureTests.proof_rows(self), dispositions=[{"admission": key, "integrated_into": head}])
+        path = self.closed_with_open_source()
+        self.assertEqual(read(self.project, "objective")["admissions"][key]["disposition"]["validated"], "ancestry")
+        # The result commit is not an ancestor of its base: the writer would refuse this target.
+        retarget = lambda raw: raw["admissions"][key]["disposition"].update(candidate=self.base)  # noqa: E731
+        self.assert_refused(path, retarget, earlier=False, detail="settlement_changed", key=key, label="recorded set")
+        self.assert_refused(path, retarget, earlier=True, detail="outstanding_unaccounted", key=key, label="Git check")
+        self.assert_replays(path, earlier=True)
+        self.assert_replays(path, earlier=False)
+
+    def test_a_report_less_discarded_result_closes_the_source_in_the_closing_step(self):
+        key, _ = self.implementation(result=False)
+        self.write(tick_closure.ClosureTests.proof_rows(self),
+                   dispositions=[{"admission": key, "discarded": True, "reason": "superseded result"}])
+        self.tick()
+        self.assertIsNone(read(self.project, "objective")["admissions"][key]["report"])
+        self.assertEqual(self.write(close=True)["source_issues"][0]["outcome"], "closed")
+        self.assertEqual(len(self.issue.closes), 1)
 
     def test_a_refusal_before_closure_names_the_bound_source(self):
         self.bind(); self.prove(); self.tick()
@@ -127,14 +211,18 @@ class RecordedDispositionTests(unittest.TestCase):
         }
         for label, admission in written.items():
             with self.subTest(label):
-                self.assertTrue(_recorded_disposition(admission, 5))
-                self.assertFalse(_recorded_disposition(admission, 4), "a disposition after the closed map")
+                self.assertTrue(_recorded_disposition(admission, 5, is_ancestor=lambda head, candidate: True))
+                self.assertFalse(_recorded_disposition(admission, 4, is_ancestor=lambda head, candidate: True),
+                                 "a disposition after the closed map")
                 for role in ("review", "investigate"):
                     self.assertFalse(_recorded_disposition({**admission, "role": role}, 5))
                 for change in ({"extra": 1}, {"kind": "accepted"}, {"seq": 0}):
                     self.assertFalse(_recorded_disposition(
                         {**admission, "disposition": {**admission["disposition"], **change}}, 5), change)
         ancestry = written["ancestry"]
+        # Shape alone never attests an integration target: the writer's Git ancestry check runs again.
+        self.assertFalse(_recorded_disposition(ancestry, 5, is_ancestor=lambda head, candidate: False))
+        self.assertFalse(_recorded_disposition(ancestry, 5))
         self.assertFalse(_recorded_disposition({**ancestry, "disposition": {**ancestry["disposition"],
                                                                             "validated": "attestation"}}, 5))
         self.assertFalse(_recorded_disposition({**ancestry, "disposition": {}}, 5))

@@ -2384,16 +2384,34 @@ def _close(state: dict, ctx: dict) -> dict:
         # Superseded derived validations a delivered objective's closure preserved UNKNOWN (C11); the journal
         # keeps them exactly as recorded.
         closure["preserved"] = [dict(row) for row in ctx["closure_preserved"]]
+    if recorded is None or "settlement_digest" in recorded:
+        # R155: the exact settled set this closure accepted, which its replay must find again; a closure recorded
+        # before this keeps its shape.
+        from .ledger import settlement_facts
+        closure["settlement_digest"], closure["settlement_admissions"] = settlement_facts(
+            _admissions(ctx), runtimes=set(ctx.get("report_runtimes") or ()), seq=state["seq"],
+            pending=ctx.get("pending_route_settlements", ()))
     return {**closure, "report": report_projection({**state, "closure": closure}, ctx)}
 
 
 CLOSURE_FIELDS = {"seq", "revision", "report"}
+_HEX64, _HEX16 = re.compile(r"[0-9a-f]{64}"), re.compile(r"[0-9a-f]{16}")
 PRESERVED_FIELDS = {"record", "kind", "recorded", "outcome", "reason", "pr", "merged_head"}
 
 
 def _closure_record(value: object) -> dict:
     """A stored closure: its sequence, revision and report, and optionally the rows it preserved (C11)."""
-    closed = _exact(value, CLOSURE_FIELDS | {"preserved", "at"}, CLOSURE_FIELDS, "closure")
+    closed = _exact(value, CLOSURE_FIELDS | {"preserved", "at", "settlement_digest", "settlement_admissions"},
+                    CLOSURE_FIELDS, "closure")
+    entries = closed.get("settlement_admissions")
+    if (("settlement_digest" in closed) != ("settlement_admissions" in closed)
+            or "settlement_digest" in closed and (
+                not isinstance(closed["settlement_digest"], str) or _HEX64.fullmatch(closed["settlement_digest"]) is None
+                or not isinstance(entries, dict)
+                or any(not isinstance(key, str) or _HEX16.fullmatch(key) is None
+                       or not isinstance(item, str) or _HEX16.fullmatch(item) is None for key, item in entries.items()))):
+        raise refuse("obligation_invalid", "malformed", "closure records its settled set as a digest and one short "
+                     "digest per admission", record="closure")
     if "at" in closed:
         from .util import normalize_timestamp
         if normalize_timestamp(closed["at"], field="Closure time", code="obligation_invalid") != closed["at"]:
@@ -2417,6 +2435,11 @@ def _closure_record(value: object) -> dict:
 def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
     """Recheck recorded closure with the same row, closure and report contracts."""
     closure = _closure_record(state.get("closure"))
+    if ctx.get("settlement_changed") is not None:
+        changed = ctx["settlement_changed"]
+        raise refuse("obligation_unaccounted", "settlement_changed",
+                     "the closure's recorded settled set no longer matches this admission's settlement evidence",
+                     **({"record": "closure"} if changed == "closure" else {"admission": changed}))
     for key in ("seq", "revision"):
         if type(state.get(key)) is not int or state[key] < 1 or type(closure[key]) is not int or closure[key] != state[key]:
             raise refuse("obligation_invalid", "malformed", "closure sequence and revision match the map", record="closure")

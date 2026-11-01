@@ -1072,19 +1072,24 @@ def _outstanding_ids(state: dict, native: dict | None, *, recorded: dict | None 
 
 
 def _settlement_recorded(admission: dict, recorded: dict) -> bool:
-    """The durable record of a bound admission's native settlement, under the writers' own eligibility rules.
+    """For a closure recorded without a settlement digest: the durable record of a bound admission's native
+    settlement, under its writers' own eligibility and semantic checks.
 
     Pod writes each only after native readback showed the exact Dispatch settled: a consumed report
-    (`report_attempt_unverified` refuses an unsettled one), a terminal review or investigation route discard
-    (R160 discards only after exact native settlement) and abandoned accounting (its fence requires a settled
-    readback). A present consumed report must verify, so no other marker can stand in for a corrupted one; a
-    disposition is an implementation result's and must hold the shape its writer records; a disposition
-    without a consumed report or abandoned accounting settles nothing here.
+    (`report_attempt_unverified` refuses an unsettled one), a disposition (only a settled implementation
+    result takes one), a terminal review or investigation route discard (R160 discards only after exact native
+    settlement) and abandoned accounting (its fence requires a settled readback). A present consumed report
+    must verify, so no other record stands in for a corrupted one. A disposition must hold the shape its
+    writer records and pass the writer's check again: an `integrated_into` validated by ancestry needs the
+    result commit to be an ancestor of the recorded target in Git now. Anything unprovable stays outstanding.
     """
-    if admission.get("disposition") is not None and not _recorded_disposition(admission, recorded["seq"]):
+    if admission.get("disposition") is not None and not _recorded_disposition(
+            admission, recorded["seq"], is_ancestor=recorded.get("is_ancestor")):
         return False
     if admission.get("report") is not None:
-        return _report_verified(admission, recorded["runtimes"])
+        return _report_deviations(admission, recorded["runtimes"]) is not None
+    if admission.get("disposition") is not None:
+        return True
     if "abandoned_accounting" in admission:
         from .abandoned import validate
         try:
@@ -1099,30 +1104,65 @@ def _settlement_recorded(admission: dict, recorded: dict) -> bool:
         return False
 
 
-def _report_verified(admission: dict, runtimes: set[str]) -> bool:
-    """A consumed report whose digest verifies: `validated_observation`, or `reconciliation_required` with
-    the exact scope deviations it was consumed with."""
+def _report_deviations(admission: dict, runtimes: set[str]) -> list[str] | None:
+    """The scope deviations a consumed report's digest verifies with (none for `validated_observation`),
+    or None when its digest does not verify."""
     try:
         value = _consumed_report(admission, runtimes)
     except PodError:
-        return False
+        return None
     if value is None:
-        return False
+        return None
     if value["status"] == "validated_observation":
-        return True  # `_consumed_report` verified this digest.
+        return []  # `_consumed_report` verified this digest.
     from itertools import combinations
     from .records import REPORT_DEVIATIONS, report_record
     observation = report_record(value["observation"])
     binding = {key: admission["native_binding"][key] for key in ("runId", "taskId", "dispatchId", "workerId")}
-    return any(digest({"status": value["status"], "deviations": list(codes), "observation": observation,
-                       "native_binding": {"runtime": runtime, **binding}}) == value["observation_digest"]
-               for size in range(1, len(REPORT_DEVIATIONS) + 1)
-               for codes in combinations(REPORT_DEVIATIONS, size)
-               for runtime in runtimes | {admission["runtime"]})
+    for size in range(1, len(REPORT_DEVIATIONS) + 1):
+        for codes in combinations(REPORT_DEVIATIONS, size):
+            if any(digest({"status": value["status"], "deviations": list(codes), "observation": observation,
+                           "native_binding": {"runtime": runtime, **binding}}) == value["observation_digest"]
+                   for runtime in runtimes | {admission["runtime"]}):
+                return list(codes)
+    return None
 
 
-def _recorded_disposition(admission: dict, seq: int | None) -> bool:
-    """Whether a stored disposition has exactly the shape `obligations.disposition` records for this admission."""
+def settlement_facts(admissions: dict, *, runtimes: set[str], seq: int, pending=()) -> tuple[str, dict]:
+    """R155: the canonical settled set a closing write accepts, and its replay recomputes.
+
+    Every admission a closure counts (all but closed and deferred ones, each of which the closing write saw
+    settled) with its full settlement evidence: the consumed report's identity and the deviations its digest
+    verifies with, the result commits, the disposition, abandoned accounting and an R160 terminal discard
+    (judged with this write's pending settlements, which land after the closure is built). Returns the digest of
+    that set with the closed map's `seq`, and a short digest per admission so a mismatch names the admission."""
+    from .util import route_discarded
+    entries = {}
+    for key in sorted(admissions):
+        row = admissions[key]
+        if not isinstance(row, dict) or row.get("state") in ("closed", "deferred"):
+            continue
+        report = row.get("report") if isinstance(row.get("report"), dict) else None
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        try:
+            discarded = route_discarded(row, pending=list(pending or ()))
+        except PodError:
+            discarded = None
+        entries[key] = {
+            "state": row.get("state"), "role": row.get("role"),
+            "report": None if report is None else {
+                **{field: report.get(field) for field in ("status", "outcome", "observation_digest", "result_commit")},
+                "deviations": _report_deviations(row, runtimes)},
+            "result": {field: result.get(field) for field in ("base", "head")},
+            "disposition": row.get("disposition"), "abandoned_accounting": row.get("abandoned_accounting"),
+            "route_discarded": discarded}
+    return (digest({"seq": seq, "admissions": entries}),
+            {key[:16]: digest(value)[:16] for key, value in entries.items()})
+
+
+def _recorded_disposition(admission: dict, seq: int | None, *, is_ancestor=None) -> bool:
+    """Whether a stored disposition has exactly the shape `obligations.disposition` records for this admission,
+    and an ancestry-validated integration still passes that writer's Git check through `is_ancestor`."""
     value = admission["disposition"]
     if (admission.get("role") != "implement" or admission.get("state") == "deferred" or not isinstance(value, dict)
             or type(value.get("seq")) is not int or value["seq"] < 1 or type(seq) is not int or value["seq"] > seq):
@@ -1146,10 +1186,17 @@ def _recorded_disposition(admission: dict, seq: int | None) -> bool:
     result = admission.get("result") or {}
     head = result.get("head")
     expected = "ancestry" if isinstance(head, str) and head != result.get("base") else "attestation"
-    return (value.get("validated") == expected
+    if not (value.get("validated") == expected
             and {"kind", "candidate", "validated", "seq"} | ({"attestation"} if expected == "attestation" else set())
             <= set(value) <= {"kind", "candidate", "validated", "seq"} | optional
-            and (not admission.get("boundary_exceeded") or "reason" in value))
+            and (not admission.get("boundary_exceeded") or "reason" in value)):
+        return False
+    if expected == "ancestry":
+        try:
+            return is_ancestor is not None and is_ancestor(head, value["candidate"]) is True
+        except PodError:
+            return False
+    return True
 
 
 def _governor_pending(project: Path, objective: str, excluded: frozenset = frozenset()) -> bool:
@@ -1347,9 +1394,24 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
         ctx["closure_preserved"] = preserved
         ctx["governor_pending"] = _governor_pending(project, objective, excluded=frozenset(
             row.get("record") for row in preserved if isinstance(row, dict)))
-    # R155: the closing write's settlement rule, read from each admission's durable settlement record.
-    ctx["outstanding"] = _outstanding_ids(state, None, recorded={
-        "runtimes": set(ctx["report_runtimes"]), "seq": (map_of(state) or {}).get("seq")})
+    # R155: a closure recorded with its settled set replays exactly that set; an earlier one reads each
+    # admission's durable settlement record under its writers' checks.
+    mapped = map_of(state) or {}
+    closure = mapped.get("closure") if isinstance(mapped.get("closure"), dict) else {}
+    runtimes = set(ctx["report_runtimes"])
+    if "settlement_digest" in closure:
+        recorded, short = settlement_facts(state["admissions"], runtimes=runtimes, seq=mapped.get("seq"))
+        if recorded == closure["settlement_digest"]:
+            ctx["outstanding"] = []
+        else:
+            stored = closure.get("settlement_admissions") if isinstance(closure.get("settlement_admissions"), dict) else {}
+            differing = sorted(key for key in set(short) | set(stored) if short.get(key) != stored.get(key))
+            named = [key for key in state["admissions"] if key[:16] in differing[:1]]
+            ctx["settlement_changed"] = named[0] if named else "closure"
+            ctx["outstanding"] = named
+    else:
+        ctx["outstanding"] = _outstanding_ids(state, None, recorded={
+            "runtimes": runtimes, "seq": mapped.get("seq"), "is_ancestor": ctx.get("is_ancestor")})
     # R204: proof a recorded delivery relied on replays against the delivered candidate's tree, as it was
     # judged on the closing route, not against whatever the worktree holds now.
     return delivered_read_context(project, state, ctx)

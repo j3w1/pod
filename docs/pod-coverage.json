@@ -10210,7 +10210,10 @@
       "offline_test": [
         "tests.test_closed_replay.ConsumedReconciliationTests.test_a_prose_scope_report_closes_the_source_in_the_closing_step_and_sweep_is_a_no_op",
         "tests.test_closed_replay.ConsumedReconciliationTests.test_a_file_outside_the_assignment_closes_the_source_in_the_closing_step",
-        "tests.test_closed_replay.ConsumedReconciliationTests.test_a_report_without_a_verifiable_settlement_record_stays_outstanding_and_is_named",
+        "tests.test_closed_replay.ConsumedReconciliationTests.test_an_edited_settlement_record_is_refused_by_the_recorded_settled_set",
+        "tests.test_closed_replay.ConsumedReconciliationTests.test_a_closure_without_the_recorded_settled_set_checks_each_settlement_record",
+        "tests.test_closed_replay.ConsumedReconciliationTests.test_an_edited_integration_target_is_refused_and_the_genuine_one_closes",
+        "tests.test_closed_replay.ConsumedReconciliationTests.test_a_report_less_discarded_result_closes_the_source_in_the_closing_step",
         "tests.test_closed_replay.ConsumedReconciliationTests.test_a_refusal_before_closure_names_the_bound_source",
         "tests.test_closed_replay.YoloDeliveryReplayTests.test_a_yolo_delivered_closure_replays_its_recorded_consent",
         "tests.test_closed_replay.YoloDeliveryReplayTests.test_consent_revoked_before_closure_still_reads_missing",
