@@ -314,7 +314,14 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     record_root = None
     try:
         if objective is None:
-            matches = contexts_for_run(run)
+            try:
+                matches = contexts_for_run(run)
+            except PodError as exc:
+                # A superseded record that names this Run holds the lookup (R206); it reads as that record's own
+                # condition, objective_superseded below, never as a generic unsupported state.
+                if exc.code != "state_unsupported" or not superseded_for_run(run):
+                    raise
+                matches = []
             if len(matches) > 1:
                 result.update({"run": run, "choices": sorted([
                     {"objective": (row.get("checkpoint") or {}).get("objective"),

@@ -113,6 +113,36 @@ class MembershipTests(KernelCase):
         self.assertEqual(caught.exception.code, "discovery_budget")
 
 
+class RunLookupStatusTests(KernelCase):
+    """A record that names the selected Run holds `pod status --run`; a superseded one reads as its own condition."""
+
+    def peer(self, context, checkpoint):
+        record = ledger.state_root(self.project) / "earlier" / "context.json"
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({"schema": context, "revision": 1, "owner": "owner",
+                                      "checkpoint": {"schema": checkpoint, "objective": "earlier",
+                                                     "native_refs": [{"runId": RUN, "runtime": "runtime"}]},
+                                      "admissions": {}, "interventions": {}, "source_rejections": {},
+                                      "constraints": []}))
+
+    def run_status(self):
+        from pod.status import status
+        return status(self.project, RUN)
+
+    def test_a_superseded_record_reads_objective_superseded(self):
+        self.peer("pod-context/v4", "pod-checkpoint/v2")
+        shown = self.run_status()
+        self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "objective_superseded"))
+        self.assertIn("start a new objective", shown["next_safe_action"])
+
+    def test_an_undecodable_record_that_names_the_run_still_holds(self):
+        record = ledger.state_root(self.project) / "earlier" / "context.json"
+        record.parent.mkdir(parents=True)
+        record.write_text('{"native_refs": [{"runId": "%s"}], ' % RUN)  # Not in the superseded inventory.
+        shown = self.run_status()
+        self.assertEqual((shown["status"], shown["blocker"]), ("blocked", "invalid_record"))
+
+
 class ListDeadlineTests(KernelCase):
     def test_an_outer_deadline_at_the_first_record_read_refuses_the_whole_list(self):
         self.intake(objective=TARGET)
