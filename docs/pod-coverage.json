@@ -9984,6 +9984,77 @@
         "tests.test_governance_delta_rebind.QuestionTests.test_an_answer_records_but_using_the_approval_still_needs_current_governance"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A756",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_keeps_proof_the_delivery_relied_on",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_the_closing_write_and_its_replay_use_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_recorded_closure_replays_against_the_delivered_tree_after_the_worktree_moves"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A757",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_changed_candidate_or_new_satisfaction_keeps_todays_refusal",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_row_re_satisfied_in_the_closing_write_is_judged_against_the_worktree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_writes_outside_the_bookkeeping_route_judge_the_worktree"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A758",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_bound_source_that_differs_from_the_delivered_tree_refuses",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_compared_row_the_kernel_changes_refuses_after_the_kernel",
+        "tests.test_delivered_proof_sources.DeliveredSourceReaderTests.test_regular_blobs_are_read_from_the_commit_and_absence_is_absent",
+        "tests.test_delivered_proof_sources.DeliveredSourceReaderTests.test_links_gitlinks_trees_unsafe_and_oversized_paths_are_unreadable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A759",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_replacement_refs_cannot_redirect_the_delivered_candidate",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_carriage_return_name_does_not_stand_in_for_a_newline_name",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_replacement_refs_redirect_neither_trees_nor_blobs",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_grafts_and_shallow_boundaries_leave_recorded_parents",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_carriage_return_and_newline_names_stay_distinct",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_blob_bytes_must_match_their_object_id"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A760",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_ambient_object_or_repository_redirection_cannot_substitute_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_forged_tree_in_an_alternate_object_store_cannot_substitute_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_partial_clone_is_refused_and_nothing_is_fetched",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_ambient_repository_and_object_redirection_is_ignored",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_a_partial_clone_is_refused_and_a_missing_object_is_never_fetched"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
