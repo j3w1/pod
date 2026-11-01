@@ -194,12 +194,12 @@ def _fleet() -> dict | None:
     Discovery reads only this newest-first cursor walk. Its cursor is a keyset position, so every Dispatch
     that exists for the whole walk is listed exactly once, whatever state it changes to. Inside a batch the
     walk is also the fence's start (`fleet_start`): total and counts from its first page, the newest rows
-    from that page, the unreleased rows and the abandoned claims from the walk. The end fence compares it
-    with fresh reads, and every race shows there: a Dispatch created during the walk changes the end's
-    newest page (and its unreleased rows unless created released); a deletion lowers the end's total; a
-    state change alters the end's counts or unreleased rows. The end fence is a pure comparison, so a race
-    during its own reads only makes it unequal, which fails safe. What it leaves is v6's residual: a row
-    released at both ends, outside the newest 100 and not abandoned.
+    from that page, and the unreleased rows, the released rows and the abandoned claims from the walk. The
+    end fence re-reads every terminal-state partition, released included, and compares each Dispatch's
+    identity at both ends, so every race shows there: a Dispatch created during the walk changes the end's
+    newest page and its rows; a deletion lowers the end's total; any identity change of any row, in any
+    state, alters the end's digests. The end fence is a pure comparison, so a race during its own reads
+    only makes it unequal, which fails safe.
     """
     discovery = _SHARED.get()
     fleet = _fleet_sequential(discovery)
@@ -258,7 +258,7 @@ def _counts(value) -> dict:
 
 
 def _fleet_partition(state: str, discovery) -> dict:
-    """The end fence's read of one unreleased terminal-state partition, every page, with the sequential walk's
+    """The end fence's read of one terminal-state partition, every page, with the sequential walk's
     cursor, runtime, scope and identity checks; any refusal makes that fence side incomplete."""
     prefix = [*WORKER_LIST, "--limit", "100", "--terminal-state", state]
     cursor, seen, workers, runtime, total = None, set(), {}, None, None
@@ -415,6 +415,8 @@ def _fleet_side(observed, claims) -> dict:
             raise PodError("orca_contract", "The fleet read has no runtime")
         unreleased = sorted((_identity_row(row) for row in observed["rows"] if row.get("terminalState") != "released"),
                             key=lambda row: str(row["dispatchId"]))
+        released = sorted((_identity_row(row) for row in observed["rows"] if row.get("terminalState") == "released"),
+                          key=lambda row: str(row["dispatchId"]))
         newest = sorted((_identity_row(row) for row in rows), key=lambda row: str(row["dispatchId"]))
         facts = []
         for dispatch in sorted(claims):
@@ -423,6 +425,7 @@ def _fleet_side(observed, claims) -> dict:
             facts.append(_claim_fact(dispatch, claims[dispatch]))
         side = {"runtime": runtime, "complete": True, "total": page["total"], "counts": dict(counts),
                 "unreleased": len(unreleased), "unreleased_sha256": _rows_digest(runtime, unreleased),
+                "released": len(released), "released_sha256": _rows_digest(runtime, released),
                 "newest": len(newest), "newest_sha256": _rows_digest(runtime, newest),
                 "claims_read": len(facts), "claims_sha256": _rows_digest(runtime, facts)}
     except PodError as exc:
@@ -437,10 +440,10 @@ def _fleet_side(observed, claims) -> dict:
 
 
 def _fleet_end(discovery) -> dict:
-    """A fresh complete fleet read for the fence: the newest page and every unreleased partition."""
+    """A fresh complete fleet read for the fence: the newest page and every terminal-state partition."""
     page = discovery.submit(("page",), lambda: discovery.read([*WORKER_LIST, "--limit", "100"]), stage="fence")
     partitions = [discovery.submit(("partition", state), lambda state=state: _fleet_partition(state, discovery),
-                                   stage="fence") for state in TERMINAL_STATES if state != "released"]
+                                   stage="fence") for state in TERMINAL_STATES]
     first = page.result()
     rows, runtimes = [], {first["runtime"]}
     for future in partitions:
@@ -493,7 +496,8 @@ def _native_fence(discovery) -> dict:
     fence = {"start": _fence_side(start, rows=False), "end": _fence_side(observed["end"], rows=True),
              "fleet_start": _fleet_side(fleet_start, start_claims), "fleet_end": _fleet_side(observed["fleet"], end_claims)}
     sides = list(fence.values())
-    compared = ("total", "counts", "unreleased", "unreleased_sha256", "newest", "newest_sha256", "claims_read",
+    compared = ("total", "counts", "unreleased", "unreleased_sha256", "released", "released_sha256",
+                "newest", "newest_sha256", "claims_read",
                 "claims_sha256")
     fence["stable"] = bool(all(side["complete"] for side in sides)
                            and len({side["runtime"] for side in sides}) == 1

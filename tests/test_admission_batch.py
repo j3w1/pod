@@ -176,9 +176,9 @@ class SharedReadTests(BatchCase):
         self.assertTrue(first_after)
         self.assertEqual(sorted(set(first_after)), sorted(first_after))
         self.assertEqual(answer["discovery"]["records"], 4)
-        # Discovery's terminal list, then the fence's terminal list, newest page and five unreleased
-        # partitions; the discovery fleet is a double.
-        self.assertEqual(answer["discovery"]["orca_reads"], 8)
+        # Discovery's terminal list, then the fence's terminal list, newest page and six partitions; the
+        # discovery fleet is a double.
+        self.assertEqual(answer["discovery"]["orca_reads"], 9)
         self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
 
     def test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to(self):
@@ -472,17 +472,20 @@ class FleetFenceTests(FencedCase):
         self.assertTrue(fence["stable"], fence)
         unreleased = sorted((identity(row) for row in self.rows if row["terminalState"] != "released"),
                             key=lambda row: row["dispatchId"])
+        released = sorted((identity(row) for row in self.rows if row["terminalState"] == "released"),
+                          key=lambda row: row["dispatchId"])
         newest = sorted((identity(row) for row in self.rows[:100]), key=lambda row: row["dispatchId"])
         self.assertEqual(fence["fleet_start"], {
             "runtime": "runtime", "complete": True, "total": 123, "counts": {"active": 1, "retained": 2, "released": 120},
             "unreleased": 3, "unreleased_sha256": canonical("runtime", unreleased),
+            "released": 120, "released_sha256": canonical("runtime", released),
             "newest": 100, "newest_sha256": canonical("runtime", newest),
             "claims_read": 1, "claims_sha256": canonical("runtime", [{"dispatch": "t2", **LIVE_CLAIM}])})
         self.assertEqual(fence["fleet_end"], fence["fleet_start"])
         self.assertTrue(answer["complete"])
         reads = self.native.calls
         self.assertIn([*LIST, "--limit", "100"], reads)
-        self.assertNotIn([*LIST, "--limit", "100", "--terminal-state", "released"], reads)  # released is never re-read
+        self.assertIn([*LIST, "--limit", "100", "--terminal-state", "released"], reads)  # every partition is re-read
 
     def test_each_fleet_change_between_discovery_and_the_end_is_unstable(self):
         stable = self.fenced()
@@ -533,11 +536,22 @@ class FleetFenceTests(FencedCase):
         self.assertTrue(all(index < first_fence for index, _ in used), events)
         self.assertEqual({event[1] for event in events[first_fence:]}, {"orca", "claim"})  # end reads only
 
-    def test_a_released_row_changing_outside_the_newest_page_is_the_documented_residual(self):
-        changed = [dict(row, workerState="unsupervised") if row["dispatchId"] == "r110" else row for row in self.rows]
-        self.assertGreaterEqual(changed.index(next(row for row in changed if row["dispatchId"] == "r110")), 100)
-        answer = self.fenced(fleet_end=fleet_model(changed))
-        self.assertTrue(answer["native_fence"]["stable"])  # Not covered by design: see R207's residual.
+    def test_a_released_row_outside_the_newest_page_that_changes_makes_the_fence_unstable(self):
+        stable = self.fenced()
+        position = next(index for index, row in enumerate(self.rows) if row["dispatchId"] == "r110")
+        self.assertGreaterEqual(position, 100)  # outside the newest page, released and not abandoned at the start
+        cases = {"becomes abandoned with a pending effect": (dict(self.rows[position], workerState="abandoned"),
+                     {"t2": [LIVE_CLAIM], "r110": [{"process": "exited", "effects": [{"kind": "push", "id": "main",
+                                                                                      "state": "pending"}]}]}),
+                 "other identity change": (dict(self.rows[position], dispatchStatus="failed"), None)}
+        for label, (row, claims) in cases.items():
+            with self.subTest(label):
+                changed = [*self.rows[:position], row, *self.rows[position + 1:]]
+                answer = self.fenced(fleet_end=fleet_model(changed), claims=claims)
+                fence = answer["native_fence"]
+                self.assertNotEqual(fence["fleet_start"]["released_sha256"], fence["fleet_end"]["released_sha256"])
+                self.assert_unstable(answer, stable)
+        self.assertTrue(self.fenced()["native_fence"]["stable"])  # unchanged stays stable
 
     def test_an_unproved_end_or_a_bound_caller_is_incomplete(self):
         stable = self.fenced()
@@ -720,7 +734,7 @@ class FleetReadTests(base.AdmissionQueryCase):
     def test_the_end_fence_reads_every_unreleased_partition_and_refuses_any_race(self):
         rows = self.fleet()
         observed, _ = self.read(FleetDouble(rows), admission._fleet_end)
-        self.assertEqual(len(observed["rows"]), 131)  # the five unreleased partitions; released is never re-read
+        self.assertEqual(len(observed["rows"]), 381)  # all six partitions, released included
         state = [*LIST, "--limit", "100", "--terminal-state"]
         page = FleetDouble(rows).page
         bound = {"runtime": "runtime", "result": {"scope": {"source": "bound", "run": "run"}}}

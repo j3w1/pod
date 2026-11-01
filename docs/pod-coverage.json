@@ -10456,7 +10456,7 @@
       "offline_test": [
         "tests.test_admission_batch.FleetFenceTests.test_an_unchanged_fleet_fence_is_stable_and_digests_the_documented_rows",
         "tests.test_admission_batch.FleetFenceTests.test_each_fleet_change_between_discovery_and_the_end_is_unstable",
-        "tests.test_admission_batch.FleetFenceTests.test_a_released_row_changing_outside_the_newest_page_is_the_documented_residual",
+        "tests.test_admission_batch.FleetFenceTests.test_a_released_row_outside_the_newest_page_that_changes_makes_the_fence_unstable",
         "tests.test_admission_batch.FleetFenceTests.test_an_unproved_end_or_a_bound_caller_is_incomplete",
         "tests.test_admission_batch.FleetFenceTests.test_end_reads_start_only_after_every_native_read_a_result_uses",
         "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it"
