@@ -389,6 +389,32 @@ def capacity_refusal(ob: dict, ctx: dict, *, seq: int, field: str, retained: int
                                if pending else "resolve required corrections, retain all findings, then retry on the same assurance"))
 
 
+def _source_context(ob: dict, ctx: dict) -> dict:
+    """R204: a row the delivery relied on, left unchanged on the bookkeeping or completion route, has its bound
+    sources read from the delivered candidate's tree; every other row, and every other binding part, as before."""
+    delivered = ctx.get("delivered_sources")
+    if isinstance(delivered, dict) and ob.get("id") in delivered["rows"]:
+        return {**ctx, "source_current": delivered["source_current"]}
+    return ctx
+
+
+def _delivered_mismatch(ob: dict, ctx: dict) -> list[str]:
+    """R204: the bound source paths that differ from the delivered candidate's tree, for the refusal."""
+    delivered = ctx.get("delivered_sources")
+    if not isinstance(delivered, dict) or ob.get("id") not in delivered["rows"]:
+        return []
+    from .obligations import _admissions
+    paths = []
+    for row in ob.get("evidence", []):
+        binding = ((_admissions(ctx).get(row.get("attempt")) or {}).get("binding")
+                   if ob["kind"] == "assurance" else row)
+        for entry in (binding or {}).get("sources") or []:
+            if isinstance(entry, dict) and delivered["source_current"](entry) is not True \
+                    and isinstance(entry.get("path"), str) and entry["path"] not in paths:
+                paths.append(entry["path"])
+    return paths
+
+
 def binding_current(binding: Any, ctx: dict) -> bool:
     """R41: effective Governor policy, environment, dependencies and sources still hold."""
     if not isinstance(binding, dict):
@@ -573,6 +599,7 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
                  cause: PodError | None = None) -> dict:
     """Classify all invalid proof without changing a receipt or declaring REUSE."""
     from .obligations import definition_id
+    ctx = _source_context(ob, ctx)
     rows = ob.get("evidence", [])
     ordering = ([finding for row in rows for finding in review_ordering(ob, ctx, attempt=row["attempt"])]
                 if ob["kind"] == "assurance" else [])
@@ -597,6 +624,13 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
     correction = (f"add reuse {{from: {source}}} to {ob['id']}" if label == "eligible"
                   else f"record fresh evidence for {ob['id']}" + (" after governance refresh/rebind" if classification == "governance change" else "")
                   + (f"; the Git delta from {source[:12]} touches its scope" if label == "touched" else ""))
+    mismatch = _delivered_mismatch(ob, ctx) if classification == "binding change" else []
+    if mismatch:
+        touched = mismatch
+        correction = (f"record fresh evidence for {ob['id']}; its bound source{'s' if len(mismatch) > 1 else ''} "
+                      f"{', '.join(mismatch[:8])} {'differ' if len(mismatch) > 1 else 'differs'} "
+                      f"from the delivered candidate {ctx['delivered_sources']['candidate'][:12]} (compared with "
+                      "the delivered candidate's Git tree, not the worktree)")
     if classification == "ordering":
         correction = ("consume the fixer's report and satisfy the named corrections with proof; "
                       f"then admit and consume a fresh review before satisfying {ob['id']}")
@@ -620,6 +654,7 @@ def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) 
     from .obligations import _admissions, _outstanding, definition_id
     if ob.get("state") == "renewed":
         return False
+    ctx = _source_context(ob, ctx)
     current = ctx.get("candidate") if candidate is None else candidate
     rows = ob.get("evidence", [])
     if not rows:

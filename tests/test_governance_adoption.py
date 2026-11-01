@@ -162,14 +162,15 @@ class GovernanceAdoptionTests(KernelCase):
         self.write([self.criterion()], governance={"base_ref": "target", "exclude": ["CLAUDE.md"]},
                    revision_authority=USER)
         state = read(self.project, "objective")
-        original = ledger._git
+        from pod import gitio
+        original = gitio.TreeView.entry
         seen = []
-        def observe(project, argv, **kwargs):
-            if argv[:2] == ["ls-tree", "-z"] and argv[-1] == "CLAUDE.md":
-                seen.append(argv)
-                return None
-            return original(project, argv, **kwargs)
-        with patch("pod.ledger._git", side_effect=observe):
+        def observe(view, path):
+            if path == "CLAUDE.md":
+                seen.append(path)
+                return gitio.UNREADABLE
+            return original(view, path)
+        with patch.object(gitio.TreeView, "entry", observe):
             observed = kernel_context(self.project, "objective", state, None)["bound_governance"](state["checkpoint"]["governance"])
         self.assertTrue(seen)
         self.assertNotEqual(observed["status"], "observed")

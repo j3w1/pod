@@ -402,8 +402,9 @@ def _admissions(state: dict, *, runtime: str, port,
 
 def _cwd_toplevel() -> str | None:
     try:
+        from .gitio import read_environment
         completed = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                                   timeout=10, check=False)
+                                   timeout=10, check=False, env=read_environment())
     except (OSError, subprocess.TimeoutExpired):
         return None
     return completed.stdout.strip() if completed.returncode == 0 else None

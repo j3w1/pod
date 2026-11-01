@@ -331,18 +331,22 @@ class LinkScopeTests(KernelCase):
         self.refused("into", [("into", "module/src")], "does not resolve", gitlinks=["module"])
 
     def test_any_mode_outside_the_allow_list_is_unresolved(self):
-        # Git normalizes modes on write, so an unknown mode is shown through a doubled tree read.
-        from subprocess import CompletedProcess
-        from unittest.mock import patch
+        # Git normalizes modes on write, so the unknown mode is written as a literal, correctly hashed tree.
+        import subprocess
         from pod.governance import scope_resolver
-        listing = "\0".join([f"100664 blob {'1' * 40}\tweird", f"040000 tree {'2' * 40}\tsrc",
-                              f"100644 blob {'3' * 40}\tsrc/old.py", ""])
-        with patch("pod.ledger._git", return_value=CompletedProcess([], 0, listing, "")):
-            resolve = scope_resolver(self.project, ["c" * 40])
-            self.assertIsNone(resolve("weird"))
-            self.assertIsNone(resolve("weird/below"))
-            self.assertEqual(resolve("src/old.py"), ["src/old.py"])
-            self.assertEqual(resolve("src/new.py"), ["src/new.py"])
+
+        def literal(data):
+            return subprocess.run(["git", "-C", str(self.project), "hash-object", "-w", "-t", "tree", "--literally",
+                                   "--stdin"], input=data, check=True, capture_output=True).stdout.decode().strip()
+        old = bytes.fromhex(git(self.project, "rev-parse", "HEAD:src/old.py"))
+        src = literal(b"100644 old.py\0" + old)
+        top = literal(b"40000 src\0" + bytes.fromhex(src) + b"100664 weird\0" + old)
+        commit = git(self.project, "commit-tree", top, "-m", "literal modes")
+        resolve = scope_resolver(self.project, [commit])
+        self.assertIsNone(resolve("weird"))
+        self.assertIsNone(resolve("weird/below"))
+        self.assertEqual(resolve("src/old.py"), ["src/old.py"])
+        self.assertEqual(resolve("src/new.py"), ["src/new.py"])
 
 
 class ExemptedAdoptionTests(KernelCase):

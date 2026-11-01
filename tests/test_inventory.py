@@ -510,19 +510,31 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         text = (self.root / ".github" / "workflows" / "ci.yml").read_text()
         workflow = yaml.safe_load(text)
         triggers = workflow[True] if True in workflow else workflow["on"]
-        self.assertEqual(set(triggers), {"pull_request", "push"})
+        self.assertEqual(set(triggers), {"pull_request", "push", "schedule", "workflow_dispatch"})
         self.assertEqual(triggers["push"], {"branches": ["main"]})
-        # Every pull request runs the full suite; no path filter routes a change around it.
-        self.assertFalse(any({"paths", "paths-ignore"} & set(trigger or {}) for trigger in triggers.values()))
+        self.assertEqual(len(triggers["schedule"]), 1)
+        self.assertFalse(triggers["workflow_dispatch"])
+        # Pull requests and pushes run the static checks; the weekly and hand-dispatched runs add the
+        # full suite. No path filter routes a change around either.
+        self.assertFalse(any({"paths", "paths-ignore"} & set(trigger or {}) for trigger in triggers.values()
+                             if isinstance(trigger, dict)))
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         # `linux` is the status check the main branch ruleset requires. It always reports and
-        # passes only when every lane share and every check passed, so it is never skipped.
+        # passes only when every job that ran passed; `tests` may be skipped, never failed, and
+        # only on a run that is not a full one, so it is never skipped itself.
         jobs = workflow["jobs"]
         self.assertEqual(list(jobs), ["python", "tests", "checks", "linux"])
+        full = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+        self.assertEqual(jobs["tests"]["if"], full)
+        self.assertNotIn("if", jobs["checks"])
         linux = jobs["linux"]
         self.assertEqual((linux["name"], linux["if"], set(linux["needs"])),
                          ("linux", "always()", {"python", "tests", "checks"}))
-        self.assertIn("all(.[]; .result == \"success\")", "\n".join(step.get("run", "") for step in linux["steps"]))
+        (gate,) = linux["steps"]
+        self.assertEqual(gate["env"]["FULL"], "${{ " + full + " }}")
+        self.assertIn('all(.[]; .value.result == "success" '
+                      'or ($full != "true" and .key == "tests" and .value.result == "skipped"))',
+                      " ".join(gate["run"].split()))
         # The matrix runs exactly the lane shares the manifest plans, with CI's strict flags.
         strategy = jobs["tests"]["strategy"]
         self.assertIs(strategy["fail-fast"], False)

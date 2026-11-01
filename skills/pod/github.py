@@ -20,7 +20,7 @@ import shutil
 import subprocess
 
 from .errors import PodError
-from .gitio import OBJECT_ID as _GIT_ID, worktree_inventory, worktree_rows
+from .gitio import OBJECT_ID as _GIT_ID, read_environment, worktree_inventory, worktree_rows
 
 MAX_OUTPUT = 2_000_000
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
@@ -277,7 +277,7 @@ def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
         completed = subprocess.run([str(git_executable()), *options, *argv],
                                    capture_output=True, text=not inventory,
                                    timeout=timeout if budget is None else budget.limit(timeout),
-                                   check=False, cwd=str(project))
+                                   check=False, cwd=str(project), env=read_environment())
         output = completed.stdout.decode("utf-8") if inventory else completed.stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
         if budget is not None and isinstance(exc, subprocess.TimeoutExpired):

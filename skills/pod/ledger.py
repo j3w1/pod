@@ -1215,6 +1215,16 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
     ctx["outstanding"] = [key for key in ctx["outstanding"]
                           if state["admissions"][key]["state"] != "bound"
                           or (state["admissions"][key].get("report") or {}).get("status") != "validated_observation"]
+    # R204: proof a recorded delivery relied on replays against the delivered candidate's tree, as it was
+    # judged on the closing route, not against whatever the worktree holds now.
+    delivery = state["checkpoint"].get("delivery")
+    if isinstance(delivery, dict) and type(delivery.get("seq")) is int:
+        delivered = _delivered_sources(
+            project, delivery, state["checkpoint"].get("candidate"),
+            [row["id"] for row in state["checkpoint"].get("obligations", [])
+             if isinstance(row, dict) and _relied_on(row, delivery["seq"])])
+        if delivered is not None:
+            ctx["delivered_sources"] = delivered
     return ctx
 
 
@@ -1609,6 +1619,55 @@ def _bookkeeping_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
     return True
 
 
+def _relied_on(row: dict, delivery_seq: int) -> bool:
+    """R204: a satisfied row whose every selected evidence item was accepted at or before the delivery."""
+    identity = "attempt" if row.get("kind") == "assurance" else "reference"
+    receipts = {item["evidence"].get(identity): item for item in row.get("receipts", [])
+                if isinstance(item, dict) and isinstance(item.get("evidence"), dict)}
+    evidence = row.get("evidence")
+    return (row.get("state") == "satisfied" and isinstance(evidence, list) and bool(evidence)
+            and all(isinstance(item, dict) and item.get(identity) in receipts
+                    and receipts[item[identity]]["evidence"] == item
+                    and type(receipts[item[identity]].get("accepted_seq")) is int
+                    and receipts[item[identity]]["accepted_seq"] <= delivery_seq for item in evidence))
+
+
+def _delivered_sources(project: Path, delivery: dict | None, candidate: object, rows: list[str]) -> dict | None:
+    """R204: the context entry that judges these rows' bound sources against the delivered candidate's tree."""
+    if delivery is None or not rows or candidate != delivery.get("candidate"):
+        return None
+    from .governance import delivered_source_reader
+    reader = delivered_source_reader(project, delivery["candidate"])
+
+    def current(entry: dict) -> bool:
+        try:
+            return entry.get("state") == "present" and reader(entry["path"]) == entry
+        except (KeyError, TypeError, AttributeError):
+            return False
+    return {"candidate": delivery["candidate"], "rows": frozenset(rows), "source_current": current}
+
+
+def _unchanged_delivered_rows(prior_map: dict, proposed: dict, delivery: dict) -> list[str]:
+    """R204 before the kernel: satisfied rows the delivery relied on that this write proposes byte-identical,
+    as recorded or as their restated form. Rows it changes, satisfies or re-satisfies are not among them."""
+    from .obligations import expand_update, restatable_rows
+    try:
+        rows = expand_update(prior_map, proposed).get("obligations", prior_map["obligations"])
+    except PodError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    prior = {row["id"]: row for row in prior_map["obligations"]}
+    restated = {row["id"]: row for row in restatable_rows(prior_map, include_terminal=True)}
+    named = {}
+    for row in rows:
+        if isinstance(row, dict) and isinstance(row.get("id"), str):
+            named.setdefault(row["id"], []).append(row)
+    return [key for key, old in prior.items()
+            if _relied_on(old, delivery["seq"]) and len(named.get(key, [])) == 1
+            and named[key][0] in (old, restated[key])]
+
+
 # R119 adoption-only: a write may change only its governance binding and narration. These are the map fields
 # a refresh rebinds or every write updates, the input fields a refresh needs, and the narrative core fields.
 _ADOPTION_BINDING = {"seq", "revision", "governance", "governance_sources", "governance_history", "observations",
@@ -1690,6 +1749,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                                 seq=prior_map["seq"] + 1)
         kept = None
         bookkeeping = False
+        delivered = None
         withdrawing = (prior_map is not None and not refresh and proposed.get("close") is True
                        and not prior_map.get("closure")
                        and _withdrawal_only(prior_map, proposed, core, previous, dispositions, verified_delivery))
@@ -1729,6 +1789,13 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                     unchanged, bookkeeping = None, True
             if unchanged is not None:
                 adopted_observation, derived_adoption = unchanged
+            if (kept is not None and "closure" not in kept and "delivery_proof" not in kept
+                    and current_map.get("delivery") is not None):
+                # R204: on the bookkeeping or completion route, proof the delivery relied on is judged against
+                # the delivered candidate's tree while the write leaves its row unchanged.
+                delivered = _delivered_sources(
+                    project, current_map["delivery"], core.get("candidate"),
+                    _unchanged_delivered_rows(prior_map, proposed, current_map["delivery"]))
         if prior_map is None:
             declared = proposed.get("governance")
             base_ref = declared.get("base_ref") if isinstance(declared, dict) else None
@@ -1841,6 +1908,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                       if row["state"] == "satisfied"}
         if kept is not None:
             ctx["governance_kept"] = kept
+        if delivered is not None:
+            ctx["delivered_sources"] = delivered
         ctx["derived_adoption"] = derived_adoption
         ctx["recorded_questions"] = previous.get("questions", [])
         if issue_revision is not None:
@@ -1890,6 +1959,17 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             require_governance_current(project, prior_map, checkpoint=True)
             raise PodError("governance_changed", "The target moved; only post-delivery bookkeeping keeps the "
                            "delivered baseline", {"detail": "governance_changed"})
+        if delivered is not None:
+            recorded = {row["id"]: row for row in prior_map["obligations"]}
+            stored = {row["id"]: row for row in map_state["obligations"]}
+            changed = sorted(key for key in delivered["rows"] if stored.get(key) != recorded[key])
+            if changed:
+                # R204 judged these rows against the delivered candidate only because the write leaves them as
+                # recorded; a row the kernel changed is judged against the worktree instead.
+                raise refuse("obligation_unaccounted", "evidence_invalidated",
+                             "a row whose proof was compared with the delivered candidate changed in this write; "
+                             "write it unchanged, or record fresh evidence that holds in the worktree",
+                             obligation=changed[0], rows=",".join(changed[:8]))
         from .standing import checkpoint_times
         checkpoint_times(state, prior_map, map_state)
         if verified_delivery is not None:

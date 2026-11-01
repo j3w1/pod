@@ -70,10 +70,14 @@ fresh temporary home: every installer base-directory variable (`HOME`, `XDG_CONF
 cannot select the real Pod launcher. These permissions cover only that process; never affect real
 launchers, skills, rc files, data, config or state.
 
-Every pull request runs the full suite in the lanes of `tools/suite_lanes.py`. Keep each new
-test under its 2 s fast limit: build expensive fixtures once, never sleep for time to pass, and
-split a table into named group methods before any method nears the ceiling. Record a
-necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`.
+Hosted CI on a pull request or `main` push runs only the static `checks` job; the required
+`linux` check passes on it. The full suite runs in the lanes of `tools/suite_lanes.py` weekly
+and when dispatched by hand ("ship it": `gh workflow run ci.yml --ref BRANCH`). Every release
+(a root `VERSION` change) also passes the local full gate and a clean-home install trial before
+it merges. Keep each new test under its 2 s fast limit: build expensive fixtures once, never
+sleep for time to pass, and split a table into named group methods before any method nears the
+ceiling. Record a necessarily slow test from a full run with
+`python tools/suite_lanes.py refresh --run ID` (or `--pr N` once a full run exists on its head).
 Budgets, lane targets and any override that keeps a timing test out of `serial` change only by
 owner decision.
 
