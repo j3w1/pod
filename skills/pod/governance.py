@@ -88,20 +88,44 @@ def _delivery_object(project: Path, argv: list[str], *, subcode: str) -> str:
     return value
 
 
-def verify_delivery(project: Path, objective: str, map_state: dict, record_id: str, *, seq: int) -> dict:
-    """Bind a Governor merge PASS to one exact target result without moving policy authority."""
-    from .governor import _read_journal, _record_path
+def verify_delivery(project: Path, objective: str, map_state: dict, record_id: str, *, seq: int,
+                    candidate: object = None) -> dict:
+    """Bind a Governor merge PASS to one exact target result without moving policy authority.
+
+    A recorded delivery is replaced only by a provably later one of the checkpoint candidate (R93)."""
     if not isinstance(record_id, str) or not 1 <= len(record_id) <= 128:
         raise _delivery_refusal("record_missing", "A bounded Governor record id is required",
                                 "name the allowed merge PASS record from this objective")
     prior = map_state.get("delivery")
-    if prior is not None:
-        validate_delivery_record(prior)
-        if prior["record"] != record_id:
-            raise PodError("delivery_recorded", "This objective already has a different verified delivery record",
-                           {"detail": "delivery_recorded", "record": prior["record"],
-                            "next_action": "keep the existing delivery or obtain a new objective decision"})
+    if prior is None:
+        return _verified_delivery(project, objective, map_state, record_id, seq=seq)
+    validate_delivery_record(prior)
+    if prior["record"] == record_id:
         return dict(prior)
+    try:
+        later = _verified_delivery(project, objective, map_state, record_id, seq=seq, prior=prior)
+    except PodError as exc:
+        if exc.code != "delivery_unverified":
+            raise
+        later, reason = None, (exc.detail or {}).get("detail")
+    else:
+        reason = ("candidate" if later["candidate"] != candidate or later["candidate"] == prior["candidate"]
+                  else "target" if later["target_ref"] != prior["target_ref"]
+                  # Landed on a target that already holds the recorded result: the policy base may stay (R93).
+                  else "result" if later["result"] == prior["result"]
+                  or git_is_ancestor(project, prior["result"], later["result"]) is not True else None)
+    if later is None or reason is not None:
+        raise PodError("delivery_recorded", "This objective already has a different verified delivery record",
+                       {"detail": "delivery_recorded", "record": prior["record"], "reason": reason,
+                        "next_action": "keep the existing delivery; only a later verified merge PASS of the "
+                        "checkpoint candidate, on the same target and containing the recorded result, replaces it"})
+    return later
+
+
+def _verified_delivery(project: Path, objective: str, map_state: dict, record_id: str, *, seq: int,
+                       prior: dict | None = None) -> dict:
+    """R93's journal and Git checks for one record; after a recorded delivery, its row must also come later."""
+    from .governor import _read_journal, _record_path
     journal = _read_journal(_record_path(project, objective))
     matches = [row for row in journal["actions"] if row.get("record_id") == record_id]
     if len(matches) != 1:
@@ -112,9 +136,25 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
             or (row.get("action") or {}).get("kind") != "merge"):
         raise _delivery_refusal("record_not_merge_pass", "The record is not an allowed merge PASS",
                                 "settle the exact governed merge before recording delivery", record=record_id)
+    if prior is not None:
+        # Journal rows are only appended: a later delivery is after the recorded one and finished after it.
+        earlier = [index for index, item in enumerate(journal["actions"]) if item.get("record_id") == prior["record"]]
+        if (len(earlier) != 1 or journal["actions"].index(row) <= earlier[0]
+                or not _finished_after(row, journal["actions"][earlier[0]])):
+            raise _delivery_refusal("record_not_later", "The merge record does not come after the recorded delivery",
+                                    "keep the existing delivery", record=record_id)
     unit, governance = carried_merge_context(row, journal["units"].get(row["action"].get("unit")),
                                              map_state["governance"])
     return {"seq": seq, "record": record_id, **verify_merge_result(project, row, unit, governance)}
+
+
+def _finished_after(row: dict, earlier: dict) -> bool:
+    try:
+        later = datetime.fromisoformat(row["receipt"]["finished_at"])
+        first = datetime.fromisoformat(earlier["receipt"]["finished_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return later.utcoffset() is not None and first.utcoffset() is not None and later > first
 
 
 def carried_merge_context(row: dict, unit: dict | None, governance: dict | None = None) -> tuple[dict | None, dict]:

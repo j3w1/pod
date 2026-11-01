@@ -1826,7 +1826,7 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                                {"detail": "map_missing", "next_action": "checkpoint the objective map first"})
             record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
             verified_delivery = verify_delivery(project, objective, prior_map, record_id,
-                                                seq=prior_map["seq"] + 1)
+                                                seq=prior_map["seq"] + 1, candidate=core.get("candidate"))
         kept = None
         bookkeeping = False
         delivered = None
@@ -1856,8 +1856,9 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
                     if kept is None:
                         raise
                     unchanged, withdrawal_refusal = None, exc
-                # With governance current, only a delivery already recorded counts: the write that records it
-                # keeps judging the worktree, as it did before R204.
+                # With governance current, only a delivery already recorded counts: the write that records the
+                # first one keeps judging the worktree, as it did before R204. A write recording a later delivery
+                # (R93) judges the rows it relies on against that delivery's candidate tree.
                 settling = kept is not None or prior_map.get("delivery") is not None
             else:
                 try:
