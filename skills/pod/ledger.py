@@ -850,27 +850,60 @@ def contexts_for_run(run_id: str) -> list[tuple[Path, dict]]:
     """Read every objective bound to one Run without choosing among them.
 
     A record Pod cannot read or does not support holds this lookup only when its decoded record names the Run, or
-    when it cannot be decoded within Pod's read bounds (R206); every other one is skipped."""
+    when it cannot be decoded within Pod's read bounds (R206); every other one is skipped. The refusal names every
+    record that holds it, each classified in this same read as `superseded` (R90's superseded schema family, with its
+    objective and schemas), `unsupported` (any other record that decodes, a future schema or a non-object included)
+    or `undecodable` (`holding`), so a caller never needs a second look."""
     root = state_root()
     if not root.exists():
         return []
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
-    matches = []
-    for path in root.glob("*/context.json"):
+    matches, holding, first = [], [], None
+    for path in sorted(root.glob("*/context.json")):
         try:
             state = _read(path)
         except PodError as exc:
             from .handoff import record_mentions
             if not record_mentions(path.parent, run_id):
                 continue
-            raise
+            holding.append(_holding_record(path, exc))
+            if first is None or first.code == "state_unsupported" and exc.code != "state_unsupported":
+                first = exc
+            continue
         checkpoint_value = state.get("checkpoint")
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
         admission_match = any(row.get("run_id") == run_id for row in state["admissions"].values())
         if admission_match or any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs):
             matches.append((path.parent, state))
+    if holding:
+        raise PodError(first.code, str(first), {**(first.detail or {}), "holding": holding})
     return matches
+
+
+def _holding_record(path: Path, exc: PodError) -> dict:
+    """How one record that holds a Run-bound lookup reads, from this same read of it. `superseded` has one authority:
+    the R90 predicate the objective list and evidence closure use (an object whose every non-current schema is an
+    earlier version of a current family, `handoff._older_schema`). Any record-local error while classifying makes
+    the record `undecodable`, with its reason; an outer deadline still propagates."""
+    from .handoff import _older_schema
+    from .installer import superseded_schemas
+    from .orca import DEADLINE_SPENT
+    row = {"record": path.parent.name, "code": exc.code}
+    try:
+        raw = load_context(path, validate=False)
+        if not isinstance(raw, dict) or not _older_schema(raw):
+            return {**row, "class": "unsupported"}
+        checkpoint = raw.get("checkpoint")
+        objective = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
+        return {**row, "class": "superseded", "objective": objective if isinstance(objective, str) else None,
+                "schemas": superseded_schemas(raw)}
+    except PodError as error:
+        if error.code == DEADLINE_SPENT:
+            raise
+        return {**row, "class": "undecodable", "reason": error.code}
+    except (OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError) as error:
+        return {**row, "class": "undecodable", "reason": type(error).__name__}
 
 
 def context_root_for_run(run_id: str) -> Path | None:
