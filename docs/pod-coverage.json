@@ -10371,7 +10371,9 @@
       ],
       "offline_test": [
         "tests.test_admission_batch.EquivalenceTests.test_occupancy_shapes_equal_their_single_queries",
-        "tests.test_admission_batch.EquivalenceTests.test_target_effect_and_expect_shapes_equal_their_single_queries",
+        "tests.test_admission_batch.EquivalenceTests.test_the_target_shape_equals_its_single_query",
+        "tests.test_admission_batch.EquivalenceTests.test_the_effects_shape_equals_its_single_query",
+        "tests.test_admission_batch.EquivalenceTests.test_the_expect_shape_equals_its_single_query",
         "tests.test_admission_batch.EquivalenceTests.test_a_native_writer_stays_equivalent",
         "tests.test_admission_batch.EquivalenceTests.test_a_bound_caller_keeps_its_coverage_unknown",
         "tests.test_admission_batch.EquivalenceTests.test_the_projection_limit_stays_per_result"
@@ -10385,7 +10387,8 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_admission_batch.SharedReadTests.test_eight_queries_read_each_source_once_and_two_calls_read_afresh",
+        "tests.test_admission_batch.SharedReadTests.test_eight_queries_read_each_source_once",
+        "tests.test_admission_batch.SharedReadTests.test_two_calls_each_read_afresh",
         "tests.test_admission_batch.SharedReadTests.test_abandoned_workers_claims_start_from_their_inventory_rows",
         "tests.test_admission_batch.FleetReadTests.test_abandoned_rows_start_their_claim_reads_during_the_walk"
       ],
@@ -10459,7 +10462,8 @@
         "tests.test_admission_batch.FleetFenceTests.test_a_released_row_outside_the_newest_page_that_changes_makes_the_fence_unstable",
         "tests.test_admission_batch.FleetFenceTests.test_an_unproved_end_or_a_bound_caller_is_incomplete",
         "tests.test_admission_batch.FleetFenceTests.test_end_reads_start_only_after_every_native_read_a_result_uses",
-        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it"
+        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it",
+        "tests.test_admission_batch.DiscoveryRaceTests.test_an_old_released_row_becoming_abandoned_after_the_walk_makes_the_fence_unstable"
       ],
       "status": "NOT_RUN"
     },
