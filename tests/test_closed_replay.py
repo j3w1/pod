@@ -8,14 +8,17 @@ from unittest.mock import patch
 from pod import config, ledger
 from pod.evidence_closure import close_source_issues, sweep
 from pod.governor import objective_delivery_reporting
-from pod.ledger import closed_snapshot_context, objective_root, read
+from pod.internal import run as internal_run
+from pod.ledger import closed_snapshot_context, continuity_locked, objective_root, read, update_admission
 from pod.obligations import validate_closed_snapshot
+from pod.operations import OrcaPort
 from tests import test_pod_ticks_closure as tick_closure
 from tests.common import logical_json, proof
 from tests.issue_port_support import patch_issue_port
 from tests.kernel_support import git
 from tests.pod_tick_support import TickCase
 from tests.test_completed_closure import SourcePort
+from tests.test_runtime_continuity import ContinuityCase
 from tests.test_standing_authorization import StandingCase
 
 
@@ -447,3 +450,78 @@ class YoloDeliveryReplayTests(StandingCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClosedContinuityTests(ContinuityCase):
+    """A closed record takes no automatic runtime rebind: each write refuses first and changes nothing."""
+
+    def closed(self, *, worker: bool, runtime_change: bool = True):
+        if worker:
+            [admission] = self.started(); self.settle(admission)
+            self.write(tick_closure.ClosureTests.proof_rows(self), dispositions=[
+                {"admission": admission["admission_id"], "discarded": True, "reason": "superseded"}])
+        else:
+            self.intake(); self.write(tick_closure.ClosureTests.proof_rows(self))
+        self.write(self.stored(), close=True)
+        self.assertEqual(self.replay(), ())
+        if runtime_change:
+            self.change_runtime()
+        return self.snapshot()
+
+    def replay(self):
+        state = read(self.project, "objective")
+        return validate_closed_snapshot(ledger.map_of(state), closed_snapshot_context(self.project, "objective", state))
+
+    def assert_closed_unchanged(self, before, call):
+        error = self.refused("objective_closed", call)
+        self.assertEqual(self.snapshot(), before, error)
+        self.assertEqual(self.history(), [])
+        self.assertEqual(self.replay(), ())
+
+    def test_a_checkpoint_on_a_closed_objective_without_workers_refuses_before_its_rebind(self):
+        before = self.closed(worker=False)
+        self.assert_closed_unchanged(before, self.checkpoint_op)
+
+    def test_a_checkpoint_on_a_closed_objective_with_a_settled_worker_refuses_before_its_rebind(self):
+        before = self.closed(worker=True)
+        self.assert_closed_unchanged(before, self.checkpoint_op)
+
+    def assert_writes_refused(self, writes):
+        before = self.closed(worker=True)
+        for name, call in writes(next(iter(read(self.project, "objective")["admissions"]))):
+            with self.subTest(write=name):
+                self.assert_closed_unchanged(before, call)
+
+    def test_governor_and_admission_writes_on_a_closed_objective_refuse_and_write_nothing(self):
+        self.assert_writes_refused(lambda admission: (
+            ("governor", lambda: internal_run("governor-prepare", {
+                "project": str(self.project), "objective": "objective", "owner": "owner", "unit": "delivery",
+                "branch": {"remote": "origin", "base": "target", "branch": "delivery"}})),
+            ("admission", lambda: self.admission_op("task-2", ["S1"], boundary={"paths": ["area1"]}))))
+
+    def test_admission_updates_and_report_or_start_rebinds_on_a_closed_objective_refuse_and_write_nothing(self):
+        self.assert_writes_refused(lambda admission: (
+            ("admission update", lambda: update_admission(
+                self.project, "objective", owner="owner", admission_id=admission, update=lambda row: None)),
+            ("report and start reads", lambda: continuity_locked(
+                self.project, "objective", owner="owner", port=OrcaPort(self.project)))))
+
+    def test_an_admission_update_on_a_closed_objective_refuses_without_a_runtime_change(self):
+        before = self.closed(worker=True, runtime_change=False)
+        admission = next(iter(read(self.project, "objective")["admissions"]))
+
+        def refresh(row):
+            row["route_decision"]["effective_unknown"] = False
+        self.assert_closed_unchanged(before, lambda: update_admission(
+            self.project, "objective", owner="owner", admission_id=admission, update=refresh))
+
+    def test_a_user_reopen_carries_the_rebind_only_in_its_own_successful_write(self):
+        before = self.closed(worker=True)
+        self.assert_closed_unchanged(before, lambda: self.checkpoint_op(reopen=True))
+        reopened = self.checkpoint_op(reopen=True, revision_authority={
+            "provenance": "user_direct", "instruction": "Reopen the objective"})
+        self.assertIsNone(reopened["checkpoint"]["closure"])
+        self.assertEqual([(row["provenance"], row["to_runtime"]) for row in self.history()],
+                         [("automatic", "runtime-2")])
+        self.assertEqual({row["runtime"] for row in read(self.project, "objective")["admissions"].values()},
+                         {"runtime-2"})

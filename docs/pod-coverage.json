@@ -10246,7 +10246,13 @@
         "tests.test_closed_replay.YoloDeliveryReplayTests.test_an_earlier_closure_without_the_recorded_facts_replays_at_its_own_recorded_instant",
         "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_with_an_unreadable_claimed_predecessor",
         "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_with_an_unknown_schema_claimed_predecessor",
-        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_when_the_claimed_chain_exceeds_its_bound"
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_when_the_claimed_chain_exceeds_its_bound",
+        "tests.test_closed_replay.ClosedContinuityTests.test_a_checkpoint_on_a_closed_objective_without_workers_refuses_before_its_rebind",
+        "tests.test_closed_replay.ClosedContinuityTests.test_a_checkpoint_on_a_closed_objective_with_a_settled_worker_refuses_before_its_rebind",
+        "tests.test_closed_replay.ClosedContinuityTests.test_governor_and_admission_writes_on_a_closed_objective_refuse_and_write_nothing",
+        "tests.test_closed_replay.ClosedContinuityTests.test_admission_updates_and_report_or_start_rebinds_on_a_closed_objective_refuse_and_write_nothing",
+        "tests.test_closed_replay.ClosedContinuityTests.test_an_admission_update_on_a_closed_objective_refuses_without_a_runtime_change",
+        "tests.test_closed_replay.ClosedContinuityTests.test_a_user_reopen_carries_the_rebind_only_in_its_own_successful_write"
       ],
       "status": "NOT_RUN"
     },

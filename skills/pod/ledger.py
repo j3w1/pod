@@ -421,7 +421,7 @@ def _run_references(state: dict) -> dict[str, str]:
 def require_authority(project: Path, objective: str, *, owner: str,
                       state: dict | None = None, run_id: str | None = None,
                       native_port=None, expected_runtime: str | None = None, claim: str | None = None,
-                      persist_rebind: bool = True) -> dict:
+                      persist_rebind: bool = True, reopen: bool = False) -> dict:
     """Join a stable native current Run to this objective's persisted owner and refs.
 
     Every caller passing ``state`` holds the objective lock, so a proven runtime
@@ -429,6 +429,8 @@ def require_authority(project: Path, objective: str, *, owner: str,
     runtime. Closing writes defer its persistence to their successful write.
     ``expected_runtime`` is the runtime the caller's own
     mutation already observed; continuity only rebinds to that runtime.
+    A closed record is never rebound: only a ``reopen`` write may carry a rebind,
+    and it defers that rebind to its own successful write.
     """
     from .operations import OrcaPort
     from .orca import current_run
@@ -463,14 +465,15 @@ def require_authority(project: Path, objective: str, *, owner: str,
         if not locked:
             raise
         continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                      expected_runtime=expected_runtime, persist=persist_rebind)
+                                      expected_runtime=expected_runtime, persist=persist_rebind, reopen=reopen)
         if continuity is None:
             raise
         native = port.read_native(owner, authority_runs=selected, assignments=bound_assignments(state))
     else:
         if locked and native.get("runtime") not in set(refs.values()):
             continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                          current=native, expected_runtime=expected_runtime, persist=persist_rebind)
+                                          current=native, expected_runtime=expected_runtime, persist=persist_rebind,
+                                          reopen=reopen)
             if continuity is not None and bound_assignments(state):
                 native = port.read_native(owner, authority_runs=selected,
                                           assignments=bound_assignments(state))
@@ -720,11 +723,13 @@ def _ambiguous(objective: str, verdict: dict) -> PodError:
 
 def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, port,
                      current: dict | None = None, expected_runtime: str | None = None,
-                     persist: bool = True) -> dict | None:
+                     persist: bool = True, reopen: bool = False) -> dict | None:
     """Under the caller's objective lock: rebind a proven continuity and record it.
 
     Returns None when no continuity path applies or continuity is disproven, so the
     caller's existing check refuses with its own code; raises when it is ambiguous.
+    A closed record refuses `objective_closed` before any rebind, so nothing about
+    it changes after closure (R155); a reopen write defers its rebind instead.
     """
     try:
         refs = _run_references(state)
@@ -742,6 +747,11 @@ def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, 
             or (expected_runtime is not None and runtime != expected_runtime)):
         # No observed change, or a port that cannot show the current Run binding.
         return None
+    closure = (map_of(state) or {}).get("closure")
+    if closure and not (reopen and not persist):
+        from .obligations import refuse
+        raise refuse("objective_closed", "objective_closed", "the objective is closed; a closed record takes no "
+                     "runtime rebind", record="runtime continuity", closure_revision=closure["revision"])
     if current.get("caller") is not None and current["caller"] != state.get("owner"):
         from .handoff import refuse_nonowner
         refuse_nonowner(project, objective, state, owner, port=port, current=current)
@@ -1128,8 +1138,8 @@ def _report_deviations(admission: dict, runtimes: set[str]) -> list[str] | None:
     return None
 
 
-# Admission fields a closure's settled set leaves out (R155), each because it legitimately changes after the
-# closure is built: `updated_at` is stamped by every later admission update, and a checkpoint's route settlements
+# Admission fields a closure's settled set leaves out (R155): `updated_at` is only the time a row was last
+# written and says nothing about its settlement, and a checkpoint's route settlements
 # (`route_decision.settlements` and its `mismatch_occurrence`) land after the closure in the same write; an R160
 # terminal discard is bound through the evidence instead.
 SETTLEMENT_EXCLUDED = ("updated_at",)
@@ -2378,9 +2388,12 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                          if isinstance(row, dict)}
         from .issue_revision import Revision
         issue_requested = requested(proposed.get("revision_authority"))
+        closing = isinstance(proposed, dict) and proposed.get("close") is True
+        reopening = isinstance(proposed, dict) and proposed.get("reopen") is True
+        # A closing or reopening write carries its rebind only in its own successful write.
         authority = require_authority(project, objective, owner=owner, state=state,
                                       expected_runtime=native["runtime"],
-                                      persist_rebind=not (issue_requested or isinstance(proposed, dict) and proposed.get("close") is True))
+                                      persist_rebind=not (issue_requested or closing or reopening), reopen=reopening)
         if issue_requested and authority.get("continuity") is not None:
             raise issue_refuse("native_continuity_requires_separate_checkpoint")
         if native["runtime"] != authority["runtime"]:
@@ -2458,7 +2471,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         _write(path, state, native=authority.get("native"),
                before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None,
                project=project)
-        if isinstance(proposed, dict) and proposed.get("close") is True:
+        if closing or reopening:
             _record_continuity_event(authority.get("continuity"))
         result = dict(state)
         result.update(route_settlement_projection(list(state["admissions"].values())))
@@ -3015,8 +3028,15 @@ def _update_admission_locked(project: Path, objective: str, *, state: dict, owne
         from .handoff import refuse_nonowner
         refuse_nonowner(project, objective, state, owner, code="unknown_admission")
         raise PodError("unknown_admission", "No owned admission identity")
+    closure = (map_of(state) or {}).get("closure")
     if open_required:
         _require_open(state)
+    elif closure:
+        # A closed record's admissions are its settled set (R155): a late report's route refresh or
+        # mismatch flag, or any other update, refuses before it or a runtime rebind is written.
+        from .obligations import refuse
+        raise refuse("objective_closed", "objective_closed", "the objective is closed; its admissions take no "
+                     "update", record="admission update", closure_revision=closure["revision"])
     authority = require_authority(project, objective, owner=owner, state=state,
                                   run_id=state["admissions"][admission_id]["run_id"],
                                   expected_runtime=expected_runtime)
