@@ -1660,15 +1660,37 @@ def _delivery_bookkeeping(prior_map: dict, proposed: dict, core: dict, previous:
     return True
 
 
-def _bookkeeping_rows_unchanged(prior_map: dict, map_state: dict) -> bool:
+def _as_recorded(row: dict, old: dict, map_state: dict, ctx: dict | None) -> dict:
+    """R202/R204 after the kernel: a policy citation the kernel moved only by R119's derived adoption compares
+    as recorded. That holds only when the stored citation is exactly R119's relocation of the recorded one at
+    this write's adopted commit, with the same path, lines, quoted text and revision; anything else is a change."""
+    from .obligations import _relocate
+    observed = (ctx or {}).get("governance")
+    source, recorded = row.get("source"), old.get("source")
+    if (not (ctx or {}).get("derived_adoption") or not isinstance(observed, dict)
+            or row.get("provenance") != "project_policy" or old.get("provenance") != "project_policy"
+            or not isinstance(source, dict) or not isinstance(recorded, dict) or source == recorded):
+        return row
+    try:
+        relocated = _relocate(recorded, observed, map_state["governance_sources"])
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return row
+    if (source != relocated or source.get("base") != observed.get("commit")
+            or any(source.get(key) != recorded.get(key) for key in ("path", "lines", "quote_sha256", "revision"))):
+        return row
+    return {**row, "source": recorded}
+
+
+def _bookkeeping_rows_unchanged(prior_map: dict, map_state: dict, ctx: dict | None = None) -> bool:
     """R202 after the kernel: the same rows in order, settled rows byte-identical, and a remaining row changed
-    only in its state, state referent and evidence."""
+    only in its state, state referent and evidence. R119's relocation of a policy citation is not a change."""
     from .obligations import TERMINAL
     prior = {row["id"]: row for row in prior_map["obligations"]}
     if [row["id"] for row in map_state["obligations"]] != list(prior):
         return False
     for row in map_state["obligations"]:
         old = prior[row["id"]]
+        row = _as_recorded(row, old, map_state, ctx)
         if old["state"] in TERMINAL:
             if row != old:
                 return False
@@ -2021,12 +2043,12 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             raise withdrawal_refusal
         if adoption_only and not _adoption_only_result(prior_map, map_state):
             raise _adoption_only_refusal()
-        if bookkeeping and not _bookkeeping_rows_unchanged(prior_map, map_state):
+        if bookkeeping and not _bookkeeping_rows_unchanged(prior_map, map_state, ctx):
             # R202 keeps the delivered baseline only for bookkeeping; anything else gets today's refusal.
             require_governance_current(project, prior_map, checkpoint=True)
             raise PodError("governance_changed", "The target moved; only post-delivery bookkeeping keeps the "
                            "delivered baseline", {"detail": "governance_changed"})
-        if bookkept and delivered is not None and not _bookkeeping_rows_unchanged(prior_map, map_state):
+        if bookkept and delivered is not None and not _bookkeeping_rows_unchanged(prior_map, map_state, ctx):
             # R204 took the bookkeeping route on the proposal; the stored result must be bookkeeping as a whole too.
             raise refuse("obligation_unaccounted", "evidence_invalidated",
                          "the stored result changes more than post-delivery bookkeeping, so proof the delivery "
@@ -2036,7 +2058,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
         if delivered is not None:
             recorded = {row["id"]: row for row in prior_map["obligations"]}
             stored = {row["id"]: row for row in map_state["obligations"]}
-            changed = sorted(key for key in delivered["rows"] if stored.get(key) != recorded[key])
+            changed = sorted(key for key in delivered["rows"] if key not in stored
+                             or _as_recorded(stored[key], recorded[key], map_state, ctx) != recorded[key])
             if changed:
                 # R204 judged these rows against the delivered candidate only because the write leaves them as
                 # recorded; a row the kernel changed is judged against the worktree instead.

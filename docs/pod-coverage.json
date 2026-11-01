@@ -10174,6 +10174,20 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A788",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.RelocatedPolicyCitationTests.test_bookkeeping_after_an_adopting_target_move_keeps_the_relocated_policy_row",
+        "tests.test_delivered_proof_sources.RelocatedPolicyCitationTests.test_a_closing_write_after_an_adopting_target_move_closes",
+        "tests.test_delivered_proof_sources.RelocatedPolicyCitationTests.test_a_changed_cited_quote_is_still_a_change",
+        "tests.test_delivered_proof_sources.RelocatedPolicyCitationTests.test_a_citation_base_other_than_the_adopted_commit_is_still_a_change"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A768",
       "required_evidence": [
         "unit",
