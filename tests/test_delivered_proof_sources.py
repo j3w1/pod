@@ -69,9 +69,17 @@ class DeliveredProofSourceTests(KernelCase):
     prepare_result = delivery.VerifiedDeliveryTests.prepare_result
     move_target = delivery.VerifiedDeliveryTests.move_target
 
+    assurance = False  # add an unsatisfied assurance with a non-empty editing boundary
+
     def intake(self, *rows, **fields):
-        return self.write([self.criterion(), self.sub("R", state="blocked_external", external=dict(EXTERNAL))],
-                          governance={"base_ref": "target"})
+        extra = [{"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1", "check": "review src",
+                  "scope": {"paths": ["src"], "surfaces": []},
+                  "boundary": {"paths": ["src"], "surfaces": ["ownership"]},
+                  "question": "is src correct?", "candidate": self.candidate, "existing_evidence": "unit",
+                  "insufficiency": "review needed", "state": "blocked_external",
+                  "external": dict(EXTERNAL)}] if self.assurance else []
+        return self.write([self.criterion(), self.sub("R", state="blocked_external", external=dict(EXTERNAL)),
+                           *extra], governance={"base_ref": "target"})
 
     def setUp(self):
         super().setUp()
@@ -106,10 +114,10 @@ class DeliveredProofSourceTests(KernelCase):
         if later:
             self.later_work()
 
-    def later_work(self):
+    def later_work(self, path="README.md"):
         git(self.project, "checkout", "-qb", "later-work")
-        (self.project / "README.md").write_text("later, unrelated work\n")
-        git(self.project, "add", "README.md")
+        (self.project / path).write_text("later, unrelated work\n")
+        git(self.project, "add", path)
         git(self.project, "commit", "-qm", "later work")
         self.later = git(self.project, "rev-parse", "HEAD")
 
@@ -275,11 +283,56 @@ class DeliveredProofSourceTests(KernelCase):
         self.assertEqual(error.detail["referent"]["invalidations"][0]["paths"], ["linename.py"])
 
     def test_writes_outside_the_bookkeeping_route_judge_the_worktree(self):
-        self.deliver(move=False)  # the target still names the delivery: currency holds, no route is taken
-        error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
-                                       lambda: self.update(self.external_evidence()))
+        self.deliver(move=False)  # currency holds; adding a row is not post-delivery bookkeeping
+        rows = self.stored() + [self.sub("S", state="blocked_external", external=dict(EXTERNAL))]
+        error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated", lambda: self.write(rows))
         self.assertIn("O1: binding change", str(error))
         self.assertNotIn("delivered candidate", str(error))
+
+    def deliver_reused(self, *, dirty=False):
+        """With governance current: O1 is proved at the base, carried by REUSE to the candidate and delivered;
+        the worktree then takes later work that edits the bound source, src/old.py."""
+        self.prepare_result()
+        delivered, self.candidate = self.candidate, self.base
+        if dirty:
+            (self.project / "src" / "old.py").write_text("uncommitted bytes the proof was bound to\n")
+        rows = self.stored()
+        rows[0]["proof_scope"] = ["src"]  # REUSE carries proof only for a declared scope
+        self.write(rows)
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1", sources=[
+            source_identity(self.project, "src/old.py")])])
+        self.write(rows)
+        self.candidate = delivered
+        self.update({"O1": {"reuse": {"from": self.base}}})
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        if dirty:
+            git(self.project, "checkout", "-q", "--", "src/old.py")
+        self.assertEqual(self.stored()[0]["reuse"]["from"], self.base)
+        self.later_work("src/old.py")
+
+    def test_bookkeeping_with_current_governance_keeps_reused_proof_the_delivery_relied_on(self):
+        self.deliver_reused()
+        recorded = self.stored()[0]
+        stored = self.update(self.external_evidence())["checkpoint"]
+        self.assertEqual(stored["obligations"][0], recorded)
+        self.assertEqual(stored["obligations"][1]["state"], "blocked_external")
+        # Reads judge the same row the same way: at the delivered tree, not the worktree.
+        from pod.assurance import evidence_valid
+        from pod.ledger import kernel_view
+        from pod.obligations import bound_governance_digest
+        view = kernel_view(self.project, "objective", delivered=True)
+        gov = bound_governance_digest(view["map"])
+        self.assertTrue(evidence_valid(recorded, view["ctx"], gov))
+        self.assertFalse(evidence_valid(recorded, kernel_view(self.project, "objective")["ctx"], gov))
+
+    def test_bookkeeping_with_current_governance_refuses_proof_the_delivered_tree_lacks(self):
+        self.deliver_reused(dirty=True)
+        error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                       lambda: self.update(self.external_evidence()))
+        self.assertIn("delivered candidate " + self.candidate[:12], str(error))
+        self.assertEqual(error.detail["referent"]["invalidations"][0]["paths"], ["src/old.py"])
 
     def closing_rows(self):
         rows = self.stored()
@@ -306,6 +359,57 @@ class DeliveredProofSourceTests(KernelCase):
         self.assertEqual(validate_closed_snapshot(state["checkpoint"],
                                                   closed_snapshot_context(self.project, "objective", state)), ())
         self.assertTrue(_closure_recorded(self.project, "objective", state))
+
+    def without_boundary(self):
+        rows = self.stored()
+        rows[2].pop("boundary")  # full rows that omit the assurance's editing boundary
+        return rows
+
+    def test_an_omitted_boundary_is_not_bookkeeping_so_the_worktree_judges_delivered_proof(self):
+        self.assurance = True
+        self.deliver(move=False)  # currency holds; the worktree's README.md differs from the delivered tree
+        error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                       lambda: self.write(self.without_boundary()))
+        self.assertIn("O1: binding change", str(error))
+        self.assertNotIn("delivered candidate", str(error))
+
+    def test_an_omitted_boundary_with_nothing_stale_is_an_ordinary_write(self):
+        self.assurance = True
+        self.deliver(move=False, later=False)  # the worktree still holds the delivered bytes
+        import pod.obligations as kernel
+        original, seen = kernel.accept_write, []
+
+        def traced(prior, proposed, ctx):
+            seen.append("delivered_sources" in ctx)
+            return original(prior, proposed, ctx)
+        with patch.object(kernel, "accept_write", traced):
+            stored = self.write(self.without_boundary())["checkpoint"]
+        # As on main: no R204 route is taken, the worktree check passes and the kernel records the empty boundary.
+        self.assertEqual(seen, [False])
+        self.assertEqual(stored["obligations"][2]["boundary"], {"paths": [], "surfaces": []})
+
+    def test_a_bookkeeping_proposal_whose_stored_result_is_not_bookkeeping_refuses(self):
+        self.deliver(move=False)
+        import pod.obligations as kernel
+        original = kernel.accept_write
+
+        def changing(prior, proposed, ctx):
+            stored = original(prior, proposed, ctx)
+            self.assertIn("O1", ctx["delivered_sources"]["rows"])
+            stored["obligations"][1] = {**stored["obligations"][1], "check": "changed by the kernel"}
+            return stored
+        with patch.object(kernel, "accept_write", changing):
+            error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                           lambda: self.update(self.external_evidence()))
+        self.assertIn("changes more than post-delivery bookkeeping", str(error))
+
+    def test_a_closing_write_with_current_governance_uses_the_delivered_tree(self):
+        self.deliver(move=False)  # currency holds; the worktree has moved on and edited README.md
+        closed = self.write(self.closing_rows(), close=True)
+        self.assertTrue(closed["checkpoint"]["closure"])
+        state = read(self.project, "objective")
+        self.assertEqual(validate_closed_snapshot(state["checkpoint"],
+                                                  closed_snapshot_context(self.project, "objective", state)), ())
 
     def test_a_recorded_closure_replays_against_the_delivered_tree_after_the_worktree_moves(self):
         self.deliver(later=False)

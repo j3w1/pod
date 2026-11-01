@@ -717,6 +717,37 @@ class ObjectiveToolTests(ProductionCase):
         self.assertEqual(caught.exception.code, "tool_question_kernel_field")
         self.assertEqual(_path(self.project, "objective").read_bytes(), before)
 
+    def test_a_closed_record_holding_a_consumed_question_validates_for_its_source_effect(self):
+        from pod.evidence_closure import _read_record, _source_closure
+        from pod.ledger import objective_root, read, validate_checkpoint_snapshot
+        self.answer(self.check()["invocation"], "ask_each_time")
+        use = self.check()
+        self.answer(use["invocation"], "approve")
+        self.assertTrue(self.check(invocation=use["invocation"])["execute"])
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="withdrawn", withdrawal={"by": "user_direct", "reason": "explicit fixture scope withdrawal"})
+        self.write(rows, questions=read(self.project, "objective")["checkpoint"]["questions"], close=True,
+                   revision_authority=PERSON)
+        state = read(self.project, "objective")
+        self.assertIsNotNone(state["checkpoint"]["closure"])
+        self.assertIn("consumed", [row["state"] for row in state["checkpoint"]["questions"]])
+        # The stored question is not an incoming change: the snapshot validates and the source effect may proceed.
+        validate_checkpoint_snapshot(self.project, state)
+        root = objective_root(self.project, "objective")
+        raw, before = _read_record(root)
+        self.assertTrue(_source_closure(self.project, "objective", root, raw, before))
+
+    def test_a_checkpoint_that_drops_a_pending_question_still_refuses(self):
+        from pod.ledger import _path, read
+        self.check()
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["questions"][0]["state"], "pending")
+        before = _path(self.project, "objective").read_bytes()
+        with self.assertRaises(PodError) as caught:
+            self.write(self.stored(), questions=[], revision_authority=PERSON)
+        self.assertEqual(caught.exception.code, "tool_question_kernel_field")
+        self.assertEqual(_path(self.project, "objective").read_bytes(), before)
+
     def test_completed_objective_closes_without_answering_an_unused_question(self):
         from pod.ledger import read
         self.check()

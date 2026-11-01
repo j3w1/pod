@@ -406,6 +406,12 @@ def intake(state: dict, map_state: dict | None = None) -> dict:
                         for number in sorted(set(mapped) - set(lines))]}
 
 
+def _read_context(project: Path, objective: str, state: dict) -> dict:
+    """Kernel facts for a tick read; proof a recorded delivery relied on reads at the delivered tree (R204)."""
+    from . import ledger as store
+    return store.delivered_read_context(project, state, store.kernel_context(project, objective, state, None))
+
+
 def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project: Path | None = None,
                objective: str | None = None, owner: str | None = None, source: dict | None = None) -> dict:
     """R9/R10 decision table from recorded observations and current proof; no fetch."""
@@ -629,7 +635,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
     request = {"id": uuid.uuid4().hex, "pod": pod, "seq": seq, "source": source,
                "direction": "tick", "before": source["body_sha256"], "intended": source["body_sha256"],
                "phase": "completed", "result": None, "readback": None, "block": None}
-    ctx = store.kernel_context(project, objective, state, None)
+    ctx = _read_context(project, objective, state)
     current = projection(state, store.map_of(state), ctx, project=project, objective=objective)
     row = next((row for row in current["lines"] if row["pod"] == pod), None)
     request["direction"] = (row or {}).get("direction") or "tick"
@@ -676,7 +682,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                 mapping_changed = True
             if mapping_changed:
                 store._write(path, recorded)
-        ctx = store.kernel_context(project, objective, recorded, None)
+        ctx = _read_context(project, objective, recorded)
         exc.detail = {**(exc.detail or {}), "pod": pod, "direction": request["direction"],
                       "blocked": request["block"],
                       "pod_ticks": projection(recorded, store.map_of(recorded), ctx,
@@ -701,7 +707,7 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                             "readback": {"body_sha256": _hash(body), "state": live["state"], "ticked": None},
                             "pod_ticks": projection(state, store.map_of(state), ctx, project=project, objective=objective)})
         _facts(ledger, source, body, context=state, mapping_check=checked)
-        ctx = store.kernel_context(project, objective, state, None)
+        ctx = _read_context(project, objective, state)
         view = projection(state, store.map_of(state), ctx, project=project, objective=objective)
         row = next((row for row in view["lines"] if row["pod"] == pod), None)
         request["direction"] = (row or {}).get("direction") or "tick"
@@ -856,7 +862,7 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             ledger["authors"][key] = "own" if accepted else "ambiguous"
         ledger["requests"][key] = request
         store._write(path, state)
-        ctx = store.kernel_context(project, objective, state, None)
+        ctx = _read_context(project, objective, state)
         view = projection(state, store.map_of(state), ctx, project=project, objective=objective)
     receipt = {"pod": int(key), "direction": request["direction"], "before": request["before"],
                "intended": request["intended"], "result": result,

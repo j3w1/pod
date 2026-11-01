@@ -10155,6 +10155,36 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A767",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_with_current_governance_keeps_reused_proof_the_delivery_relied_on",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_bookkeeping_with_current_governance_refuses_proof_the_delivered_tree_lacks",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_closing_write_with_current_governance_uses_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_an_omitted_boundary_is_not_bookkeeping_so_the_worktree_judges_delivered_proof",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_an_omitted_boundary_with_nothing_stale_is_an_ordinary_write",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_bookkeeping_proposal_whose_stored_result_is_not_bookkeeping_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A768",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_plain_close_after_an_earlier_withdrawal_keeps_the_bound_baseline",
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_minimal_close_after_an_earlier_withdrawal_keeps_the_bound_baseline",
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_a_plain_close_that_omits_a_recorded_field_keeps_ordinary_checks",
+        "tests.test_superseded_closure.EarlierWithdrawalClosureTests.test_an_all_satisfied_record_without_a_withdrawal_keeps_ordinary_checks"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A770",
       "required_evidence": [
         "unit",
