@@ -8,8 +8,11 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 import zlib
+from copy import deepcopy
+from pathlib import Path
 from unittest.mock import patch
 
 from pod import config, governance
@@ -424,7 +427,10 @@ class DeliveredProofSourceTests(KernelCase):
 class RelocatedPolicyCitationTests(KernelCase):
     """After a delivery the target moves with unchanged governance, so a later checkpoint adopts it (R119) and
     relocates the citation of a satisfied policy assurance to the adopted commit; the shared worktree has moved
-    off the delivered candidate. Bookkeeping then satisfies a waiting criterion and a blocked subgoal."""
+    off the delivered candidate. Bookkeeping then satisfies a waiting criterion and a blocked subgoal.
+
+    The delivered fixture is built once per class. Records and the fixture's Git remote name absolute paths, so
+    each test restores the same disposable directory from that template instead of building a new one."""
 
     prepare_result = delivery.VerifiedDeliveryTests.prepare_result
     move_target = delivery.VerifiedDeliveryTests.move_target
@@ -433,10 +439,29 @@ class RelocatedPolicyCitationTests(KernelCase):
     record = DeliveredProofSourceTests.record
     update = DeliveredProofSourceTests.update
     review = assurance_review
+    CARRIED = ("root", "project", "base", "candidate", "port", "recorded", "adopted", "later")
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        builder = cls()
+        cls.addClassCleanup(builder.doCleanups)  # its fixture, environment and authority stay for the class
+        KernelCase.setUp(builder)
+        builder.build()
+        cls.builder, cls.home = builder, builder.root.parent
+        cls.template = Path(cls.enterClassContext(tempfile.TemporaryDirectory())) / "template"
+        shutil.copytree(cls.home, cls.template, symlinks=True)
+        cls.port_state = deepcopy(builder.port.__dict__)
 
     def setUp(self):
-        super().setUp()
-        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        for entry in self.home.iterdir():
+            shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
+        shutil.copytree(self.template, self.home, symlinks=True, dirs_exist_ok=True)
+        builder = self.builder
+        builder.port.__dict__.clear()
+        builder.port.__dict__.update(deepcopy(self.port_state))
+        for name in self.CARRIED:
+            setattr(self, name, getattr(builder, name))
 
     def core(self, **extra):
         return super().core(**{"criteria": ["PoD#1", "PoD#2"], **extra})
@@ -448,7 +473,8 @@ class RelocatedPolicyCitationTests(KernelCase):
         return self.write([self.criterion(), waiting, self.sub("R", state="blocked_external", external=dict(EXTERNAL)),
                            governance_policy(self, "A", parent="O1")], governance={"base_ref": "target"})
 
-    def deliver(self):
+    def build(self):
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
         self.prepare_result()
         self.port.placement["branch"] = git(self.project, "branch", "--show-current")
         self.write(self.stored())  # the checkpoint names the candidate the review binds
@@ -468,7 +494,6 @@ class RelocatedPolicyCitationTests(KernelCase):
         return {key: {"state": "satisfied", "evidence": [self.proof(key)]} for key in ("R", "O2")}
 
     def test_bookkeeping_after_an_adopting_target_move_keeps_the_relocated_policy_row(self):
-        self.deliver()
         written = self.update(self.bookkeeping())
         self.assertEqual(written["checkpoint"]["governance"]["base"], self.adopted)  # R119 adopted the target
         stored = {row["id"]: row for row in written["checkpoint"]["obligations"]}
@@ -479,7 +504,6 @@ class RelocatedPolicyCitationTests(KernelCase):
         self.assertEqual({**stored["A"], "source": self.recorded["A"]["source"]}, self.recorded["A"])
 
     def test_a_closing_write_after_an_adopting_target_move_closes(self):
-        self.deliver()
         rows = self.stored()
         for row in rows:
             if row["id"] in ("R", "O2"):
@@ -506,12 +530,10 @@ class RelocatedPolicyCitationTests(KernelCase):
                                           lambda: self.update(self.bookkeeping()))
 
     def test_a_changed_cited_quote_is_still_a_change(self):
-        self.deliver()
         error = self.stamped({"quote_sha256": hashlib.sha256(b"other text").hexdigest()})
         self.assertIn("changes more than post-delivery bookkeeping", str(error))
 
     def test_a_citation_base_other_than_the_adopted_commit_is_still_a_change(self):
-        self.deliver()
         error = self.stamped({"base": self.later})
         self.assertIn("changes more than post-delivery bookkeeping", str(error))
 
