@@ -60,6 +60,9 @@ MAX_LISTED = 64
 # objective lock is held. Recorded worktrees it does not name are released without those reads (R206).
 MAX_PATHS = MAX_LISTED
 MAX_DELIVERY = 16
+# The owner-worded next action, still imported by the genuine Pod 0.12.0 status module the readiness comparison loads.
+ACTION = ("Read it with pod status --objective {}; the owner's historical retirement released its worktrees: "
+          "it is not completed, and its record accepts no writes.")
 OWNER_RETIREMENT = "the owner's historical retirement"
 AGENT_RETIREMENT = "a historical retirement (agent decision under the decision policy)"
 
