@@ -10055,7 +10055,10 @@
         "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_forged_tree_in_an_alternate_object_store_cannot_substitute_the_delivered_tree",
         "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_partial_clone_is_refused_and_nothing_is_fetched",
         "tests.test_delivered_proof_sources.GitObjectTrustTests.test_ambient_repository_and_object_redirection_is_ignored",
-        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_a_partial_clone_is_refused_and_a_missing_object_is_never_fetched"
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_a_partial_clone_is_refused_and_a_missing_object_is_never_fetched",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_a_valueless_promisor_key_refuses_as_a_promisor_repository",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_promisor_spellings_follow_gits_boolean_rules",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_an_unrecognized_promisor_value_refuses"
       ],
       "status": "NOT_RUN"
     },
