@@ -10361,6 +10361,67 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A792",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.TerminalHistoryTests.test_a_closed_record_with_settled_placementless_admissions_is_history",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_continued_record_with_settled_admissions_is_history",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_retired_unattributed_record_with_settled_admissions_is_history",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_bound_dispatch_shown_current_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_pending_governor_effect_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_record_changed_during_the_read_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_bound_caller_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_the_selected_objectives_own_record_never_uses_the_rule",
+        "tests.test_admission_query.TerminalHistoryTests.test_an_open_record_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_an_unbound_reservation_on_a_closed_record_without_unattributed_actors_is_history",
+        "tests.test_admission_query.TerminalHistoryTests.test_an_unbound_reservation_with_an_unattributed_live_worker_and_no_certificate_stays",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_retirement_certificate_settles_an_unbound_reservation_despite_a_live_worker",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_closed_record_takes_no_certificate",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_dispatch_current_in_another_repositorys_registered_worktree_is_history",
+        "tests.test_admission_query.TerminalHistoryTests.test_another_repository_must_be_proven",
+        "tests.test_admission_query.TerminalHistoryTests.test_an_admission_naming_this_repository_keeps_the_gap_elsewhere"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A793",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.TerminalHistoryTests.test_an_evidence_closed_record_reads_closed_in_admission"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A794",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.TerminalHistoryTests.test_an_unplaceable_worker_is_its_own_fact"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A795",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.TerminalHistoryTests.test_an_ended_dispatch_with_gone_resources_makes_no_claim",
+        "tests.test_admission_query.TerminalHistoryTests.test_an_ended_dispatch_keeps_its_gap_unless_every_resource_is_gone",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_bound_caller_never_settles_an_ended_dispatch"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A779",
       "required_evidence": [
         "unit",
