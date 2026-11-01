@@ -27,18 +27,16 @@ def _git(project: Path, argv: list[str]) -> str | None:
 
 
 def _worktrees(project: Path) -> list[dict]:
-    """Keep the bounded full-list contract used by R113's registry observations."""
+    """R113's complete registry observation: every worktree of the repository, however many (R206), within the
+    byte bound on Git's output. An over-limit, failed or malformed read is unavailable."""
     try:
         with worktree_inventory(project) as inventory:
             output = inventory.read(MAX_GIT_OUTPUT + 1)
             if len(output) > MAX_GIT_OUTPUT:
                 raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read")
-            rows = list(worktree_rows(StringIO(output)))
+            return list(worktree_rows(StringIO(output)))
     except PodError as exc:
         raise PodError("cleanup_unavailable", "Git worktree inventory cannot be read") from exc
-    if len(rows) > MAX_RESOURCES:
-        raise PodError("cleanup_unavailable", "Git worktree inventory exceeds the cleanup bound")
-    return rows
 
 
 def _objective_worktrees(project: Path, paths: set[str], branches: set[str]) -> tuple[dict, dict, str | None]:

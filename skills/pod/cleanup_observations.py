@@ -170,8 +170,6 @@ def directory_names(path: Path) -> set[str]:
     with os.scandir(path) as entries:
         for entry in entries:
             names.add(entry.name)
-            if len(names) > MAX_ITEMS:
-                raise archives.Unavailable("Directory metadata exceeds its bound")
     return names
 
 

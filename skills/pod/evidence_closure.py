@@ -286,7 +286,6 @@ def _journal_bytes(root: Path) -> bytes | None:
 
 
 ROOT_UNREADABLE = "state_root_unreadable"
-BEYOND_BOUND = "beyond_scan_bound"
 UNATTRIBUTED = "unattributed"
 
 
@@ -294,12 +293,12 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
     """Every readable record of this repository, any schema, and what kept the scan from reading all of them.
 
     The second list names each problem as `{record, code}`: a record directory that could not be read, one whose
-    record names no objective (`unattributed`), the state root itself (`state_root_unreadable`), or the directories
-    past the scan's own bound (`beyond_scan_bound` with their `count`). `orphans` also names a directory holding
-    Pod files without the record that names them, as R108's list does."""
+    record names no objective (`unattributed`) or the state root itself (`state_root_unreadable`). Every directory
+    is read, however many there are (R206). `orphans` also names a directory holding Pod files without the record
+    that names them, as R108's list does."""
     from .github import repository_context
     from .ledger import _record_exists, record_name, state_root
-    from .listing import MAX_SCAN, _name
+    from .listing import _name
     context = repository_context(project)
     root = state_root(project)
     try:
@@ -313,9 +312,8 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
     except OSError:
         return [], [{"record": None, "code": ROOT_UNREADABLE}]
     found = []
-    unreadable = ([] if len(entries) <= MAX_SCAN
-                  else [{"record": None, "code": BEYOND_BOUND, "count": len(entries) - MAX_SCAN}])
-    for entry in entries[:MAX_SCAN]:
+    unreadable = []
+    for entry in entries:
         try:
             if entry.is_symlink():
                 unreadable.append({"record": entry.name, "code": "unsafe_state"})
@@ -1944,15 +1942,11 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
 
 def _scope_reason(problems: list[dict]) -> str:
     """Plain words for what kept a sweep from reading every record of a repository."""
-    from .listing import MAX_SCAN
-    beyond = sum(row.get("count", 0) for row in problems if row["code"] == BEYOND_BOUND)
     orphaned = [row["record"] for row in problems if row["code"] == UNATTRIBUTED]
-    unread = [row for row in problems if row["code"] not in (BEYOND_BOUND, UNATTRIBUTED)]
+    unread = [row for row in problems if row["code"] != UNATTRIBUTED]
     parts = []
     if any(row["code"] == ROOT_UNREADABLE for row in problems):
         return "the Pod state root cannot be enumerated; nothing can be proven absent"
-    if beyond:
-        parts.append(f"{beyond} record directory(ies) lie beyond the sweep's {MAX_SCAN}-directory scan bound")
     if unread:
         parts.append(f"{len(unread)} record(s) cannot be read ("
                      + ", ".join(f"{row['record'][:16]}: {row['code']}" for row in unread[:4])
