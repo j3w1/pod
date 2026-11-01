@@ -6,12 +6,15 @@ with changed governance, and the shared worktree reused for later, unrelated wor
 
 import hashlib
 import os
+import shutil
 import subprocess
 import unittest
+import zlib
 from unittest.mock import patch
 
 from pod import config, governance
-from pod.gitio import blob, is_ancestor, read as read_git, tree_entry
+from pod.errors import PodError
+from pod.gitio import blob, is_ancestor, read as read_git, resolve_commit, tree_entry
 from pod.governance import delivered_source_reader, scope_resolver
 from pod.ledger import checkpoint, closed_snapshot_context, objective_root, read
 from pod.obligations import validate_closed_snapshot
@@ -23,6 +26,43 @@ from tests.common import fixture
 from tests.kernel_support import KernelCase, git
 
 EXTERNAL = {"party": "third_party", "need": "acceptance", "unblocks_when": "accepted"}
+
+
+def forged_store(project, commit, directory, name, data, store):
+    """A copy of the object store whose `directory` tree, under its genuine id, lists `name` as a correctly hashed
+    blob of `data`: malformed storage, not a hash collision. Returns the genuine tree id."""
+    run = lambda *argv, **kwargs: subprocess.run(["git", "-C", str(project), *argv], check=True, capture_output=True,
+                                                 **kwargs).stdout
+    original = run("rev-parse", f"{commit}:{directory}/{name}").decode().strip()
+    tree = run("rev-parse", f"{commit}:{directory}").decode().strip()
+    replacement = run("hash-object", "-w", "--stdin", input=data).decode().strip()
+    raw = run("cat-file", "tree", tree)
+    forged = raw.replace(bytes.fromhex(original), bytes.fromhex(replacement))
+    assert forged != raw and hashlib.sha1(b"tree %d\0" % len(forged) + forged).hexdigest() != tree
+    shutil.copytree(project / ".git" / "objects", store)
+    target = store / tree[:2] / tree[2:]
+    target.parent.mkdir(exist_ok=True)
+    if target.exists():
+        target.chmod(0o600)
+    target.write_bytes(zlib.compress(b"tree %d\0" % len(forged) + forged))
+    return tree
+
+
+def promisor(project, root):
+    """Make `project` a partial clone of a local bare copy whose upload-pack leaves a marker when run."""
+    remote, marker, helper = root / "remote.git", root / "upload-pack-called", root / "upload-pack-probe"
+    subprocess.run(["git", "clone", "--bare", "-q", str(project), str(remote)], check=True, capture_output=True)
+    helper.write_text(f'#!/bin/sh\n: > "{marker}"\nexec git-upload-pack "$@"\n')
+    helper.chmod(0o700)
+    for argv in (["remote", "add", "probe", str(remote)], ["config", "remote.probe.uploadpack", str(helper)],
+                 ["config", "remote.probe.promisor", "true"], ["config", "core.repositoryformatversion", "1"],
+                 ["config", "extensions.partialClone", "probe"]):
+        subprocess.run(["git", "-C", str(project), *argv], check=True, capture_output=True)
+    return marker
+
+
+def packs(project):
+    return sorted((project / ".git" / "objects" / "pack").glob("*.pack"))
 
 
 class DeliveredProofSourceTests(KernelCase):
@@ -176,6 +216,52 @@ class DeliveredProofSourceTests(KernelCase):
                     self.assertIn("src/old.py", str(error))
                 finally:
                     git(self.project, "replace", "-d", old)
+
+    def forged(self):
+        self.deliver(dirty="src/old.py")
+        self.forged_bytes = b"uncommitted bytes the proof was bound to\n"
+        return forged_store(self.project, self.candidate, "src", "old.py", self.forged_bytes, self.root / "forged")
+
+    def refused_while_git_reads_forged(self, environment, *, ordinary=True):
+        with patch.dict(os.environ, environment):
+            if ordinary:  # ordinary Git reads the forged membership
+                shown = subprocess.run(["git", "-C", str(self.project), "show", self.candidate + ":src/old.py"],
+                                       check=True, capture_output=True).stdout
+                self.assertEqual(shown, self.forged_bytes)
+            error = self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                           lambda: self.update(self.external_evidence()))
+        self.assertIn("src/old.py", str(error))
+
+    def test_ambient_object_or_repository_redirection_cannot_substitute_the_delivered_tree(self):
+        tree = self.forged()
+        copy = self.root / "copied-repository"
+        shutil.copytree(self.project / ".git", copy)
+        (copy / "objects" / tree[:2] / tree[2:]).chmod(0o600)
+        shutil.copyfile(self.root / "forged" / tree[:2] / tree[2:], copy / "objects" / tree[:2] / tree[2:])
+        for name, environment, ordinary in (
+                ("GIT_OBJECT_DIRECTORY", {"GIT_OBJECT_DIRECTORY": str(self.root / "forged")}, True),
+                ("GIT_DIR", {"GIT_DIR": str(copy), "GIT_WORK_TREE": str(self.project)}, True),
+                ("GIT_ALTERNATE_OBJECT_DIRECTORIES", {"GIT_ALTERNATE_OBJECT_DIRECTORIES": str(self.root / "forged")},
+                 False)):
+            with self.subTest(name):
+                self.refused_while_git_reads_forged(environment, ordinary=ordinary)
+
+    def test_a_forged_tree_in_an_alternate_object_store_cannot_substitute_the_delivered_tree(self):
+        tree = self.forged()
+        (self.project / ".git" / "objects" / tree[:2] / tree[2:]).rename(self.root / "genuine-tree")
+        (self.project / ".git" / "objects" / "info" / "alternates").write_text(str(self.root / "forged") + "\n")
+        self.refused_while_git_reads_forged({})
+
+    def test_a_partial_clone_is_refused_and_nothing_is_fetched(self):
+        self.deliver()
+        marker = promisor(self.project, self.root)
+        before = packs(self.project)
+        record = self.record()
+        with self.assertRaises(PodError):
+            self.update(self.external_evidence())
+        self.assertEqual(self.record(), record)
+        self.assertFalse(marker.exists())
+        self.assertEqual(packs(self.project), before)
 
     def test_a_carriage_return_name_does_not_stand_in_for_a_newline_name(self):
         lf, cr = "line\nname.py", "line\rname.py"
@@ -356,6 +442,38 @@ class GitObjectTrustTests(unittest.TestCase):
         self.assertEqual(resolve("a\rb"), ["AGENTS.md"])
         self.assertEqual(resolve("a\nb"), ["a\nb"])
         self.assertEqual(tree_entry(self.project, commit, "line\nname.py"), (True, None))
+
+    def test_ambient_repository_and_object_redirection_is_ignored(self):
+        head = self.commit({"AGENTS.md": "rules\n", "src/file.py": "bound\n"})
+        other = self.root / "other"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(other)], check=True)
+        (other / "x.txt").write_text("x\n")
+        subprocess.run(["git", "-C", str(other), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(other), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm",
+                        "other"], check=True)
+        with patch.dict(os.environ, {"GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other)}):
+            self.assertEqual(resolve_commit(self.project, "HEAD"), head)
+        tree = forged_store(self.project, head, "src", "file.py", b"forged\n", self.root / "forged")
+        with patch.dict(os.environ, {"GIT_OBJECT_DIRECTORY": str(self.root / "forged")}):
+            self.assertEqual(delivered_source_reader(self.project, head)("src/file.py")["sha256"],
+                             hashlib.sha256(b"bound\n").hexdigest())
+        (self.project / ".git" / "objects" / tree[:2] / tree[2:]).unlink()
+        (self.project / ".git" / "objects" / "info" / "alternates").write_text(str(self.root / "forged") + "\n")
+        self.assertIsNone(delivered_source_reader(self.project, head)("src/file.py"))  # forged storage: unreadable
+        self.assertEqual(tree_entry(self.project, head, "src/file.py"), (False, None))
+        self.assertIsNone(scope_resolver(self.project, [head])("src/file.py"))
+        self.assertEqual(delivered_source_reader(self.project, head)("AGENTS.md")["state"], "present")
+
+    def test_a_partial_clone_is_refused_and_a_missing_object_is_never_fetched(self):
+        head = self.commit({"source.txt": "delivered bytes\n"})
+        obj = self.run_git("rev-parse", head + ":source.txt")
+        marker = promisor(self.project, self.root)
+        self.assertIsNone(delivered_source_reader(self.project, head)("source.txt"))  # refused while present
+        (self.project / ".git" / "objects" / obj[:2] / obj[2:]).unlink()
+        self.assertIsNone(delivered_source_reader(self.project, head)("source.txt"))
+        self.assertIsNone(blob(self.project, obj, limit=64))  # a direct read does not fetch either
+        self.assertFalse(marker.exists())
+        self.assertEqual(packs(self.project), [])
 
     def test_blob_bytes_must_match_their_object_id(self):
         commit = self.commit({"file.txt": "real\n"})

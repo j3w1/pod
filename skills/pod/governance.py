@@ -414,9 +414,10 @@ def governance_observation(project: Path, base_ref: str | None, *, at: str | Non
         return {"status": "unavailable", "reason": "base_ref_unresolved", "target_ref": target,
                 "current": current}
     texts: dict[str, str | None] = {}
+    view = gitio.TreeView(project, commit, reader=_git)
     for path in GOVERNANCE_PATHS if paths is None else paths:
-        readable, entry = gitio.tree_entry(project, commit, path, reader=_git)
-        if not readable:
+        entry = view.entry(path)
+        if entry == gitio.UNREADABLE:
             return {"status": "unavailable", "reason": "tree_unreadable", "current": current}
         if entry is None:
             texts[path] = None
@@ -495,13 +496,13 @@ def scope_resolver(project: Path, commits: list[str]):
     a component has any other mode (a gitlink's opaque subtree included), or a link is absolute, leaves the
     repository, loops or exceeds the bound. Host paths, submodule checkouts and remotes are never read.
     """
-    tables: dict[str, dict[str, tuple[str, str]] | None] = {}
+    tables: dict[str, gitio.TreeView | None] = {}
     blobs: dict[str, str | None] = {}
 
     def entries(commit):
         if commit not in tables:
-            listed = gitio.tree_entries(project, commit, reader=_git)
-            tables[commit] = None if listed is None else {name: (mode, obj) for name, (mode, _, obj) in listed.items()}
+            view = gitio.TreeView(project, commit, reader=_git)
+            tables[commit] = view if view.top() is not None else None
         return tables[commit]
 
     def target(blob):
@@ -525,7 +526,10 @@ def scope_resolver(project: Path, commits: list[str]):
                     return None
                 done.pop()
                 continue
-            mode, obj = rows.get("/".join([*done, part]), (None, None))
+            found = rows.entry("/".join([*done, part]))
+            if found == gitio.UNREADABLE:
+                return None
+            mode, obj = (found[0], found[2]) if found is not None else (None, None)
             if mode == "120000":
                 hops += 1
                 link = target(obj) if _OBJECT.fullmatch(obj) else None
@@ -560,43 +564,38 @@ def delivered_source_reader(project: Path, commit: str):
     cannot read it: an unsafe or secret-bearing path, an unreadable tree or blob, a blob over the source read
     limit, or a path whose final component is not a regular file (`100644`/`100755`) or whose parents are not
     all trees, so a committed symlink or gitlink is never followed, as `source_identity` refuses one on the host
-    and R203's resolver refuses an opaque mode. Names are compared byte-exactly and blobs verified against their
-    ids; replacement refs, grafts and shallow boundaries do not apply (`gitio.read`). The worktree, host paths
-    and remotes are never read; the tree inventory and blobs are cached for one write.
+    and R203's resolver refuses an opaque mode. The commit, every tree on the path and the blob are rehashed
+    against their ids (`gitio.TreeView`), names compare exactly, and a partial clone is refused; `gitio.read` keeps
+    ambient repository redirection, replacement refs, grafts, shallow boundaries and lazy fetching out. The
+    worktree, host paths and remotes are never read; trees and results are cached for one write.
     """
     from hashlib import sha256
     from .records import _safe_relative
-    table: list[dict[str, tuple[str, str]] | None] = []
+    view = gitio.TreeView(project, commit, reader=_git)
     found: dict[str, dict | None] = {}
 
-    def entries():
-        if not table:
-            listed = gitio.tree_entries(project, commit, reader=_git)
-            table.append(None if listed is None else {name: (mode, obj) for name, (mode, _, obj) in listed.items()})
-        return table[0]
-
-    def blob(obj):
-        return gitio.blob(project, obj, limit=MAX_SOURCE_BYTES, reader=_git)
-
     def read(path):
-        rows = entries()
-        if rows is None or not isinstance(path, str) or "\0" in path or not _safe_relative(path):
+        if view.top() is None or not isinstance(path, str) or "\0" in path or not _safe_relative(path):
             return None
         parts = path.split("/")
         if any(part in ("", ".", "..") for part in parts):
             return None
         for depth in range(1, len(parts)):
-            mode, _ = rows.get("/".join(parts[:depth]), (None, None))
-            if mode is None:
+            entry = view.entry("/".join(parts[:depth]))
+            if entry == gitio.UNREADABLE:
+                return None
+            if entry is None:
                 return {"path": path, "state": "absent"}
-            if mode != "040000":
+            if entry[0] != "040000":
                 return None  # a symlink, gitlink or file as a parent is never followed
-        mode, obj = rows.get(path, (None, None))
-        if mode is None:
-            return {"path": path, "state": "absent"}
-        if mode not in ("100644", "100755") or not _OBJECT.fullmatch(obj):
+        entry = view.entry(path)
+        if entry == gitio.UNREADABLE:
             return None
-        data = blob(obj)
+        if entry is None:
+            return {"path": path, "state": "absent"}
+        if entry[0] not in ("100644", "100755"):
+            return None
+        data = gitio.blob(project, entry[2], limit=MAX_SOURCE_BYTES, reader=_git)
         return None if data is None else {"path": path, "state": "present", "sha256": sha256(data).hexdigest()}
 
     def reader(path):

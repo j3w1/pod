@@ -56,6 +56,7 @@ def worktree_inventory(root: Path, *, executable: str = "git"):
             result = subprocess.run([executable, "--no-optional-locks", "-C", str(root),
                                      "worktree", "list", "--porcelain", "-z"],
                                     stdout=inventory, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                    env=read_environment(),
                                     timeout=30 if budget is None else budget.limit(30), check=False)
             if result.returncode:
                 raise PodError("repository_identity_unavailable", "Git worktree inventory cannot be read")
@@ -69,15 +70,25 @@ def worktree_inventory(root: Path, *, executable: str = "git"):
         raise PodError("git_unavailable", "Git worktree inventory cannot be read") from exc
 
 
-# Every Pod read sees the repository's own objects and history, exactly as Git stores them:
-# - replacement refs (refs/replace) are not applied, so an object id names its own content;
-# - grafts (info/grafts) and shallow boundaries (shallow) are not applied, so a commit has its recorded
-#   parents; a parent missing from a shallow clone makes the read fail, which callers treat as unknown;
-# - pathspecs are literal, so a path names only itself;
-# - text output is strict UTF-8 without newline translation, so a carriage return in a path stays one.
-# Alternates only add storage for the same content-addressed objects; blob readers verify their bytes.
+# Every Pod read sees this repository's own objects and history, exactly as Git stores them:
+# - the environment is an allow-list: no ambient GIT_DIR, GIT_OBJECT_DIRECTORY, alternates variable or other
+#   GIT_* redirection reaches Git, so `-C root` alone selects the repository; only two variables that can only
+#   narrow what Git reads (a discovery ceiling and skipping system config) are kept;
+# - replacement refs, grafts (info/grafts) and shallow boundaries are not applied, so an object id names its own
+#   content and a commit its recorded parents; a parent missing from a shallow clone makes the read fail, which
+#   callers treat as unknown;
+# - lazy fetching is off, so a missing object is unreadable and no read reaches a remote;
+# - pathspecs are literal, and text output is strict UTF-8 without newline translation.
+# Object storage itself (including alternates) is not trusted for proof: TreeView and blob rehash every object.
+_KEPT_ENVIRONMENT = frozenset({"PATH", "HOME", "LANG", "TZ", "TMPDIR", "XDG_CONFIG_HOME",
+                               "GIT_CEILING_DIRECTORIES", "GIT_CONFIG_NOSYSTEM"})
 _READ_ENVIRONMENT = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull, "GIT_SHALLOW_FILE": os.devnull,
-                     "GIT_LITERAL_PATHSPECS": "1"}
+                     "GIT_LITERAL_PATHSPECS": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
+
+
+def read_environment() -> dict[str, str]:
+    return {**{key: value for key, value in os.environ.items()
+               if key in _KEPT_ENVIRONMENT or key.startswith("LC_")}, **_READ_ENVIRONMENT}
 
 
 def read(root: Path, argv: list[str], *, binary: bool = False,
@@ -88,8 +99,7 @@ def read(root: Path, argv: list[str], *, binary: bool = False,
         completed = subprocess.run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(root), *argv],
                                    capture_output=True, text=False,
                                    timeout=timeout if budget is None else budget.limit(timeout),
-                                   check=False, stdin=subprocess.DEVNULL,
-                                   env={**os.environ, **_READ_ENVIRONMENT})
+                                   check=False, stdin=subprocess.DEVNULL, env=read_environment())
         if not binary:
             completed.stdout, completed.stderr = (
                 value.decode("utf-8") if isinstance(value, bytes) else value
@@ -101,58 +111,15 @@ def read(root: Path, argv: list[str], *, binary: bool = False,
         return None
 
 
-def tree_entries(root: Path, commit: str, *, reader: Callable | None = None) -> dict[str, tuple[str, str, str]] | None:
-    """Every path in one commit's tree, recursively with its trees, as exact names: {path: (mode, type, id)}.
-
-    The NUL-delimited listing is parsed as bytes and each name decoded as strict UTF-8, so distinct Git names stay
-    distinct; a name that is not UTF-8 is left out, since no Pod path can name it. None when Git cannot list it.
-    """
-    if not isinstance(commit, str) or not OBJECT_ID.fullmatch(commit):
-        return None
-    listed = (reader or read)(root, ["ls-tree", "-r", "-t", "-z", "--full-tree", commit], binary=True)
-    if listed is None or listed.returncode != 0 or not isinstance(listed.stdout, bytes):
-        return None
-    rows: dict[str, tuple[str, str, str]] = {}
-    for entry in listed.stdout.split(b"\0"):
-        if not entry:
-            continue
-        meta, tab, raw = entry.partition(b"\t")
-        parts = meta.split(b" ")
-        try:
-            name, fields = raw.decode("utf-8"), [part.decode("ascii") for part in parts]
-        except UnicodeError:
-            continue
-        if not tab or not name or len(fields) != 3 or not OBJECT_ID.fullmatch(fields[2]):
-            return None
-        rows[name] = (fields[0], fields[1], fields[2])
-    return rows
+MAX_TREE_BYTES = 16 * 1024 * 1024
+MAX_COMMIT_BYTES = 1_048_576
+MAX_TREES = 4096
+MAX_DEPTH = 256
+UNREADABLE = "unreadable"  # TreeView.entry: Pod cannot establish the path either way
 
 
-def tree_entry(root: Path, commit: str, path: str, *,
-               reader: Callable | None = None) -> tuple[bool, tuple[str, str, str] | None]:
-    """(readable, (mode, type, id) or None when absent) for one exact path at one commit, without recursion."""
-    if not isinstance(commit, str) or not OBJECT_ID.fullmatch(commit) or not isinstance(path, str) or not path:
-        return False, None
-    listed = (reader or read)(root, ["ls-tree", "-z", commit, "--", path], binary=True)
-    if listed is None or listed.returncode != 0 or not isinstance(listed.stdout, bytes):
-        return False, None
-    exact = path.encode("utf-8")
-    for entry in listed.stdout.split(b"\0"):
-        meta, tab, name = entry.partition(b"\t")
-        if tab and name == exact:
-            parts = meta.split(b" ")
-            try:
-                fields = [part.decode("ascii") for part in parts]
-            except UnicodeError:
-                return False, None
-            if len(fields) != 3 or not OBJECT_ID.fullmatch(fields[2]):
-                return False, None
-            return True, (fields[0], fields[1], fields[2])
-    return True, None
-
-
-def blob(root: Path, obj: str, *, limit: int, reader: Callable | None = None) -> bytes | None:
-    """One blob's bytes within `limit`, verified against its object id; None when unreadable, larger or different."""
+def _verified_object(root: Path, obj: str, kind: str, *, limit: int, reader: Callable | None) -> bytes | None:
+    """One object's raw content within `limit`, rehashed against its id with its claimed type."""
     if not isinstance(obj, str) or not OBJECT_ID.fullmatch(obj):
         return None
     run = reader or read
@@ -160,12 +127,115 @@ def blob(root: Path, obj: str, *, limit: int, reader: Callable | None = None) ->
     text = size.stdout.strip() if size is not None and size.returncode == 0 and isinstance(size.stdout, str) else ""
     if not text.isdigit() or int(text) > limit:
         return None
-    shown = run(root, ["cat-file", "blob", obj], binary=True)
+    shown = run(root, ["cat-file", kind, obj], binary=True)
     data = shown.stdout if shown is not None and shown.returncode == 0 else None
     if not isinstance(data, bytes) or len(data) != int(text):
         return None
     algorithm = "sha1" if len(obj) == 40 else "sha256"
-    return data if hashlib.new(algorithm, b"blob %d\0" % len(data) + data).hexdigest() == obj else None
+    header = kind.encode("ascii") + b" %d\0" % len(data)
+    return data if hashlib.new(algorithm, header + data).hexdigest() == obj else None
+
+
+def blob(root: Path, obj: str, *, limit: int, reader: Callable | None = None) -> bytes | None:
+    """One blob's bytes within `limit`, verified against its object id; None when unreadable, larger or different."""
+    return _verified_object(root, obj, "blob", limit=limit, reader=reader)
+
+
+def _tree_rows(data: bytes, width: int) -> dict[str, tuple[str, str, str]] | None:
+    """A verified tree's entries by exact name; None for a malformed tree.
+
+    A name that is not UTF-8 is left out (no Pod path can name it); a name that is empty, `.`, `..` or contains
+    `/`, a non-numeric mode or a repeated name makes the whole tree malformed."""
+    rows: dict[str, tuple[str, str, str]] = {}
+    index = 0
+    while index < len(data):
+        space = data.find(b" ", index)
+        nul = data.find(b"\0", space + 1) if space >= 0 else -1
+        if space < 0 or nul < 0 or nul + 1 + width > len(data):
+            return None
+        mode, name, obj = data[index:space], data[space + 1:nul], data[nul + 1:nul + 1 + width].hex()
+        index = nul + 1 + width
+        if not mode.isdigit() or not name or name in (b".", b"..") or b"/" in name:
+            return None
+        try:
+            text = name.decode("utf-8")
+        except UnicodeError:
+            continue
+        if text in rows:
+            return None
+        mode_text = mode.decode("ascii").zfill(6)
+        rows[text] = (mode_text, "tree" if mode_text == "040000" else "commit" if mode_text == "160000" else "blob",
+                      obj)
+    return rows
+
+
+def partial_clone(root: Path, *, reader: Callable | None = None) -> bool | None:
+    """Whether the repository is a partial clone or has a promisor remote; None when its config is unreadable."""
+    listed = (reader or read)(root, ["config", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.promisor)$"])
+    if listed is None or listed.returncode not in (0, 1) or not isinstance(listed.stdout, str):
+        return None
+    for line in listed.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "extensions.partialclone" or value.strip().lower() in ("true", "yes", "on", "1"):
+            return True
+    return False
+
+
+class TreeView:
+    """One commit's tree read through verified objects: the commit, each tree on a path and (via `blob`) its blob
+    are rehashed against their ids, and membership is parsed from those verified bytes, so forged storage reads as
+    unreadable rather than as other content. A partial clone or promisor repository is refused outright. Trees are
+    cached for the view's life; at most MAX_TREES trees and MAX_DEPTH components are read."""
+
+    def __init__(self, root: Path, commit: str, *, reader: Callable | None = None):
+        self.root, self.commit, self.reader = root, commit, reader
+        self._top: str | None | bool = False
+        self._trees: dict[str, dict | None] = {}
+
+    def _rows(self, obj: str) -> dict | None:
+        if obj not in self._trees:
+            if len(self._trees) >= MAX_TREES:
+                return None
+            data = _verified_object(self.root, obj, "tree", limit=MAX_TREE_BYTES, reader=self.reader)
+            self._trees[obj] = None if data is None else _tree_rows(data, len(obj) // 2)
+        return self._trees[obj]
+
+    def top(self) -> str | None:
+        """The verified root tree id, or None when the commit or repository cannot be trusted."""
+        if self._top is False:
+            self._top = None
+            if partial_clone(self.root, reader=self.reader) is False:
+                data = _verified_object(self.root, self.commit, "commit", limit=MAX_COMMIT_BYTES,
+                                        reader=self.reader)
+                head = data.split(b"\n", 1)[0] if data is not None else b""
+                tree = head[5:].decode("ascii", "replace") if head.startswith(b"tree ") else ""
+                if len(tree) == len(self.commit) and OBJECT_ID.fullmatch(tree) and self._rows(tree) is not None:
+                    self._top = tree
+        return self._top
+
+    def entry(self, path: str):
+        """(mode, type, id) for one exact path, None when absent (a parent that is not a tree included), or
+        UNREADABLE."""
+        top = self.top()
+        parts = path.split("/") if isinstance(path, str) else []
+        if top is None or not parts or len(parts) > MAX_DEPTH or any(part in ("", ".", "..") for part in parts):
+            return UNREADABLE
+        rows = self._rows(top)
+        for part in parts[:-1]:
+            found = rows.get(part)
+            if found is None or found[0] != "040000":
+                return None
+            rows = self._rows(found[2])
+            if rows is None:
+                return UNREADABLE
+        return rows.get(parts[-1])
+
+
+def tree_entry(root: Path, commit: str, path: str, *,
+               reader: Callable | None = None) -> tuple[bool, tuple[str, str, str] | None]:
+    """(readable, (mode, type, id) or None when absent) for one exact path at one commit, through TreeView."""
+    found = TreeView(root, commit, reader=reader).entry(path)
+    return (False, None) if found == UNREADABLE else (True, found)
 
 
 def resolve_commit(root: Path, ref: str) -> str | None:

@@ -10040,6 +10040,21 @@
         "tests.test_delivered_proof_sources.GitObjectTrustTests.test_blob_bytes_must_match_their_object_id"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A760",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_ambient_object_or_repository_redirection_cannot_substitute_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_forged_tree_in_an_alternate_object_store_cannot_substitute_the_delivered_tree",
+        "tests.test_delivered_proof_sources.DeliveredProofSourceTests.test_a_partial_clone_is_refused_and_nothing_is_fetched",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_ambient_repository_and_object_redirection_is_ignored",
+        "tests.test_delivered_proof_sources.GitObjectTrustTests.test_a_partial_clone_is_refused_and_a_missing_object_is_never_fetched"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
