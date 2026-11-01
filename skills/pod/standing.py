@@ -208,12 +208,19 @@ def state(context: dict, *, now: datetime | None = None) -> str:
     return "active"
 
 
+def _recorded_at_closure(context: dict) -> dict:
+    closure = (context.get("checkpoint") or {}).get("closure") or {}
+    value = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {}) \
+        if isinstance(closure.get("report"), dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
 def closure_instant(context: dict, *, closure_utc: str | None = None, now: datetime | None = None) -> str:
-    """The recorded instant a closure judged the mode at; a new closure takes its own closing time."""
+    """The one instant a closure judged the mode at (R155): the recorded one, else the closure's own `at`."""
     record = context.get("standing_authorization", {})
     closure = (context.get("checkpoint") or {}).get("closure") or {}
-    stored = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {})
-    return normalize_timestamp(stored.get("utc") or record.get("closed_at") or closure_utc or _timestamp(_clock(now)),
+    return normalize_timestamp(_recorded_at_closure(context).get("utc") or closure.get("at") or record.get("closed_at")
+                               or closure_utc or _timestamp(_clock(now)),
                                field="Standing closure time", code="state_unsupported")
 
 
@@ -221,8 +228,8 @@ def closing_state(context: dict, *, closure_utc: str | None = None, now: datetim
     """The mode as the closing write judged it (R155).
 
     An open record has its current mode. A recorded closure ends yolo for every later effect, so `state` reads
-    `ended`; what the closure judged is replayed instead: this record without its closure, at the closure's
-    recorded instant. Consent revoked, expired, suspended or replaced before closure still reads so here.
+    `ended`; the closure's own judgment is this record without its closure, at the closure's one instant.
+    Consent revoked, expired, suspended or replaced before closure still reads so here.
     """
     checkpoint = context.get("checkpoint") or {}
     if not checkpoint.get("closure"):
@@ -230,6 +237,15 @@ def closing_state(context: dict, *, closure_utc: str | None = None, now: datetim
     stamp = closure_instant(context, closure_utc=closure_utc, now=now)
     before = {**context, "checkpoint": {**checkpoint, "closure": None}}
     return state(before, now=datetime.fromisoformat(stamp.replace("Z", "+00:00")))
+
+
+def closing_mode(context: dict) -> str:
+    """The mode a closure's report judges consent by: the state its closure recorded, read back exactly,
+    or, for a closure being written or an earlier one without that fact, `closing_state`."""
+    recorded = _recorded_at_closure(context).get("state")
+    if isinstance(recorded, str) and (context.get("checkpoint") or {}).get("closure"):
+        return recorded
+    return closing_state(context)
 
 
 def _names(value: object, allowed: tuple, *, nonempty: bool = False) -> list:
@@ -787,10 +803,15 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
     closure = checkpoint.get("closure")
     if closure and (decisions or record.get("closed_at")):
         stamp = closure_instant(context, closure_utc=closure_utc, now=now)
-        active = closing_state(context, closure_utc=closure_utc, now=now) == "active"
+        judged = closing_state(context, closure_utc=closure_utc, now=now)
+        active = judged == "active"
         result["at_closure"] = {"utc": stamp, "mode": "yolo" if active else "normal",
                                 "ran_in_yolo": latest is not None,
                                 "decision": latest["id"] if latest else None, "active_until_closure": active}
+        if "report" not in closure or "state" in _recorded_at_closure(context):
+            # R155: the consent facts the closure report judged, recorded once; earlier closures keep their shape.
+            before = {**context, "checkpoint": {**checkpoint, "closure": None}}
+            result["at_closure"].update(state=judged, scope_digest=scope_digest(before))
     return result
 
 

@@ -192,8 +192,14 @@ class ReopenTimingTests(TickCase):
         before = self.saved()
         result = close_source_issues(self.project, "objective")
         self.assertEqual(result["source_issues"][0]["outcome"], "closed")
-        self.assertEqual(result["source_issues"][1]["reason"],
+        chain = result["source_issues"][1]
+        self.assertEqual(chain["reason"],
                          {"unreadable": "record_unreadable", "unknown": "schema_unknown", "long": "scope_too_large"}[kind])
+        # R155: the chain condition names the record whose claim failed and keeps its explanation, binding no
+        # locator for a predecessor it could not read.
+        self.assertIsNone(chain["locator"])
+        self.assertEqual(chain.get("referent", {}).get("predecessor"), {"long": "prior-9"}.get(kind, "prior-1"))
+        self.assertIn("prior-1" if kind != "long" else "8", chain.get("message", ""))
         self.assertEqual([row["number"] for row in self.issue.closes], [7, 7])
         self.assertEqual(_questions(result), [])
         self.assertEqual(self.saved(), before)

@@ -10214,7 +10214,16 @@
         "tests.test_closed_replay.ConsumedReconciliationTests.test_a_refusal_before_closure_names_the_bound_source",
         "tests.test_closed_replay.YoloDeliveryReplayTests.test_a_yolo_delivered_closure_replays_its_recorded_consent",
         "tests.test_closed_replay.YoloDeliveryReplayTests.test_consent_revoked_before_closure_still_reads_missing",
-        "tests.test_closed_replay.YoloDeliveryReplayTests.test_consent_replaced_before_closure_still_reads_missing"
+        "tests.test_closed_replay.YoloDeliveryReplayTests.test_consent_replaced_before_closure_still_reads_missing",
+        "tests.test_closed_replay.RecordedDispositionTests.test_every_written_shape_is_accepted_and_any_other_is_not",
+        "tests.test_closed_replay.YoloDeliveryReplayTests.test_a_scope_changing_close_judges_consent_on_its_own_closing_record",
+        "tests.test_closed_replay.YoloDeliveryReplayTests.test_expiry_during_the_closing_operation_is_judged_at_the_one_closure_instant",
+        "tests.test_closed_replay.YoloDeliveryReplayTests.test_expiry_exactly_at_the_closure_instant_reads_expired_in_both",
+        "tests.test_closed_replay.YoloDeliveryReplayTests.test_a_revoke_after_closure_is_refused_and_the_replay_keeps_the_recorded_consent",
+        "tests.test_closed_replay.YoloDeliveryReplayTests.test_an_earlier_closure_without_the_recorded_facts_replays_at_its_own_recorded_instant",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_with_an_unreadable_claimed_predecessor",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_with_an_unknown_schema_claimed_predecessor",
+        "tests.test_closure_fixes_c1.ReopenTimingTests.test_own_source_closes_when_the_claimed_chain_exceeds_its_bound"
       ],
       "status": "NOT_RUN"
     },

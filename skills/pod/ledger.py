@@ -1035,13 +1035,14 @@ def map_of(state: dict | None) -> dict | None:
     return None
 
 
-def _outstanding_ids(state: dict, native: dict | None, *, recorded: set[str] | None = None) -> list[str]:
+def _outstanding_ids(state: dict, native: dict | None, *, recorded: dict | None = None) -> list[str]:
     """Objective-local outstanding admissions; without native evidence nothing is settled.
 
     This is the one settlement rule for an ordinary write and for the replay of a recorded closure (R155).
-    A write reads native settlement. A replay passes ``recorded`` (the runtimes the record's reports may
-    carry) and reads the durable record each settled admission carries instead, which Pod writes only after
-    this same native check held for that exact Dispatch, so the replay settles what the closing write settled.
+    A write reads native settlement. A replay passes ``recorded`` (``runtimes`` the record's reports may carry
+    and the closed map's ``seq``) and reads the durable record each settled admission carries instead, which
+    Pod writes only after this same native check held for that exact Dispatch, so the replay settles what the
+    closing write settled.
     """
     evidence: dict[str, list[dict]] = {}
     for row in (native or {}).get("assignments", []) if isinstance(native, dict) else []:
@@ -1070,17 +1071,37 @@ def _outstanding_ids(state: dict, native: dict | None, *, recorded: set[str] | N
     return outstanding
 
 
-def _settlement_recorded(admission: dict, runtimes: set[str]) -> bool:
-    """The durable record of a bound admission's native settlement.
+def _settlement_recorded(admission: dict, recorded: dict) -> bool:
+    """The durable record of a bound admission's native settlement, under the writers' own eligibility rules.
 
-    Each is written only after native readback showed the exact Dispatch settled: a consumed report
-    (`report_attempt_unverified` refuses an unsettled one), a disposition (only a settled implementation
-    result takes one) and abandoned accounting (its fence requires a settled readback). A consumed report
-    counts with either status, its observation digest verified: `validated_observation`, or
-    `reconciliation_required` with the recorded scope deviations it was consumed with.
+    Pod writes each only after native readback showed the exact Dispatch settled: a consumed report
+    (`report_attempt_unverified` refuses an unsettled one), a terminal review or investigation route discard
+    (R160 discards only after exact native settlement) and abandoned accounting (its fence requires a settled
+    readback). A present consumed report must verify, so no other marker can stand in for a corrupted one; a
+    disposition is an implementation result's and must hold the shape its writer records; a disposition
+    without a consumed report or abandoned accounting settles nothing here.
     """
-    if admission.get("disposition") is not None or "abandoned_accounting" in admission:
+    if admission.get("disposition") is not None and not _recorded_disposition(admission, recorded["seq"]):
+        return False
+    if admission.get("report") is not None:
+        return _report_verified(admission, recorded["runtimes"])
+    if "abandoned_accounting" in admission:
+        from .abandoned import validate
+        try:
+            validate(admission)
+        except PodError:
+            return False
         return True
+    from .util import route_discarded
+    try:
+        return route_discarded(admission)
+    except PodError:
+        return False
+
+
+def _report_verified(admission: dict, runtimes: set[str]) -> bool:
+    """A consumed report whose digest verifies: `validated_observation`, or `reconciliation_required` with
+    the exact scope deviations it was consumed with."""
     try:
         value = _consumed_report(admission, runtimes)
     except PodError:
@@ -1098,6 +1119,37 @@ def _settlement_recorded(admission: dict, runtimes: set[str]) -> bool:
                for size in range(1, len(REPORT_DEVIATIONS) + 1)
                for codes in combinations(REPORT_DEVIATIONS, size)
                for runtime in runtimes | {admission["runtime"]})
+
+
+def _recorded_disposition(admission: dict, seq: int | None) -> bool:
+    """Whether a stored disposition has exactly the shape `obligations.disposition` records for this admission."""
+    value = admission["disposition"]
+    if (admission.get("role") != "implement" or admission.get("state") == "deferred" or not isinstance(value, dict)
+            or type(value.get("seq")) is not int or value["seq"] < 1 or type(seq) is not int or value["seq"] > seq):
+        return False
+    try:
+        for field in ("reason", "attestation", "integrated_into"):
+            key = "candidate" if field == "integrated_into" else field
+            if key in value:
+                bounded_text(value[key], name=field, limit=bound("disposition", field))
+    except PodError:
+        return False
+    if value.get("kind") == "discarded":
+        return set(value) == {"kind", "reason", "seq"}
+    if value.get("kind") != "integrated_into" or "abandoned_accounting" in admission:
+        return False
+    optional = {"reason", "attestation"}  # The writer keeps either when given, whatever validated it.
+    if admission.get("changed_paths") is None:
+        return (set(value) - {"reason"} == {"kind", "candidate", "validated", "attestation", "boundary_check", "seq"}
+                and value["validated"] == "attestation" and value["boundary_check"] == "unavailable"
+                and (admission.get("result") or {}).get("base") is None)
+    result = admission.get("result") or {}
+    head = result.get("head")
+    expected = "ancestry" if isinstance(head, str) and head != result.get("base") else "attestation"
+    return (value.get("validated") == expected
+            and {"kind", "candidate", "validated", "seq"} | ({"attestation"} if expected == "attestation" else set())
+            <= set(value) <= {"kind", "candidate", "validated", "seq"} | optional
+            and (not admission.get("boundary_exceeded") or "reason" in value))
 
 
 def _governor_pending(project: Path, objective: str, excluded: frozenset = frozenset()) -> bool:
@@ -1229,6 +1281,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "authorization_granted": _authorization_granted(project, objective, context=state),
             "governor_pending": _governor_pending(project, objective),
             "governor_delivery": objective_delivery_reporting(project, objective),
+            "closing_delivery": lambda context: objective_delivery_reporting(project, objective, context=context),
             "git_delta": lambda source, target: git_delta(project, source, target),
             "candidate_check": lambda candidate: require_candidate(project, candidate, assurance=True),
             "is_ancestor": lambda commit, target: git_is_ancestor(project, commit, target)}
@@ -1295,7 +1348,8 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
         ctx["governor_pending"] = _governor_pending(project, objective, excluded=frozenset(
             row.get("record") for row in preserved if isinstance(row, dict)))
     # R155: the closing write's settlement rule, read from each admission's durable settlement record.
-    ctx["outstanding"] = _outstanding_ids(state, None, recorded=set(ctx["report_runtimes"]))
+    ctx["outstanding"] = _outstanding_ids(state, None, recorded={
+        "runtimes": set(ctx["report_runtimes"]), "seq": (map_of(state) or {}).get("seq")})
     # R204: proof a recorded delivery relied on replays against the delivered candidate's tree, as it was
     # judged on the closing route, not against whatever the worktree holds now.
     return delivered_read_context(project, state, ctx)

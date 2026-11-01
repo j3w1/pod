@@ -1,14 +1,17 @@
 """R155 / A791: a recorded closure replays exactly as its closing write accepted it (pod#117)."""
 
+from datetime import datetime, timedelta, timezone
 import json
 import unittest
+from unittest.mock import patch
 
+from pod import config, ledger
 from pod.evidence_closure import close_source_issues, sweep
 from pod.governor import objective_delivery_reporting
 from pod.ledger import closed_snapshot_context, objective_root, read
 from pod.obligations import validate_closed_snapshot
 from tests import test_pod_ticks_closure as tick_closure
-from tests.common import logical_json
+from tests.common import logical_json, proof
 from tests.issue_port_support import patch_issue_port
 from tests.kernel_support import git
 from tests.pod_tick_support import TickCase
@@ -65,14 +68,22 @@ class ConsumedReconciliationTests(TickCase):
         self.assertEqual(self.write(close=True)["source_issues"][0]["outcome"], "refused")
         path = objective_root(self.project, "objective") / "context.json"
         original = path.read_bytes()
-        for label, tamper in (("changed digest", lambda row: row["report"].update(observation_digest="0" * 64)),
-                              ("no consumed report", lambda row: row.update(report=None))):
+        seq = read(self.project, "objective")["checkpoint"]["seq"]
+        corrupt = lambda row: row["report"].update(observation_digest="0" * 64)  # noqa: E731
+        for label, tamper in (
+                ("changed digest", corrupt),
+                ("no consumed report", lambda row: row.update(report=None)),
+                # A disposition never stands in for a corrupted report, nor settles a review or investigation.
+                ("changed digest with an empty disposition", lambda row: (corrupt(row), row.update(disposition={}))),
+                ("no report with an invented discard", lambda row: row.update(
+                    report=None, disposition={"kind": "discarded", "reason": "invented", "seq": seq}))):
             with self.subTest(label):
                 raw = logical_json(path); tamper(raw["admissions"][key])
                 path.write_text(json.dumps(raw))
                 closes = len(self.issue.closes)
                 row = close_source_issues(self.project, "objective")["source_issues"][0]
-                self.assertEqual((row["outcome"], row["reason"], row["detail"], row["locator"]),
+                self.assertEqual(len(self.issue.closes), closes)
+                self.assertEqual((row["outcome"], row.get("reason"), row.get("detail"), row["locator"]),
                                  ("unverified", "obligation_unaccounted", "outstanding_unaccounted", self.locator))
                 self.assertEqual(row["referent"]["admission"], key)
                 self.assertIn("obligation", row["referent"])
@@ -88,6 +99,46 @@ class ConsumedReconciliationTests(TickCase):
         self.assertEqual((row["outcome"], row["reason"], row["locator"]),
                          ("refused", "objective_not_closed", self.locator))
         self.assertEqual(self.issue.closes, [])
+
+
+class RecordedDispositionTests(unittest.TestCase):
+    """The replay accepts exactly the dispositions `obligations.disposition` records (R155)."""
+
+    def written(self, request, **row):
+        from pod.obligations import disposition
+        admission = {"admission_id": "a1", "role": "implement", "state": "bound", "changed_paths": ["src/x.py"],
+                     "result": {"base": "1" * 40, "head": "2" * 40}, "boundary_exceeded": [], **row}
+        ctx = {"outstanding": [], "admissions": {"a1": admission}, "is_ancestor": lambda head, candidate: True}
+        return {**admission, "disposition": disposition(admission, {"admission": "a1", **request}, ctx, seq=5)}
+
+    def test_every_written_shape_is_accepted_and_any_other_is_not(self):
+        from pod.ledger import _recorded_disposition
+        written = {
+            "ancestry": self.written({"integrated_into": "3" * 40}),
+            "ancestry with reason and attestation": self.written(
+                {"integrated_into": "3" * 40, "reason": "why", "attestation": "checked"}),
+            "attestation without a commit": self.written({"integrated_into": "c", "attestation": "checked"},
+                                                         result={"base": "1" * 40, "head": "1" * 40}),
+            "attestation without a Git base": self.written({"integrated_into": "c", "attestation": "checked"},
+                                                           changed_paths=None, result={"base": None}),
+            "boundary exceeded with reason": self.written({"integrated_into": "3" * 40, "reason": "why"},
+                                                          boundary_exceeded=["elsewhere"]),
+            "discarded": self.written({"discarded": True, "reason": "superseded"}),
+        }
+        for label, admission in written.items():
+            with self.subTest(label):
+                self.assertTrue(_recorded_disposition(admission, 5))
+                self.assertFalse(_recorded_disposition(admission, 4), "a disposition after the closed map")
+                for role in ("review", "investigate"):
+                    self.assertFalse(_recorded_disposition({**admission, "role": role}, 5))
+                for change in ({"extra": 1}, {"kind": "accepted"}, {"seq": 0}):
+                    self.assertFalse(_recorded_disposition(
+                        {**admission, "disposition": {**admission["disposition"], **change}}, 5), change)
+        ancestry = written["ancestry"]
+        self.assertFalse(_recorded_disposition({**ancestry, "disposition": {**ancestry["disposition"],
+                                                                            "validated": "attestation"}}, 5))
+        self.assertFalse(_recorded_disposition({**ancestry, "disposition": {}}, 5))
+        self.assertFalse(_recorded_disposition({**ancestry, "boundary_exceeded": ["elsewhere"]}, 5))
 
 
 class YoloDeliveryReplayTests(StandingCase):
@@ -145,6 +196,84 @@ class YoloDeliveryReplayTests(StandingCase):
         self.activate(scope=["publish"])
         closed = self.close_and_replay(rows, "MISSING")
         self.assertTrue(closed["standing_authorization"]["at_closure"]["active_until_closure"])
+
+    def test_a_scope_changing_close_judges_consent_on_its_own_closing_record(self):
+        rows = self.deliver_under_yolo()
+        added = self.case.criterion("satisfied", id="O2", provenance="user_direct", check="PoD#2 passes",
+                                    source={"ref": "PoD#2", "instruction": "Include the second criterion",
+                                            "channel": "session"})
+        added["evidence"] = [proof("O2", self.case.candidate, definition=added,
+                                   policy_revision=config.effective(self.project)["revision"])]
+        closed = self.case.write([*rows, added], criteria=["PoD#1", "PoD#2"], close=True, revision_authority={
+            "provenance": "user_direct", "instruction": "Include the second criterion"})
+        report = closed["checkpoint"]["closure"]["report"]
+        stored = read(self.project, "objective")
+        self.assertEqual(validate_closed_snapshot(stored["checkpoint"],
+                                                  closed_snapshot_context(self.project, "objective", stored)), ())
+        # The closing scope suspends yolo at closure, for the report's consent and its standing projection alike.
+        self.assertEqual(report["delivery_authorization"], {"delivery": {"publish": "MISSING", "merge": "MISSING"}})
+        self.assertEqual(report["standing_authorization"]["at_closure"].get("state"), "suspended")
+
+    def close_at(self, closing, expires, *, advance=None):
+        """Close with the standing clock at `closing`, optionally moving it to `advance` once the closing context
+        has read consent, as a slow closing operation would."""
+        moment, real = [closing], ledger.kernel_context
+        def context(*args, **kwargs):
+            value = real(*args, **kwargs)
+            if advance is not None and kwargs.get("criteria") is not None:
+                moment[0] = advance
+            return value
+        activate = self.activate
+        with patch.object(self, "activate", side_effect=lambda **fields: activate(expires_at=expires.isoformat(), **fields)):
+            rows = self.deliver_under_yolo()
+        with patch("pod.standing._clock", side_effect=lambda now: now or moment[0]), \
+                patch("pod.ledger.decision_commit_time", return_value=closing.isoformat()), \
+                patch("pod.ledger.kernel_context", side_effect=context):
+            closed = self.case.write(rows, close=True)["checkpoint"]["closure"]
+            stored = read(self.project, "objective")
+            self.assertEqual(validate_closed_snapshot(stored["checkpoint"],
+                                                      closed_snapshot_context(self.project, "objective", stored)), ())
+            replayed = objective_delivery_reporting(self.project, "objective")["units"]["delivery"]
+        self.assertEqual(closed["report"]["standing_authorization"]["at_closure"]["utc"], closed["at"])
+        self.assertEqual(closed["report"]["delivery_authorization"]["delivery"], replayed)
+        return closed["report"]
+
+    def test_expiry_during_the_closing_operation_is_judged_at_the_one_closure_instant(self):
+        closing = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        report = self.close_at(closing, closing + timedelta(seconds=1), advance=closing + timedelta(seconds=1))
+        self.assertEqual(report["delivery_authorization"]["delivery"], {"publish": "RECORDED", "merge": "RECORDED"})
+        self.assertEqual(report["standing_authorization"]["at_closure"].get("state"), "active")
+
+    def test_expiry_exactly_at_the_closure_instant_reads_expired_in_both(self):
+        closing = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        report = self.close_at(closing, closing)
+        self.assertEqual(report["delivery_authorization"]["delivery"], {"publish": "MISSING", "merge": "MISSING"})
+        self.assertEqual(report["standing_authorization"]["at_closure"].get("state"), "expired")
+
+    def test_a_revoke_after_closure_is_refused_and_the_replay_keeps_the_recorded_consent(self):
+        self.close_and_replay(self.deliver_under_yolo(), "RECORDED")
+        self.refusal("objective_closed", self.operation, "revoke")
+        with patch("pod.standing._clock", side_effect=lambda now: now or datetime(2100, 1, 1, tzinfo=timezone.utc)):
+            stored = read(self.project, "objective")
+            self.assertEqual(validate_closed_snapshot(stored["checkpoint"],
+                                                      closed_snapshot_context(self.project, "objective", stored)), ())
+            self.assertEqual(objective_delivery_reporting(self.project, "objective")["units"]["delivery"],
+                             {"publish": "RECORDED", "merge": "RECORDED"})
+
+    def test_an_earlier_closure_without_the_recorded_facts_replays_at_its_own_recorded_instant(self):
+        self.close_and_replay(self.deliver_under_yolo(), "RECORDED")
+        path = objective_root(self.project, "objective") / "context.json"
+        raw = logical_json(path)
+        at_closure = raw["checkpoint"]["closure"]["report"]["standing_authorization"]["at_closure"]
+        # The shape 0.21.32 recorded: no consent state or scope digest, and a separately sampled instant.
+        del at_closure["state"], at_closure["scope_digest"]
+        at_closure["utc"] = raw["standing_authorization"]["closed_at"] = "2099-06-01T00:00:00Z"
+        path.write_text(json.dumps(raw))
+        stored = read(self.project, "objective")
+        self.assertEqual(validate_closed_snapshot(stored["checkpoint"],
+                                                  closed_snapshot_context(self.project, "objective", stored)), ())
+        self.assertEqual(objective_delivery_reporting(self.project, "objective")["units"]["delivery"],
+                         {"publish": "RECORDED", "merge": "RECORDED"})
 
 if __name__ == "__main__":
     unittest.main()

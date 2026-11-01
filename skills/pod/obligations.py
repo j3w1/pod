@@ -2691,6 +2691,18 @@ def disposition(row: dict, request: Any, ctx: dict, *, seq: int) -> dict:
 
 
 
+def closing_record(state: dict, ctx: dict) -> dict:
+    """The one record a report judges standing consent on (R155): the context with this map. A closure being
+    written is the proposed record with its new closure at `closure.at`; a replayed closure keeps the recorded
+    closure, so its recorded consent facts and instant are read back exactly rather than sampled again."""
+    base = ctx.get("standing_context") or {}
+    checkpoint = {**(base.get("checkpoint") or {}), **state}
+    recorded = (base.get("checkpoint") or {}).get("closure")
+    if state.get("closure") and isinstance(recorded, dict) and isinstance(recorded.get("report"), dict):
+        checkpoint["closure"] = recorded
+    return {**base, "checkpoint": checkpoint}
+
+
 def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) -> dict:
     """R43 report content derived from the map: nothing here is asserted by a caller."""
     rows = state["obligations"]
@@ -2724,6 +2736,9 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
         result["renewed"] = [{"obligation": ob["id"], **ob["renewal"]} for ob in rows if ob["state"] == "renewed"]
     if any(ob["kind"] == "delivery" for ob in rows):
         delivery_status = ctx.get("governor_delivery") or {}
+        if state.get("closure") and callable(ctx.get("closing_delivery")):
+            # R155: a closure report, written or replayed, judges consent on one closing record and instant.
+            delivery_status = ctx["closing_delivery"](closing_record(state, ctx)) or {}
         result["delivery_authorization"] = delivery_status.get("units") or {
             "unprepared": {"publish": "MISSING", "merge": "MISSING"}}
         result["hosted_checks"] = delivery_status.get("hosted_checks", "NOT_RUN")
@@ -2755,7 +2770,7 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
                 or ((context.get("checkpoint") or {}).get("closure") or {}).get(
                     "report", {}).get("standing_authorization", {}).get("at_closure", {}).get("utc"))
             result["standing_authorization"] = standing_projection(
-                {**context, "checkpoint": {**(context.get("checkpoint") or {}), **state}}, ctx.get("standing_journal"),
+                closing_record(state, ctx), ctx.get("standing_journal"),
                 closure_utc=closure_utc, compact_answers=bool(state.get("closure")))
             if has_decisions:
                 result["decision_channels"] = 3

@@ -1008,9 +1008,9 @@ def applicable_authorization(unit: dict, authorization: object, *, candidate: st
     except PodError:
         return False
     if consent is not None and standing:
-        from .standing import closing_state, state as standing_state
+        from .standing import closing_mode, state as standing_state
         decisions = (context or {}).get("standing_authorization", {}).get("decisions", [])
-        mode = closing_state(context or {}) if as_closed else standing_state(context or {})
+        mode = closing_mode(context or {}) if as_closed else standing_state(context or {})
         if (mode != "active" or not decisions
                 or decisions[-1]["id"] != consent["standing"]["id"]
                 or not set(consent["scope"]) <= set(decisions[-1]["scope"])):
@@ -2501,11 +2501,14 @@ def _unit_projection(unit: dict, actions: list[dict], *, context: dict | None = 
             "active_validation": active, "unresolved": unresolved, **delivery}
 
 
-def objective_delivery_reporting(project: Path, objective: str) -> dict:
-    """Read only exact Governor evidence for the obligation report."""
+def objective_delivery_reporting(project: Path, objective: str, *, context: dict | None = None) -> dict:
+    """Read only exact Governor evidence for the obligation report.
+
+    A closure report passes its closing `context` (R155): the closing write its proposed record with this
+    closure, the replay the recorded one, so both judge consent from the same facts at the same instant."""
     try:
         journal = _read_journal(_record_path(project, objective))
-        context = _read(_path(project, objective))
+        context = _read(_path(project, objective)) if context is None else context
     except PodError:
         return {"units": {}, "hosted_checks": "UNAVAILABLE"}
     units = {}

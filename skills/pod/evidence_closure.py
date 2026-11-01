@@ -1638,8 +1638,20 @@ def _bound_locator(raw: object) -> str | None:
         return None
 
 
+def _chain_failure(objective: str, problem: tuple[str, str, str], chain: list[dict], raw: dict, *,
+                   locator: str | None = None) -> dict:
+    """A returned lineage problem keeps its code and message, and names the record whose claim failed (R155)."""
+    from .listing import _name
+    current = chain[-1]["raw"] if chain else raw
+    claim = current.get("continues") if isinstance(current, dict) else None
+    referent = {"objective": _name(current) or objective}
+    if isinstance(claim, dict) and isinstance(claim.get("objective"), str):
+        referent["predecessor"] = claim["objective"]
+    return _source_failure(objective, problem[1], locator=locator, message=problem[2], referent=referent)
+
+
 def _source_failure(objective: str, reason: str, *, error: PodError | None = None,
-                    locator: str | None = None) -> dict:
+                    locator: str | None = None, message: str | None = None, referent: dict | None = None) -> dict:
     """A closure or chain refusal that names its record, cause and the lead's step (R155)."""
     from .term import clean
     row = {"objective": objective, "locator": locator,
@@ -1647,7 +1659,7 @@ def _source_failure(objective: str, reason: str, *, error: PodError | None = Non
     detail = error.detail if error is not None and isinstance(error.detail, dict) else {}
     if isinstance(detail.get("detail"), str):
         row["detail"] = clean(detail["detail"])[:128]
-    referent = detail.get("referent")
+    referent = detail.get("referent") if referent is None else referent
     if isinstance(referent, dict):
         # The named admission, obligation or record; nested diagnostics stay in the record itself.
         named = {clean(str(key))[:64]: clean(value)[:256] if isinstance(value, str) else value
@@ -1655,8 +1667,8 @@ def _source_failure(objective: str, reason: str, *, error: PodError | None = Non
                  if isinstance(value, (str, int, bool)) or value is None}
         if named:
             row["referent"] = named
-    if error is not None:
-        row["message"] = clean(str(error))[:512]
+    if error is not None or message is not None:
+        row["message"] = clean(str(error) if error is not None else message)[:512]
     row["next_action"] = (
         "the project lead resolves the named closure or chain condition before source completion"
         if reason in _CHAIN_REFUSALS or error is None else
@@ -1697,7 +1709,7 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
     if _roots != roots:
         return _source_failure(objective, "chain_changed", locator=locator)
     if problem is not None and present(root):
-        return _source_failure(objective, problem[1], locator=locator)
+        return _chain_failure(objective, problem, chain, raw, locator=locator)
     try:
         writable = _source_closure(project, objective, root, raw, before)
         closed_at = (load(root)["tail"].get("at") if present(root)
@@ -1720,7 +1732,8 @@ def close_source_issues(project: Path, objective: str, *, remote=None, locked: b
         for key in out:
             out[key].extend(effect[key])
     if problem is not None:
-        out["source_issues"].extend(_source_failure(objective, problem[1])["source_issues"])
+        # A chain condition, not this source's own refusal: it names the failing record and binds no locator.
+        out["source_issues"].extend(_chain_failure(objective, problem, chain, raw)["source_issues"])
     return _completed_sources(out)
 
 

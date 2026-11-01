@@ -202,7 +202,10 @@ class StandingOrderingTests(StandingCase):
 
     def test_n1_closure_and_reopen_times_survive_and_reject_older_activation(self):
         self.at(0)
-        with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=2)):
+        # One closure instant (R155): the closing write's own `closure.at` is the standing closure time.
+        closing = self.MOMENT + timedelta(seconds=2)
+        with patch("pod.standing._clock", return_value=closing), \
+                patch("pod.ledger.decision_commit_time", return_value=closing.isoformat()):
             self.case.write([self.case.criterion("satisfied", evidence=[self.case.proof("O1")])], close=True)
         with patch("pod.standing._clock", return_value=self.MOMENT + timedelta(seconds=4)):
             self.case.write([self.case.criterion()], reopen=True, revision_authority=DECISION)
