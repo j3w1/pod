@@ -100,8 +100,13 @@ class ListingTests(ListingCase):
             "interventions": {}, "source_rejections": {}, "constraints": []})
         before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
         result = self.listed()
+        # The healthy objectives are still listed; a record Pod cannot read is named with phase `unavailable` and its
+        # condition, and the list is not complete while it exists (R206).
         self.assertFalse(result["complete"])
-        self.assertEqual([row["record"] for row in result["unreadable_records"]], ["broken"])
+        self.assertEqual(result["unreadable_records"], [{"record": "broken", "code": "invalid_record",
+                                                         "phase": "unavailable",
+                                                         "condition": "its record is empty or not valid JSON"}])
+        self.assertIn("objective", {row["objective"] for row in result["objectives"]})
         self.assertEqual(result["unattributed_records"], ["journal-only"])
         rows = {row["objective"]: row for row in result["objectives"]}
         self.assertEqual((rows["earlier"]["schema"], rows["earlier"]["phase"], rows["earlier"]["runs"]),
@@ -109,13 +114,12 @@ class ListingTests(ListingCase):
         self.assertEqual(rows["later"]["schema"], "unsupported")  # A future version is not the 0.6.0 cutover.
         self.assertEqual(before, {path: path.read_bytes() for path in root.rglob("*") if path.is_file()})
 
-    def test_unenumerable_root_and_truncation_are_explicit(self):
+    def test_unenumerable_root_is_explicit_and_every_record_is_listed(self):
         self.intake()
         self.write([self.criterion()], objective="second", governance={"base_ref": "target"})
-        with patch.object(listing, "MAX_ROWS", 1):
-            result = self.listed()
+        result = self.listed()  # No row or directory bound: the repository's size never truncates the list (R206).
         self.assertEqual((result["truncated"], result["total"], len(result["objectives"]), result["complete"]),
-                         (True, 2, 1, False))
+                         (False, 2, 2, True))
         root = state_root(self.project)
         moved = root.with_name("moved")
         root.rename(moved); root.symlink_to(moved)

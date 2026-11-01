@@ -593,14 +593,15 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                 result.update(next_safe_action=action, next_action=action,
                               **({"blocker": "window_available"} if window["status"] == "window_available" else {}))
     if state is not None:
-        from .retirement import ACTION as RETIREMENT, status_block as retirement_block
+        from .retirement import retired_action, status_block as retirement_block
         retirement = retirement_block(state)
         if retirement is not None:
             # Under historical retirement a record is read, never written; it is not closed, continued or
             # successful (R112).
             # Other objectives keep their exact earlier projection, without a phase field.
             result.update(phase="retired", retirement=retirement, blocker="objective_retired",
-                          next_safe_action=RETIREMENT.format(objective), next_action=RETIREMENT.format(objective))
+                          next_safe_action=retired_action(objective, state["historical_retirement"]),
+                          next_action=retired_action(objective, state["historical_retirement"]))
         from .succession import ACTION, reserved_for, status_block
         block = status_block(project, state)
         if block is not None:
@@ -779,20 +780,21 @@ def render(result: dict) -> None:
         retirement = result.get("retirement")
         if isinstance(retirement, dict):
             tally = retirement["counts"]
-            print(f"Historical retirement by the owner at {clean(retirement['retired_at'])}: not completed or closed; released "
+            decider = "an agent decision under the decision policy" if retirement["decided_by"] == "agent" else "the owner"
+            print(f"Historical retirement by {decider} at {clean(retirement['retired_at'])}: not completed or closed; released "
                   + ", ".join(clean(path) for path in retirement["released"])
                   + f"; preserved {tally['pending']} pending, {tally['unknown']} unknown, {tally['failed']} failed and "
                   f"{tally['unreported']} unreported record(s); {len(retirement['unfinished'])} unfinished "
                   "obligation(s); this record accepts no writes")
             for row in retirement["locations"] or []:
                 print(f"  Released {clean(row['path'])}: "
-                      + ("absent from this host, Git and Orca when the owner decided" if row["disposition"] == "absent"
-                         else "an existing worktree of this repository when the owner decided"))
-            for path in retirement["retained"]:
-                print(f"  Still held: {clean(path)}, a recorded worktree this retirement did not release")
-            if retirement["unrecorded_locations"] == "hold_ends":
-                print("  Its record does not list every location its work used; retirement ended cleanup's hold on "
-                      "the locations it never listed")
+                      + ("absent from this host, Git and Orca when the decision was recorded"
+                         if row["disposition"] == "absent"
+                         else "an existing worktree of this repository when the decision was recorded"))
+            for path in retirement["also_released"]:
+                print(f"  Also released: {clean(path)}, a recorded worktree the decision did not name")
+            print("  Pod's record holds no worktree of this objective, including any location it never listed; "
+                  "CE's own cleanup protections still apply")
             for reference in retirement["delivery"]:
                 print(f"  Delivery reference: {clean(reference)}")
             preserved = result.get("assignments", {}).get("preserved", [])

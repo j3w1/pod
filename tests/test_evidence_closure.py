@@ -631,6 +631,23 @@ class LostCoordinatorTests(GroupedTable):
     def test_an_older_schema_record(self): self.rows()
 
 
+class UnreadableRecordProofTests(ClosureCase):
+    """R206: an unreadable record holds a Run another live coordinator holds only when its decoded record names
+    that Run, or when it cannot be decoded."""
+
+    def test_an_unreadable_record_holds_only_a_run_it_could_name(self):
+        from pod.ledger import state_root
+        self.shipped(unknown_start=False)
+        _rebound("closed")(self)  # The Run is held by a live recovery whose own record is closed.
+        stray = state_root(self.project) / "zz-stray"
+        stray.mkdir()
+        (stray / "context.json").write_text('["elsewhere"]')  # Decoded whole, it never names the Run.
+        self.assertEqual(prove(self.project, "objective")["status"], "proved")
+        (stray / "context.json").write_text("{")  # Undecodable: its membership is unknown, so it holds.
+        verdict = prove(self.project, "objective")
+        self.assertIn("run_held", [row["code"] for row in verdict["conditions"]])
+
+
 class UndeliveredTests(ClosureCase):
     """R145: undelivered or live work is never closed; it stays open as a task for the project lead."""
 
@@ -1580,12 +1597,12 @@ class SweepTests(ClosureCase):
         self.assertFalse([call for call in self.remote.calls[sent:] if call[0] in MUTATIONS])
         self.assertEqual(self.files(), closed)
 
-    def test_the_sweep_reads_every_record_past_the_list_bound_and_names_what_it_cannot_read(self):
-        """F4: the sweep's own bounded scan, never the list's 128 rows; named objectives resolve directly; a
+    def test_the_sweep_reads_every_record_and_names_what_it_cannot_read(self):
+        """F4: the sweep and the list read every record, however many (R206); named objectives resolve directly; a
         repository it cannot read whole is `incomplete` with its reason, and nothing claims it all closed."""
         self.shipped()
         self.finished(128)
-        self.assertNotIn("objective", self.listed())  # The presentation list stops at its first 128 rows.
+        self.assertIn("objective", self.listed())  # The list has no row bound (R206).
         code, first = self.sweep()
         repository = first["repositories"][0]
         self.assertEqual((code, repository["status"], repository["reason"], self.swept(first)["outcome"]),
@@ -1601,23 +1618,17 @@ class SweepTests(ClosureCase):
                           for row in named["repositories"][0]["objectives"]],
                          [("objective", "already_closed", []), ("missing", "skipped", ["objective_unknown"])])
         self.assertEqual(self.everything(), settled)
-        # Records the scan cannot read: one unreadable, one directory of Pod files no record names, and every
-        # directory past a scan bound lowered for the test.
+        # Records the scan cannot read: one unreadable and one directory of Pod files no record names. The scan has
+        # no directory bound (R206); every other record is still swept.
         (objective_root(self.project, "aaa-000") / "context.json").write_text("{broken")
         stray = objective_root(self.project, "objective").parent / ("0" * 64)
         stray.mkdir()
         (stray / "governor.json").write_text("{}")
-        with patch("pod.listing.MAX_SCAN", 0):
-            code, blind = self.sweep()
-            named = self.sweep("--objective", "objective")[1]
-        repository = blind["repositories"][0]
-        self.assertEqual((code, blind["status"], repository["status"], repository["objectives"]),
-                         (0, "swept", "incomplete", []))
-        self.assertIn("130 record directory(ies) lie beyond the sweep's 0-directory scan bound", repository["reason"])
-        self.assertNotIn("every provably delivered objective is closed", blind["next_safe_action"])
-        self.assertIn("could not all be read", blind["next_safe_action"])
+        named = self.sweep("--objective", "objective")[1]
         self.assertEqual((named["repositories"][0]["status"], self.swept(named)["outcome"]), ("swept", "already_closed"))
         code, partial = self.sweep()
+        self.assertNotIn("every provably delivered objective is closed", partial["next_safe_action"])
+        self.assertIn("could not all be read", partial["next_safe_action"])
         repository = partial["repositories"][0]
         self.assertEqual(repository["status"], "incomplete")
         self.assertIn("1 record(s) cannot be read (" + objective_root(self.project, "aaa-000").name[:16],

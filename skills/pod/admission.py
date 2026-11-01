@@ -18,7 +18,6 @@ from .window import Budget
 
 MAX_TIMEOUT = 30.0
 MAX_CLAIM_BYTES = 8 * 1024 * 1024
-MAX_CLAIMS = 4096
 
 
 def digest(value):
@@ -43,11 +42,12 @@ def _fleet() -> dict | None:
     """One complete native inventory for CE's unbound caller; bound callers fall back.
 
     Orca decides the scope. Omitting --run must never turn a bound Run's empty
-    list into proof that the repository has no other worker.
+    list into proof that the repository has no other worker. Every page is read, however many workers the fleet
+    has (R206); a missing or repeated cursor still refuses, and the read deadline still applies.
     """
     prefix = ["orchestration", "worker-list", "--include-remote", "--json", "--limit", "100"]
     cursor, seen, workers, runtime = None, set(), {}, None
-    for _ in range(100):
+    while True:
         response = _read(prefix + (["--cursor", cursor] if cursor else []))
         result = response["result"]
         scope = result.get("scope")
@@ -73,7 +73,6 @@ def _fleet() -> dict | None:
         if not rows or not isinstance(cursor, str) or not cursor or cursor in seen:
             raise PodError("orca_pagination", "Native inventory cursor is missing or repeated")
         seen.add(cursor)
-    raise PodError("admission_inventory_limit", "Native inventory exceeds bounded pages")
 
 
 def _worker_fact(row: dict) -> dict:
@@ -607,9 +606,22 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             "fact": extra.pop("fact", code), "reconciliation": extra.pop("reconciliation", repair),
             **extra})
 
+    def unavailable(record, code):
+        """One record Pod cannot read or attribute before any of its own resources is known holds only those
+        resources (R206): it is named apart, never as a repository-wide unknown. A live writer it could own is still
+        found by the complete native fleet and terminal inventories this query reads."""
+        if record in record_scopes:
+            unknown(record, code)  # Its own recorded scope is known; the hold stays on exactly that scope.
+            return
+        result.setdefault("unrelated_unknowns", []).append({
+            "record": record, "code": code, "status": "unavailable", "fact": "record_readable",
+            "scope": {"record": record},
+            "relevance": "an unreadable record holds only its own resources; current native writers are inventoried "
+                         "independently",
+            "reconciliation": {"action": "inspect_record", "record": record,
+                               "condition": "Repair or remove the unreadable record; it holds only its own resources"}})
+
     def claim(row):
-        if len(result["claims"]) >= MAX_CLAIMS:
-            raise PodError("admission_claim_limit", "Current claims exceed the bounded projection")
         try:
             encoded = json.dumps(row, ensure_ascii=False).encode("utf-8")
         except UnicodeError:
@@ -669,10 +681,11 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             for entry in sorted(cohort, key=lambda row: row.name):
                 budget.check()
                 record = entry.name
+                reading = True
                 try:
                     record.encode("utf-8")
                 except UnicodeError:
-                    unknown("sha256:" + hashlib.sha256(os.fsencode(record)).hexdigest(), "path_encoding")
+                    unavailable("sha256:" + hashlib.sha256(os.fsencode(record)).hexdigest(), "path_encoding")
                     continue
                 try:
                     if entry.is_symlink():
@@ -690,9 +703,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             has_other = has_other or item.name != ".lock"
                     if not has_context:
                         if has_other:
-                            unknown(record, "unattributed")
+                            unavailable(record, "unattributed")
                         continue
                     raw, identity = _primary(directory / "context.json")
+                    reading = False  # The record reads; any later fault is about its own facts.
                     try:
                         name = _membership(project, context, record, raw, known)
                     except PodError as exc:
@@ -791,9 +805,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             unknown(record, "assignment_unbound", objective=name, admission=key)
                     effect_claims(directory, raw, journal, source or context)
                 except PodError as exc:
-                    unknown(record, exc.code)
+                    # Only a record that cannot be read at all is named apart; a read deadline is no record's fault.
+                    (unavailable if reading and exc.code != "discovery_budget" else unknown)(record, exc.code)
                 except OSError:
-                    unknown(record, "unreadable")
+                    (unavailable if reading else unknown)(record, "unreadable")
             # Prefer the installed all-Run inventory for CE's unbound caller.
             # A bound caller retains exact-Run reads and the same outer deadline.
             fleet = _fleet()
@@ -1070,7 +1085,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                "branch": branch, "target": target, "effects": effects or []}
     result["scope"]["selection"] = {**request, "target": requested_target}
     all_unknowns = result["unknowns"]
-    result["repository_complete"] = not all_unknowns
+    unread = [{"record": row["record"], "code": row["code"]} for row in result.get("unrelated_unknowns", [])
+              if row.get("status") == "unavailable"]
+    result["repository_complete"] = not all_unknowns and not unread
+    result["unavailable_records"] = unread
     result["unknowns"] = [row for row in all_unknowns if row.get("objective") == objective and objective
                           or relevant(row["scope"], request, context["repo_key"], row["fact"])]
     relevant_unknowns = list(result["unknowns"])
@@ -1168,6 +1186,7 @@ def query(project: Path, **kwargs) -> dict:
             result = {"schema": "pod-admission-query/v1", "status": "unknown", "scope": scope,
                       "complete": False, "claims": [], "conflicts": [],
                       "repository_complete": False, "native_resources_complete": False,
+                      "unavailable_records": [],
                       "unrelated_unknowns": {"count": 0, "by_code": {}, "references": {
                         "records": [], "runs": [], "dispatches": [], "terminals": []}},
                       "proof": {"status": "unknown", "candidate": kwargs["candidate"], "reason": exc.code}
@@ -1182,7 +1201,7 @@ def query(project: Path, **kwargs) -> dict:
         result.update(status="unknown", complete=False, claims=[], conflicts=[], snapshot=None,
                       proof={"status": "unknown", "reason": "admission_projection_limit"} if kwargs.get("objective") else None,
                       unknowns=[row for row in result["unknowns"] if row["record"] is not None
-                                and not row["record"].startswith("run:") and "admission" not in row][:MAX_CLAIMS])
+                                and not row["record"].startswith("run:") and "admission" not in row][:4096])
         result["unknowns"].append({"record": None, "code": "admission_projection_limit", "scope": result["scope"],
                                    "omitted": omitted})
     return result

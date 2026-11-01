@@ -166,12 +166,14 @@ def filesystem(path: Path) -> dict | None:
 
 
 def directory_names(path: Path) -> set[str]:
-    names = set()
+    """Every name in one directory, bounded by the bytes held rather than by a count (R206)."""
+    names, held = set(), 0
     with os.scandir(path) as entries:
         for entry in entries:
+            held += len(os.fsencode(entry.name)) + 1
+            if held > archives.MAX_OUTPUT:
+                raise archives.Unavailable("Directory metadata exceeds its byte bound")
             names.add(entry.name)
-            if len(names) > MAX_ITEMS:
-                raise archives.Unavailable("Directory metadata exceeds its bound")
     return names
 
 

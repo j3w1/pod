@@ -989,7 +989,8 @@ class ClosureContractTableTests(GroupedTable):
                 if kind.startswith("withdrawal-") and isinstance(ob["withdrawal"], dict):
                     cp["closure"]["report"]["withdrawn"] = [{"obligation":ob["id"], "provenance":ob["provenance"], **ob["withdrawal"]}]
                 if not kind.startswith("genuine-") and not released:
-                    peer.write_text(json.dumps([] if kind == "outer-nonobject" else raw))
+                    # A non-object record holds the Run only when its decoded record names it (R206).
+                    peer.write_text(json.dumps(["run"] if kind == "outer-nonobject" else raw))
                 if phase == "fresh": case.lose()
                 before = case.snapshot(); own = deepcopy(case.state()); calls = len(case.mutations)
                 starts, workers = deepcopy(case.port.starts), deepcopy(case.port.workers)
@@ -1340,7 +1341,8 @@ class TransitionTableTests(HandoffCase):
         self.establish(); self.lose(); self.mode = "lost"
         self.refused(lambda:self.handoff()); self.mode = "success"
         unknown = objective_root(self.project, "unknown-record") / "context.json"
-        unknown.parent.mkdir(parents=True); unknown.write_text("incomplete{")
+        # An unreadable record that names this Run holds its handoff (R206).
+        unknown.parent.mkdir(parents=True); unknown.write_text('incomplete{"runId": "run"')
         before = self.snapshot()
         self.assertEqual(self.status()["owner_handoff"]["condition"], "scope_unreadable")
         self.refused(lambda:self.handoff())

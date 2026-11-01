@@ -761,7 +761,7 @@ class DiscoveryTests(WindowCase):
         for index in range(12):
             peer = state_root(self.project) / f"incomplete-peer-{index}"
             peer.mkdir()
-            (peer / "context.json").write_text("{}")
+            (peer / "context.json").write_text('{"runId": "run"}')  # Each could name the Run (R206).
         clock, starts, scan = {"now": 0.0}, [], os.scandir
 
         class Clock(window.Budget):

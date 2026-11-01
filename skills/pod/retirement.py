@@ -1,6 +1,7 @@
 """The owner's historical retirement of delivered objectives whose coordinator is lost (R112, R113).
 
-Retirement abandons the named record and releases only its named worktrees. The objective is not
+Retirement abandons the named record and releases every worktree it records: the paths the decision
+names, after the checks below, and every other recorded worktree, as a closed objective's are. The objective is not
 closed, continued, QUALIFIED or successful: its Governor journal, admissions, obligations and
 evidence stay exactly as recorded, and the record accepts no later write. No coordinator is
 revived, and no successor, agent session or worker is created. CE stays the resource authority.
@@ -44,24 +45,62 @@ ENTRY = {"at", "decision", "instruction", "reason", "repository", "objectives", 
          "released", "preserved", "unfinished", "delivery", "native"}
 # Pod 0.11.0 recorded no release dispositions; an entry from R113 on records where each released path stood.
 LOCATED_ENTRY = ENTRY | {"locations"}
-# How a released path stood when the owner decided: a verified worktree of this repository, or proven gone.
+# How a released path stood when the decision was recorded: a verified worktree of this repository, or proven gone.
 RELEASABLE = ("existing", "absent")
-# Cleanup's conservative hold on locations a record never listed: ended by retirement, or never held (R113).
+# Cleanup's conservative hold on locations a record never listed. Retirement ends it for every record (R113, R206);
+# `none` stays readable only so that a decision made before R206 refuses as changed facts, not as malformed.
 UNRECORDED = ("hold_ends", "none")
 GOVERNOR_ROW = {"kind", "id", "action", "candidate", "outcome"}
 ADMISSION_ROW = {"kind", "id", "role", "state", "dispatch", "reported"}
 NATIVE = {"runtime", "owner", "runs", "dispatches", "exited_terminals"}
 PRESERVED_OUTCOMES = ("pending", "UNKNOWN", "FAILED")
 MAX_OBJECTIVES = 16
-MAX_RECORDS = 64
 MAX_LISTED = 64
-# A decision releases as many paths as it can leave retained: a record with at most 64 recorded worktrees can
-# release them all in one decision (its record accepts no later write). The whole request names at most as many,
-# which bounds the native reads made while every requested objective lock is held.
+# The whole request names at most 64 paths to check, which bounds the native reads made while every requested
+# objective lock is held. Recorded worktrees it does not name are released without those reads (R206).
 MAX_PATHS = MAX_LISTED
 MAX_DELIVERY = 16
+# The owner-worded next action, still imported by the genuine Pod 0.12.0 status module the readiness comparison loads.
 ACTION = ("Read it with pod status --objective {}; the owner's historical retirement released its worktrees: "
           "it is not completed, and its record accepts no writes.")
+OWNER_RETIREMENT = "the owner's historical retirement"
+AGENT_RETIREMENT = "a historical retirement (agent decision under the decision policy)"
+
+
+def by_agent(entry: object) -> bool:
+    """Whether a retirement entry records an agent's decision rather than the owner's: its recorded actor, else its
+    provenance, else its channel. Entries written before decision actors were user_direct, the owner's."""
+    if not isinstance(entry, dict):
+        return False
+    actor = entry.get("actor")
+    if isinstance(actor, dict) and "kind" in actor:
+        return actor["kind"] != "person"
+    if "provenance" in entry:
+        return entry["provenance"] != "user_direct"
+    return entry.get("channel") == "agent_session"
+
+
+def named(entry: object, *, capital: bool = False) -> str:
+    """How text names a retirement: the owner's only when the owner decided it."""
+    text = AGENT_RETIREMENT if by_agent(entry) else OWNER_RETIREMENT
+    return text[0].upper() + text[1:] if capital else text
+
+
+def entry_of(project: Path, root: Path, raw: object) -> dict | None:
+    """The retirement entry of a record: a current record's own, or an older record's certified entry beside it."""
+    entry = raw.get(FIELD) if isinstance(raw, dict) else None
+    if isinstance(entry, dict):
+        return entry
+    try:
+        found = older_state(root, project)
+    except PodError:
+        return None
+    return found[0].get(FIELD) if found is not None else None
+
+
+def retired_action(objective: str, entry: object) -> str:
+    return (f"Read it with pod status --objective {objective}; {named(entry)} released its worktrees: it is not "
+            "completed, and its record accepts no writes.")
 # An older record's retirement, stored beside its unchanged bytes (R205).
 SIDECAR = "historical-retirement.json"
 SIDECAR_SCHEMA = "pod-historical-retirement/v1"
@@ -164,7 +203,7 @@ def _locations_valid(value: object, released: list) -> bool:
 
 def _facts_valid(value: dict, older: bool = False) -> bool:
     return (_text(value["objective"], 256) and _text(value["owner"], 256) and _runs(value["runs"])
-            and isinstance(value["release"], list) and 0 < len(value["release"]) <= MAX_PATHS
+            and isinstance(value["release"], list) and len(value["release"]) <= MAX_PATHS
             and all(_path_text(path) for path in value["release"])
             and len(set(value["release"])) == len(value["release"])
             and _locations_valid(value["locations"], value["release"])
@@ -173,7 +212,7 @@ def _facts_valid(value: dict, older: bool = False) -> bool:
             and value["retained"] == sorted(set(value["retained"]))
             and not set(value["retained"]) & set(value["release"])
             and value["unrecorded_locations"] in UNRECORDED
-            and isinstance(value["records"], list) and len(value["records"]) <= MAX_RECORDS
+            and isinstance(value["records"], list)
             and all(_record_row(row, older) for row in value["records"]))
 
 
@@ -186,9 +225,9 @@ def validate_entry(value: object, *, older: bool = False) -> None:
             or not all(_text(value[key], 1024) for key in ("at", "decision", "instruction", "reason", "repository"))
             or not _texts(value["objectives"], MAX_OBJECTIVES, 256) or not value["objectives"]
             or not _text(value["owner"], 256) or not _runs(value["runs"])
-            or not isinstance(value["released"], list) or not 0 < len(value["released"]) <= MAX_PATHS
+            or not isinstance(value["released"], list) or len(value["released"]) > MAX_PATHS
             or not all(_path_text(path) for path in value["released"])
-            or not isinstance(value["preserved"], list) or len(value["preserved"]) > MAX_RECORDS
+            or not isinstance(value["preserved"], list)
             or not all(_record_row(row, older) for row in value["preserved"])
             or not _texts(value["unfinished"], MAX_LISTED, 256)
             or not _texts(value["delivery"], MAX_DELIVERY, 512) or not value["delivery"]
@@ -206,9 +245,9 @@ def refuse_retired(state: dict | None) -> None:
     if isinstance(entry, dict):
         name = ((state.get("checkpoint") or {}).get("objective")) or "this objective"
         raise PodError("objective_retired",
-                       f"The owner's historical retirement of this objective at {entry['at']} released its worktrees; "
+                       f"{named(entry, capital=True)} of this objective at {entry['at']} released its worktrees; "
                        "it is not completed, and its record accepts no writes",
-                       {"retired_at": entry["at"], "next_action": ACTION.format(name)})
+                       {"retired_at": entry["at"], "next_action": retired_action(name, entry)})
 
 
 # --------------------------------------------------------------------------- an older record's retirement (R205)
@@ -236,11 +275,13 @@ def refuse_sidecar(root: Path) -> None:
                        "nothing was written", {"next_action": "restore access to the objective's state directory, "
                                                               "then retry"})
     try:
-        at = _sidecar(root)[FIELD]["at"]
+        entry = _sidecar(root)[FIELD]
+        at = entry["at"]
     except PodError:
-        at = None
+        entry, at = None, None
     raise PodError("objective_retired",
-                   "The owner's historical retirement of this objective" + (f" at {at}" if at else "")
+                   (named(entry, capital=True) if entry is not None else "A historical retirement")
+                   + " of this objective" + (f" at {at}" if at else "")
                    + " released its worktrees; it is not completed, and its record accepts no writes",
                    {"retired_at": at, "next_action": "Read it with pod status --objective NAME; nothing remains to "
                                                      "record."})
@@ -558,7 +599,7 @@ def older_status(project: Path, objective: str, root: Path) -> dict | None:
         else:
             settled.append(item)
     checkpoint = view["checkpoint"]
-    action = ACTION.format(objective)
+    next_action = retired_action(objective, entry)
     runs = doc["runs"]
     return {**out, "status": "observed", "phase": "retired", "blocker": "objective_retired",
             "source": checkpoint.get("objective_source", "direct_objective"),
@@ -575,9 +616,9 @@ def older_status(project: Path, objective: str, root: Path) -> dict | None:
                                           "runs": runs[:32], "generation": None, "runtime": None,
                                           "liveness": "not_read", "code": None},
                           "finalization": None, "reason": {"retired_at": entry["at"], "reason": entry["reason"]},
-                          "summary": "Ended by the owner's historical retirement: not completed or closed, and its "
-                                     "record accepts no writes."},
-            "next_safe_action": action, "next_action": action}
+                          "summary": f"Ended by {named(entry)}: not completed or closed, and its record accepts "
+                                     "no writes."},
+            "next_safe_action": next_action, "next_action": next_action}
 
 
 def counts(rows: list[dict]) -> dict:
@@ -600,12 +641,13 @@ def _recorded(state: dict) -> tuple[set[str], bool]:
     return {os.path.normpath(path) for path in facts["worktrees"]}, facts["locations_complete"]
 
 
-def _reservations(state: dict, release: list[str]) -> tuple[list[str], str]:
-    """What retirement leaves held and ends: the recorded worktrees it does not release, and whether it ends
-    cleanup's conservative hold on locations the record never listed. A record under retirement accepts no write, so
-    these read the same afterwards as when the owner decided."""
-    recorded, complete = _recorded(state)
-    return sorted(recorded - set(release)), "none" if complete else "hold_ends"
+def _reservations(state: dict, release: list[str]) -> dict:
+    """What retirement holds and ends, computed from the whole record on every read (R206): an objective under historical retirement holds
+    no worktree, so `retained` is empty, `also_released` lists the recorded worktrees the decision did not name, and
+    cleanup's hold on locations the record never listed ends. Nothing is stored, so a retirement recorded before
+    this rule, current entry or older record's sidecar alike, reads the same way."""
+    recorded, _ = _recorded(state)
+    return {"retained": [], "also_released": sorted(recorded - set(release)), "unrecorded_locations": "hold_ends"}
 
 
 def status_block(state: dict) -> dict | None:
@@ -613,10 +655,10 @@ def status_block(state: dict) -> dict | None:
     entry = state.get(FIELD) if isinstance(state, dict) else None
     if not isinstance(entry, dict):
         return None
-    retained, unrecorded = _reservations(state, entry["released"])
-    return {"retired_at": entry["at"], "completed": False, "released": list(entry["released"]),
-            "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None,
-            "retained": retained, "unrecorded_locations": unrecorded,
+    held = _reservations(state, entry["released"])
+    return {"retired_at": entry["at"], "completed": False, "decided_by": "agent" if by_agent(entry) else "owner",
+            "released": list(entry["released"]),
+            "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None, **held,
             "preserved": [dict(row) for row in entry["preserved"]], "counts": counts(entry["preserved"]),
             "unfinished": list(entry["unfinished"]), "delivery": list(entry["delivery"]),
             "reason": entry["reason"], "decided_with": list(entry["objectives"]),
@@ -633,13 +675,15 @@ def _governor_rows(project: Path, objective: str) -> list[dict]:
 
 
 def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
-    """Objectives of this repository whose claim names this one as successor, and the records that could hold
-    such a claim but are unreadable, by path. Every readable record is read whatever the others are, so an
-    unreadable record never hides a readable claim. Directories without a record carry no claim and are skipped."""
+    """Objectives of this repository whose claim names this one as successor, and the records Pod cannot read, by
+    path. Every readable record is read whatever the others are, so an unreadable record never hides a readable claim;
+    `could_claim` says which unreadable ones could name this objective (R206). Directories without a record are
+    skipped."""
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
     from .history import load_context
+    from .orca import DEADLINE_SPENT
     context = repository_context(project)
     root = state_root(project)
     try:
@@ -662,18 +706,36 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
             if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
                 continue
             raw = load_context(Path(entry.path) / "context.json", validate=False)
-        except (OSError, PodError):
+            if not isinstance(raw, dict):
+                unreadable.append(entry.path)
+                continue
+            # Lazy reads of this record stay inside its own boundary (R206).
+            link = raw.get("continued_by")
+            name = _name(raw)
+            claims = (isinstance(link, dict) and link.get("objective") == objective and name is not None
+                      and record_name(project, context, name) == entry.name)
+        except PodError as exc:
+            if exc.code == DEADLINE_SPENT:
+                raise
             unreadable.append(entry.path)
             continue
-        if not isinstance(raw, dict):
+        except (OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unreadable.append(entry.path)
             continue
-        link = raw.get("continued_by")
-        name = _name(raw)
-        if (isinstance(link, dict) and link.get("objective") == objective and name is not None
-                and record_name(project, context, name) == entry.name):
+        if claims:
             found.append(name)
     return found, unreadable
+
+
+def could_claim(project: Path, unreadable: list[str], objective: str) -> list[str]:
+    """The unreadable records, by path, that could hold a claim naming this objective (R206): the state root itself
+    when it cannot be enumerated, or a record whose decoded logical record names the objective exactly or cannot be
+    reconstructed within Pod's read bounds (`handoff.record_mentions`). Every other one holds only itself."""
+    from .handoff import record_mentions
+    from .ledger import state_root
+    root = str(state_root(project))
+    return [path for path in unreadable
+            if path == root or record_mentions(Path(path), objective, exact=True)]
 
 
 def _readable(place: object) -> bool:
@@ -1110,13 +1172,15 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
                     + "; historical retirement never ends a successor that holds a claim.")
     if isinstance(state.get(FIELD), dict):
         entry = state[FIELD]
-        retained, unrecorded = _reservations(state, entry["released"])
+        held = _reservations(state, entry["released"])
         verdict.update(status="retired", condition="objective_retired", facts={
             "objective": objective, "owner": entry["owner"], "runs": list(entry["runs"]),
             "release": list(entry["released"]),
             "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None,
-            "retained": retained, "unrecorded_locations": unrecorded, "records": list(entry["preserved"])},
-            message="The owner's historical retirement already covers this objective.", next_action=ACTION.format(objective))
+            "retained": held["retained"], "unrecorded_locations": held["unrecorded_locations"],
+            "records": list(entry["preserved"])}, also_released=held["also_released"],
+            message=f"{named(entry, capital=True)} already covers this objective.",
+            next_action=retired_action(objective, entry))
         return verdict
     map_state = map_of(state)
     if map_state is not None and map_state.get("closure"):
@@ -1132,12 +1196,15 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         return fail("objective_continues", f"Objective {claimants[0]} records this objective as its successor; "
                     "historical retirement never ends a successor that holds a claim.")
     if unreadable:
-        return fail("scope_unreadable", "A Pod record that could name this objective as a claimed successor is "
-                    "unreadable.")
-    named = None
+        # An unreadable record holds only its own resources, and a claim only of an objective it names (R206).
+        verdict["unavailable_records"] = unreadable[:MAX_LISTED]
+        if could_claim(project, unreadable, objective):
+            return fail("scope_unreadable", "A Pod record that names this objective, and so could hold a claim of it "
+                        "as a successor, is unreadable.")
+    scoped_runs = None
     if doc is not None:
         # An older record is read whole: a field detection does not prove refuses before any native read (R205).
-        named, field = older_scope(state, objective)
+        scoped_runs, field = older_scope(state, objective)
         if field is not None:
             verdict["field"] = field
             return fail("retirement_scope_unproved", f"The superseded record's field {field} is not one "
@@ -1154,7 +1221,7 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         from .window import unfinished as window_unfinished
         if (window_unfinished(state) or {}).get("state") == "pending":
             return fail("handoff_pending", "The objective has a pending window continuation.")
-        refs = sorted(set(doc["runs"]) | set(named)) if doc is not None else sorted(_run_references(state))
+        refs = sorted(set(doc["runs"]) | set(scoped_runs)) if doc is not None else sorted(_run_references(state))
         recorded, _ = _recorded(state)
         records = _governor_rows(project, objective)
     except PodError as exc:
@@ -1165,11 +1232,10 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         if path not in recorded:
             return fail("path_not_recorded", "A path to release is not one of the objective's recorded worktrees.",
                         "Name only worktrees pod status --list records for this objective.")
-    retained, unrecorded = _reservations(state, release)
-    if len(retained) > MAX_LISTED:
-        return fail("scope_unreadable", f"More than {MAX_LISTED} recorded worktrees left held cannot be bound to "
-                    "one decision.")
-    verdict["facts"].update(retained=retained, unrecorded_locations=unrecorded)
+    held = _reservations(state, release)
+    verdict["facts"].update(retained=held["retained"], unrecorded_locations=held["unrecorded_locations"])
+    # Computed, never decided: the decision binds the paths it names, and the rest of the record follows (R206).
+    verdict["also_released"] = held["also_released"]
     if not refs:
         return fail("scope_unreadable", "The objective records no Run whose work could be proven settled.")
     admissions = doc["admissions"] if doc is not None else state["admissions"]
@@ -1182,8 +1248,7 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
                         # An older record's report is never read: its bound start counts as unreported (R146).
                         "reported": row["reported"] if doc is not None else row["state"] == "bound"
                         and (row.get("report") or {}).get("status") == "validated_observation"})
-    if len(records) > MAX_RECORDS:
-        return fail("scope_unreadable", f"More than {MAX_RECORDS} preserved records cannot be bound to one decision.")
+    # The preserved table has no count bound; the record byte caps bound it (R206).
     verdict["facts"]["records"] = records
     previous = terminal_identity(owner)
     if previous["state"] == "live":
@@ -1252,10 +1317,11 @@ def _requested(value: object) -> list[dict]:
         bounded_text(row["objective"], name="objective", limit=256)
         if not _encodable(row["objective"]):
             raise PodError("invalid_request", "objective must be text that can be encoded as UTF-8")
-        if (not isinstance(row["release"], list) or not 0 < len(row["release"]) <= MAX_PATHS
+        # An empty release is a record-only retirement: no path is checked, and none is named (R206).
+        if (not isinstance(row["release"], list) or len(row["release"]) > MAX_PATHS
                 or not all(_path_text(path) and "\x00" not in path for path in row["release"])
                 or len(set(row["release"])) != len(row["release"])):
-            raise PodError("invalid_request", f"release names 1 to {MAX_PATHS} distinct absolute normalized paths")
+            raise PodError("invalid_request", f"release names 0 to {MAX_PATHS} distinct absolute normalized paths")
         rows.append({"objective": row["objective"], "release": list(row["release"])})
     if len({row["objective"] for row in rows}) != len(rows):
         raise PodError("invalid_request", "Each objective is named once")
@@ -1308,20 +1374,21 @@ def _block_valid(block: dict, older: bool = False) -> bool:
 
 
 def _released(locations: list[dict]) -> str:
+    if not locations:
+        return "no named worktree (a record-only retirement)"
     return ", ".join(row["path"] + (" (absent)" if row["disposition"] == "absent" else " (existing worktree)")
                      for row in locations)
 
 
 def _effects(row: dict) -> str:
-    """What cleanup keeps holding for one objective after retirement, and the hold retirement ends (R113)."""
-    facts, said = row["facts"], ""
-    if facts["retained"]:
-        said += (f" Objective {row['objective']} keeps holding its recorded worktree(s) it does not release: "
-                 + ", ".join(facts["retained"]) + ".")
-    if facts["unrecorded_locations"] == "hold_ends":
-        said += (f" Objective {row['objective']}'s record does not list every location its work used, so while it "
-                 "is open cleanup holds every task worktree of this repository for it; retirement ends that hold.")
-    return said
+    """What else retirement ends for one objective (R113, R206): its record's reservation of every worktree it records.
+    That is reservation only: it never says a worktree is free, which another record or CE's protections may hold."""
+    also = row.get("also_released") or []
+    said = f" Retirement ends objective {row['objective']}'s reservation of every worktree it records"
+    if also:
+        said += ", including the ones not named above: " + ", ".join(also)
+    return said + ("; its record holds nothing afterwards, including any location it never listed. This never says "
+                   "a worktree is free: another objective's record and CE's own cleanup protections still hold it.")
 
 
 def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
@@ -1334,8 +1401,8 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
                 "for cleanup? This is an authority decision to abandon the record, never delivery proof.")
     # Only a refusal that came after every fact was read, with every path an existing worktree or proven absent,
     # leaves facts a decision can bind (R112, R113); what that decision would end is said for it too.
+    # Runs are recorded only once every Run read succeeded, and the paths to release are read right after them.
     later = [row for row in refused if row["status"] == "refused" and row["facts"]["runs"]
-             and row["facts"]["locations"]
              and all(item["disposition"] in RELEASABLE for item in row["facts"]["locations"])]
     never = [row for row in refused if row not in later]
     if any(item["disposition"] == "absent" for row in eligible + later for item in row["facts"]["locations"]):
@@ -1670,7 +1737,7 @@ def historical_retirement(project: Path, objectives: object, *, decision: object
             results.append({**verdict, "status": "retired", "retirement": status_block(state),
                             "message": "Historical retirement recorded: the record is kept, not completed, and "
                                        "accepts no writes.",
-                            "next_action": ACTION.format(name)})
+                            "next_action": retired_action(name, entry)})
     done = [row for row in results if row["status"] in ("retired", "replayed")]
     if decision is None:
         eligible = [row for row in results if row["status"] == "eligible"]
