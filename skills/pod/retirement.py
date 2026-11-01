@@ -55,7 +55,6 @@ ADMISSION_ROW = {"kind", "id", "role", "state", "dispatch", "reported"}
 NATIVE = {"runtime", "owner", "runs", "dispatches", "exited_terminals"}
 PRESERVED_OUTCOMES = ("pending", "UNKNOWN", "FAILED")
 MAX_OBJECTIVES = 16
-MAX_RECORDS = 64
 MAX_LISTED = 64
 # The whole request names at most 64 paths to check, which bounds the native reads made while every requested
 # objective lock is held. Recorded worktrees it does not name are released without those reads (R206).
@@ -174,7 +173,7 @@ def _facts_valid(value: dict, older: bool = False) -> bool:
             and value["retained"] == sorted(set(value["retained"]))
             and not set(value["retained"]) & set(value["release"])
             and value["unrecorded_locations"] in UNRECORDED
-            and isinstance(value["records"], list) and len(value["records"]) <= MAX_RECORDS
+            and isinstance(value["records"], list)
             and all(_record_row(row, older) for row in value["records"]))
 
 
@@ -189,7 +188,7 @@ def validate_entry(value: object, *, older: bool = False) -> None:
             or not _text(value["owner"], 256) or not _runs(value["runs"])
             or not isinstance(value["released"], list) or not 0 < len(value["released"]) <= MAX_PATHS
             or not all(_path_text(path) for path in value["released"])
-            or not isinstance(value["preserved"], list) or len(value["preserved"]) > MAX_RECORDS
+            or not isinstance(value["preserved"], list)
             or not all(_record_row(row, older) for row in value["preserved"])
             or not _texts(value["unfinished"], MAX_LISTED, 256)
             or not _texts(value["delivery"], MAX_DELIVERY, 512) or not value["delivery"]
@@ -1183,8 +1182,7 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
                         # An older record's report is never read: its bound start counts as unreported (R146).
                         "reported": row["reported"] if doc is not None else row["state"] == "bound"
                         and (row.get("report") or {}).get("status") == "validated_observation"})
-    if len(records) > MAX_RECORDS:
-        return fail("scope_unreadable", f"More than {MAX_RECORDS} preserved records cannot be bound to one decision.")
+    # The preserved table has no count bound; the record byte caps bound it (R206).
     verdict["facts"]["records"] = records
     previous = terminal_identity(owner)
     if previous["state"] == "live":

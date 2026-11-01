@@ -314,11 +314,6 @@ def _no_run(case):
     path.write_text(json.dumps(raw))
 
 
-def _too_many_records(case):
-    bound = patch("pod.retirement.MAX_RECORDS", 1)
-    bound.start(); case.addCleanup(bound.stop)
-
-
 def _request_failure(code):
     def arrange(case):
         if code == "pending":
@@ -360,7 +355,6 @@ REFUSALS = {
     "journal-unreadable": (_journal_unreadable, "scope_unreadable"),
     "record-unsupported": (_record_unsupported, "scope_unreadable"),
     "no-run": (_no_run, "scope_unreadable"),
-    "too-many-records": (_too_many_records, "scope_unreadable"),
 }
 
 
@@ -369,7 +363,7 @@ class RefusalTableTests(GroupedTable):
     GROUPS = {"test_lifecycle_refuses": ["closed", "continued", "continues"],
               "test_unreadable_records_refuse": ["record-unsupported", "journal-unreadable"],
               "test_handoff_refuses": ["handoff-pending"],
-              "test_scope_refuses": ["no-run", "too-many-records"],
+              "test_scope_refuses": ["no-run"],
               "test_claims_refuse": ["claimed-by-another"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
               "test_run_binding_refuses": ["run-rebound", "generation-changed"],

@@ -1246,6 +1246,17 @@ class LocatedEntryShapeTests(unittest.TestCase):
                 validate_entry({**self.ENTRY, "locations": locations})
             self.assertEqual(caught.exception.code, "state_unsupported")
 
+    def test_preserved_records_have_no_count_bound(self):
+        # R206: real records preserve more than 64 rows; an entry and a decision part carrying 156 stay valid.
+        from pod.retirement import _block_valid
+        rows = [{"kind": "admission", "id": f"a{index}", "role": "implement", "state": "unresolved",
+                 "dispatch": None, "reported": False} for index in range(156)]
+        validate_entry({**self.ENTRY, "preserved": rows})
+        block = {"objective": "o", "owner": "h", "runs": [{"run": "r", "generation": 1}], "release": ["/w/one"],
+                 "locations": [{"path": "/w/one", "disposition": "absent"}], "retained": [],
+                 "unrecorded_locations": "hold_ends", "records": rows, "delivery": ["none recorded"]}
+        self.assertTrue(_block_valid(block))
+
     def test_the_block_derives_reservations_from_the_record(self):
         state = {"historical_retirement": self.ENTRY,
                  "checkpoint": {"worktree": {"path": "/w/coordinator"}},

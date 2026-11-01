@@ -10188,7 +10188,8 @@
       "offline_test": [
         "tests.test_retirement_absent.RepositorySizeTests.test_more_than_ninety_six_unrelated_worktrees_still_prove_absence",
         "tests.test_cleanup_plan.CleanupPlanTests.test_more_than_ninety_six_unrelated_worktrees_never_bound_the_plan",
-        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_has_no_resource_count"
+        "tests.test_cleanup_plan.CleanupScaleTests.test_one_plan_has_no_resource_count",
+        "tests.test_retirement_absent.LocatedEntryShapeTests.test_preserved_records_have_no_count_bound"
       ],
       "status": "NOT_RUN"
     },
