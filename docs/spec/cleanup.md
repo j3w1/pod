@@ -307,7 +307,7 @@ Complete Git worktree inventory is streamed under its existing contract, retaini
 all checkouts of the selected refs without imposing a new repository-size limit.
 Native worker pages retain exact Run/runtime scope and require explicit boolean
 continuation, nonempty advancing pages, unique Dispatch identities and bounded
-cursors; at most 100 pages of 100 rows are consumed. A missing/interrupted/duplicate,
+cursors; every page of 100 rows is consumed, however many (R206). A missing/interrupted/duplicate,
 changed or truncated page holds. Display retains its independent 1000-row complete
 worktree-list/host-scope contract. No native pagination capability is invented.
 
