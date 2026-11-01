@@ -1187,13 +1187,16 @@ assurance, evidence, verification gaps and native validity. `objective_unfinishe
 and `objective_complete` separately describe closure: future merge/delivery rows
 are not circular prerequisites for candidate proof. Missing review, invalidated
 evidence, genuine verification gaps, unresolved required findings and outstanding
-material work still withhold candidate proof. Candidate proof reads every bound
-evidence source from the candidate's own Git tree with R204's read-only reader,
-whatever checkout `--repository` names, so the same record gives the same proof
-from every root. Proof bound to bytes the candidate's tree does not hold, including
-uncommitted or untracked worktree bytes, is invalidated from every root. Every
-other check is unchanged: candidate equality, verification gaps, outstanding work,
-native settlement and the non-source binding parts. Acceptance and Governor
+material work still withhold candidate proof. At a root whose HEAD resolves
+exactly to the candidate, candidate proof judges bound evidence sources by that
+checkout's working files, as a review binds them. At any other root, such as a
+canonical checkout on the target branch, it judges them against the candidate's
+stored blobs with R204's read-only reader, never that root's unrelated files.
+There a path whose checkout conversion changes its bytes (text or eol
+attributes, clean/smudge filters) reads invalidated: that is fail-closed, and the
+proof can be read from a checkout of the candidate instead. Every other check is
+unchanged: candidate equality, verification gaps, outstanding work, native
+settlement and the non-source binding parts. Acceptance and Governor
 qualification keep reading the coordinator's worktree. CE applies its own required
 pre-merge proof contract rather than equating this status with permission.
 
@@ -1234,7 +1237,7 @@ CE always parses the factual status and scope; zero is never permission.
 - <a id="a671"></a>**A671** — Closed or archived work still exposes a possibly active writer; complete terminal ownership finds unregistered sessions. Governor intrinsic, declared, admitted mapped and unknown effects retain their real meanings, including shared effects from another repository.
 - <a id="a672"></a>**A672** — Missing, malformed, incomplete, changing or unavailable relevant facts produce specific scoped uncertainty and reconciliation. Complete native inventory prevents non-current runtime references from becoming permanent vetoes; positive current-owner observations distinguish retained purposes from foreign owners without inventing authority.
 - <a id="a673"></a>**A673** — Target, candidate, claim or resource changes fail the serialized recheck. Explicitly unrelated uncertainty stays disclosed without blocking independent work. Candidate proof, current owner identity, objective completion and CE permission remain distinct through CLI and CE consumer tests.
-- <a id="a790"></a>**A790** — The exact-candidate proof gives the same answer from every checkout. A review bound to a source as the candidate holds it stays QUALIFIED and the proof `ready` when read from a root on another branch whose working file differs, where 0.21.32 withheld it as `invalidated`. A review bound to bytes the candidate's tree does not hold, committed later or uncommitted in the worktree, is `invalidated` and the proof is withheld with `assurance_unbound`, even from the root that holds those bytes.
+- <a id="a790"></a>**A790** — A review bound to a source as the candidate holds it stays QUALIFIED, and the proof `ready`, when read from a root on another branch whose working file differs, where 0.21.32 withheld it as `invalidated`. Read from another root, a review bound to bytes the candidate's stored tree does not hold is withheld with `assurance_unbound`, even when that root holds those bytes. At a root checked out at the candidate the working files still decide, as before: uncommitted bound bytes it holds, and clean CRLF (`text eol=crlf`) and clean/smudge-filtered checkouts, stay `ready`. The same clean converted bytes read from another root are `invalidated`.
 
 #### Admission storage read contract
 

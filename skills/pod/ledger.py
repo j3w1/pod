@@ -1200,8 +1200,8 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
     """Read-only map, facts and derived projections for status, acceptance and reports.
 
     `delivered` (map and status reads) judges proof a recorded delivery relied on against the delivered
-    candidate's tree (R204). `sources_at` (the exact-candidate admission proof, R185) judges every bound source
-    against that commit's tree, whatever `project` holds. Acceptance and Governor qualification keep the worktree."""
+    candidate's tree (R204). `sources_at` (the exact-candidate admission proof at a root not checked out at the
+    candidate, R185) judges every bound source against that commit's stored blobs, whatever `project` holds. Acceptance and Governor qualification keep the worktree."""
     from .obligations import label_qualification, report_projection, status_projection
     state = read(project, objective) if state is None else state
     if state is None:

@@ -983,9 +983,12 @@ def _proof(project: Path, objective: str, candidate: str) -> dict:
     checkpoint = state.get("checkpoint") or {}
     if checkpoint.get("candidate") != candidate:
         return {"status": "blocked", "candidate": candidate, "reason": "candidate_mismatch"}
-    # Proof of the exact candidate reads each bound source from the candidate's own Git tree, never from the
-    # working files of whichever checkout the caller names (pod#184).
-    view = kernel_view(project, objective, state=state, candidate=candidate, sources_at=candidate)
+    # A root checked out at the candidate keeps judging bound sources by its working files, which is what a review
+    # binds, including bytes a clean checkout converts (eol, filters). Any other root, such as a canonical checkout on
+    # the target branch, judges them against the candidate's stored blobs instead of its own unrelated files (pod#184).
+    at_candidate = gitio.resolve_commit(project, "HEAD") == candidate
+    view = kernel_view(project, objective, state=state, candidate=candidate,
+                       sources_at=None if at_candidate else candidate)
     from .obligations import _persisted_rows, TERMINAL
     gaps, unavailable = [], []
     if view["map"] is None:

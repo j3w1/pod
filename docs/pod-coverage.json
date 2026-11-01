@@ -9538,8 +9538,12 @@
       ],
       "offline_test": [
         "tests.test_admission_query.CandidateTreeProofTests.test_a_root_on_another_branch_reads_the_candidates_own_tree",
-        "tests.test_admission_query.CandidateTreeProofTests.test_proof_bound_to_bytes_the_candidate_tree_lacks_is_invalidated",
-        "tests.test_admission_query.CandidateTreeProofTests.test_proof_bound_to_uncommitted_bytes_is_invalidated"
+        "tests.test_admission_query.CandidateTreeProofTests.test_proof_bound_to_bytes_the_candidate_tree_lacks_is_invalidated_at_another_root",
+        "tests.test_admission_query.CandidateTreeProofTests.test_a_root_at_the_candidate_keeps_judging_working_files",
+        "tests.test_admission_query.CandidateTreeProofTests.test_a_clean_crlf_checkout_at_the_candidate_stays_ready",
+        "tests.test_admission_query.CandidateTreeProofTests.test_a_clean_filtered_checkout_at_the_candidate_stays_ready",
+        "tests.test_admission_query.CandidateTreeProofTests.test_crlf_bytes_read_from_another_root_are_invalidated",
+        "tests.test_admission_query.CandidateTreeProofTests.test_filtered_bytes_read_from_another_root_are_invalidated"
       ],
       "status": "NOT_RUN"
     },
