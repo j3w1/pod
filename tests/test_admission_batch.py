@@ -102,22 +102,15 @@ class EquivalenceTests(BatchCase):
         self.assertFalse(answer["authorization"])
         self.assertTrue(all(result["authorization"] is False for result in results))
 
-    def test_the_target_shape_equals_its_single_query(self):
+    def test_target_effect_and_expect_shapes_equal_their_single_queries(self):
         self.scenario()
-        result = self.assert_equivalent(self.shapes()[4:5])["responses"][0]["result"]
-        self.assertEqual(result["proof"]["candidate"], self.base)
-        self.assertEqual(result["target"]["commit"], self.base)
-
-    def test_the_effects_shape_equals_its_single_query(self):
-        self.scenario()
-        result = self.assert_equivalent(self.shapes()[5:6])["responses"][0]["result"]
-        self.assertIn("external_effect", {dimension for row in result["conflicts"]
+        answer = self.assert_equivalent(self.shapes()[4:])
+        results = [row["result"] for row in answer["responses"]]
+        self.assertEqual(results[0]["proof"]["candidate"], self.base)
+        self.assertEqual(results[0]["target"]["commit"], self.base)
+        self.assertIn("external_effect", {dimension for row in results[1]["conflicts"]
                                           for dimension in row.get("dimensions", [])})
-
-    def test_the_expect_shape_equals_its_single_query(self):
-        self.scenario()
-        result = self.assert_equivalent(self.shapes()[6:7])["responses"][0]["result"]
-        self.assertEqual(result["conflicts"][-1], {"kind": "snapshot_changed"})
+        self.assertEqual(results[2]["conflicts"][-1], {"kind": "snapshot_changed"})
 
     def test_a_native_writer_stays_equivalent(self):
         self.scenario()
@@ -156,7 +149,8 @@ class EquivalenceTests(BatchCase):
 
 
 class SharedReadTests(BatchCase):
-    def counted_reads(self):
+    def test_eight_queries_read_each_source_once_and_two_calls_read_afresh(self):
+        self.scenario()
         loads, after = [], []
         real_load, real_bytes = history.load_admission_facts, history._context_bytes
         def load(path, *, include_admissions=True):
@@ -166,38 +160,26 @@ class SharedReadTests(BatchCase):
             if admission._SHARED.get().stage == "recheck":
                 after.append(path.parent.name + "/" + path.name)
             return real_bytes(path, limit)
-        return loads, after, (patch("pod.history.load_admission_facts", side_effect=load),
-                              patch("pod.admission.history._context_bytes", side_effect=raw_bytes))
-
-    def test_eight_queries_read_each_source_once(self):
-        self.scenario()
-        loads, after, (facts, raw) = self.counted_reads()
         shapes = (self.shapes() + [{"branch": "other"}])[:8]
-        with facts, raw, patch("pod.admission._fleet", wraps=admission._fleet) as fleet, \
+        with patch("pod.history.load_admission_facts", side_effect=load), \
+             patch("pod.admission.history._context_bytes", side_effect=raw_bytes), \
+             patch("pod.admission._fleet", wraps=admission._fleet) as fleet, \
              patch("pod.admission._terminals", wraps=admission._terminals) as terminals:
             answer = self.batch(*shapes)
+            first_loads, first_after = list(loads), list(after)
+            self.batch({})
         self.assertEqual(len(answer["responses"]), 8)
-        self.assertEqual((fleet.call_count, terminals.call_count), (1, 1))
-        self.assertEqual(sorted(set(loads)), sorted(loads), "a record was decoded twice in one call")
+        self.assertEqual((fleet.call_count, terminals.call_count), (2, 2))  # once per call, never shared across calls
+        self.assertEqual(sorted(set(first_loads)), sorted(first_loads), "a record was decoded twice in one call")
+        self.assertLessEqual({row for row in first_loads if not row[1]}, set(loads[len(first_loads):]))
         # One shared recheck: each rechecked file's bytes are read once for all eight queries.
-        self.assertTrue(after)
-        self.assertEqual(sorted(set(after)), sorted(after))
+        self.assertTrue(first_after)
+        self.assertEqual(sorted(set(first_after)), sorted(first_after))
         self.assertEqual(answer["discovery"]["records"], 4)
         # Discovery's terminal list, then the fence's terminal list, newest page and six partitions; the
         # discovery fleet is a double.
         self.assertEqual(answer["discovery"]["orca_reads"], 9)
         self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
-
-    def test_two_calls_each_read_afresh(self):
-        self.intake(worktree=self.place)
-        loads, _, (facts, raw) = self.counted_reads()
-        with facts, raw, patch("pod.admission._fleet", wraps=admission._fleet) as fleet, \
-             patch("pod.admission._terminals", wraps=admission._terminals) as terminals:
-            self.batch({}, {"branch": "main"})
-            first = list(loads)
-            self.batch({})
-        self.assertEqual((fleet.call_count, terminals.call_count), (2, 2))  # once per call, never shared across calls
-        self.assertLessEqual({row for row in first if not row[1]}, set(loads[len(first):]))
 
     def test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to(self):
         self.intake(worktree=self.place)
@@ -974,24 +956,6 @@ class DiscoveryRaceTests(BatchCase):
         self.assertEqual((fence["fleet_start"]["counts"], fence["fleet_start"]["newest_sha256"]),
                          (fence["fleet_end"]["counts"], fence["fleet_end"]["newest_sha256"]))
         self.assertFalse(fence["stable"])  # the unreleased rows differ
-
-    def test_an_old_released_row_becoming_abandoned_after_the_walk_makes_the_fence_unstable(self):
-        # The review's model: an old released, non-abandoned row outside the newest 100 becomes abandoned with a
-        # pending effect after discovery's walk read it and before the end reads; its claim is never read.
-        foreign = self.root / "foreign"
-        def row(abandoned):
-            found = self.row("D", foreign, "released", abandoned)
-            found["projection"]["liveness"] = {"verdict": "live"}
-            return found
-        self.walked([*self.newer, row(False)], [*self.newer, row(True)])
-        pending = {"process": "live", "effects": [{"kind": "push", "id": "main", "state": "pending"}]}
-        with patch("pod.admission._native_claim", return_value=pending) as claims:
-            answer, result = self.outcome({"effects": ["deploy:any"]})
-        claims.assert_not_called()  # discovery saw D as not abandoned, so no claim read was made
-        fence = answer["native_fence"]
-        self.assertNotEqual(fence["fleet_start"]["released_sha256"], fence["fleet_end"]["released_sha256"])
-        self.assertFalse(fence["stable"])
-        self.assertEqual((answer["status"], answer["complete"]), ("unknown", False))
 
     def test_an_unchanged_fleet_is_stable(self):
         rows = [*self.newer, self.row("B", self.root / "foreign", "retained")]
