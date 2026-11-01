@@ -23,7 +23,7 @@ from pod.succession import _closure_recorded
 from tests import test_delivery as delivery
 from tests.decision_policy_support import PERSON
 from tests.common import fixture
-from tests.kernel_support import KernelCase, git
+from tests.kernel_support import KernelCase, assurance_review, git, governance_policy
 
 EXTERNAL = {"party": "third_party", "need": "acceptance", "unblocks_when": "accepted"}
 
@@ -419,6 +419,101 @@ class DeliveredProofSourceTests(KernelCase):
         self.assertEqual(validate_closed_snapshot(state["checkpoint"],
                                                   closed_snapshot_context(self.project, "objective", state)), ())
         self.assertTrue(_closure_recorded(self.project, "objective", state))
+
+
+class RelocatedPolicyCitationTests(KernelCase):
+    """After a delivery the target moves with unchanged governance, so a later checkpoint adopts it (R119) and
+    relocates the citation of a satisfied policy assurance to the adopted commit; the shared worktree has moved
+    off the delivered candidate. Bookkeeping then satisfies a waiting criterion and a blocked subgoal."""
+
+    prepare_result = delivery.VerifiedDeliveryTests.prepare_result
+    move_target = delivery.VerifiedDeliveryTests.move_target
+    later_work = DeliveredProofSourceTests.later_work
+    refused_unchanged = DeliveredProofSourceTests.refused_unchanged
+    record = DeliveredProofSourceTests.record
+    update = DeliveredProofSourceTests.update
+    review = assurance_review
+
+    def setUp(self):
+        super().setUp()
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+
+    def core(self, **extra):
+        return super().core(**{"criteria": ["PoD#1", "PoD#2"], **extra})
+
+    def intake(self, *rows, **fields):
+        waiting = {"id": "O2", "kind": "criterion", "provenance": "objective", "source": {"ref": "PoD#2"},
+                   "check": "PoD#2 holds once R is done", "state": "waiting",
+                   "wait": {"class": "dependency", "referent": "R"}}
+        return self.write([self.criterion(), waiting, self.sub("R", state="blocked_external", external=dict(EXTERNAL)),
+                           governance_policy(self, "A", parent="O1")], governance={"base_ref": "target"})
+
+    def deliver(self):
+        self.prepare_result()
+        self.port.placement["branch"] = git(self.project, "branch", "--show-current")
+        self.write(self.stored())  # the checkpoint names the candidate the review binds
+        self.review(criteria=["PoD#1", "PoD#2"])
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1", sources=[
+            source_identity(self.project, path) for path in ("README.md", "src/old.py")])])
+        self.write(rows)
+        self.write(self.stored(), delivery={"record": "merge-1"})
+        self.recorded = {row["id"]: row for row in self.stored()}
+        self.assertEqual(self.recorded["A"]["state"], "satisfied")
+        self.adopted = self.move_target("src/old.py")  # governance sources unchanged
+        self.later_work()
+
+    def bookkeeping(self):
+        return {key: {"state": "satisfied", "evidence": [self.proof(key)]} for key in ("R", "O2")}
+
+    def test_bookkeeping_after_an_adopting_target_move_keeps_the_relocated_policy_row(self):
+        self.deliver()
+        written = self.update(self.bookkeeping())
+        self.assertEqual(written["checkpoint"]["governance"]["base"], self.adopted)  # R119 adopted the target
+        stored = {row["id"]: row for row in written["checkpoint"]["obligations"]}
+        self.assertEqual((stored["R"]["state"], stored["O2"]["state"]), ("satisfied", "satisfied"))
+        self.assertEqual(stored["O1"], self.recorded["O1"])
+        # R119 moved only the citation's base to the adopted commit; the row is otherwise as recorded.
+        self.assertEqual(stored["A"]["source"], {**self.recorded["A"]["source"], "base": self.adopted})
+        self.assertEqual({**stored["A"], "source": self.recorded["A"]["source"]}, self.recorded["A"])
+
+    def test_a_closing_write_after_an_adopting_target_move_closes(self):
+        self.deliver()
+        rows = self.stored()
+        for row in rows:
+            if row["id"] in ("R", "O2"):
+                row.pop("external", None)
+                row.pop("wait", None)
+                row.update(state="satisfied", evidence=[self.proof(row["id"])])
+        closed = self.write(rows, close=True)["checkpoint"]
+        self.assertTrue(closed["closure"])
+        self.assertEqual(closed["obligations"][3]["source"]["base"], self.adopted)
+
+    def stamped(self, change):
+        """Bookkeeping whose kernel result stamps the policy citation with `change` instead of R119's relocation."""
+        import pod.obligations as kernel
+        original = kernel.accept_write
+
+        def stamping(prior, proposed, ctx):
+            stored = original(prior, proposed, ctx)
+            self.assertIn("A", ctx["delivered_sources"]["rows"])
+            row = next(row for row in stored["obligations"] if row["id"] == "A")
+            row["source"] = {**row["source"], **change}
+            return stored
+        with patch.object(kernel, "accept_write", stamping):
+            return self.refused_unchanged("obligation_unaccounted", "evidence_invalidated",
+                                          lambda: self.update(self.bookkeeping()))
+
+    def test_a_changed_cited_quote_is_still_a_change(self):
+        self.deliver()
+        error = self.stamped({"quote_sha256": hashlib.sha256(b"other text").hexdigest()})
+        self.assertIn("changes more than post-delivery bookkeeping", str(error))
+
+    def test_a_citation_base_other_than_the_adopted_commit_is_still_a_change(self):
+        self.deliver()
+        error = self.stamped({"base": self.later})
+        self.assertIn("changes more than post-delivery bookkeeping", str(error))
 
 
 class DeliveredSourceReaderTests(unittest.TestCase):
