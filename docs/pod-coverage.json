@@ -10391,7 +10391,12 @@
         "tests.test_admission_batch.CorrectionRoundTests.test_a_balanced_replacement_falls_back_and_keeps_the_new_claim",
         "tests.test_admission_batch.CorrectionRoundTests.test_an_active_replacement_falls_back",
         "tests.test_admission_batch.CorrectionRoundTests.test_a_newest_row_whose_identity_differs_from_its_partition_copy_falls_back",
-        "tests.test_admission_batch.CorrectionRoundTests.test_a_malformed_row_keeps_the_sequential_order_and_its_claims"
+        "tests.test_admission_batch.CorrectionRoundTests.test_a_malformed_row_keeps_the_sequential_order_and_its_claims",
+        "tests.test_admission_batch.BracketTests.test_a_settle_delete_and_create_inside_the_partition_read_falls_back",
+        "tests.test_admission_batch.BracketTests.test_a_creation_only_window_falls_back",
+        "tests.test_admission_batch.BracketTests.test_a_deletion_only_window_falls_back",
+        "tests.test_admission_batch.BracketTests.test_a_balanced_transition_falls_back",
+        "tests.test_admission_batch.BracketTests.test_an_unchanged_window_is_accepted"
       ],
       "status": "NOT_RUN"
     },

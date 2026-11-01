@@ -685,7 +685,9 @@ class PartitionTests(base.AdmissionQueryCase):
         self.assertEqual(fleet["runtime"], "runtime")
         self.assertNotIn([*LIST, "--limit", "100", "--cursor", "c1"], double.calls)  # no sequential walk
         self.assertEqual(double.calls[-1], [*LIST, "--limit", "100"])  # the newest page comes after every partition
-        self.assertEqual(len(double.calls), 1 + 1 + 1 + 2 + 3 + 1 + 1)  # six partitions' pages and the count read
+        # The opening page, the six partitions' pages and the closing page.
+        self.assertEqual(len(double.calls), 1 + 1 + 1 + 1 + 2 + 3 + 1 + 1)
+        self.assertEqual(double.calls[0], [*LIST, "--limit", "100"])  # the opening page comes before every partition
 
     def test_every_partition_rejection_falls_back_to_the_sequential_walk(self):
         rows = self.fleet()
@@ -727,7 +729,8 @@ class PartitionTests(base.AdmissionQueryCase):
         fleet, discovery = self.read(double)
         self.assertIsNone(fleet)
         self.assertEqual(discovery.fleet_read, "bound")
-        self.assertNotIn([*LIST, "--limit", "100"], double.calls)
+        self.assertEqual(double.calls.count([*LIST, "--limit", "100"]), 1)  # the opening page only: no closing read
+        self.assertNotIn([*LIST, "--limit", "100", "--cursor", "c1"], double.calls)  # and no sequential walk
 
     def test_abandoned_rows_start_their_claim_reads_during_the_walk(self):
         rows = self.fleet()
@@ -903,3 +906,83 @@ class CorrectionRoundTests(BatchCase):
         ownership = next(claim for claim in result["claims"] if claim["kind"] == "ownership")
         self.assertEqual(ownership["owner_observations"][0]["code"], "native_read_after_fence")
         self.assertFalse(ownership["owner_identity_matches"])
+
+
+class BracketTests(BatchCase):
+    """The partition read is accepted only inside a bracket of two equal newest pages."""
+
+    def bracketed(self, opening, partitions, closing):
+        """The opening unfiltered page shows `opening`; partitions show `partitions`; every later read `closing`."""
+        first, middle, last = fleet_model(opening), fleet_model(partitions), fleet_model(closing)
+        state = {"opened": False}
+        def read(argv):
+            if argv == [*LIST, "--limit", "100"] and not state["opened"]:
+                state["opened"] = True
+                return first(argv)
+            if "--terminal-state" in argv and not admission._FENCING.get():
+                return middle(argv)
+            return last(argv)
+        return read
+
+    def row(self, dispatch, path, state, abandoned=False):
+        row = base.ReviewCorrectionTests.writer(self, path=path, verdict="exited", dispatch=dispatch)
+        row.update(terminalState=state, workerState="abandoned" if abandoned else "ready",
+                   dispatchStatus="failed" if abandoned else "completed")
+        row["projection"]["resource"] = {"state": state}
+        return row
+
+    def setUp(self):
+        super().setUp()
+        self.intake(worktree=self.place)
+        fleet = patch("pod.admission._fleet", side_effect=self._real_fleet)
+        terminals = patch("pod.admission._terminals", side_effect=self._real_terminals)
+        fleet.start(); self.addCleanup(fleet.stop)
+        terminals.start(); self.addCleanup(terminals.stop)
+        foreign = self.root / "foreign"
+        self.newer = [self.row(f"N{index}", foreign, "released") for index in range(100)]
+
+    def test_a_settle_delete_and_create_inside_the_partition_read_falls_back(self):
+        # The reviewer's sequence: 100 newer released rows, released B and an old retained abandoned D with a
+        # pending push. After the released partition, D settles, B is deleted and retained C is created.
+        foreign = self.root / "foreign"
+        b, c = self.row("B", foreign, "released"), self.row("C", foreign, "retained")
+        d_open, d_closed = self.row("D", self.project, "retained", True), self.row("D", self.project, "released", True)
+        self.native.fleet = self.bracketed([*self.newer, b, d_open], [*self.newer, b, c], [c, *self.newer, d_closed])
+        pending = {"process": "exited", "effects": [{"kind": "push", "id": "main", "state": "pending"}]}
+        with patch("pod.admission._native_claim", return_value=pending):
+            answer = self.batch({"branch": "main"})
+        result = answer["responses"][0]["result"]
+        self.assertEqual(answer["discovery"]["fleet_read"], "sequential")
+        self.assertIn("D", [claim.get("dispatch") for claim in result["claims"]])
+        self.assertEqual(result["status"], "blocked")
+
+    def test_a_creation_only_window_falls_back(self):
+        c = self.row("C", self.root / "foreign", "retained")
+        self.native.fleet = self.bracketed(self.newer, [*self.newer, c], [c, *self.newer])
+        self.assertEqual(self.batch({})["discovery"]["fleet_read"], "sequential")
+
+    def test_a_deletion_only_window_falls_back(self):
+        b = self.row("B", self.root / "foreign", "released")
+        self.native.fleet = self.bracketed([*self.newer, b], self.newer, self.newer)
+        self.assertEqual(self.batch({})["discovery"]["fleet_read"], "sequential")
+
+    def test_a_balanced_transition_falls_back(self):
+        foreign = self.root / "foreign"
+        x, y = self.row("X", foreign, "retained"), self.row("Y", foreign, "active")
+        swapped = [dict(x, terminalState="active"), dict(y, terminalState="retained")]
+        for row in swapped:
+            row["projection"] = {**row["projection"], "resource": {"state": row["terminalState"]}}
+        # Two old rows (outside the newest page) swap states while the partitions are read, so both pages
+        # agree on total, counts and newest rows; each is then listed in both partitions it passed through.
+        self.native.fleet = self.bracketed([*self.newer, x, y], [*self.newer, x, swapped[0], y, swapped[1]],
+                                           [*self.newer, *swapped])
+        answer = self.batch({})
+        self.assertEqual(answer["discovery"]["fleet_read"], "sequential")
+        self.assertEqual(answer["discovery"]["native_workers"], 102)
+
+    def test_an_unchanged_window_is_accepted(self):
+        rows = [*self.newer, self.row("B", self.root / "foreign", "retained")]
+        self.native.fleet = self.bracketed(rows, rows, rows)
+        answer = self.batch({})
+        self.assertEqual(answer["discovery"]["fleet_read"], "partitioned")
+        self.assertTrue(answer["native_fence"]["stable"])

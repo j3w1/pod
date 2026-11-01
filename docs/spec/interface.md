@@ -1300,27 +1300,25 @@ query.
 
 Inside a call the all-Run inventory is read as its six terminal-state partitions in parallel,
 each fully paged with the sequential walk's cursor, runtime, scope and identity checks, and every
-row passing the same structural checks projection makes, followed by one unfiltered newest-first
-page. The union is used only when every page and the final read report scope `all` with one
-runtime, each partition's rows equal its own unchanged `page.total` and the final `counts` for its
-state, the final counts name no other state, no Dispatch appears in two partitions, no page's
-counts exceed the final total, the union holds exactly the final total, and every row of the
-newest page is in the union with an equal row identity. Otherwise the call reads the sequential
+row passing the same structural checks projection makes, between two unfiltered newest-first
+pages, one read before any partition and one after them all. The union is used only when every
+page reports scope `all` with one runtime, each partition's rows equal its own unchanged
+`page.total` and the closing `counts` for its state, the counts name no other state, no Dispatch
+appears in two partitions, no page's counts exceed the total, the union holds exactly the total,
+and every row of the closing page is in the union with an equal row identity. Otherwise the call reads the sequential
 walk within the same deadline, so a malformed row fails where it always did, in newest-first order.
 
-Nothing assumes Orca keeps every Dispatch. Rows are listed newest first, so a Dispatch created
-during the read is on the newest page, and missing from the union, unless 100 newer ones were
-created after it; one created after that page is on the end fence's newest page. A deletion alone
-lowers the total below the union. An older Dispatch that changes state during the read is listed
-twice, or leaves a partition total short of the final count, unless another row left that state; a
-row moving out is a duplicate or itself missing, and a deletion makes every earlier page's counts
-exceed the final total, unless a later creation restores it, and that creation is on the newest
-page. A Dispatch that ends unreleased and was missed still changes the end fence's unreleased
-digest. What remains is a coincidence of a deletion, a later creation and an older Dispatch moving
-into `released` within one discovery read, or more than 100 creations of already released
-Dispatches during it: both are released rows outside the newest page, the fence's documented
-residual. A bound first page answers as the sequential
-walk's does. `discovery.fleet_read` names the read used (`partitioned`, `sequential` or `bound`)
+Nothing assumes Orca keeps every Dispatch; the argument relies only on each page's counts being
+Orca's snapshot at that read and on a Dispatch id never naming two Dispatches. The partition read is bracketed by an unfiltered
+newest-first page read before any partition and the closing page read after them all, and the
+union is used only when both pages have equal runtime, total, counts and row identities. Within
+that bracket nothing moved: a creation changes the newest page, a deletion lowers the total unless
+a creation also changes the newest page, and a state change alters the counts unless another
+balances it, and a balanced pair still lists a row twice or leaves a partition total unequal to the
+counts. A Dispatch that exists only between the two pages is counted, beside every row the pages
+show, by each page read while it exists, whose counts then exceed the closing total. Every partition read lies inside the bracket, so the union is the inventory as it stood
+throughout; a change after the closing page is the end fence's to detect. A bound opening or
+first partition page answers as the sequential walk's first page does. `discovery.fleet_read` names the read used (`partitioned`, `sequential` or `bound`)
 and `discovery.orca_reads` counts the call's Orca reads; `discovery` is diagnostic only. The
 union is ordered by partition, then page, so native-derived unknowns have a deterministic order
 that is not a contract; claims stay canonically sorted. The inventory's cost grows with the
@@ -1388,9 +1386,7 @@ Three things are not covered, by design. First, a row that is `released` at both
 newest 100 and not abandoned, changing without leaving `released`: to add a claim it would have to
 report a positively exited process live again for the same Dispatch within one runtime, while a
 new process is a new Dispatch or terminal incarnation, which the fences see; re-reading every
-released row would add about 3 s. The same class covers the discovery coincidences above: an older Dispatch
-moving into `released` beside a deletion and a later creation, or more than 100 already released
-creations, inside one discovery read. Second, the target ref after a query resolved it: the consumer
+released row would add about 3 s. Second, the target ref after a query resolved it: the consumer
 keeps `target_commit` and `expect` for later checks. Third, anything after T1: work done later
 rechecks with a fresh batch and `expect`. The end fleet read re-reads the unreleased rows in
 parallel with the terminal list, which costs about 1.5 s on a fleet of about 900 unreleased rows,
@@ -1399,7 +1395,7 @@ largely overlapped with the projections and the recheck.
 - <a id="a779"></a>**A779** — Every request refusal is one `admission_batch_request` (or `admission_timeout`) error with no responses and exit 1; a per-query input fault names its query id before any discovery read; responses follow request order with their ids; the 8 MiB response limit refuses the whole batch; a factual batch answer exits zero.
 - <a id="a780"></a>**A780** — For the occupancy (worktree, branch, both), target with objective, candidate and target commit, effects, mismatched expect, native writer, bound caller, unreadable and unrelated records and projection-limit shapes, each batch result equals the single query with the same doubles.
 - <a id="a781"></a>**A781** — One batch of eight queries reads the fleet, the terminal inventory and each record once, plus one shared recheck that reads each rechecked file once; two calls each read afresh; an abandoned worker's claim is read once for every query and is started from its inventory row; no thread outlives the call.
-- <a id="a782"></a>**A782** — A complete partition union is used in partition order; a moved row (in two partitions or in none), a row outside its partition, a duplicate, a changed or short partition total, a count change, a creation, a deletion, a new terminal state, a runtime change and a failed partition read each fall back to the sequential walk and record it; a bound first page answers none without a fallback; the allowlist accepts exactly the partition and count reads; a newest-page row missing from the union or with a different identity (a balanced replacement, including an already released abandoned Dispatch with a pending effect) and a structurally malformed partition row fall back to the sequential walk, which keeps the new Dispatch's claim and the preceding newest-first failure point.
+- <a id="a782"></a>**A782** — A complete partition union is used in partition order; a moved row (in two partitions or in none), a row outside its partition, a duplicate, a changed or short partition total, a count change, a creation, a deletion, a new terminal state, a runtime change and a failed partition read each fall back to the sequential walk and record it; a bound first page answers none without a fallback; the allowlist accepts exactly the partition and count reads; a newest-page row missing from the union or with a different identity (a balanced replacement, including an already released abandoned Dispatch with a pending effect) and a structurally malformed partition row fall back to the sequential walk, which keeps the new Dispatch's claim and the preceding newest-first failure point; an opening and a closing newest page that differ in runtime, total, counts or any row identity (a creation, a deletion, or an old abandoned Dispatch settling beside a deletion and a creation) fall back too, and a balanced state swap of two old rows is refused by the partition totals.
 - <a id="a783"></a>**A783** — Exhausting the shared deadline during the call gives `discovery_budget` in every relevant result.
 - <a id="a784"></a>**A784** — A record changed during the call is `record_changed` only in the queries it is relevant to and unrelated uncertainty in the others; a record added during discovery is `inventory_changed` in every query.
 - <a id="a785"></a>**A785** — A stable fence's fingerprints equal an independent computation of the documented rule and the end returns the nine-field rows; a connected flip, a new terminal or a runtime change at the end, an incomplete end and a failed end each make the fence unstable and the batch `unknown` and incomplete while every result is unchanged.

@@ -314,41 +314,40 @@ def _fleet_partition(state: str, discovery) -> dict:
 def _fleet_partitioned(discovery) -> dict | None:
     """The all-Run inventory as the union of its six terminal-state partitions, read in parallel.
 
-    Completeness argument. Each partition is walked to its end with the sequential walk's cursor, runtime,
-    scope and identity checks; every row must pass the same structural checks projection makes
-    (`_worker_fact`) and carry its partition's terminal state; and the partition must hold exactly the
-    rows its own `page.total` names, a total that never changes across its pages. After every partition
-    is done, one unfiltered newest-first page gives the fleet's final `counts`, its total T and its
-    newest rows. The union is accepted only when every page and the final read report scope `all` with
-    one runtime; each partition's total equals the final `counts[state]` (absent means 0); the final
-    counts name no other state; no Dispatch appears in two partitions; no page's counts add up to more
-    than T; the union holds exactly T distinct Dispatches; and every row of the newest page (min(T, 100)
-    of them) is in the union with an equal row identity (`_identity_row`).
+    Completeness argument. The read is bracketed by two unfiltered newest-first pages of up to 100 rows:
+    the opening page is read before any partition, the closing page after every partition. Each partition
+    is walked to its end with the sequential walk's cursor, runtime, scope and identity checks; every row
+    must pass the structural checks projection makes (`_worker_fact`) and carry its partition's terminal
+    state; and the partition must hold exactly the rows its own `page.total` names, a total that never
+    changes across its pages. The union is accepted only when the opening and closing pages have equal
+    runtime, total, counts and row identities (`_identity_row`); every page reports scope `all` with that
+    runtime; each partition's total equals the closing `counts[state]` (absent means 0); the counts name
+    no other state; no Dispatch appears in two partitions; no page's counts add up to more than the
+    total; the union holds exactly the total; and every row of the closing page is in the union with an
+    equal identity.
 
-    Dispatches may be created, change state or be deleted while the partitions are read; nothing here
-    assumes Orca keeps a Dispatch. Take a Dispatch D that exists at the final read but is not in the union.
-    - D was created during the read. Rows are listed newest first, so D is on the newest page unless 100
-      newer Dispatches were created after it before the final read; on the page, it is missing from the
-      union and the read refuses. A Dispatch created after the final read is caught by the end fence's
-      newest page, and one with 100 newer creations is unreleased at the end, unless created released,
-      and so caught by the end fence's unreleased digest.
-    - D existed and changed state during the read, missing both its old and its new partition. Its new
-      partition's total then falls short of the final count, unless another row left that state after
-      its read. A row that moved out is listed twice (a duplicate) or is itself missing; a deleted row
-      lowers the total, so every page read before the deletion has a counts total above T and refuses,
-      unless a later creation restores the total, and that new row is on the newest page and must be in
-      the union. If D ends unreleased, the end fence's unreleased digest still differs from discovery's.
-    - A deletion alone lowers T below the union, and refuses.
-    What is left is a coincidence of a deletion, a later creation and a move of an older Dispatch into
-    `released`, all inside one discovery read, or more than 100 creations of already released
-    Dispatches; both stay within the fence's documented residual of released rows outside the newest
-    page. Each refusal falls back to the sequential walk, and any partition's first page reporting a
-    bound scope answers None, exactly as the sequential walk's first page does.
+    Nothing here assumes Orca keeps a Dispatch. It relies only on each page's counts being Orca's own
+    snapshot at that read, and on a Dispatch id never naming two Dispatches. Within the bracket nothing
+    moved: a creation changes the
+    newest page, a deletion lowers the total unless a creation also changes the newest page, and a state
+    change alters the counts unless another change balances it, and a balanced pair still leaves a row
+    listed twice or a partition total unequal to the counts. A Dispatch that exists only between the
+    two pages is counted by every page read while it exists, beside every row the pages show, so that
+    page's counts exceed the closing total and refuse. Every partition read lies inside the bracket, so the union is the inventory as it stood throughout. A change after the closing page is
+    the end fence's to detect. Each refusal falls back to the sequential walk, and a bound scope on the
+    opening page or on any partition's first page answers None, exactly as the sequential walk's first
+    page does.
 
     The union is ordered by partition, in `TERMINAL_STATES` order, then in Orca's page order, so the
     same Orca state always gives the same order. The final read is the unfiltered newest-first page,
     which the batch fence also digests.
     """
+    opening = discovery.read([*WORKER_LIST, "--limit", "100"])  # Before any partition read.
+    scope = opening["result"].get("scope")
+    if isinstance(scope, dict) and scope.get("source") == "bound":
+        discovery.fleet_start = PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
+        return None
+    opened = _page_identity(opening)
     futures = [discovery.submit(("partition", state), lambda state=state: _fleet_partition(state, discovery))
                for state in TERMINAL_STATES]
     outcomes = []
@@ -366,7 +365,9 @@ def _fleet_partitioned(discovery) -> dict | None:
     runtimes = {row["runtime"] for row in outcomes}
     if len(runtimes) != 1:
         raise _rejected("Partitions report different native runtimes")
-    final = discovery.read([*WORKER_LIST, "--limit", "100"])  # The newest page also carries total and counts.
+    final = discovery.read([*WORKER_LIST, "--limit", "100"])  # The closing page also carries total and counts.
+    if _page_identity(final) != opened:
+        raise _rejected("The inventory changed between the opening and closing pages")
     result, runtime = final["result"], final["runtime"]
     scope, page = result.get("scope"), result.get("page")
     if not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None:
@@ -400,6 +401,20 @@ def _fleet_partitioned(discovery) -> dict | None:
             raise _rejected("The newest page differs from the partition union")
     discovery.fleet_start = {"page": final, "rows": workers}
     return {"runtime": runtime, "workers": workers, "complete": True}
+
+
+def _page_identity(response: dict):
+    """An unfiltered newest-first page as compared across the partition read: runtime, total, counts and the
+    identity of every row, or a refusal when the page does not prove all-Run coverage."""
+    result = response["result"]
+    scope, page, rows = result.get("scope"), result.get("page"), result.get("workers")
+    if not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None:
+        raise _rejected("A newest page does not prove all-Run coverage")
+    if (not isinstance(page, dict) or type(page.get("total")) is not int or page["total"] < 0
+            or not isinstance(rows, list) or len(rows) > 100 or result.get("truncated", False) is not False):
+        raise _rejected("A newest page is incomplete")
+    identities = sorted((_identity_row(row) for row in rows), key=lambda row: str(row["dispatchId"]))
+    return response["runtime"], page["total"], _counts(result.get("counts")), identities
 
 
 def _worker_fact(row: dict) -> dict:
