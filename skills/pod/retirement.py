@@ -1,6 +1,7 @@
 """The owner's historical retirement of delivered objectives whose coordinator is lost (R112, R113).
 
-Retirement abandons the named record and releases only its named worktrees. The objective is not
+Retirement abandons the named record and releases every worktree it records: the paths the decision
+names, after the checks below, and every other recorded worktree, as a closed objective's are. The objective is not
 closed, continued, QUALIFIED or successful: its Governor journal, admissions, obligations and
 evidence stay exactly as recorded, and the record accepts no later write. No coordinator is
 revived, and no successor, agent session or worker is created. CE stays the resource authority.
@@ -46,7 +47,8 @@ ENTRY = {"at", "decision", "instruction", "reason", "repository", "objectives", 
 LOCATED_ENTRY = ENTRY | {"locations"}
 # How a released path stood when the owner decided: a verified worktree of this repository, or proven gone.
 RELEASABLE = ("existing", "absent")
-# Cleanup's conservative hold on locations a record never listed: ended by retirement, or never held (R113).
+# Cleanup's conservative hold on locations a record never listed. Retirement ends it for every record (R113, R206);
+# `none` stays readable only so that a decision made before R206 refuses as changed facts, not as malformed.
 UNRECORDED = ("hold_ends", "none")
 GOVERNOR_ROW = {"kind", "id", "action", "candidate", "outcome"}
 ADMISSION_ROW = {"kind", "id", "role", "state", "dispatch", "reported"}
@@ -55,9 +57,8 @@ PRESERVED_OUTCOMES = ("pending", "UNKNOWN", "FAILED")
 MAX_OBJECTIVES = 16
 MAX_RECORDS = 64
 MAX_LISTED = 64
-# A decision releases as many paths as it can leave retained: a record with at most 64 recorded worktrees can
-# release them all in one decision (its record accepts no later write). The whole request names at most as many,
-# which bounds the native reads made while every requested objective lock is held.
+# The whole request names at most 64 paths to check, which bounds the native reads made while every requested
+# objective lock is held. Recorded worktrees it does not name are released without those reads (R206).
 MAX_PATHS = MAX_LISTED
 MAX_DELIVERY = 16
 ACTION = ("Read it with pod status --objective {}; the owner's historical retirement released its worktrees: "
@@ -600,12 +601,13 @@ def _recorded(state: dict) -> tuple[set[str], bool]:
     return {os.path.normpath(path) for path in facts["worktrees"]}, facts["locations_complete"]
 
 
-def _reservations(state: dict, release: list[str]) -> tuple[list[str], str]:
-    """What retirement leaves held and ends: the recorded worktrees it does not release, and whether it ends
-    cleanup's conservative hold on locations the record never listed. A record under retirement accepts no write, so
-    these read the same afterwards as when the owner decided."""
-    recorded, complete = _recorded(state)
-    return sorted(recorded - set(release)), "none" if complete else "hold_ends"
+def _reservations(state: dict, release: list[str]) -> dict:
+    """What retirement holds and ends, computed from the whole record on every read (R206): a retired objective holds
+    no worktree, so `retained` is empty, `also_released` lists the recorded worktrees the decision did not name, and
+    cleanup's hold on locations the record never listed ends. Nothing is stored, so a retirement recorded before
+    this rule, current entry or older record's sidecar alike, reads the same way."""
+    recorded, _ = _recorded(state)
+    return {"retained": [], "also_released": sorted(recorded - set(release)), "unrecorded_locations": "hold_ends"}
 
 
 def status_block(state: dict) -> dict | None:
@@ -613,10 +615,9 @@ def status_block(state: dict) -> dict | None:
     entry = state.get(FIELD) if isinstance(state, dict) else None
     if not isinstance(entry, dict):
         return None
-    retained, unrecorded = _reservations(state, entry["released"])
+    held = _reservations(state, entry["released"])
     return {"retired_at": entry["at"], "completed": False, "released": list(entry["released"]),
-            "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None,
-            "retained": retained, "unrecorded_locations": unrecorded,
+            "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None, **held,
             "preserved": [dict(row) for row in entry["preserved"]], "counts": counts(entry["preserved"]),
             "unfinished": list(entry["unfinished"]), "delivery": list(entry["delivery"]),
             "reason": entry["reason"], "decided_with": list(entry["objectives"]),
@@ -1109,12 +1110,13 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
                     + "; historical retirement never ends a successor that holds a claim.")
     if isinstance(state.get(FIELD), dict):
         entry = state[FIELD]
-        retained, unrecorded = _reservations(state, entry["released"])
+        held = _reservations(state, entry["released"])
         verdict.update(status="retired", condition="objective_retired", facts={
             "objective": objective, "owner": entry["owner"], "runs": list(entry["runs"]),
             "release": list(entry["released"]),
             "locations": [dict(row) for row in entry["locations"]] if "locations" in entry else None,
-            "retained": retained, "unrecorded_locations": unrecorded, "records": list(entry["preserved"])},
+            "retained": held["retained"], "unrecorded_locations": held["unrecorded_locations"],
+            "records": list(entry["preserved"])}, also_released=held["also_released"],
             message="The owner's historical retirement already covers this objective.", next_action=ACTION.format(objective))
         return verdict
     map_state = map_of(state)
@@ -1164,11 +1166,10 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         if path not in recorded:
             return fail("path_not_recorded", "A path to release is not one of the objective's recorded worktrees.",
                         "Name only worktrees pod status --list records for this objective.")
-    retained, unrecorded = _reservations(state, release)
-    if len(retained) > MAX_LISTED:
-        return fail("scope_unreadable", f"More than {MAX_LISTED} recorded worktrees left held cannot be bound to "
-                    "one decision.")
-    verdict["facts"].update(retained=retained, unrecorded_locations=unrecorded)
+    held = _reservations(state, release)
+    verdict["facts"].update(retained=held["retained"], unrecorded_locations=held["unrecorded_locations"])
+    # Computed, never decided: the decision binds the paths it names, and the rest of the record follows (R206).
+    verdict["also_released"] = held["also_released"]
     if not refs:
         return fail("scope_unreadable", "The objective records no Run whose work could be proven settled.")
     admissions = doc["admissions"] if doc is not None else state["admissions"]
@@ -1312,15 +1313,13 @@ def _released(locations: list[dict]) -> str:
 
 
 def _effects(row: dict) -> str:
-    """What cleanup keeps holding for one objective after retirement, and the hold retirement ends (R113)."""
-    facts, said = row["facts"], ""
-    if facts["retained"]:
-        said += (f" Objective {row['objective']} keeps holding its recorded worktree(s) it does not release: "
-                 + ", ".join(facts["retained"]) + ".")
-    if facts["unrecorded_locations"] == "hold_ends":
-        said += (f" Objective {row['objective']}'s record does not list every location its work used, so while it "
-                 "is open cleanup holds every task worktree of this repository for it; retirement ends that hold.")
-    return said
+    """What else retirement releases for one objective (R113, R206): a retired objective holds no worktree."""
+    also = row.get("also_released") or []
+    said = f" Retirement releases every worktree objective {row['objective']} records"
+    if also:
+        said += ", including the ones not named above: " + ", ".join(also)
+    return said + ("; Pod's record holds nothing afterwards, including any location the record never listed, and "
+                   "CE's own cleanup protections still apply.")
 
 
 def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:

@@ -788,11 +788,10 @@ def render(result: dict) -> None:
                 print(f"  Released {clean(row['path'])}: "
                       + ("absent from this host, Git and Orca when the owner decided" if row["disposition"] == "absent"
                          else "an existing worktree of this repository when the owner decided"))
-            for path in retirement["retained"]:
-                print(f"  Still held: {clean(path)}, a recorded worktree this retirement did not release")
-            if retirement["unrecorded_locations"] == "hold_ends":
-                print("  Its record does not list every location its work used; retirement ended cleanup's hold on "
-                      "the locations it never listed")
+            for path in retirement["also_released"]:
+                print(f"  Also released: {clean(path)}, a recorded worktree the decision did not name")
+            print("  Pod's record holds no worktree of this objective, including any location it never listed; "
+                  "CE's own cleanup protections still apply")
             for reference in retirement["delivery"]:
                 print(f"  Delivery reference: {clean(reference)}")
             preserved = result.get("assignments", {}).get("preserved", [])
