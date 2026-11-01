@@ -270,10 +270,19 @@ def _captured_output(value: str | bytes | None) -> dict:
             "base64": base64.b64encode(raw).decode("ascii") if len(raw) <= MAX_OUTPUT else None}
 
 
+WORKER_TERMINAL_STATES = ("active", "reclaimable", "retained", "release_pending", "release_unknown", "released")
+
+
 def _worker_list_tail(tail: list[str]) -> bool:
+    if tail == ["--limit", "1"]:
+        return True  # Admission's final counts read after its terminal-state partitions.
     bounded = tail[:2] == ["--limit", "100"]
     if bounded:
         tail = tail[2:]
+        if tail[:1] == ["--terminal-state"]:
+            if len(tail) < 2 or tail[1] not in WORKER_TERMINAL_STATES:
+                return False
+            tail = tail[2:]
     if bounded and (not tail or len(tail) == 2 and tail[0] == "--cursor" and _argument(tail[1])):
         return True  # Admission verifies the returned all-Run scope on every page.
     if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):

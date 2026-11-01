@@ -69,7 +69,7 @@ class AdmissionQueryTests(AdmissionQueryCase):
              self.current_chunks_only() as chunks:
             result = self.query()
         self.assertTrue(result["complete"])
-        self.assertEqual(reads.call_count, 4)  # primary plus concurrency recheck, each record
+        self.assertEqual(reads.call_count, 2)  # one primary per record; the recheck compares bytes before decoding
         self.assertGreater(len(chunks), 0)
         self.assertEqual([row["objective"] for row in result["claims"]], ["objective"])
 
@@ -399,7 +399,9 @@ class AttributionReadTests(AdmissionQueryCase):
         self.assertTrue(result["complete"], result["unknowns"])
         self.assertEqual(files.call_count, 4)  # two attribution reads, relevant claims and recheck
         self.assertGreater(len(chunks), 0)
-        self.assertEqual(native_reads.call_count, 2)
+        # Six terminal-state partition reads, which this double cannot prove complete, then the one-page
+        # sequential fallback and the terminal list: still one native inventory, no per-record native read.
+        self.assertEqual(native_reads.call_count, 8)
         self.assertEqual(journals.call_count, 0)  # Current effects use their projection, not a full journal.
 
     def test_wrong_record_key_is_unknown_instead_of_foreign(self):
