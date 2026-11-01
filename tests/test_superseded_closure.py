@@ -266,3 +266,80 @@ class WithdrawalAuthorityRefusalTests(KernelCase):
         self.assertNotIn(sentinel, json.dumps(caught.exception.detail))
         self.assertIn("withdrawal.by", str(caught.exception))
         self.assertIn("revision_authority", caught.exception.detail["next_action"])
+
+
+
+class EarlierWithdrawalClosureTests(KernelCase):
+    """A satisfied criterion and an external row withdrawn by an earlier write; the target then moves with
+    changed governance and a plain close follows."""
+
+    commit = governance_commit
+
+    def setUp(self):
+        super().setUp()
+        config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+        external = {"party": "third_party", "need": "an outside event", "unblocks_when": "the event arrives"}
+        self.write([self.criterion(), self.sub("R", state="blocked_external", external=external)],
+                   governance={"base_ref": "target"})
+        rows = self.stored()
+        rows[0].pop("executor")
+        rows[0].update(state="satisfied", evidence=[self.proof("O1")])
+        self.write(rows)
+
+    def move_target(self):
+        self.bound = read(self.project, "objective")["checkpoint"]["governance"]
+        self.target = self.commit("AGENTS.md", (self.project / "AGENTS.md").read_text() + "Docs are required.\n",
+                                  "one-line policy change")
+        git(self.project, "update-ref", "refs/remotes/origin/target", self.target)
+
+    def withdraw(self):
+        rows = self.stored()
+        rows[1].pop("external")
+        rows[1].update(state="withdrawn", withdrawal={"by": "agent_decision", "reason": "Superseded by a plain PR"})
+        self.write(rows, revision_authority=LOCAL)
+
+    def refused_unchanged(self, rows, **fields):
+        path = objective_root(self.project, "objective") / "context.json"
+        before = path.read_bytes()
+        with self.assertRaises(PodError) as caught:
+            self.write(rows, **fields)
+        self.assertEqual(path.read_bytes(), before)
+        return caught.exception
+
+    def test_a_plain_close_after_an_earlier_withdrawal_keeps_the_bound_baseline(self):
+        self.withdraw()
+        self.move_target()
+        result = self.write(self.stored(), close=True)
+        stored = read(self.project, "objective")["checkpoint"]
+        self.assertTrue(stored["closure"])
+        self.assertEqual(stored["governance"], self.bound)
+        adoption = result["governance_adoption"]
+        self.assertEqual((adoption["adopted"], adoption["closure"]), (False, "withdrawn"))
+        self.assertEqual((adoption["base"], adoption["target"]), (self.bound["base"], self.target))
+        self.assertEqual([row["obligation"] for row in stored["closure"]["report"]["withdrawn"]], ["R"])
+
+    def test_a_minimal_close_after_an_earlier_withdrawal_keeps_the_bound_baseline(self):
+        self.withdraw()
+        self.move_target()
+        seq = read(self.project, "objective")["checkpoint"]["seq"] + 1
+        result = checkpoint(self.project, "objective", owner="owner", value=self.core(seq=seq, close=True),
+                            native={"runtime": "runtime", "delegation": "available"})
+        self.assertTrue(result["checkpoint"]["closure"])
+        self.assertEqual(result["checkpoint"]["governance"], self.bound)
+        self.assertEqual((result["governance_adoption"]["adopted"], result["governance_adoption"]["closure"]),
+                         (False, "withdrawn"))
+
+    def test_a_plain_close_that_omits_a_recorded_field_keeps_ordinary_checks(self):
+        self.withdraw()
+        self.move_target()
+        rows = self.stored()
+        rows[0].pop("boundary")
+        self.assertEqual(self.refused_unchanged(rows, close=True).code, "governance_changed")
+
+    def test_an_all_satisfied_record_without_a_withdrawal_keeps_ordinary_checks(self):
+        rows = self.stored()
+        rows[1].pop("external")
+        rows[1].update(state="satisfied", evidence=[self.proof("R")])
+        self.write(rows)
+        self.move_target()
+        self.assertEqual(self.refused_unchanged(self.stored(), close=True).code, "governance_changed")

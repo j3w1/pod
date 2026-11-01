@@ -496,7 +496,7 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
     view = None
     if isinstance(objective, str) and checkpoint.get("obligations") is not None:
         try:
-            view = kernel_view(project_for_state(checkpoint, project), objective, state=state)
+            view = kernel_view(project_for_state(checkpoint, project), objective, state=state, delivered=True)
             result["obligations"] = view["status"]["map"]
             result["obligation_lines"] = view["status"]["lines"]
             result["native_settlement"] = view["settlement"]
