@@ -983,7 +983,9 @@ def _proof(project: Path, objective: str, candidate: str) -> dict:
     checkpoint = state.get("checkpoint") or {}
     if checkpoint.get("candidate") != candidate:
         return {"status": "blocked", "candidate": candidate, "reason": "candidate_mismatch"}
-    view = kernel_view(project, objective, state=state, candidate=candidate)
+    # Proof of the exact candidate reads each bound source from the candidate's own Git tree, never from the
+    # working files of whichever checkout the caller names (pod#184).
+    view = kernel_view(project, objective, state=state, candidate=candidate, sources_at=candidate)
     from .obligations import _persisted_rows, TERMINAL
     gaps, unavailable = [], []
     if view["map"] is None:

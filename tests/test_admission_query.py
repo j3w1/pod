@@ -361,6 +361,55 @@ class CandidateProofTests(KernelCase):
         self.assertIn("DELIVER", proof["objective_unfinished"])
 
 
+class CandidateTreeProofTests(KernelCase):
+    """pod#184: the exact-candidate proof judges bound sources against the candidate's Git tree, so it does not
+    depend on which checkout `--repository` names (R185). The candidate is the fixture base; the review binds
+    README.md as the worktree holds it when the review is admitted."""
+    from tests.kernel_support import assurance_review as review, assurance_satisfied as satisfied
+
+    def proved(self):
+        from pod.records import source_identity
+        self.satisfied(sources=[source_identity(self.project, "README.md")])
+        rows = self.stored()
+        criterion = next(row for row in rows if row["id"] == "O1")
+        criterion.pop("executor", None)
+        criterion.update(state="satisfied", evidence=[self.proof("O1")])
+        self.write(rows)
+
+    def proof_now(self):
+        from pod.operations import OrcaPort
+        with patch.object(OrcaPort, "read_native", autospec=True,
+                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
+            return admission._proof(self.project, "objective", self.base)
+
+    def commit_readme(self, text):
+        (self.project / "README.md").write_text(text)
+        git(self.project, "add", "README.md")
+        git(self.project, "commit", "-qm", "later work")
+
+    def withheld(self, proof):
+        self.assertEqual((proof["status"], proof["assurance"]["label"]), ("blocked", "WITHHELD"), proof)
+        self.assertEqual(proof["assurance"]["assurance_unbound"], [{"obligation": "A", "gap": "invalidated"}])
+        self.assertIn("assurance_unbound", proof["gaps"])
+
+    def test_a_root_on_another_branch_reads_the_candidates_own_tree(self):
+        self.proved()
+        git(self.project, "checkout", "-qb", "other")
+        self.commit_readme("another branch's bytes\n")  # the root now holds other bytes at the bound path
+        proof = self.proof_now()
+        self.assertEqual((proof["status"], proof["assurance"]["label"], proof["gaps"]), ("ready", "QUALIFIED", []))
+
+    def test_proof_bound_to_bytes_the_candidate_tree_lacks_is_invalidated(self):
+        self.commit_readme("bytes of a later commit\n")  # the root holds them; the candidate's tree does not
+        self.proved()
+        self.withheld(self.proof_now())
+
+    def test_proof_bound_to_uncommitted_bytes_is_invalidated(self):
+        (self.project / "README.md").write_text("uncommitted bytes\n")
+        self.proved()
+        self.withheld(self.proof_now())
+
+
 class AttributionReadTests(AdmissionQueryCase):
     """Attribution excludes only repository-bound primary records."""
     def foreign_record(self, name="foreign"):

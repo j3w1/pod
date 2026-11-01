@@ -9531,6 +9531,19 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A790",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.CandidateTreeProofTests.test_a_root_on_another_branch_reads_the_candidates_own_tree",
+        "tests.test_admission_query.CandidateTreeProofTests.test_proof_bound_to_bytes_the_candidate_tree_lacks_is_invalidated",
+        "tests.test_admission_query.CandidateTreeProofTests.test_proof_bound_to_uncommitted_bytes_is_invalidated"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A690",
       "required_evidence": [
         "unit"
