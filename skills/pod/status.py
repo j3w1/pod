@@ -788,8 +788,9 @@ def render(result: dict) -> None:
                   "obligation(s); this record accepts no writes")
             for row in retirement["locations"] or []:
                 print(f"  Released {clean(row['path'])}: "
-                      + ("absent from this host, Git and Orca when the owner decided" if row["disposition"] == "absent"
-                         else "an existing worktree of this repository when the owner decided"))
+                      + ("absent from this host, Git and Orca when the decision was recorded"
+                         if row["disposition"] == "absent"
+                         else "an existing worktree of this repository when the decision was recorded"))
             for path in retirement["also_released"]:
                 print(f"  Also released: {clean(path)}, a recorded worktree the decision did not name")
             print("  Pod's record holds no worktree of this objective, including any location it never listed; "

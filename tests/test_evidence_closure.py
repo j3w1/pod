@@ -632,7 +632,8 @@ class LostCoordinatorTests(GroupedTable):
 
 
 class UnreadableRecordProofTests(ClosureCase):
-    """R206: an unreadable record holds a Run another live coordinator holds only when it could name that Run."""
+    """R206: an unreadable record holds a Run another live coordinator holds only when its decoded record names
+    that Run, or when it cannot be decoded."""
 
     def test_an_unreadable_record_holds_only_a_run_it_could_name(self):
         from pod.ledger import state_root
@@ -640,9 +641,9 @@ class UnreadableRecordProofTests(ClosureCase):
         _rebound("closed")(self)  # The Run is held by a live recovery whose own record is closed.
         stray = state_root(self.project) / "zz-stray"
         stray.mkdir()
-        (stray / "context.json").write_text("{")
+        (stray / "context.json").write_text('["elsewhere"]')  # Decoded whole, it never names the Run.
         self.assertEqual(prove(self.project, "objective")["status"], "proved")
-        (stray / "context.json").write_text('{"runId": "run"')
+        (stray / "context.json").write_text("{")  # Undecodable: its membership is unknown, so it holds.
         verdict = prove(self.project, "objective")
         self.assertIn("run_held", [row["code"] for row in verdict["conditions"]])
 

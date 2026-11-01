@@ -489,9 +489,10 @@ class CompatibilityTests(ReadinessCase):
     def test_a_retired_objective(self):
         self.delivered()
         self.retire(self.decide())
-        # R206: retirement holds nothing, so the held and ended-hold lines became also-released and holds-nothing.
-        revised = (("  Still held: ", "  Its record does not list every location"),
-                   ("  Also released: ", "  Pod's record holds no worktree"))
+        # R206: retirement holds nothing, so the held and ended-hold lines became also-released and holds-nothing,
+        # and each released path reads as it stood when the decision was recorded.
+        revised = (("  Still held: ", "  Its record does not list every location", "  Released "),
+                   ("  Also released: ", "  Pod's record holds no worktree", "  Released "))
         self.assertEqual(self.compare("next", revised_text=revised)["readiness"]["state"], "retired")
 
 

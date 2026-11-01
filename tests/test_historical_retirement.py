@@ -334,6 +334,8 @@ REFUSALS = {
     "continued": (_continued, "objective_continued"),
     "continues": (_continues, "objective_continues"),
     "claimed-by-another": (_claimed_by_another, "objective_continues"),
+    "record-unreadable-elsewhere": (_record_unreadable_elsewhere, "scope_unreadable"),
+    "record-directory-unreadable": (_record_directory_unreadable, "scope_unreadable"),
     "owner-live": (lambda case: case.terminals.update(owner="live"), "owner_not_lost"),
     "owner-unreadable": (lambda case: case.terminals.update(owner="unreadable"), "owner_not_lost"),
     "owner-stop-unconfirmed": (lambda case: case.terminals.update(owner="stop-unconfirmed"), "owner_not_lost"),
@@ -364,6 +366,7 @@ class RefusalTableTests(GroupedTable):
               "test_unreadable_records_refuse": ["record-unsupported", "journal-unreadable"],
               "test_handoff_refuses": ["handoff-pending"],
               "test_scope_refuses": ["no-run"],
+              "test_other_records_refuse": ["record-unreadable-elsewhere", "record-directory-unreadable"],
               "test_claims_refuse": ["claimed-by-another"],
               "test_coordinator_refuses": ["owner-live", "owner-unreadable", "owner-stop-unconfirmed"],
               "test_run_binding_refuses": ["run-rebound", "generation-changed"],
@@ -405,6 +408,9 @@ class RefusalTableTests(GroupedTable):
         self.rows()
 
     def test_handoff_refuses(self):
+        self.rows()
+
+    def test_other_records_refuse(self):
         self.rows()
 
     def test_claims_refuse(self):
@@ -487,37 +493,28 @@ class DecisionWordingTests(RetirementCase):
 
 
 class UnreadableRecordTests(RetirementCase):
-    """R206: another Pod record that cannot be read holds only itself; detection names it and goes on."""
+    """R206: another record Pod can decode whole but cannot use holds detection only of an objective it names."""
 
-    def test_an_unreadable_record_beside_it_never_refuses_detection_or_the_decision(self):
-        for arrange in (_record_unreadable_elsewhere,):
-            case = RetirementCase(); case.setUp()
-            try:
-                with self.subTest(arrange=arrange.__name__):
-                    case.delivered()
-                    decision = case.decide()
-                    arrange(case)
-                    verdict = case.retire()["objectives"][0]
-                    self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
-                    self.assertEqual([Path(path).name for path in verdict["unavailable_records"]], ["stray"])
-                    self.assertEqual(case.retire(decision)["status"], "retired")
-            finally:
-                case.doCleanups()
+    def stray(self, text):
+        stray = objective_root(self.project, "objective").parent / "stray"
+        stray.mkdir()
+        (stray / "context.json").write_text(text)
 
-    def test_an_unreadable_record_that_names_the_objective_holds_its_detection(self):
+    def test_a_decodable_record_that_names_nothing_here_never_refuses_detection(self):
         self.delivered()
-        _record_unreadable_elsewhere(self)
-        stray = objective_root(self.project, "objective").parent / "stray" / "context.json"
-        stray.write_text('{"continued_by": {"objective": "objective"')  # Its bytes name this objective exactly.
+        decision = self.decide()
+        self.stray('["elsewhere"]')  # Not a record object, decoded whole; it names no objective here.
+        verdict = self.retire()["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+        self.assertEqual([Path(path).name for path in verdict["unavailable_records"]], ["stray"])
+        self.assertEqual(self.retire(decision)["status"], "retired")
+
+    def test_a_decodable_record_that_names_the_objective_holds_its_detection(self):
+        self.delivered()
+        self.stray('["obj\\u0065ctive"]')  # Its decoded string is this objective's exact name.
         verdict = self.retire()["objectives"][0]
         self.assertEqual((verdict["status"], verdict["condition"]), ("refused", "scope_unreadable"))
         self.assertEqual([Path(path).name for path in verdict["unavailable_records"]], ["stray"])
-
-    def test_a_record_directory_pod_cannot_read_still_holds_detection(self):
-        self.delivered()
-        _record_directory_unreadable(self)  # Its bytes cannot be read at all, so it could name this objective.
-        verdict = self.retire()["objectives"][0]
-        self.assertEqual((verdict["status"], verdict["condition"]), ("refused", "scope_unreadable"))
 
 
 class RefusalTableShapeTests(unittest.TestCase):
@@ -770,7 +767,8 @@ class RecordShapeTests(unittest.TestCase):
     def test_a_malformed_entry_makes_the_record_unsupported(self):
         reported_unbound = [{"kind": "admission", "id": "a", "role": "review", "state": "reserved", "dispatch": None,
                              "reported": True}]
-        for changes in ({"released": []}, {"released": ["relative"]}, {"delivery": []}, {"preserved": reported_unbound},
+        # An empty release is a record-only retirement (R206); more paths than one request names is malformed.
+        for changes in ({"released": [f"/w/{index}" for index in range(65)]}, {"released": ["relative"]}, {"delivery": []}, {"preserved": reported_unbound},
                         {"preserved": [{"kind": "governor", "id": "g", "action": "x", "candidate": "c", "outcome": "PASS"}]},
                         {"native": {}}, {"extra": 1}):
             with self.subTest(changes=changes), self.assertRaises(PodError) as caught:

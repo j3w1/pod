@@ -3388,6 +3388,7 @@
         "tests.test_historical_retirement.RefusalTableTests.test_unreadable_records_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_scope_refuses",
         "tests.test_historical_retirement.RefusalTableTests.test_handoff_refuses",
+        "tests.test_historical_retirement.RefusalTableTests.test_other_records_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_claims_refuse",
         "tests.test_historical_retirement.RefusalTableTests.test_coordinator_refuses",
         "tests.test_historical_retirement.RefusalTableTests.test_run_binding_refuses",
@@ -4160,7 +4161,7 @@
       ],
       "offline_test": [
         "tests.test_carried_claim.ReservationTests.test_closure_proves_no_claim_names_a_successor_that_already_started",
-        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_neither_an_unstarted_objective_nor_its_closure"
+        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_an_unstarted_objective_and_any_closure"
       ],
       "status": "NOT_RUN"
     },
@@ -4190,6 +4191,7 @@
         "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_two_completed",
         "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_after_link",
         "tests.test_carried_claim.ClosedReplayTableTests.test_candidate_2b613c8_after_rows",
+        "tests.test_carried_claim.ClosedReplayTableTests.test_current_unreadable",
         "tests.test_carried_claim.ClosedReplayTableShapeTests.test_the_closed_replay_table_runs_every_row_once"
       ],
       "status": "NOT_RUN"
@@ -10227,13 +10229,16 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_neither_an_unstarted_objective_nor_its_closure",
+        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_holds_an_unstarted_objective_and_any_closure",
         "tests.test_carried_claim.UnreadableScanTests.test_a_readable_claim_is_found_before_an_unreadable_record",
-        "tests.test_historical_retirement.UnreadableRecordTests.test_an_unreadable_record_beside_it_never_refuses_detection_or_the_decision",
+        "tests.test_historical_retirement.UnreadableRecordTests.test_a_decodable_record_that_names_nothing_here_never_refuses_detection",
         "tests.test_evidence_closure.UnreadableRecordProofTests.test_an_unreadable_record_holds_only_a_run_it_could_name",
-        "tests.test_carried_claim.ReservationTests.test_an_unreadable_record_that_names_an_objective_holds_only_that_objective",
-        "tests.test_historical_retirement.UnreadableRecordTests.test_an_unreadable_record_that_names_the_objective_holds_its_detection",
-        "tests.test_historical_retirement.UnreadableRecordTests.test_a_record_directory_pod_cannot_read_still_holds_detection"
+        "tests.test_carried_claim.ReservationTests.test_a_decodable_record_holds_only_the_objective_it_names",
+        "tests.test_historical_retirement.UnreadableRecordTests.test_a_decodable_record_that_names_the_objective_holds_its_detection",
+        "tests.test_historical_retirement.RefusalTableTests.test_other_records_refuse",
+        "tests.test_record_membership.MembershipTests.test_each_record_shape_holds_only_what_it_could_name",
+        "tests.test_record_membership.MembershipTests.test_an_outer_deadline_still_refuses_on_its_own",
+        "tests.test_record_membership.LazyPageTests.test_a_missing_descendant_page_stays_inside_its_record"
       ],
       "status": "NOT_RUN"
     },
@@ -10248,7 +10253,7 @@
         "tests.test_handoff_scope.OlderSchemaScopeTests.test_unproved_layouts",
         "tests.test_handoff_scope.OlderSchemaScopeTests.test_records_that_could_name_the_run",
         "tests.test_handoff_scope.OlderSchemaScopeShapeTests.test_the_scope_table_runs_every_row_once",
-        "tests.test_history_boundaries.HistoryScanTests.test_an_unreadable_record_holds_only_a_run_it_could_name",
+        "tests.test_record_membership.MembershipTests.test_each_record_shape_holds_only_what_it_could_name",
         "tests.test_evidence_closure.UnreadableRecordProofTests.test_an_unreadable_record_holds_only_a_run_it_could_name",
         "tests.test_owner_handoff.TransitionTableTests.test_pending_unreadable_scope_and_nonlive_success_do_not_abort"
       ],
@@ -10265,7 +10270,23 @@
         "tests.test_historical_retirement.DecisionWordingTests.test_the_write_refusal_and_handoff_word_an_agent_decision_neutrally",
         "tests.test_historical_retirement.DecisionWordingTests.test_handoff_window_and_claim_word_an_agent_decision_neutrally",
         "tests.test_historical_retirement.DecisionWordingTests.test_an_owner_decision_still_names_the_owner",
-        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_agent_decision_the_hands_off_policy_accepts_retires"
+        "tests.test_retirement_superseded.SupersededRetirementTests.test_an_agent_decision_the_hands_off_policy_accepts_retires",
+        "tests.test_retirement_absent.LocationWordingTests.test_an_agent_decision",
+        "tests.test_retirement_absent.LocationWordingTests.test_an_owner_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A778",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_retirement_absent.RecordOnlyTests.test_an_empty_release_retires_beside_another_objectives_live_terminal",
+        "tests.test_retirement_absent.RecordOnlyTests.test_an_empty_release_still_refuses_a_live_owner",
+        "tests.test_retirement_absent.RecordOnlyTests.test_an_empty_release_still_refuses_an_unsettled_run",
+        "tests.test_historical_retirement.RecordShapeTests.test_a_malformed_entry_makes_the_record_unsupported"
       ],
       "status": "NOT_RUN"
     }

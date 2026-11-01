@@ -17,6 +17,13 @@ from .util import public_decisions
 
 
 
+# Plain words for why a record is unavailable, by its code.
+CONDITIONS = {"unsafe_state": "its directory or record is redirected", "unreadable": "its directory cannot be read",
+              "invalid_record": "its record is empty or not valid JSON", "state_unsupported": "its record is not an "
+              "object Pod reads", "history_missing": "part of its stored history is missing",
+              None: "its record cannot be read whole"}
+
+
 def _location(selector: object) -> str | None:
     """The absolute path an Orca placement selector or worktree id names, else None."""
     if not isinstance(selector, str):
@@ -97,6 +104,59 @@ def _schema(raw: dict) -> str:
     return "current"
 
 
+def _row(entry, raw: dict, target: Path, context: dict, worktree: str | None) -> tuple[str, dict | None]:
+    """One readable record's row, `("row", row)`, or why it has none (`unattributed`, `skip`). Every lazy read of
+    the record happens here, inside the caller's per-record boundary (R206)."""
+    from .ledger import record_name
+    name = _name(raw)
+    if name is None:
+        return "unattributed", None
+    if record_name(target, context, name) != entry.name:
+        return "skip", None
+    facts = _facts(raw)
+    from .evidence_closure import block as closure_block, compact
+    closure = closure_block(Path(entry.path))
+    phase = _phase(raw, Path(entry.path), target)
+    if closure is not None and phase == "open":
+        phase = "closed"  # Closed by evidence, whatever the record's schema (R145, R146).
+    row = {"objective": name, "record": entry.name, "phase": phase, "schema": _schema(raw),
+           **facts}
+    from .succession import links
+    row.update(links(target, raw))
+    from .readiness import label
+    if closure is not None and phase == "closed":
+        row["readiness"] = "closed"
+    elif phase == "retired" and row["schema"] == "superseded":
+        row["readiness"] = "retired"
+    else:
+        row["readiness"] = label(Path(entry.path), raw) if row["schema"] == "current" else "unavailable"
+    row["closure_basis"] = "evidence" if closure is not None else "coordinator" if phase == "closed" else None
+    row["evidence_closure"] = (None if closure is None else closure if closure["status"] == "unreadable"
+                               else compact(closure))
+    if row["phase"] == "retired" and row["schema"] == "current":
+        from .retirement import status_block
+        row["retirement"] = status_block(raw)
+    elif row["phase"] == "retired" and row["schema"] == "superseded":
+        # An older record's entry certified beside it (R205).
+        from .retirement import older_state, status_block
+        try:
+            found = older_state(Path(entry.path), target)
+        except PodError:
+            found = None
+        if found is not None:
+            row["retirement"] = status_block(found[0])
+        else:
+            row["readiness"] = "unavailable"
+    if worktree is not None:
+        if context["worktree"] in facts["worktrees"]:
+            row["match"] = "worktree"
+        elif not facts["locations_complete"]:
+            row["match"] = "repository"  # Some recorded work has no location; it may touch it.
+        else:
+            return "skip", None
+    return "row", row
+
+
 def objective_list(project: Path, *, repository: str | None = None, worktree: str | None = None,
                    delivered: bool = False) -> dict:
     """Every recorded objective of one repository, or of one worktree of it.
@@ -155,53 +215,22 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
         if not isinstance(raw, dict):
             unreadable.append({"record": entry.name, "code": "state_unsupported"})
             continue
-        name = _name(raw)
-        if name is None:
+        try:
+            kind, row = _row(entry, raw, target, context, worktree)
+        except PodError as exc:
+            from .orca import DEADLINE_SPENT
+            if exc.code == DEADLINE_SPENT:
+                raise
+            unreadable.append({"record": entry.name, "code": exc.code})
+            continue
+        except (KeyError, TypeError, ValueError, AttributeError, RecursionError):
+            unreadable.append({"record": entry.name, "code": "invalid_record"})
+            continue
+        if kind == "unattributed":
             unattributed.append(entry.name)
             continue
-        if record_name(target, context, name) != entry.name:
-            continue  # Another repository's record, or another name under this key.
-        facts = _facts(raw)
-        from .evidence_closure import block as closure_block, compact
-        closure = closure_block(Path(entry.path))
-        phase = _phase(raw, Path(entry.path), target)
-        if closure is not None and phase == "open":
-            phase = "closed"  # Closed by evidence, whatever the record's schema (R145, R146).
-        row = {"objective": name, "record": entry.name, "phase": phase, "schema": _schema(raw),
-               **facts}
-        from .succession import links
-        row.update(links(target, raw))
-        from .readiness import label
-        if closure is not None and phase == "closed":
-            row["readiness"] = "closed"
-        elif phase == "retired" and row["schema"] == "superseded":
-            row["readiness"] = "retired"
-        else:
-            row["readiness"] = label(Path(entry.path), raw) if row["schema"] == "current" else "unavailable"
-        row["closure_basis"] = "evidence" if closure is not None else "coordinator" if phase == "closed" else None
-        row["evidence_closure"] = (None if closure is None else closure if closure["status"] == "unreadable"
-                                   else compact(closure))
-        if row["phase"] == "retired" and row["schema"] == "current":
-            from .retirement import status_block
-            row["retirement"] = status_block(raw)
-        elif row["phase"] == "retired" and row["schema"] == "superseded":
-            # An older record's entry certified beside it (R205).
-            from .retirement import older_state, status_block
-            try:
-                found = older_state(Path(entry.path), target)
-            except PodError:
-                found = None
-            if found is not None:
-                row["retirement"] = status_block(found[0])
-            else:
-                row["readiness"] = "unavailable"
-        if worktree is not None:
-            if context["worktree"] in facts["worktrees"]:
-                row["match"] = "worktree"
-            elif not facts["locations_complete"]:
-                row["match"] = "repository"  # Some recorded work has no location; it may touch it.
-            else:
-                continue
+        if kind == "skip":
+            continue
         rows.append(row)
     rows.sort(key=lambda row: (row["objective"], row["record"]))
     if delivered:
@@ -214,15 +243,17 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     # reads Orca and the host verifier only for open rows, inside a live Orca terminal, within a bounded budget.
     from .window import discover
     discover(rows, project=target)
-    # One record Pod cannot read holds only its own resources (R206): it is named `unavailable` with its code, and
-    # the list of every other objective stays complete.
-    result.update(objectives=rows, total=len(rows), truncated=False,
-                  unreadable_records=[{**item, "status": "unavailable"} for item in unreadable],
-                  unattributed_records=unattributed, complete=True)
+    # Every readable objective is listed, whatever another record is (R206). A record Pod cannot read or attribute
+    # is named with phase `unavailable` and its condition, and the list is not complete while one exists: it may be
+    # this repository's, and a consumer must not take its absence as proof.
+    unavailable = [{**item, "phase": "unavailable", "condition": CONDITIONS.get(item["code"], CONDITIONS[None])}
+                   for item in unreadable]
+    result.update(objectives=rows, total=len(rows), truncated=False, unreadable_records=unavailable,
+                  unattributed_records=unattributed, complete=not unreadable and not unattributed)
     result["next_safe_action"] = (
-        "every record under the state root was read; this list is complete" if not unreadable and not unattributed
-        else "every readable record is listed; each unreadable or unattributed record is unavailable and holds only "
-             "its own resources: repair or remove it")
+        "every record under the state root was read; this list is complete" if result["complete"]
+        else "every readable objective is listed; treat each unavailable or unattributed record as possibly "
+             "touching this scope until it is repaired or removed")
     return public_decisions(result)
 
 
@@ -253,7 +284,7 @@ def render(result: dict) -> None:
             print(f"    Delivery proof: {proof['status'].replace('_', ' ')}"
                   + "".join(f"; {clean(item['code'])}" for item in proof["conditions"][:4]))
     for item in result["unreadable_records"]:
-        print(f"  Unavailable record {clean(item['record'])}: {clean(item['code'])}; it holds only its own resources")
+        print(f"  Unavailable record {clean(item['record'])}: {clean(item['code'])} ({clean(item['condition'])})")
     for record in result["unattributed_records"]:
         print(f"  Unattributed record {clean(record)}")
     print(f"State root: {clean(scope['state_root'])}")

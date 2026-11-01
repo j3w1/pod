@@ -77,8 +77,8 @@ class DetectionTests(AbsentCase):
         self.assertEqual(verdict["native"]["exited_terminals"], 1)
         question = found["question"]
         for words in (self.gone + " (absent)", self.kept + " (existing worktree)",
-                      "Retirement releases every worktree objective objective records, including the ones not "
-                      "named above: " + self.where(),
+                      "Retirement ends objective objective's reservation of every worktree it records, including "
+                      "the ones not named above: " + self.where(),
                       "its missing directory does not prove that work stopped",
                       "An existing worktree is one of this repository that stands at the recorded path now"):
             self.assertIn(words, question)
@@ -92,7 +92,7 @@ class DetectionTests(AbsentCase):
         found = self.retire()
         facts = found["objectives"][0]["facts"]
         self.assertEqual((facts["unrecorded_locations"], facts["retained"]), ("hold_ends", []))
-        self.assertIn("Pod's record holds nothing afterwards, including any location the record never listed",
+        self.assertIn("its record holds nothing afterwards, including any location it never listed",
                       found["question"])
         decision = self.decide()
         self.assertEqual(decision["objectives"][0]["unrecorded_locations"], "hold_ends")
@@ -717,6 +717,71 @@ class RepositorySizeTests(AbsentCase):
         self.assertEqual(self.located(found)[self.gone]["evidence"]["git"], "unregistered")
 
 
+class LocationWordingTests(AbsentCase):
+    """Released-path text names no decider: it reads when the decision was recorded, for an agent or the owner."""
+
+    def released_text(self, *, agent):
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        release = self.request(self.gone, self.kept)
+        decision = self.decide(objectives=release)
+        if agent:
+            from pod import config
+            from tests.decision_policy_support import PERSON
+            config.set_decision_policy(self.project, "hands_off", decision=PERSON)
+            decision = {key: value for key, value in decision.items() if key != "provenance"}
+            decision.update(provenance="agent_decision", channel="agent_session")
+        self.assertEqual(self.retire(decision, objectives=release)["status"], "retired")
+        return self.text_status()
+
+    def assert_both_dispositions(self, text):
+        self.assertIn(f"Released {self.gone}: absent from this host, Git and Orca when the decision was recorded", text)
+        self.assertIn(f"Released {self.kept}: an existing worktree of this repository when the decision was recorded",
+                      text)
+        self.assertNotIn("when the owner decided", text)
+
+    def test_an_agent_decision(self):
+        self.assert_both_dispositions(self.released_text(agent=True))
+
+    def test_an_owner_decision(self):
+        self.assert_both_dispositions(self.released_text(agent=False))
+
+
+class RecordOnlyTests(AbsentCase):
+    """R206: `release: []` retires the record without checking any path; it never claims a worktree is free."""
+
+    def test_an_empty_release_retires_beside_another_objectives_live_terminal(self):
+        self.placed()
+        self.instances[self.kept] = "wt2:local:kept"
+        # Another objective's live terminal works in this record's only remaining worktree.
+        self.inventory["terminals"] = [{"handle": "other", "connected": True, "writable": True, "orphaned": False,
+                                        "worktreePath": self.kept}]
+        found = self.retire(objectives=self.request())
+        verdict = found["objectives"][0]
+        self.assertEqual(verdict["status"], "eligible", verdict.get("message"))
+        self.assertEqual((verdict["facts"]["release"], verdict["facts"]["locations"]), ([], []))
+        self.assertIn(self.kept, verdict["also_released"])
+        for words in ("releasing no named worktree (a record-only retirement)",
+                      "This never says a worktree is free: another objective's record and CE's own cleanup "
+                      "protections still hold it."):
+            self.assertIn(words, found["question"])
+        decision = self.decide(objectives=self.request())
+        self.assertEqual(self.retire(decision, objectives=self.request())["status"], "retired")
+        block = self.status()["retirement"]
+        self.assertEqual((block["released"], block["locations"], block["retained"]), ([], [], []))
+        self.assertIn(self.kept, block["also_released"])
+
+    def test_an_empty_release_still_refuses_a_live_owner(self):
+        self.delivered()
+        self.terminals.update(owner="live")
+        self.assertEqual(self.retire(objectives=self.request())["objectives"][0]["condition"], "owner_not_lost")
+
+    def test_an_empty_release_still_refuses_an_unsettled_run(self):
+        self.delivered()
+        self.port.workers["dispatch-1"].update(outcome="in_progress", state="ready")
+        self.assertEqual(self.retire(objectives=self.request())["objectives"][0]["condition"], "work_live")
+
+
 class ReleaseCapacityTests(AbsentCase):
     """A decision releases every recorded worktree a record can leave retained, not only eight (A268)."""
 
@@ -766,7 +831,7 @@ class ReleaseCapacityTests(AbsentCase):
         found = self.retire(objectives=[{"objective": "unknown", "release": paths[:64]}])
         self.assertEqual(found["objectives"][0]["condition"], "objective_unknown")  # Sixty-four pass validation.
         for objectives, words in (
-                (self.request(*paths), "1 to 64"),
+                (self.request(*paths), "0 to 64"),
                 ([{"objective": "first", "release": paths[:33]}, {"objective": "second", "release": paths[33:]}],
                  "at most 64 paths across its objectives")):
             with self.subTest(words=words), self.assertRaises(PodError) as caught:
@@ -841,8 +906,8 @@ class ConcurrencyTests(AbsentCase):
         for words in ("objective releasing " + self.gone + " (absent) (path_in_use; 2 pending, unknown, failed or "
                       "unreported record(s) of it would stay as recorded)",
                       "its missing directory does not prove that work stopped",
-                      "Retirement releases every worktree objective objective records, including the ones not named "
-                      "above: " + self.kept):
+                      "Retirement ends objective objective's reservation of every worktree it records, including the "
+                      "ones not named above: " + self.kept):
             self.assertIn(words, question)
 
 
@@ -970,7 +1035,7 @@ class PreservationTests(AbsentCase):
                          ("retired", False, [self.gone], [], sorted([self.where(), self.kept]), "hold_ends"))
         self.assertEqual(self.listed()["objective"]["retirement"], block)
         text = self.text_status()
-        self.assertIn(f"Released {self.gone}: absent from this host, Git and Orca when the owner decided", text)
+        self.assertIn(f"Released {self.gone}: absent from this host, Git and Orca when the decision was recorded", text)
         self.assertIn(f"Also released: {self.kept}, a recorded worktree the decision did not name", text)
         self.assertIn("Pod's record holds no worktree of this objective", text)
         self.assertNotIn("Still held", text)

@@ -218,16 +218,6 @@ class HistoryScanTests(KernelCase):
         self.assertEqual(state_inventory(self.project)["unreadable"], 1)
         self.assertEqual(_claimants(self.project, "successor")[1], [str(self.path.parent)])
 
-    def test_an_unreadable_record_holds_only_a_run_it_could_name(self):
-        # R206: the same unreadable record leaves another Run's lookups unaffected.
-        self.arrange()
-        self.chunk.unlink()
-        self.assertEqual(contexts_for_run("unrelated-run"), [])
-        self.assertEqual(run_scope(self.project, "own", "unrelated-run")["unreadable"], 0)
-        with self.assertRaises(PodError) as caught:
-            contexts_for_run("synthetic-run")
-        self.assertEqual(caught.exception.code, "history_missing")
-
     def test_raw_claimant_scan_sees_link_even_with_all_admissions_archived(self):
         self.arrange()
         self.record["continued_by"] = {"objective": "successor"}

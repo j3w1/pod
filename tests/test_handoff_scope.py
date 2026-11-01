@@ -28,7 +28,10 @@ CASES = {
     "unknown-family": (older_record(schema="other-checkpoint/v1"), None),
     "future-mentions-run": (older_record(schema="pod-checkpoint/v9", next_safe_action="select run again"),
                             "scope_unreadable"),
-    "empty-record": ("", None),
+    "empty-record": ("", "scope_unreadable"),  # Undecodable: membership unknown, so it holds.
+    "escaped-mention": (json.dumps(older_record(schema="pod-checkpoint/v9", next_safe_action="select run again"))
+                        .replace("select run", "select r\\u0075n"), "scope_unreadable"),
+    "decodable-foreign": ('["elsewhere"]', None),
     "broken-mentions-run": ('{"checkpoint": {"native_refs": [{"runId": "run"', "scope_unreadable"),
 }
 
@@ -37,7 +40,8 @@ class OlderSchemaScopeTests(GroupedTable):
     """Each record shape, one named group method per few rows so suite lanes can spread them."""
     GROUPS = {"test_older_records": ["older-foreign", "older-mentions-run", "older-referenced"],
               "test_unproved_layouts": ["older-reference-unreadable", "future-foreign", "unknown-family"],
-              "test_records_that_could_name_the_run": ["future-mentions-run", "empty-record", "broken-mentions-run"]}
+              "test_records_that_could_name_the_run": ["future-mentions-run", "empty-record", "broken-mentions-run"],
+              "test_decoded_membership": ["escaped-mention", "decodable-foreign"]}
 
     def row(self, kind):
         record, expected = CASES[kind]
@@ -71,6 +75,9 @@ class OlderSchemaScopeTests(GroupedTable):
         self.rows()
 
     def test_records_that_could_name_the_run(self):
+        self.rows()
+
+    def test_decoded_membership(self):
         self.rows()
 
 

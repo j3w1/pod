@@ -100,11 +100,12 @@ class ListingTests(ListingCase):
             "interventions": {}, "source_rejections": {}, "constraints": []})
         before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
         result = self.listed()
-        # One record Pod cannot read is named unavailable and holds only itself; the healthy objectives are listed
-        # and the list stays complete (R206).
-        self.assertTrue(result["complete"])
+        # The healthy objectives are still listed; a record Pod cannot read is named with phase `unavailable` and its
+        # condition, and the list is not complete while it exists (R206).
+        self.assertFalse(result["complete"])
         self.assertEqual(result["unreadable_records"], [{"record": "broken", "code": "invalid_record",
-                                                         "status": "unavailable"}])
+                                                         "phase": "unavailable",
+                                                         "condition": "its record is empty or not valid JSON"}])
         self.assertIn("objective", {row["objective"] for row in result["objectives"]})
         self.assertEqual(result["unattributed_records"], ["journal-only"])
         rows = {row["objective"]: row for row in result["objectives"]}

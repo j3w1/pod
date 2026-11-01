@@ -71,51 +71,50 @@ def _older_schema(raw: dict) -> bool:
     return bool(found)
 
 
-def _mentions(value: object, text: str, depth: int = 0) -> bool:
-    """Whether a key equals `text` or a string value contains it; an over-deep record counts as mentioning it."""
-    if depth > 64:
+def _names(value: object, text: str, exact: bool, reader, depth: int = 0) -> bool:
+    """Whether a decoded value names `text`: a key equal to it, or a string equal to it (`exact`) or containing it.
+    A history reference is expanded through the record's own store; anything deeper than the parse bound names it."""
+    from .history import _expand, is_reference
+    from .history_tree import PARSE_DEPTH
+    if depth >= PARSE_DEPTH:
         return True
+    if is_reference(value):
+        return _names(_expand(value, reader.read_bytes, {}), text, exact, reader, depth + 1)
     if isinstance(value, str):
-        return text in value
+        return value == text if exact else text in value
     if isinstance(value, dict):
-        return any(key == text or _mentions(item, text, depth + 1) for key, item in value.items())
+        return any(key == text or _names(item, text, exact, reader, depth + 1) for key, item in value.items())
     if isinstance(value, list):
-        return any(_mentions(item, text, depth + 1) for item in value)
+        return any(_names(item, text, exact, reader, depth + 1) for item in value)
     return False
 
 
 def record_mentions(directory: Path, text: str, check=None, *, exact: bool = False) -> bool:
-    """Whether a record Pod cannot read could name `text`, such as a Run id or, `exact`, an objective name as a whole
-    JSON string (R206): its stored bytes mention it, or some of them cannot be read. Every file under the record's
-    directory is read without following a link; a link, a special file or a failed read counts as mentioning it. Pod
-    stores records and history chunks as plain JSON, so a record whose bytes never mention a name cannot bind it."""
-    import json
-    if exact:
-        needles = {json.dumps(text).encode("ascii"), json.dumps(text, ensure_ascii=False).encode("utf-8", "surrogatepass")}
-    else:
-        needles = {text.encode("utf-8", "surrogatepass"), json.dumps(text)[1:-1].encode("ascii")}
-    pending = [Path(directory)]
+    """Whether a record could name `text`, such as an objective name (`exact`) or a Run id (R206).
+
+    Membership is decided over the decoded logical record only: Pod's own bounded storage readers reconstruct it
+    (descendant pages, chunk sequences and the preceding base64 chunk format), and every decoded key and string is
+    compared. When the record cannot be reconstructed and parsed within those readers' byte, memory and time
+    bounds, membership is unknown and the record counts as naming it, so it holds. Outer deadline exhaustion
+    propagates as its own refusal."""
+    from .history import ChunkStore, load_context
+    from .history_tree import Reader, plain
+    from .orca import DEADLINE_SPENT
+    if check is not None:
+        check()
     try:
-        while pending:
-            if check is not None:
-                check()
-            with os.scandir(pending.pop()) as entries:
-                for entry in entries:
-                    if entry.is_symlink():
-                        return True
-                    if entry.is_dir(follow_symlinks=False):
-                        pending.append(Path(entry.path))
-                        continue
-                    if not entry.is_file(follow_symlinks=False):
-                        return True
-                    fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                    with os.fdopen(fd, "rb") as file:
-                        data = file.read()
-                    if any(needle in data for needle in needles):
-                        return True
-    except OSError:
+        raw = load_context(Path(directory) / "context.json", validate=False)
+        reader = Reader(ChunkStore(Path(directory)))
+        try:
+            return _names(plain(raw), text, exact, reader)
+        finally:
+            reader.close()
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
         return True
-    return False
+    except (OSError, RecursionError, ValueError, TypeError, KeyError, MemoryError):
+        return True
 
 
 def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_closure: bool = True) -> dict:
@@ -193,61 +192,70 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         if not isinstance(raw, dict):
             unknown += record_mentions(path.parent, run_id, check)
             continue
-        checkpoint = raw.get("checkpoint")
-        admissions = raw.get("admissions")
-        refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else [] if checkpoint is None else None
-        readable = (isinstance(refs, list) and isinstance(admissions, dict)
-                    and all(isinstance(row, dict) and isinstance(row.get("runId"), str) and row["runId"] for row in refs)
-                    and all(isinstance(row, dict) and isinstance(row.get("run_id"), str) and row["run_id"] for row in admissions.values()))
-        referenced = (isinstance(refs, list) and any(isinstance(row, dict) and row.get("runId") == run_id for row in refs)
-                      or isinstance(admissions, dict) and any(isinstance(row, dict) and row.get("run_id") == run_id for row in admissions.values()))
-        supported = False
-        check()
+        # Every lazy read of this record stays inside its own boundary: a missing page makes its membership
+        # unknown, which holds this Run, and never aborts the scan of other records (R206).
         try:
-            _run_references(_validate_context(raw))
-            supported = True
-        except PodError:
-            pass
-        if referenced:
-            closure = checkpoint.get("closure") if isinstance(checkpoint, dict) else None
-            if supported and closure is not None and not prove_closure:
-                name = checkpoint["objective"]
-                unchecked.append(name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective")
-                continue
-            if supported and closure is not None:
-                from .obligations import validate_closed_snapshot
-                try:
-                    # Only a complete immutable consumed observation proves past
-                    # settlement for closure; unreported work stays outstanding.
-                    from .records import worktree_binding
-                    workspace = worktree_binding(checkpoint["worktree"]) if "worktree" in checkpoint else None
-                    peer_project = Path(workspace["path"]) if workspace is not None else (
-                        project if objective_root(project, checkpoint["objective"]) == path.parent else None)
-                    if peer_project is None:
-                        raise PodError("closure_unverified", "Peer repository binding is unavailable")
-                    check()
-                    if not peer_project.is_dir():
-                        raise PodError("closure_unverified", "Peer worktree is unreadable")
-                    check()
-                    validate_checkpoint_snapshot(peer_project, raw)
-                    check()
-                    ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
-                    check()
-                    unproven = validate_closed_snapshot(checkpoint, ctx)
-                except (PodError, KeyError, TypeError, ValueError, OSError) as exc:
-                    if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT:
-                        raise
-                    pass
-                else:
-                    if unproven:
-                        name = checkpoint["objective"]
-                        unverifiable.append(name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective")
+            checkpoint = raw.get("checkpoint")
+            admissions = raw.get("admissions")
+            refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else [] if checkpoint is None else None
+            readable = (isinstance(refs, list) and isinstance(admissions, dict)
+                        and all(isinstance(row, dict) and isinstance(row.get("runId"), str) and row["runId"] for row in refs)
+                        and all(isinstance(row, dict) and isinstance(row.get("run_id"), str) and row["run_id"] for row in admissions.values()))
+            referenced = (isinstance(refs, list) and any(isinstance(row, dict) and row.get("runId") == run_id for row in refs)
+                          or isinstance(admissions, dict) and any(isinstance(row, dict) and row.get("run_id") == run_id for row in admissions.values()))
+            supported = False
+            check()
+            try:
+                _run_references(_validate_context(raw))
+                supported = True
+            except PodError:
+                pass
+            if referenced:
+                closure = checkpoint.get("closure") if isinstance(checkpoint, dict) else None
+                if supported and closure is not None and not prove_closure:
+                    name = checkpoint["objective"]
+                    unchecked.append(name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective")
                     continue
-            name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
-            others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
-        elif (not readable or not supported) and _mentions(raw, run_id):
-            # A record outside the documented reference layouts holds this Run only when it names it somewhere
-            # (R206); one that never mentions the Run cannot bind it, whatever its schema.
+                if supported and closure is not None:
+                    from .obligations import validate_closed_snapshot
+                    try:
+                        # Only a complete immutable consumed observation proves past
+                        # settlement for closure; unreported work stays outstanding.
+                        from .records import worktree_binding
+                        workspace = worktree_binding(checkpoint["worktree"]) if "worktree" in checkpoint else None
+                        peer_project = Path(workspace["path"]) if workspace is not None else (
+                            project if objective_root(project, checkpoint["objective"]) == path.parent else None)
+                        if peer_project is None:
+                            raise PodError("closure_unverified", "Peer repository binding is unavailable")
+                        check()
+                        if not peer_project.is_dir():
+                            raise PodError("closure_unverified", "Peer worktree is unreadable")
+                        check()
+                        validate_checkpoint_snapshot(peer_project, raw)
+                        check()
+                        ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
+                        check()
+                        unproven = validate_closed_snapshot(checkpoint, ctx)
+                    except (PodError, KeyError, TypeError, ValueError, OSError) as exc:
+                        if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT:
+                            raise
+                        pass
+                    else:
+                        if unproven:
+                            name = checkpoint["objective"]
+                            unverifiable.append(name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective")
+                        continue
+                name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
+                others.append(name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective")
+            elif (not readable or not supported) and record_mentions(path.parent, run_id, check):
+                # A record outside the documented reference layouts holds this Run only when its decoded record names
+                # it, or cannot be decoded within bounds (R206).
+                unknown += 1
+        except PodError as exc:
+            if exc.code == DEADLINE_SPENT:
+                raise
+            unknown += 1
+        except (KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unknown += 1
     check()
     result = {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}

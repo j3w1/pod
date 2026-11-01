@@ -45,7 +45,7 @@ ENTRY = {"at", "decision", "instruction", "reason", "repository", "objectives", 
          "released", "preserved", "unfinished", "delivery", "native"}
 # Pod 0.11.0 recorded no release dispositions; an entry from R113 on records where each released path stood.
 LOCATED_ENTRY = ENTRY | {"locations"}
-# How a released path stood when the owner decided: a verified worktree of this repository, or proven gone.
+# How a released path stood when the decision was recorded: a verified worktree of this repository, or proven gone.
 RELEASABLE = ("existing", "absent")
 # Cleanup's conservative hold on locations a record never listed. Retirement ends it for every record (R113, R206);
 # `none` stays readable only so that a decision made before R206 refuses as changed facts, not as malformed.
@@ -203,7 +203,7 @@ def _locations_valid(value: object, released: list) -> bool:
 
 def _facts_valid(value: dict, older: bool = False) -> bool:
     return (_text(value["objective"], 256) and _text(value["owner"], 256) and _runs(value["runs"])
-            and isinstance(value["release"], list) and 0 < len(value["release"]) <= MAX_PATHS
+            and isinstance(value["release"], list) and len(value["release"]) <= MAX_PATHS
             and all(_path_text(path) for path in value["release"])
             and len(set(value["release"])) == len(value["release"])
             and _locations_valid(value["locations"], value["release"])
@@ -225,7 +225,7 @@ def validate_entry(value: object, *, older: bool = False) -> None:
             or not all(_text(value[key], 1024) for key in ("at", "decision", "instruction", "reason", "repository"))
             or not _texts(value["objectives"], MAX_OBJECTIVES, 256) or not value["objectives"]
             or not _text(value["owner"], 256) or not _runs(value["runs"])
-            or not isinstance(value["released"], list) or not 0 < len(value["released"]) <= MAX_PATHS
+            or not isinstance(value["released"], list) or len(value["released"]) > MAX_PATHS
             or not all(_path_text(path) for path in value["released"])
             or not isinstance(value["preserved"], list)
             or not all(_record_row(row, older) for row in value["preserved"])
@@ -683,6 +683,7 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
     from .history import load_context
+    from .orca import DEADLINE_SPENT
     context = repository_context(project)
     root = state_root(project)
     try:
@@ -705,24 +706,31 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
             if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
                 continue
             raw = load_context(Path(entry.path) / "context.json", validate=False)
-        except (OSError, PodError):
+            if not isinstance(raw, dict):
+                unreadable.append(entry.path)
+                continue
+            # Lazy reads of this record stay inside its own boundary (R206).
+            link = raw.get("continued_by")
+            name = _name(raw)
+            claims = (isinstance(link, dict) and link.get("objective") == objective and name is not None
+                      and record_name(project, context, name) == entry.name)
+        except PodError as exc:
+            if exc.code == DEADLINE_SPENT:
+                raise
             unreadable.append(entry.path)
             continue
-        if not isinstance(raw, dict):
+        except (OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unreadable.append(entry.path)
             continue
-        link = raw.get("continued_by")
-        name = _name(raw)
-        if (isinstance(link, dict) and link.get("objective") == objective and name is not None
-                and record_name(project, context, name) == entry.name):
+        if claims:
             found.append(name)
     return found, unreadable
 
 
 def could_claim(project: Path, unreadable: list[str], objective: str) -> list[str]:
     """The unreadable records, by path, that could hold a claim naming this objective (R206): the state root itself
-    when it cannot be enumerated, or a record whose readable bytes name the objective exactly or cannot all be read.
-    Every other unreadable record holds only its own resources."""
+    when it cannot be enumerated, or a record whose decoded logical record names the objective exactly or cannot be
+    reconstructed within Pod's read bounds (`handoff.record_mentions`). Every other one holds only itself."""
     from .handoff import record_mentions
     from .ledger import state_root
     root = str(state_root(project))
@@ -1309,10 +1317,11 @@ def _requested(value: object) -> list[dict]:
         bounded_text(row["objective"], name="objective", limit=256)
         if not _encodable(row["objective"]):
             raise PodError("invalid_request", "objective must be text that can be encoded as UTF-8")
-        if (not isinstance(row["release"], list) or not 0 < len(row["release"]) <= MAX_PATHS
+        # An empty release is a record-only retirement: no path is checked, and none is named (R206).
+        if (not isinstance(row["release"], list) or len(row["release"]) > MAX_PATHS
                 or not all(_path_text(path) and "\x00" not in path for path in row["release"])
                 or len(set(row["release"])) != len(row["release"])):
-            raise PodError("invalid_request", f"release names 1 to {MAX_PATHS} distinct absolute normalized paths")
+            raise PodError("invalid_request", f"release names 0 to {MAX_PATHS} distinct absolute normalized paths")
         rows.append({"objective": row["objective"], "release": list(row["release"])})
     if len({row["objective"] for row in rows}) != len(rows):
         raise PodError("invalid_request", "Each objective is named once")
@@ -1365,18 +1374,21 @@ def _block_valid(block: dict, older: bool = False) -> bool:
 
 
 def _released(locations: list[dict]) -> str:
+    if not locations:
+        return "no named worktree (a record-only retirement)"
     return ", ".join(row["path"] + (" (absent)" if row["disposition"] == "absent" else " (existing worktree)")
                      for row in locations)
 
 
 def _effects(row: dict) -> str:
-    """What else retirement releases for one objective (R113, R206): an objective under historical retirement holds no worktree."""
+    """What else retirement ends for one objective (R113, R206): its record's reservation of every worktree it records.
+    That is reservation only: it never says a worktree is free, which another record or CE's protections may hold."""
     also = row.get("also_released") or []
-    said = f" Retirement releases every worktree objective {row['objective']} records"
+    said = f" Retirement ends objective {row['objective']}'s reservation of every worktree it records"
     if also:
         said += ", including the ones not named above: " + ", ".join(also)
-    return said + ("; Pod's record holds nothing afterwards, including any location the record never listed, and "
-                   "CE's own cleanup protections still apply.")
+    return said + ("; its record holds nothing afterwards, including any location it never listed. This never says "
+                   "a worktree is free: another objective's record and CE's own cleanup protections still hold it.")
 
 
 def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
@@ -1389,8 +1401,8 @@ def _question(eligible: list[dict], refused: list[dict], tally: dict) -> str:
                 "for cleanup? This is an authority decision to abandon the record, never delivery proof.")
     # Only a refusal that came after every fact was read, with every path an existing worktree or proven absent,
     # leaves facts a decision can bind (R112, R113); what that decision would end is said for it too.
+    # Runs are recorded only once every Run read succeeded, and the paths to release are read right after them.
     later = [row for row in refused if row["status"] == "refused" and row["facts"]["runs"]
-             and row["facts"]["locations"]
              and all(item["disposition"] in RELEASABLE for item in row["facts"]["locations"])]
     never = [row for row in refused if row not in later]
     if any(item["disposition"] == "absent" for row in eligible + later for item in row["facts"]["locations"]):

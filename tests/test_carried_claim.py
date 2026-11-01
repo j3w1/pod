@@ -474,29 +474,39 @@ class ReservationTests(CarriedCase):
         self.refused(self.close_successor, code="claim_incomplete")
         self.assertEqual(before, self.snapshot())
 
-    def test_an_unreadable_record_holds_neither_an_unstarted_objective_nor_its_closure(self):
-        """R206: a record the scan cannot read holds only its own resources; the healthy objective's first work and
-        its closure proceed, and the record stays untouched."""
+    def test_an_unreadable_record_holds_an_unstarted_objective_and_any_closure(self):
+        """While the scan cannot read a record, an objective its own records do not prove started does no work, which
+        would start it; a started one works on, and closure asks the proof of either."""
         self.lost_with(lambda: None)
         self.successor()
         broken = state_root(self.project) / "zz-unreadable"
         broken.mkdir()
-        (broken / "context.json").write_text("")
-        self.own_work()["prepare"]()
+        (broken / "context.json").write_text("{")
+        prepare = self.own_work()["prepare"]
+        before = self.snapshot()
+        refused = self.refused(prepare, code="claim_unverified")
+        self.assertEqual((refused.detail["unreadable"], refused.detail["next_action"]),
+                         ([str(broken)], "repair or remove the unreadable record, then retry"))
+        self.assertEqual(before, self.snapshot())
+        (broken / "context.json").unlink()
+        prepare()
+        (broken / "context.json").write_text("{")
         self.mine("checkpoint", value=self.core(
-            obligations=read(self.project, "successor")["checkpoint"]["obligations"]))
+            obligations=read(self.project, "successor")["checkpoint"]["obligations"]))  # Started, it works on.
+        self.refused(self.close_successor, code="claim_unverified")
+        (broken / "context.json").unlink()
+        broken.rmdir()
         self.close_successor()
         self.assertTrue(read(self.project, "successor")["checkpoint"]["closure"])
-        self.assertEqual((broken / "context.json").read_bytes(), b"")
 
-    def test_an_unreadable_record_that_names_an_objective_holds_only_that_objective(self):
-        """R206: a record the scan cannot read holds the claim decision of an objective its readable bytes name
-        exactly; another objective proceeds, and the refusal names the record."""
+    def test_a_decodable_record_holds_only_the_objective_it_names(self):
+        """R206: a record the scan cannot use as one, but can decode whole, holds the claim decision of an objective
+        its decoded record names; another objective proceeds, and the refusal names the record."""
         self.lost_with(lambda: None)
         self.successor()
         broken = state_root(self.project) / "zz-unreadable"
         broken.mkdir()
-        (broken / "context.json").write_text('{"continued_by": {"objective": "successor"')
+        (broken / "context.json").write_text('["succ\\u0065ssor"]')  # Not a record object; it names the successor.
         before = self.snapshot()
         refused = self.refused(self.own_work()["prepare"], code="claim_unverified")
         self.assertEqual((refused.detail["unreadable"], refused.detail["next_action"]),
@@ -1442,11 +1452,11 @@ class UnreadableScanTests(ShapeCase):
         self.assertEqual(sorted(row["record_id"] for row in self.journal("successor")["actions"]),
                          sorted(built.values()))
         self.refresh()  # The refresh route opens once the claim is complete.
-        # The unreadable record holds only itself (R206): the carried rows alone hold closure, with it or without.
-        for _ in range(2):
-            self.assertEqual(self.refused(lambda: self.close("successor", "next", "run-s")).detail["detail"],
-                             "closure_unfinished")
-            (broken / "context.json").unlink(missing_ok=True)
+        # Closure still asks that no unreadable record hides another claimant; once it is gone the rows hold it.
+        self.refused(lambda: self.close("successor", "next", "run-s"), code="claim_unverified")
+        (broken / "context.json").unlink()
+        self.assertEqual(self.refused(lambda: self.close("successor", "next", "run-s")).detail["detail"],
+                         "closure_unfinished")
         self.assertEqual(self.writes(), effects)
 
     def test_a_readable_claim_is_found_before_an_unreadable_record(self):
@@ -1456,7 +1466,6 @@ class UnreadableScanTests(ShapeCase):
         self.masked("00-unreadable")
 
     def test_an_unreadable_predecessor_record_holds_the_successor_until_repaired(self):
-        # R206: its other stored files name the successor, so it could hold that successor's claim.
         built = self.lost_with(self.publications)
         self.earlier_successor()
         decision = self.interrupted("candidate-2b613c8", "after_link")
@@ -1681,7 +1690,8 @@ CLOSED_REPLAY_ROWS = [("pod-0.13.1", "two_completed", "claim_ambiguous"),
                       ("candidate-2b613c8", "two", "claim_ambiguous"),
                       ("candidate-2b613c8", "two_completed", "claim_ambiguous"),
                       ("candidate-2b613c8", "after_link", "claim_incomplete"),
-                      ("candidate-2b613c8", "after_rows", "claim_incomplete")]
+                      ("candidate-2b613c8", "after_rows", "claim_incomplete"),
+                      ("current", "unreadable", "claim_unverified")]
 
 
 class ClosedReplayCase(DoubleClaimCase):
@@ -1698,7 +1708,11 @@ class ClosedReplayCase(DoubleClaimCase):
 
     def closed_row(self, writer, shape, refused):
         """Build the state, see an unrecorded closure still refused, record one, then repeat the close."""
-        if shape.startswith("two"):
+        if shape == "unreadable":
+            built = self.lost_with(self.publications)
+            self.successor()
+            self.claim(self.decide())  # A current claim; its rows read back below.
+        elif shape.startswith("two"):
             built = self.setting(self.publications if writer != "pod-0.13.1" else lambda: {})
             self.claims(writer, ("empty", "objective"), completed="empty" if shape == "two_completed" else None)
         else:
@@ -1710,10 +1724,21 @@ class ClosedReplayCase(DoubleClaimCase):
             with patch("pod.succession.refuse_incomplete"):  # Its bundle's own readback, which did not check.
                 settled, expected = self.read_back_all("publications", built, "successor", "next")
             self.assertEqual(settled, expected)
+        if shape == "unreadable":
+            settled, expected = self.read_back_all("publications", built, "successor", "next")
+            self.assertEqual(settled, expected)
+            broken = state_root(self.project) / "zz-unreadable"
+            broken.mkdir()
+            (broken / "context.json").write_text("{")
         self.act("next", "run-s")
         self.refused(self.closing(), code=refused)  # The open objective's refusal is unchanged.
-        with patch("pod.succession.refuse_incomplete"):  # A closing write that did not check (R118's writers).
-            self.closing()()
+        if shape == "unreadable":
+            (broken / "context.json").unlink()
+            self.closing()()  # This version records the closure, then the record becomes unreadable again.
+            (broken / "context.json").write_text("{")
+        else:
+            with patch("pod.succession.refuse_incomplete"):  # A closing write that did not check (R118's writers).
+                self.closing()()
         state = read(self.project, "successor")
         self.assertEqual(validate_closed_snapshot(map_of(state), closed_snapshot_context(self.project, "successor",
                                                                                            state)), ())
@@ -1744,6 +1769,7 @@ class ClosedReplayTableTests(GroupedTable):
     def test_candidate_2b613c8_two_completed(self): self.rows()
     def test_candidate_2b613c8_after_link(self): self.rows()
     def test_candidate_2b613c8_after_rows(self): self.rows()
+    def test_current_unreadable(self): self.rows()
 
 
 class ClosedReplayTableShapeTests(unittest.TestCase):

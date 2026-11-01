@@ -327,17 +327,22 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
                             unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
                 continue
             raw, _ = _read_record(Path(entry.path))
+            # Lazy reads of this record stay inside its own boundary (R206).
+            name = _name(raw)
+            member = name is not None and record_name(project, context, name) == entry.name
         except PodError as exc:
+            from .orca import DEADLINE_SPENT
+            if exc.code == DEADLINE_SPENT:
+                raise
             unreadable.append({"record": entry.name, "code": exc.code})
             continue
-        except OSError:
+        except (OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unreadable.append({"record": entry.name, "code": "unreadable"})
             continue
-        name = _name(raw)
         if name is None:
             unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
             continue
-        if record_name(project, context, name) == entry.name:
+        if member:
             found.append({"objective": name, "root": Path(entry.path), "raw": raw})
     return found, unreadable
 
@@ -1949,7 +1954,15 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
                     rows.append({"objective": tail, "phase": "closed"})
         return rows, missing, []
     found, problems = _scan(target, orphans=True)
-    rows = [{"objective": row["objective"], "phase": _phase(target, row["root"], row["raw"])} for row in found]
+    rows = []
+    for row in found:
+        try:
+            rows.append({"objective": row["objective"], "phase": _phase(target, row["root"], row["raw"])})
+        except PodError as exc:
+            from .orca import DEADLINE_SPENT
+            if exc.code == DEADLINE_SPENT:
+                raise
+            problems.append({"record": row["root"].name, "code": exc.code})  # Its own fault holds only itself (R206).
     return rows, [], problems
 
 
@@ -2015,7 +2028,15 @@ def sweep(project: Path, *, repositories: list[str] | None = None, objectives: l
             if row["objective"] in done:
                 continue
             done.add(row["objective"])
-            verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=reader)
+            try:
+                verdict = close_by_evidence(target, row["objective"], caller="sweep", port=port, remote=reader)
+            except PodError as exc:
+                from .orca import DEADLINE_SPENT
+                if exc.code == DEADLINE_SPENT:
+                    raise
+                # One record's own fault holds only that objective; the sweep goes on (R206).
+                verdict = {"status": "unverified", "conditions": [
+                    {"code": exc.code, "message": "Its record could not be read whole: " + str(exc)[:256]}]}
             results.append(_outcome(row["objective"], verdict))
             # A predecessor entry this sweep wrote, with its tail or completing an interrupted closure, closed that
             # predecessor now: it is reported as its own `closed` row, never as an earlier closure replayed.

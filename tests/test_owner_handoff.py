@@ -989,7 +989,8 @@ class ClosureContractTableTests(GroupedTable):
                 if kind.startswith("withdrawal-") and isinstance(ob["withdrawal"], dict):
                     cp["closure"]["report"]["withdrawn"] = [{"obligation":ob["id"], "provenance":ob["provenance"], **ob["withdrawal"]}]
                 if not kind.startswith("genuine-") and not released:
-                    peer.write_text(json.dumps([] if kind == "outer-nonobject" else raw))
+                    # A non-object record holds the Run only when its decoded record names it (R206).
+                    peer.write_text(json.dumps(["run"] if kind == "outer-nonobject" else raw))
                 if phase == "fresh": case.lose()
                 before = case.snapshot(); own = deepcopy(case.state()); calls = len(case.mutations)
                 starts, workers = deepcopy(case.port.starts), deepcopy(case.port.workers)
