@@ -1195,11 +1195,13 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
 
 
 def kernel_view(project: Path, objective: str, *, native: dict | None = None,
-                candidate: str | None = None, state: dict | None = None, delivered: bool = False) -> dict:
+                candidate: str | None = None, state: dict | None = None, delivered: bool = False,
+                sources_at: str | None = None) -> dict:
     """Read-only map, facts and derived projections for status, acceptance and reports.
 
     `delivered` (map and status reads) judges proof a recorded delivery relied on against the delivered
-    candidate's tree (R204); acceptance, admission and Governor qualification keep the worktree."""
+    candidate's tree (R204). `sources_at` (the exact-candidate admission proof at a root not checked out at the
+    candidate, R185) judges every bound source against that commit's stored blobs, whatever `project` holds. Acceptance and Governor qualification keep the worktree."""
     from .obligations import label_qualification, report_projection, status_projection
     state = read(project, objective) if state is None else state
     if state is None:
@@ -1217,6 +1219,8 @@ def kernel_view(project: Path, objective: str, *, native: dict | None = None,
             native, settlement, failure = None, "unverified", exc.code
             runtime_changed = (exc.detail or {}).get("reason") == "runtime_changed"
     ctx = kernel_context(project, objective, state, native)
+    if sources_at is not None:
+        ctx["source_current"] = tree_source_current(project, sources_at)
     if delivered:
         ctx = delivered_read_context(project, state, ctx)
     map_state = map_of(state)
@@ -1712,19 +1716,25 @@ def _relied_on(row: dict, delivery_seq: int) -> bool:
                     and receipts[item[identity]]["accepted_seq"] <= delivery_seq for item in evidence))
 
 
-def _delivered_sources(project: Path, delivery: dict | None, candidate: object, rows: list[str]) -> dict | None:
-    """R204: the context entry that judges these rows' bound sources against the delivered candidate's tree."""
-    if delivery is None or not rows or candidate != delivery.get("candidate"):
-        return None
+def tree_source_current(project: Path, commit: str):
+    """A bound evidence source still has exactly its recorded identity in `commit`'s Git tree, read only (R204)."""
     from .governance import delivered_source_reader
-    reader = delivered_source_reader(project, delivery["candidate"])
+    reader = delivered_source_reader(project, commit)
 
     def current(entry: dict) -> bool:
         try:
             return entry.get("state") == "present" and reader(entry["path"]) == entry
         except (KeyError, TypeError, AttributeError):
             return False
-    return {"candidate": delivery["candidate"], "rows": frozenset(rows), "source_current": current}
+    return current
+
+
+def _delivered_sources(project: Path, delivery: dict | None, candidate: object, rows: list[str]) -> dict | None:
+    """R204: the context entry that judges these rows' bound sources against the delivered candidate's tree."""
+    if delivery is None or not rows or candidate != delivery.get("candidate"):
+        return None
+    return {"candidate": delivery["candidate"], "rows": frozenset(rows),
+            "source_current": tree_source_current(project, delivery["candidate"])}
 
 
 def _unchanged_delivered_rows(prior_map: dict, proposed: dict, delivery: dict) -> list[str]:

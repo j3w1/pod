@@ -362,6 +362,106 @@ class CandidateProofTests(KernelCase):
         self.assertIn("DELIVER", proof["objective_unfinished"])
 
 
+class CandidateTreeProofTests(KernelCase):
+    """pod#184: the exact-candidate proof does not depend on which checkout `--repository` names (R185). A root
+    checked out at the candidate keeps judging bound sources by its working files, as a review binds them; any other
+    root judges them against the candidate's stored blobs. The review binds README.md as the worktree holds it when
+    the review is admitted; the candidate is the fixture base unless a test commits a new one."""
+    from tests.kernel_support import assurance_review as review, assurance_satisfied as satisfied
+
+    def proved(self):
+        from pod.records import source_identity
+        self.satisfied(sources=[source_identity(self.project, "README.md")])
+        rows = self.stored()
+        criterion = next(row for row in rows if row["id"] == "O1")
+        criterion.pop("executor", None)
+        criterion.update(state="satisfied", evidence=[self.proof("O1")])
+        self.write(rows)
+
+    def proof_now(self):
+        from pod.operations import OrcaPort
+        with patch.object(OrcaPort, "read_native", autospec=True,
+                          side_effect=lambda _port, owner, **kwargs: self.port.read_native(owner, **kwargs)):
+            return admission._proof(self.project, "objective", self.base)
+
+    def commit_readme(self, text):
+        (self.project / "README.md").write_text(text)
+        git(self.project, "add", "README.md")
+        git(self.project, "commit", "-qm", "later work")
+
+    def converted(self, kind):
+        """A clean checkout whose README.md working bytes differ from its blob (eol or a filter), committed as the
+        candidate."""
+        readme = self.project / "README.md"
+        if kind == "crlf":
+            (self.project / ".gitattributes").write_text("README.md text eol=crlf\n")
+            readme.write_text("line one\nline two\n")
+        else:
+            (self.project / ".gitattributes").write_text("README.md filter=fixture\n")
+            git(self.project, "config", "filter.fixture.clean", "sed s/WORKTREE/BLOB/g")
+            git(self.project, "config", "filter.fixture.smudge", "sed s/BLOB/WORKTREE/g")
+            readme.write_text("WORKTREE\n")
+        git(self.project, "add", ".gitattributes", "README.md")
+        git(self.project, "commit", "-qm", "converted checkout")
+        readme.unlink()
+        git(self.project, "checkout", "--", "README.md")
+        self.assertEqual(git(self.project, "status", "--porcelain"), "")
+        blob = git(self.project, "cat-file", "-p", "HEAD:README.md")
+        self.assertNotEqual(readme.read_text(newline="").strip(), blob.strip())  # converted on checkout
+        self.base = self.candidate = git(self.project, "rev-parse", "HEAD")
+
+    def ready(self, proof):
+        self.assertEqual((proof["status"], proof["assurance"]["label"], proof["gaps"]), ("ready", "QUALIFIED", []))
+
+    def withheld(self, proof):
+        self.assertEqual((proof["status"], proof["assurance"]["label"]), ("blocked", "WITHHELD"), proof)
+        self.assertEqual(proof["assurance"]["assurance_unbound"], [{"obligation": "A", "gap": "invalidated"}])
+        self.assertIn("assurance_unbound", proof["gaps"])
+
+    def test_a_root_on_another_branch_reads_the_candidates_own_tree(self):
+        self.proved()
+        git(self.project, "checkout", "-qb", "other")
+        self.commit_readme("another branch's bytes\n")  # the root now holds other bytes at the bound path
+        self.ready(self.proof_now())
+
+    def test_proof_bound_to_bytes_the_candidate_tree_lacks_is_invalidated_at_another_root(self):
+        self.commit_readme("bytes of a later commit\n")  # the root holds them; the candidate's tree does not
+        self.proved()
+        self.withheld(self.proof_now())
+
+    def test_a_root_at_the_candidate_keeps_judging_working_files(self):
+        (self.project / "README.md").write_text("uncommitted bytes\n")  # unchanged pre-existing behaviour
+        self.proved()
+        self.ready(self.proof_now())
+
+    def test_a_clean_crlf_checkout_at_the_candidate_stays_ready(self):
+        self.converted("crlf")
+        self.proved()
+        self.ready(self.proof_now())
+
+    def test_a_clean_filtered_checkout_at_the_candidate_stays_ready(self):
+        self.converted("filter")
+        self.proved()
+        self.ready(self.proof_now())
+
+    def converted_elsewhere(self, kind):
+        """Converted bytes, proved at the candidate, then read from a root on another commit. Fail-closed and
+        documented (R185): the stored blob differs from the bytes the review bound."""
+        self.converted(kind)
+        self.proved()
+        git(self.project, "checkout", "-qb", "other")
+        (self.project / "unrelated.txt").write_text("x\n")
+        git(self.project, "add", "unrelated.txt")
+        git(self.project, "commit", "-qm", "unrelated")
+        self.withheld(self.proof_now())
+
+    def test_crlf_bytes_read_from_another_root_are_invalidated(self):
+        self.converted_elsewhere("crlf")
+
+    def test_filtered_bytes_read_from_another_root_are_invalidated(self):
+        self.converted_elsewhere("filter")
+
+
 class AttributionReadTests(AdmissionQueryCase):
     """Attribution excludes only repository-bound primary records."""
     def foreign_record(self, name="foreign"):
