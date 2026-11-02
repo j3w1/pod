@@ -201,6 +201,71 @@ class AttestedRebindTests(DeltaCase):
         self.assertTrue(all(row["state"] == "satisfied" for row in stored["obligations"]))
 
 
+
+class RefusalRouteTests(DeltaCase):
+    """pod#196: the refusal's own next step reaches an accepted write, with or without a changed source."""
+
+    def unchanged_governance(self):
+        git(self.project, "switch", "-q", "target")
+        git(self.project, "reset", "-q", "--hard", self.base)
+        git(self.project, "switch", "-q", "main")
+        self.target = self.move_target("notes\n", path="docs/notes.md")
+
+    def listed(self):
+        error = self.refused_unchanged("evidence_invalidated", self.refresh)
+        referent = error.detail["referent"]
+        self.assertEqual(referent["eligible_rebind_remaining"], 0)
+        return error, referent, referent["eligible_rebind"].split(",")
+
+    def accepted(self):
+        stored = read(self.project, "objective")["checkpoint"]
+        self.assertEqual(stored["governance"]["base"], self.target)
+        self.assertTrue(all(row["state"] == "satisfied" for row in stored["obligations"]))
+
+    def test_an_empty_change_routes_without_governance_delta(self):
+        self.unchanged_governance()
+        error, referent, rows = self.listed()
+        self.assertEqual(referent["governance_delta"], [])
+        self.assertIn("without governance_delta", error.detail["next_action"])
+        self.assertIn("no attestation is needed", error.detail["next_action"])
+        self.assertNotIn("governance_delta {sources", error.detail["next_action"])
+        self.assertTrue(all("needs no attestation" in item["correction"] and "attested" not in item["correction"]
+                            for item in referent["invalidations"]))
+        self.refresh(rebind=rows)
+        self.accepted()
+
+    def test_a_changed_source_routes_through_the_attested_delta(self):
+        error, referent, rows = self.listed()
+        self.assertIn("governance_delta {sources: the exact delta Pod reports, reason}", error.detail["next_action"])
+        self.assertTrue(all(item["correction"].endswith("with the attested governance delta")
+                            for item in referent["invalidations"]))
+        self.refresh(governance=snapshot(self.project), revision_authority=LOCAL, rebind=rows,
+                     governance_delta={"sources": referent["governance_delta"], "reason": REASON})
+        self.accepted()
+
+    def test_an_empty_sources_list_stays_malformed_and_says_to_omit_the_key(self):
+        empty = {"sources": [], "reason": REASON}
+        # With a changed source the shape refusal keeps its wording.
+        error = self.refused("obligation_invalid", "malformed", self.refresh, rebind=self.satisfied(),
+                             governance_delta=empty)
+        self.assertNotIn("omit governance_delta", str(error))
+        self.unchanged_governance()
+        before = self.record()
+        error = self.refused("obligation_invalid", "malformed", self.refresh, rebind=self.satisfied(),
+                             governance_delta=empty)
+        self.assertEqual(self.record(), before)
+        self.assertIn("omit governance_delta", str(error))
+        self.assertIn("omit governance_delta", error.detail["next_action"])
+        self.assertEqual(error.detail["referent"]["governance_delta"], [])
+        # A declared change where Pod reads none points at the same route.
+        declared = {"sources": [{"path": "AGENTS.md", "bound": None, "current": "0" * 40,
+                                "added": 1, "removed": 0}], "reason": REASON}
+        error = self.refused_unchanged("rebind_refused", self.refresh, governance=snapshot(self.project),
+                                       revision_authority=LOCAL, rebind=self.satisfied(), governance_delta=declared)
+        self.assertEqual(error.detail["referent"]["predicate"], "rebind_delta_mismatch")
+        self.assertIn("without governance_delta", error.detail["next_action"])
+
+
 class ScopedRowTests(KernelCase):
     """A row whose proof scope names AGENTS.md, beside a review that only read it as bound context."""
 

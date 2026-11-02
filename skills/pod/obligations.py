@@ -684,9 +684,14 @@ def _rebind_plan(prior_map: dict | None, value: dict, ctx: dict, refresh: bool, 
         reason = _text(raw["reason"], "reason", limit=1024)
         if (not isinstance(raw["sources"], list) or not 1 <= len(raw["sources"]) <= MAX_DELTA
                 or not all(delta_entry(entry) for entry in raw["sources"])):
+            read = ctx.get("governance_delta")
             raise refuse("obligation_invalid", "malformed", "governance_delta.sources lists each changed governance "
-                         "source as {path, bound, current, added, removed}", field="governance_delta",
-                         governance_delta=ctx.get("governance_delta"))
+                         "source as {path, bound, current, added, removed}"
+                         + ("; Pod reads no governance source change since the bound governance: when the rebound "
+                            "rows cross no changed source, omit governance_delta" if read == [] else ""),
+                         field="governance_delta", governance_delta=read,
+                         **({"next_action": "omit governance_delta and retry; if the rebound rows cross a changed source, Pod "
+                                           "reports the exact delta to declare"} if read == [] else {}))
         attested = {"sources": _delta_order(raw["sources"]), "reason": reason}
     prior = bound_governance_digest(prior_map)
     resolve = ctx.get("governance_stamp_delta") or (lambda stamp: ctx.get("governance_delta") if stamp == prior else None)
@@ -698,6 +703,9 @@ MAX_DELTA = 8  # refusal referents carry at most eight entries, so a declared de
 REBIND_ROUTE = ("governance_refresh: true, governance {base_ref, base} naming the observed target, a revision_authority "
                 "valid under the decision policy for scope changes, rebind naming the rows, and governance_delta "
                 "{sources: the exact delta Pod reports, reason}")
+# R203: rows that cross no changed governance source rebind without an attestation or a snapshot decision.
+REBIND_ROUTE_UNCHANGED = ("governance_refresh: true and rebind naming the rows, without governance_delta: they cross no "
+                          "changed governance source, so no attestation is needed")
 
 
 def _delta_order(entries: list[dict]) -> list[dict]:
@@ -788,7 +796,8 @@ def _attestation_check(plan: dict | None, ctx: dict) -> None:
                       "delta", "write " + REBIND_ROUTE)
     if plan["attested"]["sources"] != needed:
         raise refused("rebind_delta_mismatch", "the declared governance_delta differs from the delta Pod read for the "
-                      "rebound rows", "declare exactly the governance_delta Pod reports; " + REBIND_ROUTE)
+                      "rebound rows", ("declare exactly the governance_delta Pod reports; " + REBIND_ROUTE) if needed
+                      else "write " + REBIND_ROUTE_UNCHANGED)
     if not ctx.get("snapshot_decision"):
         raise refused("rebind_needs_snapshot_decision", "an attested rebind is a snapshot decision by the decider the "
                       "decision policy names for scope changes", "write " + REBIND_ROUTE)
@@ -1813,7 +1822,9 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
             if blocker is None:
                 eligible.append(ob["id"])
                 needed.update({(entry["path"], entry["bound"]): entry for entry in crossed})
-                item.update(eligibility="rebindable", correction=f"rebind {ob['id']} with the attested governance delta")
+                item.update(eligibility="rebindable", correction=(
+                    f"rebind {ob['id']} with the attested governance delta" if crossed else
+                    f"rebind {ob['id']}; it crosses no changed governance source, so it needs no attestation"))
             else:
                 item.update(eligibility="ineligible", correction=f"record fresh evidence for {ob['id']}; {blocker}")
         shown = []
@@ -1831,7 +1842,8 @@ def _account(state: dict, rows: dict[str, dict], seq: int, ctx: dict, gov: str, 
                                for item in invalid[:8]) + (f"; +{len(invalid)-8} more" if len(invalid) > 8 else ""),
                      **first, invalidations=invalid[:8], remaining=max(0, len(invalid)-8), **rebind_referent,
                      next_action="re-read with pod internal map; "
-                     + (f"rebind the {len(eligible)} rebindable rows with {REBIND_ROUTE}; " if eligible else "")
+                     + (f"rebind the {len(eligible)} rebindable rows with "
+                        f"{REBIND_ROUTE if needed else REBIND_ROUTE_UNCHANGED}; " if eligible else "")
                      + "name eligible ids in reuse {from, ids}; record fresh evidence or restate the other rows")
     for key in outstanding:
         row = admissions.get(key)
