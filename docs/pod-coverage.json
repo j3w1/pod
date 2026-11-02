@@ -10757,6 +10757,18 @@
         "tests.test_governance_delta_rebind.RefusalRouteTests.test_an_empty_sources_list_stays_malformed_and_says_to_omit_the_key"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A825",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.RunCoordinatorFenceTests.test_an_ended_dispatch_with_gone_resources_settles_as_in_the_single_query",
+        "tests.test_admission_batch.RunCoordinatorFenceTests.test_a_normal_batch_requests_no_native_read_after_the_fence"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

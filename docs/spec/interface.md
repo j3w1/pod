@@ -1267,7 +1267,7 @@ full audit and explicit migration are separate operations.
 
 ### R207 — Answer many admission queries over one shared discovery
 
-Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787)
+Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787), [A825](#a825)
 
 `pod admission --batch --timeout SECONDS --json` reads one `pod-admission-batch-request/v1`
 object from stdin and answers `pod-admission-batch/v1`. With `--batch` every per-query flag is
@@ -1338,7 +1338,8 @@ also returns its rows. A side that is not provably whole or failed has `complete
 `fleet_start` describes the complete all-Run worker read discovery used, and `fleet_end` a fresh
 one made with the terminal `end` read. The end reads start once every native read any result uses
 has finished (the fleet, the terminal list, every abandoned Dispatch's claim, every observed Run
-owner and each candidate proof's reads), so they are the call's last native reads; the remaining
+owner, R206 rule S's Run-coordinator list, read once whenever the terminal inventory is known, and
+each candidate proof's reads), so they are the call's last native reads; the remaining
 projection and the shared recheck run beside them, and a native read requested after they start
 is refused `native_read_after_fence` rather than made: a claim read becomes that scoped unknown, and
 a Run-owner read keeps its owner observation with that code, `owner_identity_matches` false, and
@@ -1396,6 +1397,7 @@ overlapped with the projections and the recheck.
 - <a id="a785"></a>**A785** — A stable fence's fingerprints equal an independent computation of the documented rule and the end returns the nine-field rows; a connected flip, a new terminal or a runtime change at the end, an incomplete end and a failed end each make the fence unstable and the batch `unknown` and incomplete while every result is unchanged.
 - <a id="a786"></a>**A786** — The fleet fence digests the documented row identities of every unreleased row, every released row, the newest page and every abandoned claim, from discovery's own reads and fresh end reads; with unchanged inventories it is stable; a created, settled, deleted or changed row, a changed abandoned claim, a balanced create, settle and delete with equal totals and counts, a runtime change, a bound or failed end read and a failed end partition each make it unstable and the batch `unknown` while every result is unchanged; a released row outside the newest page that becomes abandoned with a pending effect, or changes any other identity field, makes it unstable; a bound caller's fleet start is incomplete with `native_inventory_scope`; the end reads start only after every native read a result uses has finished.
 - <a id="a787"></a>**A787** — During one call, a changed record is `record_changed` and incomplete only in the results it is relevant to, an added or removed record is `inventory_changed`, and a changed effect policy is `effect_policy_changed`; a fault inside one query's projection prints no partial batch; an unlocated foreign worker together with an open record's stale runtime answers normally in both forms; an OSError from the fleet or from a record read stays the scoped `inventory_unreadable` or `unreadable` answer in both forms; a Run-owner read asked for after the end fence started is never made and adds a scoped `native_read_after_fence` unknown.
+- <a id="a825"></a>**A825** — In a batch, an ended Dispatch whose terminal, workspace and Run coordinator are gone settles under rule S exactly as in the single query, with the same result and the same blocking unknowns, the Run list walked once for the call; no native read is requested after the end fence starts.
 
 ### R208 — Read one objective's exact-candidate facts without discovery
 

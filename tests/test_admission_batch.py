@@ -16,6 +16,7 @@ from tests import test_admission_query as base
 
 LIST = ["orchestration", "worker-list", "--include-remote", "--json"]
 LIVE = {"connected": True, "writable": True, "orphaned": False}
+RUNS = {"runtime": "runtime", "result": {"runs": [], "nextCursor": None}}
 
 
 def terminal_page(rows, runtime="runtime", **whole):
@@ -29,8 +30,8 @@ def terminal(handle, path, **fields):
 
 
 class NativeDouble:
-    """Orca reads the batch makes past the patched inventories: terminal lists, served in order, and the
-    fence's fleet reads, answered by a FleetDouble."""
+    """Orca reads the batch makes past the patched inventories: terminal lists, served in order, an empty complete
+    Run list, and the fence's fleet reads, answered by a FleetDouble."""
 
     def __init__(self, *pages, fleet=None):
         self.pages, self.fleet, self.calls, self.lock = list(pages), fleet, [], threading.Lock()
@@ -43,6 +44,8 @@ class NativeDouble:
             elif argv[:2] == ["terminal", "list"]:
                 page = self.pages.pop(0) if len(self.pages) > 1 else self.pages[0]
                 fleet = None
+            elif argv[:2] == ["orchestration", "run-list"]:
+                page, fleet = RUNS, None  # rule S's Run-coordinator list, read before the end fence
             else:
                 raise AssertionError(f"unexpected native read {argv}")
         if fleet is not None:
@@ -176,9 +179,9 @@ class SharedReadTests(BatchCase):
         self.assertTrue(first_after)
         self.assertEqual(sorted(set(first_after)), sorted(first_after))
         self.assertEqual(answer["discovery"]["records"], 4)
-        # Discovery's terminal list, then the fence's terminal list, newest page and six partitions; the
-        # discovery fleet is a double.
-        self.assertEqual(answer["discovery"]["orca_reads"], 9)
+        # Discovery's terminal list and one Run list, then the fence's terminal list, newest page and six
+        # partitions; the discovery fleet is a double.
+        self.assertEqual(answer["discovery"]["orca_reads"], 10)
         self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
 
     def test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to(self):
@@ -876,9 +879,9 @@ class CorrectionRoundTests(BatchCase):
     def test_a_late_run_owner_read_is_never_made_and_marks_the_result_incomplete(self):
         self.intake(worktree=self.place)
         real = admission._prefetch_native
-        def skip_owners(discovery):
+        def skip_owners(discovery, *args, **kwargs):
             discovery.owner_runs.clear()  # force the projection to ask for the owner after the fence starts
-            real(discovery)
+            real(discovery, *args, **kwargs)
         with patch("pod.admission._prefetch_native", side_effect=skip_owners), \
              patch("pod.admission._owner_observation") as owner:
             answer = self.batch({"worktree": str(self.project), "branch": "main"})
@@ -890,6 +893,63 @@ class CorrectionRoundTests(BatchCase):
         ownership = next(claim for claim in result["claims"] if claim["kind"] == "ownership")
         self.assertEqual(ownership["owner_observations"][0]["code"], "native_read_after_fence")
         self.assertFalse(ownership["owner_identity_matches"])
+
+
+class RunCoordinatorFenceTests(BatchCase):
+    """R206 rule S in a batch (A825): the Run-coordinator list is read before the end fence, through the same
+    gated reads the fence guards, so an ended Dispatch whose resources are gone settles as in the single query."""
+
+    writer = base.ReviewCorrectionTests.writer
+    worker = base.TerminalHistoryTests.worker
+    ended = base.TerminalHistoryTests.ended
+    settled = base.TerminalHistoryTests.settled
+
+    def setUp(self):
+        super().setUp()
+        self.intake(worktree=self.place)
+        native, self.run_reads = self.native, []
+        def read(argv):
+            if argv[:2] == ["orchestration", "run-list"]:
+                self.run_reads.append(list(argv))
+                return {"runtime": "runtime", "result": {
+                    "runs": [{"id": "ended-run", "coordinator_handle": None}], "nextCursor": None}}
+            return native(argv)
+        reads = patch("pod.admission._read", side_effect=read)
+        reads.start(); self.addCleanup(reads.stop)
+        real, self.refused = admission._Discovery.ordered, []
+        def ordered(discovery):
+            try:
+                return real(discovery)
+            except PodError as exc:
+                self.refused.append(exc.code)
+                raise
+        guard = patch.object(admission._Discovery, "ordered", ordered)
+        guard.start(); self.addCleanup(guard.stop)
+        inventories = {"runtime": "runtime", "complete": True}
+        for name, value in (("_fleet", {**inventories, "workers": [self.ended()]}),
+                            ("_terminals", {**inventories, "terminals": []})):
+            fixed = patch(f"pod.admission.{name}", return_value=value)
+            fixed.start(); self.addCleanup(fixed.stop)
+
+    def test_an_ended_dispatch_with_gone_resources_settles_as_in_the_single_query(self):
+        shape = {"worktree": str(self.project), "branch": "main"}
+        single = self.query(**shape)
+        self.settled(single)
+        self.run_reads.clear()
+        answer = self.batch(shape, {"branch": "main"})
+        result = answer["responses"][0]["result"]
+        self.settled(result)
+        self.assertEqual(result, single)
+        self.assertEqual(result["unknowns"], single["unknowns"])  # the same blocking unknowns
+        self.assertEqual(len(self.run_reads), 1)  # one walk per call, shared by every query
+        self.assertEqual(self.refused, [])  # no native read was refused after the fence
+
+    def test_a_normal_batch_requests_no_native_read_after_the_fence(self):
+        answer = self.batch({}, {"worktree": str(self.project)}, {"effects": ["deploy:target"]})
+        self.assertEqual(self.refused, [])
+        self.assertIn("native_fence", answer)
+        for row in answer["responses"]:
+            self.assertNotIn("native_read_after_fence", [unknown["code"] for unknown in row["result"]["unknowns"]])
 
 
 class DiscoveryRaceTests(BatchCase):
