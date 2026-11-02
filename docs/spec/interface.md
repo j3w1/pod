@@ -521,6 +521,7 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments (active, settled, or unverified when the exact native read fails), runtime rebinds, succession, gates, progress, blockers and next action, and the `readiness` answer (R114) first. Shared Runs require explicit selection. |
 | `pod status --list [--repository PATH \| --worktree PATH] [--delivered] [--json]` | List every objective recorded for a repository or worktree (R108) from Pod's own state, without Orca, each with its record-only readiness label. `--delivered` adds read-only delivery proof for open rows (R148). Exit 0 for `listed` or `absent`. |
 | `pod admission --repository PATH [--objective ID --candidate SHA] [--json]` | Read current claims and exact candidate proof with scoped unknowns and effect-boundary recheck identity (R185). |
+| `pod admission --selected --objective ID --candidate SHA [--repository PATH] [--tree TREE] [--expect DIGEST] --json` | Read one objective's exact-candidate facts with no repository record scan and no fleet discovery (R208). |
 | `pod sweep [--repository PATH]... [--objective NAME]... [--json]` | Close every proved delivered open objective by evidence (R148); no terminal or Run binding needed. |
 | `pod doctor [--json]` | Read-only installation, registry, preference, route summary, observation cache, runtime capability, message route (R111) and version diagnostics. |
 | `pod update` | Runs the installer update path; active coordinators reload, active workers continue. |
@@ -1149,7 +1150,8 @@ uncertainty, never guessed clearance or a replacement effect vocabulary.
 
 The query reads bounded primary facts, current Governor journals, a paginated
 native all-Run inventory, and a complete native terminal ownership inventory.
-It is a one-query call over the same shared discovery as the batch form (R207).
+It is a one-query call over the same shared discovery as the batch form (R207). The selected read (R208)
+returns the same `proof` from the same implementation without that discovery.
 The latter includes sessions outside supervised workers, including folder contexts
 inside a repository; physical workspace overlap is checked, not just literal
 path equality. Worker facts retain their current terminal/resource owner and
@@ -1394,3 +1396,95 @@ overlapped with the projections and the recheck.
 - <a id="a785"></a>**A785** — A stable fence's fingerprints equal an independent computation of the documented rule and the end returns the nine-field rows; a connected flip, a new terminal or a runtime change at the end, an incomplete end and a failed end each make the fence unstable and the batch `unknown` and incomplete while every result is unchanged.
 - <a id="a786"></a>**A786** — The fleet fence digests the documented row identities of every unreleased row, every released row, the newest page and every abandoned claim, from discovery's own reads and fresh end reads; with unchanged inventories it is stable; a created, settled, deleted or changed row, a changed abandoned claim, a balanced create, settle and delete with equal totals and counts, a runtime change, a bound or failed end read and a failed end partition each make it unstable and the batch `unknown` while every result is unchanged; a released row outside the newest page that becomes abandoned with a pending effect, or changes any other identity field, makes it unstable; a bound caller's fleet start is incomplete with `native_inventory_scope`; the end reads start only after every native read a result uses has finished.
 - <a id="a787"></a>**A787** — During one call, a changed record is `record_changed` and incomplete only in the results it is relevant to, an added or removed record is `inventory_changed`, and a changed effect policy is `effect_policy_changed`; a fault inside one query's projection prints no partial batch; an unlocated foreign worker together with an open record's stale runtime answers normally in both forms; an OSError from the fleet or from a record read stays the scoped `inventory_unreadable` or `unreadable` answer in both forms; a Run-owner read asked for after the end fence started is never made and adds a scoped `native_read_after_fence` unknown.
+
+### R208 — Read one objective's exact-candidate facts without discovery
+
+Type: B,I · Scenarios: [A796](#a796), [A797](#a797), [A798](#a798), [A799](#a799), [A800](#a800), [A801](#a801), [A802](#a802), [A803](#a803), [A804](#a804)
+
+`pod admission --selected --objective ID --candidate SHA [--repository PATH] [--tree TREE]
+[--expect DIGEST] [--timeout SECONDS] --json` returns `pod-admission-selected/v1`: one objective's
+facts at one exact candidate, for a host that admits that one change. Like R185 it reports facts;
+`authorization` is always false, and no status, exit code or digest grants anything. It makes no
+write, tick, compaction, migration, collection or provider call.
+
+It reads only: the repository's Git identity; the candidate's commit and tree; the selected record
+at its record name, with its history and its own Governor journal; and R185's exact-candidate proof,
+whose only native reads are the exact worker read of each still-bound admission by its recorded
+Dispatch (or one runtime read when none is bound). It never lists the record cohort, reads another
+record, walks the all-Run inventory, lists or shows terminals, or reads a Run or Task. Recorded Run,
+Task, Dispatch, worker and terminal ids are returned as references only.
+
+`proof` is the R185 proof, from the same implementation, and is byte-identical to the `proof` that
+`pod admission --objective ID --candidate SHA` returns for the same record and candidate. Each
+assurance's `evidence_current` comes from that proof's own `assurance_unbound` judgement: true for a
+satisfied assurance with no gap, false for an `invalidated` or `unbound` gap or a candidate mismatch,
+and null for a withdrawn or renewed assurance or a proof that could not judge it.
+
+The answer holds:
+
+- `binding`: the repository display name, `repo_key`, resolved path, objective, record name, and
+  the full candidate commit and tree.
+- `snapshot`: the record revision, checkpoint seq and revision, plan revision, recorded candidate,
+  writer's Pod version, the recorded objective source binding, the policy revision recorded and
+  current, and the recorded governance base with its bound digest, the base ref's current commit
+  and whether it is stale.
+- `assurances`: every recorded assurance with its id, state, audit role, provenance, unit, parent,
+  definition, the recorded `scope` (`paths` and `surfaces`, never inferred), `evidence_current`,
+  its gap, the evidence candidate, the recorded reuse, the accepted attempts (current evidence and
+  accepted receipts, by admission id) and its findings.
+- `attempts`: every admission, ordered by admission sequence and then id, with role, served
+  obligations, state, recorded native references, worktree, candidate, the requested route, the
+  effective agent, model, effort and context recorded when it bound (`source` `receipt`, or
+  `inherited` with its recorded provenance for a reused terminal, or `not_recorded`), reuse and
+  retry parents, the consumed report header, the recorded result head and disposition and, for an
+  implementation, whether its integrated or result commit is an ancestor of the candidate. The
+  effective facts are the ones the record captured; a later reuse of the terminal never replaces
+  them, and no live terminal is read. The agent is the model family; Pod does not map a model id
+  to a provider, so the digest never depends on catalog contents.
+- `unknowns`, `conflicts`, `digest` and `next_action`.
+
+Top-level `unknowns` are only the facts that make the read itself incomplete or uncertain:
+`proof_unverified` (an unknown proof, including a failed exact worker read), `discovery_budget` (the
+deadline ran out during any read, including the last one, or before the finished answer, its digest and
+its printed form were complete; the deadline is checked after the last read and again once the answer
+is finished, and its expiry is never a refusal),
+`record_changed` (the record's primary or journal bytes changed during the read), `invalid_record`
+and `state_unsupported`, and `selected_projection_limit`. `status` is `unknown` when any is present,
+else `ready` when the proof is ready, else `blocked`. A fact an attempt lacks
+(`effective_unknown`, `effective_not_recorded`, `implementation_ancestry_unknown`) is listed in that
+attempt's own `unknowns`; it never changes `status`, and it is part of the digest.
+
+`digest` is a digest of the facts: the SHA-256 of the returned answer without `digest`, `status`,
+`conflicts` and `next_action`, in Pod's canonical JSON (sorted keys, no whitespace, UTF-8), so a caller
+recomputes it from the answer it received. `status` is left out because it is derived from the proof
+and the unknowns, which the digest covers. Every list has a defined order, and the answer carries no
+time or diagnostic field, so the same facts give the same digest. `--expect DIGEST` (64 lowercase hex
+characters) compares it as R185 compares its snapshot: a different digest adds `{"kind":
+"digest_changed", "expected": DIGEST}` to `conflicts` and makes a ready answer `blocked`. It is never a
+refusal, the returned digest is still the facts digest, unchanged by the conflict, and a factual answer
+exits zero. The bound is R185's projection bound, applied to the final answer exactly as `--json`
+prints it, with digest, conflicts and next action included: an answer over it withholds the snapshot,
+assurances and attempts, sets the proof unknown with `selected_projection_limit` and returns a null
+digest. No list is truncated otherwise; the record's own validation bounds it.
+
+Refusals print only Pod's error object and exit 1: `admission_selected_request` for `--selected`
+without `--json`, `--objective` or `--candidate`, with `--batch`, `--worktree`, `--branch`, `--target`,
+`--target-commit`, `--effect` or `--known-repository`, for a malformed `--tree`, and for `--tree`
+without `--selected`, and for a malformed `--expect`; `admission_candidate` for a candidate that is not a full object id or not a
+commit in the repository; `selected_tree_mismatch` when `--tree` differs from the candidate's tree;
+`objective_unknown` when the repository holds no record for the objective, which is what a wrong
+repository finds, since the record name binds the repository identity; `selected_repository_mismatch`
+when the record's checkpoint names another repository; and R185's `admission_scope_unavailable`,
+`repository_identity_unavailable`, `git_unavailable`, `unsafe_state` and `admission_timeout`. Each is
+found before the record's contents are read, except `selected_repository_mismatch`. The timeout keeps R185's default
+of 10 seconds and maximum of 30, and every read spends it.
+
+- <a id="a796"></a>**A796** — With another objective's record and an unreadable record in the same state root, and every cohort listing, other-record read, all-Run inventory, terminal inventory, Run owner read and Orca executable launch made to fail the test, the selected read through the production native port, doubled only at its worker-show boundary, answers `ready`; its only native reads are the exact worker reads of the record's bound admissions, and no byte or modification time under the state root changes. A discovery read injected inside the production native port fails the control.
+- <a id="a797"></a>**A797** — For a ready, an invalidated, an unbound, a changed-candidate and a verification-gap proof, the selected read's `proof` is byte-identical to `pod admission --objective O --candidate C`.
+- <a id="a798"></a>**A798** — Each assurance reports its recorded `scope.paths` exactly as recorded, its own `evidence_current` and gap, and its accepted attempts by admission id; a withdrawn assurance has a null currency.
+- <a id="a799"></a>**A799** — A reviewer's recorded effective route survives a later reuse of its terminal at another effort, with no terminal or worker show read; a missing effective fact is an explicit attempt gap, `effective_not_recorded` or `effective_unknown`, never inferred.
+- <a id="a800"></a>**A800** — An implementation attempt reports its disposition and whether its integrated or result commit is in the candidate: true, false, null without a commit, and null with `implementation_ancestry_unknown` when Git cannot tell.
+- <a id="a801"></a>**A801** — A candidate that is not a full id or not a commit in the repository, a different `--tree`, a malformed `--tree` and a repository without the record each refuse with their code and exit 1, before the record is read; a record that names another repository refuses; the CLI refuses every discovery flag, `--batch`, a missing `--json`, and `--tree` without `--selected`, and answers a factual read with exit 0.
+- <a id="a802"></a>**A802** — The same facts give the same digest, recomputable from the returned answer without `digest`, `status`, `conflicts` and `next_action`; a changed plan revision or policy revision gives a new digest; `--expect` with a stale digest adds `digest_changed` and makes the answer `blocked` with exit 0 while returning the unchanged facts digest; a malformed `--expect` and the `--tree` mismatch refuse with exit 1.
+- <a id="a803"></a>**A803** — An exhausted deadline (during the proof, at the end of the last read, before the record is read, or once the answer is finished), a record changed during the read, a failed exact worker read and an answer over the projection bound each give `unknown` with exactly their code, never `ready` and never a refusal; the bound applies to the final printed answer, and the over-bound answer has a null digest and no snapshot, assurances or attempts.
+- <a id="a804"></a>**A804** — A ready proof whose reviewer attempt lacks its recorded effort stays `ready` with no top-level unknown; the gap is visible in that attempt's `unknowns`, and filling it changes the digest.

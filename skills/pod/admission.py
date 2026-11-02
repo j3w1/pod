@@ -1196,13 +1196,19 @@ def _effect_identity(journal: dict, *, open_objective: bool) -> str:
 
 
 def _proof(project: Path, objective: str, candidate: str) -> dict:
+    return _proof_view(project, objective, candidate)[0]
+
+
+def _proof_view(project: Path, objective: str, candidate: str) -> tuple[dict, dict, dict | None]:
+    """The exact-candidate proof, with the record and kernel view it was judged from (None on a candidate
+    mismatch). The one proof implementation: `pod admission` and its selected read both return this proof."""
     from .ledger import kernel_view, read
     state = read(project, objective)
     if state is None:
         raise PodError("objective_unknown", "The selected objective has no record")
     checkpoint = state.get("checkpoint") or {}
     if checkpoint.get("candidate") != candidate:
-        return {"status": "blocked", "candidate": candidate, "reason": "candidate_mismatch"}
+        return {"status": "blocked", "candidate": candidate, "reason": "candidate_mismatch"}, state, None
     # A root checked out at the candidate keeps judging bound sources by its working files, which is what a review
     # binds, including bytes a clean checkout converts (eol, filters). Any other root, such as a canonical checkout on
     # the target branch, judges them against the candidate's stored blobs instead of its own unrelated files (pod#184).
@@ -1227,13 +1233,13 @@ def _proof(project: Path, objective: str, candidate: str) -> dict:
         gaps.append("outstanding_assignments")
     if view["label"]["label"] != "QUALIFIED":
         gaps.append("assurance_unbound")
-    return {"status": "unknown" if view["settlement"] == "unverified" or unavailable else "blocked" if gaps else "ready",
-            "candidate": candidate, "settlement": view["settlement"],
-            "purpose": "candidate_proof", "gaps": gaps, "assurance": view["label"],
-            "objective_unfinished": [row["id"] for row in (view["map"] or {}).get("obligations", [])
-                                     if row["state"] not in TERMINAL],
-            "objective_complete": bool(view["map"]) and all(row["state"] in TERMINAL
-                                      for row in view["map"]["obligations"])}
+    return ({"status": "unknown" if view["settlement"] == "unverified" or unavailable else "blocked" if gaps else "ready",
+             "candidate": candidate, "settlement": view["settlement"],
+             "purpose": "candidate_proof", "gaps": gaps, "assurance": view["label"],
+             "objective_unfinished": [row["id"] for row in (view["map"] or {}).get("obligations", [])
+                                      if row["state"] not in TERMINAL],
+             "objective_complete": bool(view["map"]) and all(row["state"] in TERMINAL
+                                       for row in view["map"]["obligations"])}, state, view)
 
 
 def _query(project: Path, *, repository: str | None = None, objective: str | None = None,
@@ -2394,3 +2400,313 @@ def batch_command(args, project: Path) -> dict:
     except OSError:
         raise _request_fault("Cannot read the batch request from stdin") from None
     return batch(project, batch_request(data), timeout=timeout)
+
+
+# --------------------------------------------------------------------------- selected objective (R208)
+
+SELECTED_SCHEMA = "pod-admission-selected/v1"
+SELECTED_FLAGS = ("worktree", "branch", "target", "target_commit")
+ROUTE_FIELDS = ("agent", "model", "effort", "context")
+
+
+def _selected_fault(message: str) -> PodError:
+    return PodError("admission_selected_request", message)
+
+
+def _record_identity(directory: Path) -> str:
+    """The selected record's change identity: its primary and journal bytes (history chunks are addressed by
+    content, so the primary names them). Read without decoding; an absent journal is its own identity."""
+    from .ledger import _record_exists
+    parts = {}
+    for name in ("context.json", "governor.json"):
+        parts[name] = (hashlib.sha256(history._context_bytes(directory / name, history.MAINTENANCE_LIMIT)).hexdigest()
+                       if _record_exists(directory / name) else None)
+    return digest(parts)
+
+
+def _route(value) -> dict:
+    value = value if isinstance(value, dict) else {}
+    return {key: value.get(key) for key in ROUTE_FIELDS}
+
+
+def _selected_assurances(state: dict, proof: dict) -> list[dict]:
+    """Every recorded assurance with its recorded scope; currency is read from the proof's own judgement."""
+    label = proof.get("assurance") if isinstance(proof.get("assurance"), dict) else None
+    gaps = {row.get("obligation"): row.get("gap") for row in (label or {}).get("assurance_unbound", [])
+            if isinstance(row, dict) and row.get("obligation")}
+    mismatch = proof.get("reason") == "candidate_mismatch"
+    rows = []
+    for ob in (state.get("checkpoint") or {}).get("obligations") or []:
+        if not isinstance(ob, dict) or ob.get("kind") != "assurance":
+            continue
+        live = ob.get("state") not in ("withdrawn", "renewed")
+        if not live:
+            current, gap = None, None
+        elif mismatch:
+            current, gap = False, "candidate_mismatch"
+        elif label is None:
+            current, gap = None, None  # The proof could not judge it; the read's own unknown says why.
+        else:
+            gap = gaps.get(ob.get("id"))
+            current = ob.get("state") == "satisfied" and gap is None
+        evidence = [row for row in ob.get("evidence") or [] if isinstance(row, dict)]
+        attempts = [{"admission": row["attempt"], "candidate": row.get("candidate"), "accepted_seq": None,
+                     "source": "evidence"} for row in evidence if isinstance(row.get("attempt"), str)]
+        for receipt in ob.get("receipts") or []:
+            held = receipt.get("evidence") if isinstance(receipt, dict) else None
+            if isinstance(held, dict) and isinstance(held.get("attempt"), str):
+                attempts.append({"admission": held["attempt"], "candidate": held.get("candidate"),
+                                 "accepted_seq": receipt.get("accepted_seq"), "source": "receipt"})
+        reuse = ob.get("reuse") if isinstance(ob.get("reuse"), dict) else None
+        scope = ob.get("scope") if isinstance(ob.get("scope"), dict) else {}
+        rows.append({"id": ob.get("id"), "state": ob.get("state"), "audit_role": ob.get("audit_role"),
+                     "provenance": ob.get("provenance"), "unit": ob.get("unit"), "parent": ob.get("parent"),
+                     "definition": ob.get("definition"),
+                     "scope": {"paths": scope.get("paths"), "surfaces": scope.get("surfaces")},
+                     "evidence_current": current, "gap": gap,
+                     "evidence_candidate": evidence[-1].get("candidate") if evidence else None,
+                     "reuse": {key: reuse.get(key) for key in ("from", "to", "definition")} if reuse else None,
+                     "accepted_attempts": attempts,
+                     "findings": [{key: row.get(key) for key in ("finding", "severity", "triage", "correction",
+                                                                 "resolved_seq")}
+                                  for row in ob.get("findings") or [] if isinstance(row, dict)]})
+    return rows
+
+
+def _selected_attempts(project: Path, state: dict, candidate: str) -> list[dict]:
+    """Every admission as recorded. Effective facts are the ones captured at bind time, never a live read."""
+    ancestry = {}
+
+    def in_candidate(commit):
+        if commit not in ancestry:
+            ancestry[commit] = gitio.is_ancestor(project, commit, candidate, resolve=lambda _root, value: value)
+        return ancestry[commit]
+
+    admissions = state.get("admissions") if isinstance(state.get("admissions"), dict) else {}
+    ordered = sorted(admissions.items(), key=lambda item: (
+        item[1].get("admitted_seq") if isinstance(item[1], dict) and type(item[1].get("admitted_seq")) is int else 0,
+        item[0]))
+    rows = []
+    for key, row in ordered:
+        if not isinstance(row, dict):
+            continue
+        unknowns = []
+        binding = row.get("native_binding") if binding_valid(row.get("native_binding")) else None
+        evidence = row.get("effective_evidence") if isinstance(row.get("effective_evidence"), dict) else {}
+        if isinstance(evidence.get("effective"), dict):
+            effective = {**_route(evidence["effective"]),
+                         "source": "inherited" if evidence.get("inherited") is not None else "receipt"}
+            if evidence.get("inherited") is not None:
+                effective["inherited"] = evidence["inherited"]
+            missing = [field for field in ("agent", "model", "effort") if effective[field] == "unknown"]
+            if missing:
+                unknowns.append({"code": "effective_unknown", "fact": "effective_route", "fields": missing})
+        else:
+            effective = {**_route(None), "source": "not_recorded"}
+            unknowns.append({"code": "effective_not_recorded", "fact": "effective_route"})
+        report = row.get("report") if isinstance(row.get("report"), dict) else None
+        disposition = row.get("disposition") if isinstance(row.get("disposition"), dict) else None
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        attempt = {"admission": key, "role": row.get("role"), "serves": row.get("serves"), "state": row.get("state"),
+                   "admitted_seq": row.get("admitted_seq"),
+                   "native": None if binding is None else {
+                       "run": binding["runId"], "task": binding["taskId"], "dispatch": binding["dispatchId"],
+                       "worker": binding["workerId"], "terminal": binding["terminalHandle"],
+                       "worktree_id": binding["worktreeId"]},
+                   "worktree": row.get("worktree"), "candidate": row.get("candidate"),
+                   "requested": _route(row.get("request")), "effective": effective,
+                   "reuse_of": row.get("reuse_of"), "retry_of": row.get("retry_of"),
+                   "report": None if report is None else {key: report.get(key)
+                                                          for key in ("outcome", "status", "result_commit")},
+                   "result_head": result.get("head"),
+                   "disposition": None if disposition is None else {
+                       "kind": disposition.get("kind"), "integrated_into": disposition.get("candidate"),
+                       "validated": disposition.get("validated"), "seq": disposition.get("seq")},
+                   "in_candidate": None}
+        if row.get("role") == "implement":
+            commit = (disposition.get("candidate") if disposition and disposition.get("kind") == "integrated_into"
+                      else result.get("head"))
+            if isinstance(commit, str) and commit:
+                attempt["in_candidate"] = in_candidate(commit)
+                if attempt["in_candidate"] is None:
+                    unknowns.append({"code": "implementation_ancestry_unknown", "fact": "implementation_in_candidate",
+                                     "commit": commit})
+        attempt["unknowns"] = unknowns
+        rows.append(attempt)
+    return rows
+
+
+def _selected_snapshot(state: dict, view: dict | None) -> dict:
+    checkpoint = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
+    ctx = (view or {}).get("ctx") or {}
+    governance = checkpoint.get("governance") if isinstance(checkpoint.get("governance"), dict) else {}
+    source = checkpoint.get("objective_source") if isinstance(checkpoint.get("objective_source"), dict) else None
+    bound = None
+    if view is not None and view.get("map") is not None:
+        from .obligations import bound_governance_digest
+        bound = bound_governance_digest(view["map"])
+    current_base = ctx.get("governance_current")
+    return {"record_revision": state.get("revision"), "seq": checkpoint.get("seq"),
+            "checkpoint_revision": checkpoint.get("revision"), "plan_revision": checkpoint.get("plan_revision"),
+            "recorded_candidate": checkpoint.get("candidate"), "pod_version": checkpoint.get("pod_version"),
+            "source": None if source is None else {key: source.get(key) for key in
+                ("repository", "number", "locator", "body_sha256", "amendments")},
+            "policy": {"recorded": checkpoint.get("policy_revision"), "current": ctx.get("policy_revision"),
+                       "current_equal": None if ctx.get("policy_revision") is None
+                       else ctx["policy_revision"] == checkpoint.get("policy_revision")},
+            "governance": {"base_ref": governance.get("base_ref"), "base": governance.get("base"),
+                           "selection": governance.get("selection"), "bound_digest": bound,
+                           "current_base": current_base,
+                           "stale": None if current_base is None else current_base != governance.get("base")}}
+
+
+def selected(project: Path, *, repository: str | None = None, objective: str | None = None,
+             candidate: str | None = None, tree: str | None = None, expect: str | None = None,
+             timeout: float = 10.0) -> dict:
+    """R208: one objective's exact-candidate facts, with no record scan and no fleet discovery.
+
+    Reads the repository identity, the candidate, the selected record and its own journal, and the existing proof
+    path (whose only native reads are exact worker reads of still-bound admissions). It grants nothing.
+    """
+    if not objective or not candidate or not gitio.OBJECT_ID.fullmatch(candidate):
+        raise PodError("admission_candidate", "Supply an objective and its full candidate object id together")
+    if tree is not None and not gitio.OBJECT_ID.fullmatch(tree):
+        raise _selected_fault("--tree must be a full object id")
+    if expect is not None and not re.fullmatch(r"[0-9a-f]{64}", expect):
+        raise _selected_fault("--expect must be a digest this read returned (64 lowercase hex characters)")
+    budget = Budget(_timeout(timeout))
+    project = Path(repository or project).expanduser().resolve()
+    result = {"schema": SELECTED_SCHEMA, "status": "unknown", "authorization": False,
+              "binding": {"repository": None, "repo_key": None, "path": str(project), "objective": objective,
+                          "record": None, "candidate": candidate, "tree": None},
+              "snapshot": None, "proof": None, "assurances": [], "attempts": [], "unknowns": [], "conflicts": []}
+    unknowns, binding = result["unknowns"], result["binding"]
+    reading = False  # True once the selected record exists and its read has started
+    try:
+        with read_deadline(budget):
+            if not project.is_dir():
+                raise PodError("admission_scope_unavailable", "The repository argument is not an existing directory")
+            context = repository_context(project, fresh=True)
+            if context["repo_key"] is None:
+                raise PodError("admission_scope_unavailable", "The repository argument has no usable Git identity")
+            binding.update(repository=context["repository"], repo_key=context["repo_key"])
+            if gitio.resolve_commit(project, candidate) != candidate:
+                raise PodError("admission_candidate", "The candidate is not a commit in this repository")
+            read_tree = gitio.read(project, ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                             candidate + "^{tree}"])
+            observed_tree = read_tree.stdout.strip() if read_tree is not None and read_tree.returncode == 0 else ""
+            if not gitio.OBJECT_ID.fullmatch(observed_tree):
+                raise PodError("git_unavailable", "Git cannot read the candidate's tree")
+            if tree is not None and tree != observed_tree:
+                raise PodError("selected_tree_mismatch", "The candidate's tree differs from --tree")
+            binding["tree"] = observed_tree
+            root = state_root(project)
+            if root.is_symlink() or any(parent.is_symlink() for parent in root.parents):
+                raise PodError("unsafe_state", "State root is redirected")
+            binding["record"] = name = record_name(project, context, objective)
+            directory = root / name
+            from .ledger import _record_exists
+            if not _record_exists(directory / "context.json"):
+                raise PodError("objective_unknown", "The selected objective has no record in this repository")
+            reading = True
+            before = _record_identity(directory)
+            state = view = None
+            try:
+                proof, state, view = _proof_view(project, objective, candidate)
+            except PodError as exc:
+                if exc.code in (DEADLINE_SPENT, "objective_unknown"):
+                    raise
+                # The same outcome `pod admission` reports for a proof that raised.
+                proof = {"status": "unknown", "candidate": candidate, "reason": exc.code}
+                unknowns.append({"code": exc.code if exc.code in ("invalid_record", "state_unsupported")
+                                 else "proof_unverified", "fact": "candidate_proof", "reason": exc.code})
+            result["proof"] = proof
+            if state is not None:
+                recorded = (state.get("checkpoint") or {}).get("worktree")
+                if (isinstance(recorded, dict) and isinstance(recorded.get("repo_key"), str)
+                        and recorded["repo_key"] != context["repo_key"]):
+                    raise PodError("selected_repository_mismatch", "The record names another repository")
+                if proof["status"] == "unknown" and not unknowns:
+                    unknowns.append({"code": "proof_unverified", "fact": "candidate_proof",
+                                     "reason": proof.get("reason") or proof.get("settlement")})
+                result["snapshot"] = _selected_snapshot(state, view)
+                result["assurances"] = _selected_assurances(state, proof)
+                result["attempts"] = _selected_attempts(project, state, candidate)
+            after = _record_identity(directory)
+            budget.check()  # after the last read: a deadline spent by any read is never ready
+            if after != before:
+                unknowns.append({"code": "record_changed", "fact": "selected_record"})
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            unknowns.append({"code": DEADLINE_SPENT, "fact": "read_deadline"})
+        elif not reading or exc.code in ("selected_repository_mismatch", "unsafe_state"):
+            raise  # A binding refusal: no answer exists.
+        elif exc.code == "objective_unknown":
+            unknowns.append({"code": "record_changed", "fact": "selected_record"})
+        else:
+            unknowns.append({"code": "invalid_record", "fact": "selected_record", "reason": exc.code})
+    except OSError:
+        if not reading:
+            raise PodError("admission_scope_unavailable", "The repository cannot be read") from None
+        unknowns.append({"code": "invalid_record", "fact": "selected_record"})
+    if result["proof"] is None:
+        result["proof"] = {"status": "unknown", "candidate": candidate, "reason": "admission_incomplete"}
+    answer = _selected_published(result, expect, candidate)
+    # Publication is part of the deadline: an answer finished after it ran out is never ready.
+    if budget.remaining() <= 0:
+        if not any(row["code"] == DEADLINE_SPENT for row in result["unknowns"]):
+            result["unknowns"].append({"code": DEADLINE_SPENT, "fact": "read_deadline"})
+        answer = _selected_published(result, expect, candidate)
+    return answer
+
+
+def _selected_published(result: dict, expect: str | None, candidate: str) -> dict:
+    """The finished answer, withheld when its final serialized form exceeds the projection bound."""
+    answer = _selected_finish(result, expect)
+    from .orca import MAX_OUTPUT
+    if len(json.dumps(answer, sort_keys=True, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT:
+        omitted = {"assurances": len(result["assurances"]), "attempts": len(result["attempts"])}
+        result.update(snapshot=None, assurances=[], attempts=[],
+                      proof={"status": "unknown", "candidate": candidate, "reason": "selected_projection_limit"},
+                      unknowns=[{"code": "selected_projection_limit", "fact": "projection", "omitted": omitted},
+                                *(row for row in result["unknowns"] if row["code"] == DEADLINE_SPENT)])
+        answer = _selected_finish(result, expect)
+    return answer
+
+
+def selected_digest(answer: dict) -> str:
+    """The digest of an answer's facts: everything but `digest`, `status`, `conflicts` and `next_action`. Status is
+    derived from the proof and the unknowns, which it covers, so an `--expect` conflict never changes it."""
+    return digest({key: value for key, value in answer.items()
+                   if key not in ("digest", "status", "conflicts", "next_action")})
+
+
+def _selected_finish(result: dict, expect: str | None) -> dict:
+    answer = {**result, "unknowns": sorted(result["unknowns"], key=digest), "conflicts": []}
+    withheld = any(row["code"] == "selected_projection_limit" for row in answer["unknowns"])
+    answer["status"] = ("unknown" if answer["unknowns"] else "ready" if answer["proof"]["status"] == "ready"
+                        else "blocked")
+    answer["digest"] = None if withheld else selected_digest(answer)
+    if expect is not None and answer["digest"] != expect:
+        # R185's shape: a factual conflict, never a refusal; the answer is never ready.
+        answer["conflicts"].append({"kind": "digest_changed", "expected": expect})
+        if answer["status"] == "ready":
+            answer["status"] = "blocked"
+    answer["next_action"] = ("Join CE authority and repeat this read with --expect under effect serialization"
+                             if answer["status"] == "ready" else
+                             "Reconcile the named proof gaps or unknowns, then repeat the read")
+    return answer
+
+
+def selected_command(args, project: Path) -> dict:
+    """`pod admission --selected`: every flag that needs repository or fleet discovery is refused before any read."""
+    flags = [name for name in SELECTED_FLAGS if getattr(args, name) is not None]
+    if args.batch or flags or args.effect or args.known_repository:
+        raise _selected_fault("--selected reads one objective; --batch, --worktree, --branch, --target, "
+                              "--target-commit, --effect and --known-repository are refused")
+    if not args.json:
+        raise _selected_fault("--selected requires --json")
+    if not args.objective or not args.candidate:
+        raise _selected_fault("--selected requires --objective and --candidate")
+    return selected(project, repository=args.repository, objective=args.objective, candidate=args.candidate,
+                    tree=args.tree, expect=args.expect, timeout=args.timeout)
