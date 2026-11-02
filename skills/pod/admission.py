@@ -2123,9 +2123,10 @@ def _bounded(result: dict, kwargs: dict) -> dict:
     return result
 
 
-def _prefetch_native(discovery) -> None:
+def _prefetch_native(discovery, budget, *, fence: bool = False) -> None:
     """Read, in parallel, every native fact the projections will use: the fleet and terminals already
-    started, each abandoned or record-accounted abandoned Dispatch's claim, and each observed Run owner.
+    started, each abandoned or record-accounted abandoned Dispatch's claim, each observed Run owner and,
+    before an end fence, rule S's Run-coordinator list under the call's deadline (`budget`).
     Faults are kept for the queries, which raise them where they read."""
     def settled(key):
         future = discovery._memo.get(("first", *key))
@@ -2145,8 +2146,13 @@ def _prefetch_native(discovery) -> None:
         for run in sorted(discovery.owner_runs):
             discovery.submit(("owner", run, terminals["runtime"]), lambda run=run: _gated(
                 _owner_observation, run, terminals, terminals["runtime"]))
+        if fence:
+            # The same key and walk as the projection's `coordinator`, so rule S never reads it after the end fence;
+            # without a fence the projection still reads it only when rule S needs it.
+            discovery.submit(("run-coordinators", terminals["runtime"]),
+                             lambda: _run_coordinators(terminals["runtime"], budget.check))
     for key, future in list(discovery._memo.items()):
-        if key[:2] in (("first", "claim"), ("first", "owner")):
+        if key[:2] in (("first", "claim"), ("first", "owner"), ("first", "run-coordinators")):
             try:
                 future.result()
             except (PodError, OSError):
@@ -2213,7 +2219,7 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
             for step, stage in enumerate(("first", "first", "recheck")):
                 discovery.stage = stage
                 if step == 1:
-                    _prefetch_native(discovery)
+                    _prefetch_native(discovery, budget, fence=fence)
                     if fence:
                         discovery.fence_started = True
                         fenced = discovery.submit(("native",), lambda: _fenced(discovery), stage="fence")
