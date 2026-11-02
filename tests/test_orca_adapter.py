@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
+from pod import orca as orca_module
 from pod.orca import (compile_cache, contract, current_run, executable, mutate_command, read_command,
                       worker_rows, worktree_identity, worktree_selector, _mutation_envelope)
 from pod.operations import OrcaPort
@@ -86,10 +87,11 @@ class OrcaAdapterTests(unittest.TestCase):
         from pod.orca import MAX_OUTPUT
         argv = ["worktree", "list", "--limit", "1000", "--json"]
         payload = json.dumps({"ok": True, "result": {"worktrees": []}, "_meta": {"runtimeId": "r"}})
+        orca_module._COMPILE_CACHE_HOMES.clear()  # Order-independent: resolved here, before the patched window.
+        cache = compile_cache()
         with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
              patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
             self.assertEqual(read_command(argv)["runtime"], "r")
-            cache = compile_cache()
             inherited = {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"}
             runner.assert_called_once_with(["/fixture/orca", *argv], capture_output=True, text=True,
                                            timeout=10, check=False,
@@ -193,10 +195,12 @@ class OrcaAdapterTests(unittest.TestCase):
                 self.assertEqual(executable(),Path('/fixture/orca-ide'))
             which.assert_called_once_with('orca-ide')
         native={'CODEX_HOME':'native-codex','CLAUDE_CONFIG_DIR':'native-claude'}
+        orca_module._COMPILE_CACHE_HOMES.clear()  # Whatever ran before, the read below is the only process.
         with patch.dict(os.environ,{**native,'POD_CONFIG_HOME':'/isolated/config'}), \
              patch('pod.orca.executable',return_value=Path('/fixture/orca')), \
              patch('pod.orca.subprocess.run',return_value=subprocess.CompletedProcess([],0,'orca 1\n','')) as runner:
             read_command(['--version'])
+            runner.assert_called_once()
             # The native profile reaches Orca unchanged: every variable is inherited; the only addition is Node's
             # compile cache in Pod's own cache home (R23, A864).
             env=runner.call_args.kwargs['env']

@@ -125,21 +125,13 @@ def compile_cache() -> str | None:
     created 0700. Resolved from paths alone, with no Git or other process. None when it cannot be used: not a real
     directory, another owner, group or other access, or any failure. The read then runs with the variable removed,
     so an inherited value is never used, and Orca's own configuration is never touched."""
-    from .util import explicit_home
     try:
         key = (os.environ.get("POD_CACHE_HOME"), os.environ.get("XDG_CACHE_HOME"), os.environ.get("HOME"), os.getcwd())
-        path = _COMPILE_CACHE_HOMES.get(key)
+        if key not in _COMPILE_CACHE_HOMES:  # Resolved once per process and environment, a refusal included.
+            _COMPILE_CACHE_HOMES[key] = _compile_cache_path()
+        path = _COMPILE_CACHE_HOMES[key]
         if path is None:
-            home = explicit_home("POD_CACHE_HOME")
-            if home is None:
-                value = os.environ.get("XDG_CACHE_HOME")
-                base = Path(value) if value else Path.home() / ".cache"
-                if not base.is_absolute() or "\x00" in str(base):
-                    return None
-                home = base.resolve(strict=False) / "pod"
-                if _inside_working_tree(home):
-                    return None
-            path = _COMPILE_CACHE_HOMES[key] = home / COMPILE_CACHE
+            return None
         try:
             path.mkdir(mode=0o700, parents=True)
         except FileExistsError:
@@ -148,6 +140,23 @@ def compile_cache() -> str | None:
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             return None
         return str(path)
+    except (OSError, PodError, ValueError, RuntimeError):
+        return None
+
+
+def _compile_cache_path() -> Path | None:
+    from .util import explicit_home
+    try:
+        home = explicit_home("POD_CACHE_HOME")
+        if home is None:
+            value = os.environ.get("XDG_CACHE_HOME")
+            base = Path(value) if value else Path.home() / ".cache"
+            if not base.is_absolute() or "\x00" in str(base):
+                return None
+            home = base.resolve(strict=False) / "pod"
+            if _inside_working_tree(home):
+                return None
+        return home / COMPILE_CACHE
     except (OSError, PodError, ValueError, RuntimeError):
         return None
 
