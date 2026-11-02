@@ -273,6 +273,67 @@ class SharedReadTests(BatchCase):
         self.assertTrue(answer["responses"][0]["result"]["conflicts"])
 
 
+class EarlyStartTests(BatchCase):
+    """R207 (A861): in a batch the Run list starts once the terminal inventory is known, and each Run owner read once
+    a record pass names it, while discovery's walk still runs."""
+
+    def test_the_run_list_and_the_run_owners_start_while_the_walk_runs(self):
+        self.intake(worktree=self.place)
+        events = {"run-list": threading.Event(), "owner": threading.Event()}
+        native = self.native
+        def read(argv):
+            if argv[:2] == ["orchestration", "run-list"]:
+                events["run-list"].set()
+            return native(argv)
+        def owner(run, terminals, runtime):
+            events["owner"].set()
+            return {"run": run, "runtime": runtime, "terminal": None, "consumer_generation": 1, "worktree": None,
+                    "live": False, "source": "native_run_and_terminal"}
+        seen = {}
+        def fleet():
+            for name, event in events.items():
+                seen[name] = event.wait(5)  # Set by reads that must not wait for this walk; the bound only ends a failure.
+            return {"runtime": "runtime", "complete": True, "workers": []}
+        with patch("pod.admission._read", side_effect=read), \
+             patch("pod.admission._owner_observation", side_effect=owner), \
+             patch("pod.admission._fleet", side_effect=fleet):
+            answer = self.batch({"worktree": str(self.project), "branch": "main"})
+        self.assertEqual(seen, {"run-list": True, "owner": True})
+        self.assertIn("native_fence", answer)
+        self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
+
+
+class CallSharingTests(BatchCase):
+    """R207 (A862): the local facts every query repeats are derived once per call, and each result still equals its
+    single query."""
+
+    def test_repeated_local_facts_are_derived_once_per_call(self):
+        self.scenario()
+        shapes = [{"worktree": str(self.project)}, {"branch": "main"}, {"worktree": str(self.project), "branch": "main"},
+                  {}, {"effects": ["deploy:target"]}, {"expect": "0" * 64}]
+        known = [str(self.project)]
+        singles = [self.query(**shape, known_repositories=known) for shape in shapes]
+        calls = {}
+        def counted(name):
+            real = getattr(admission, name)
+            def wrapper(*args, **kwargs):
+                calls.setdefault(name, []).append(tuple(str(arg) for arg in args))
+                return real(*args, **kwargs)
+            return patch(f"pod.admission.{name}", side_effect=wrapper)
+        with counted("state_root"), counted("_resolve"), counted("_after_context_read"), \
+             counted("_after_journal_read"), counted("_terminal_validated"):
+            answer = self.batch(*shapes, known=known)
+        for shape, single, row in zip(shapes, singles, answer["responses"]):
+            with self.subTest(shape=shape):
+                self.assertEqual(row["result"], single)
+        self.assertEqual(len(calls["state_root"]), 1)  # one repository, six queries
+        for name in ("_resolve", "_after_context_read", "_after_journal_read"):
+            with self.subTest(name):
+                self.assertTrue(calls.get(name))
+                self.assertEqual(len(calls[name]), len(set(calls[name])), "derived twice in one call")
+        self.assertEqual(len(calls.get("_terminal_validated", [])), len(set(calls.get("_terminal_validated", []))))
+
+
 class RequestTests(BatchCase):
     def request(self, **fields):
         value = {"schema": "pod-admission-batch-request/v1",
@@ -556,6 +617,20 @@ class FleetFenceTests(FencedCase):
                 self.assert_unstable(answer, stable)
         self.assertTrue(self.fenced()["native_fence"]["stable"])  # unchanged stays stable
 
+    def test_a_released_circuit_broken_correction_outside_the_newest_page_makes_the_fence_unstable(self):
+        position = next(index for index, row in enumerate(self.rows) if row["dispatchId"] == "r110")
+        self.assertGreaterEqual(position, 100)
+        self.rows[position] = dict(self.rows[position], workerState="failed", dispatchStatus="circuit_broken")
+        stable = self.fenced()
+        self.assertTrue(stable["native_fence"]["stable"])
+        corrected = [*self.rows[:position], dict(self.rows[position], workerState="succeeded", dispatchStatus="completed"),
+                     *self.rows[position + 1:]]
+        self.assert_unstable(self.fenced(fleet_end=fleet_model(corrected)), stable)
+        # Why released rows stay compared (pod#213): Orca's late-report correction can turn failed/circuit_broken into
+        # succeeded/completed, and Pod settles only the second pair, in rule S as in candidate proof.
+        self.assertIn(("succeeded", "completed"), admission._SETTLED_WORKERS)
+        self.assertNotIn(("failed", "circuit_broken"), admission._SETTLED_WORKERS)
+
     def test_an_unproved_end_or_a_bound_caller_is_incomplete(self):
         stable = self.fenced()
         page = [*LIST, "--limit", "100"]
@@ -734,6 +809,19 @@ class FleetReadTests(base.AdmissionQueryCase):
         self.assertIn(["orchestration", "worker-show", "--dispatch", "a1", "--json"], double.calls)
         self.assertEqual(discovery.done(("claim", "a1", "runtime")), {"process": "exited", "effects": []})
 
+    def test_a_listed_workspace_starts_its_identity_read_during_the_walk(self):
+        """A863: a current row's workspace identity read starts from its inventory row, in the Git pool; a released
+        row that is not abandoned starts none."""
+        here = str(self.project.resolve())
+        rows = {"active": [worker("a1", "active", resource={"worktreeId": "wt::" + here})],
+                "released": [worker("r1", "released", resource={"worktreeId": "wt::" + str(self.root / "gone")})]}
+        fleet, discovery = self.read(FleetDouble(rows))
+        self.assertEqual(len(fleet["workers"]), 2)
+        self.assertEqual(discovery._placed, {here})
+        identity = discovery._memo[("first", "context", here)]
+        self.assertTrue(identity.done())
+        self.assertEqual(identity.result()["worktree"], here)
+
     def test_the_end_fence_reads_every_unreleased_partition_and_refuses_any_race(self):
         rows = self.fleet()
         observed, _ = self.read(FleetDouble(rows), admission._fleet_end)
@@ -883,6 +971,7 @@ class CorrectionRoundTests(BatchCase):
             discovery.owner_runs.clear()  # force the projection to ask for the owner after the fence starts
             real(discovery, *args, **kwargs)
         with patch("pod.admission._prefetch_native", side_effect=skip_owners), \
+             patch.object(admission._Discovery, "start_owners", lambda discovery: None), \
              patch("pod.admission._owner_observation") as owner:
             answer = self.batch({"worktree": str(self.project), "branch": "main"})
         owner.assert_not_called()
@@ -943,6 +1032,14 @@ class RunCoordinatorFenceTests(BatchCase):
         self.assertEqual(result["unknowns"], single["unknowns"])  # the same blocking unknowns
         self.assertEqual(len(self.run_reads), 1)  # one walk per call, shared by every query
         self.assertEqual(self.refused, [])  # no native read was refused after the fence
+
+    def test_a_rule_s_verdict_is_judged_once_per_call(self):
+        """A862: every query that judges the ended Dispatch reads the same verdict."""
+        with patch("pod.admission._settled_gone", wraps=admission._settled_gone) as judged:
+            answer = self.batch({"worktree": str(self.project), "branch": "main"}, {"branch": "main"},
+                                {"worktree": str(self.project)})
+        self.assertEqual(judged.call_count, 1)
+        self.settled(answer["responses"][0]["result"])
 
     def test_a_normal_batch_requests_no_native_read_after_the_fence(self):
         answer = self.batch({}, {"worktree": str(self.project)}, {"effects": ["deploy:target"]})

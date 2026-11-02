@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.orca import (contract, current_run, executable, mutate_command, read_command,
+from pod.orca import (compile_cache, contract, current_run, executable, mutate_command, read_command,
                       worker_rows, worktree_identity, worktree_selector, _mutation_envelope)
 from pod.operations import OrcaPort
 from tests.common import envelope, ORCA_VERSION
@@ -89,13 +89,47 @@ class OrcaAdapterTests(unittest.TestCase):
         with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
              patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
             self.assertEqual(read_command(argv)["runtime"], "r")
+            cache = compile_cache()
             runner.assert_called_once_with(["/fixture/orca", *argv], capture_output=True, text=True,
-                                           timeout=10, check=False)
+                                           timeout=10, check=False,
+                                           **({"env": {**os.environ, "NODE_COMPILE_CACHE": cache}} if cache else {}))
         with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
              patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, " " * (MAX_OUTPUT + 1), "")), \
              self.assertRaises(PodError) as caught:
             read_command(argv)
         self.assertEqual(caught.exception.code, "orca_contract")
+
+    def test_reads_use_a_private_compile_cache_and_run_without_an_unsafe_one(self):
+        """R23 (A864): Orca reads run with Node's compile cache in a 0700 directory under Pod's cache home; a
+        directory that is not private, not a real directory or cannot be made leaves the read without it."""
+        import shutil, stat, tempfile
+        payload = json.dumps({"ok": True, "result": {"worktrees": []}, "_meta": {"runtimeId": "r"}})
+        argv = ["worktree", "list", "--json"]
+        def env_of_read():
+            with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
+                 patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
+                read_command(argv)
+            return runner.call_args.kwargs.get("env")
+        root = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR")))
+        self.addCleanup(shutil.rmtree, root, True)
+        home = root / "pod-cache"
+        cache = home / "node-compile-cache"
+        with patch.dict(os.environ, {"POD_CACHE_HOME": str(home)}):
+            env = env_of_read()
+            self.assertEqual(env, {**os.environ, "NODE_COMPILE_CACHE": str(cache)})
+            self.assertEqual(stat.S_IMODE(os.lstat(cache).st_mode), 0o700)
+            os.chmod(cache, 0o750)
+            self.assertIsNone(env_of_read())  # group access: not private
+            os.chmod(cache, 0o700)
+            private = root / "private"; private.mkdir(mode=0o700)
+            os.rmdir(cache); os.symlink(private, cache)
+            self.assertIsNone(env_of_read())  # a redirected directory is never used
+            os.unlink(cache); cache.write_text("")
+            self.assertIsNone(env_of_read())  # not a directory
+        locked = root / "locked"; locked.mkdir(); os.chmod(locked, 0o500)
+        self.addCleanup(os.chmod, locked, 0o700)
+        with patch.dict(os.environ, {"POD_CACHE_HOME": str(locked / "pod-cache")}):
+            self.assertIsNone(env_of_read())  # cannot be created
 
     def test_cleanup_terminal_inventory_is_an_exact_read_shape(self):
         from pod.orca import _read_allowed
@@ -142,7 +176,12 @@ class OrcaAdapterTests(unittest.TestCase):
              patch('pod.orca.executable',return_value=Path('/fixture/orca')), \
              patch('pod.orca.subprocess.run',return_value=subprocess.CompletedProcess([],0,'orca 1\n','')) as runner:
             read_command(['--version'])
-            self.assertNotIn('env',runner.call_args.kwargs)
+            # The native profile reaches Orca unchanged: every variable is inherited; the only addition is Node's
+            # compile cache in Pod's own cache home (R23, A864).
+            env=runner.call_args.kwargs.get('env')
+            if env is not None:
+                self.assertEqual({**env,'NODE_COMPILE_CACHE':None},{**os.environ,'NODE_COMPILE_CACHE':None})
+                self.assertEqual(env['NODE_COMPILE_CACHE'],compile_cache())
 
     def test_output_that_is_not_utf8_is_no_evidence_and_a_cut_preview_is_harmless(self):
         # Review 3 H3: decoded by the real subprocess path, refused as a contract failure. Final audit L1: Orca cuts a

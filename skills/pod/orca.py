@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -114,6 +115,36 @@ def _read_allowed(argv: list[str]) -> bool:
     return False
 
 
+COMPILE_CACHE = "node-compile-cache"
+_COMPILE_CACHE_HOMES: dict = {}
+
+
+def compile_cache() -> str | None:
+    """Node's compile cache for the Orca CLI's own code: a private directory under Pod's cache home
+    (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`), created 0700. None when it cannot be used: not a
+    real directory, another owner, group or other access, or any failure. The read then runs without it, and
+    Orca's own configuration is never touched."""
+    from .util import explicit_home, native_home
+    try:
+        key = (os.environ.get("POD_CACHE_HOME"), os.environ.get("XDG_CACHE_HOME"), os.environ.get("HOME"), os.getcwd())
+        path = _COMPILE_CACHE_HOMES.get(key)
+        if path is None:
+            override = explicit_home("POD_CACHE_HOME")
+            home = override if override is not None else native_home(
+                "XDG_CACHE_HOME", default=Path.home() / ".cache").resolve(strict=False) / "pod"
+            path = _COMPILE_CACHE_HOMES[key] = home / COMPILE_CACHE
+        try:
+            path.mkdir(mode=0o700, parents=True)
+        except FileExistsError:
+            pass
+        info = os.lstat(path)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            return None
+        return str(path)
+    except (OSError, PodError, ValueError, RuntimeError):
+        return None
+
+
 def read_command(argv: list[str], *, timeout: int = 10) -> dict:
     if not _read_allowed(argv):
         raise PodError("unsupported_orca_read", "Orca adapter accepts only known read operations")
@@ -121,8 +152,10 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
         # Checked whatever the shape: Python would pass a surrogate-escaped argument to Orca as raw bytes (R18).
         raise PodError("unsupported_orca_read", "Orca read arguments must be UTF-8 text without NUL")
     command = [str(executable()), *argv]
+    cache = compile_cache()  # Outside glue for the CLI's start-up only; a read without it is unchanged.
+    options = {"env": {**os.environ, "NODE_COMPILE_CACHE": cache}} if cache else {}
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, **options)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PodError("orca_unavailable", "Orca read failed") from exc
     except UnicodeDecodeError:

@@ -26,6 +26,7 @@ MAX_TIMEOUT = 30.0
 MAX_CLAIM_BYTES = 8 * 1024 * 1024
 MAX_ORCA_READS = 8  # Orca CLI subprocesses one call runs at once.
 POOL_WORKERS = 12
+GIT_WORKERS = 4  # Foreign worktree identity reads started from inventory rows, in their own pool.
 WORKER_LIST = ["orchestration", "worker-list", "--include-remote", "--json"]
 # The single query's input faults; a batch names the query that raised one.
 INPUT_FAULTS = ("admission_candidate", "admission_target", "admission_timeout", "admission_scope_unavailable",
@@ -53,7 +54,8 @@ class _Discovery:
     (`memo`) or in the bounded pool (`submit`), and every query receives its outcome, value or
     exception, at the point where it uses the fact, so faults stay where the single query raised them.
     Pool tasks run in a copy of the submitting context, which carries the shared read deadline.
-    At most `MAX_ORCA_READS` Orca CLI subprocesses run at once. `close` waits for every thread.
+    At most `MAX_ORCA_READS` Orca CLI subprocesses run at once. A foreign worktree's Git identity read
+    starts from its inventory row in a separate pool of `GIT_WORKERS` threads. `close` waits for every thread.
     """
 
     def __init__(self):
@@ -71,6 +73,8 @@ class _Discovery:
         self._lock = threading.Lock()
         self._memo: dict = {}
         self._pool = ThreadPoolExecutor(max_workers=POOL_WORKERS, thread_name_prefix="pod-admission")
+        self._git = ThreadPoolExecutor(max_workers=GIT_WORKERS, thread_name_prefix="pod-admission-git")
+        self._placed: set = set()  # Workspace paths whose identity read has started.
 
     def memo(self, key, fn, *, stage=None):
         full = (stage or self.stage, *key)
@@ -134,9 +138,37 @@ class _Discovery:
         if isinstance(key, str) and key and isinstance(runtime, str):
             self.submit(("claim", key, runtime), lambda: _native_claim(row, runtime))
 
+    def prefetch_place(self, row):
+        """Start a current row's workspace Git identity read (rule T 4b) as soon as its inventory row is listed.
+
+        A released row reads exited and reaches the 4b proof only when abandoned. The read is the same per-call
+        memo `elsewhere` reads, so each query still receives that one read's value or fault where it judges."""
+        if _FENCING.get() or not isinstance(row, dict):
+            return
+        if row.get("terminalState") == "released" and row.get("workerState") != "abandoned":
+            return
+        path = _row_location(row)
+        if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+            return
+        with self._lock:
+            if self.closed or path in self._placed:
+                return
+            self._placed.add(path)
+            self._git.submit(contextvars.copy_context().run, _prefetch_identity, self, path)
+
+    def start_owners(self):
+        """Start each named Run owner's read once the terminal inventory is known; never waits."""
+        terminals = self.done(("terminals",))
+        if not isinstance(terminals, dict) or not isinstance(terminals.get("runtime"), str):
+            return
+        for run in sorted(self.owner_runs):
+            self.submit(("owner", run, terminals["runtime"]), lambda run=run: _gated(
+                _owner_observation, run, terminals, terminals["runtime"]), stage="first")
+
     def close(self):
         with self._lock:
             self.closed = True
+        self._git.shutdown(wait=True, cancel_futures=True)
         self._pool.shutdown(wait=True, cancel_futures=True)
         with self._lock:
             futures = sorted(self._memo.items(), key=lambda item: repr(item[0]))
@@ -154,6 +186,37 @@ def _shared(key, fn):
     """Read once per call when a call shares discovery; otherwise read now."""
     discovery = _SHARED.get()
     return fn() if discovery is None else discovery.memo(key, fn)
+
+
+def _row_location(row: dict):
+    """The workspace path an inventory row names, as `_worker_fact` reads it; None when it names none."""
+    resource = row.get("resource") if isinstance(row.get("resource"), dict) else {}
+    projection = row.get("projection") if isinstance(row.get("projection"), dict) else {}
+    workspace = projection.get("workspace") if isinstance(projection.get("workspace"), dict) else {}
+    try:
+        return listing._location(resource.get("worktreeId") or workspace.get("id"))
+    except (PodError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _prefetch_identity(discovery, path: str) -> None:
+    """Rule T 4b's Git identity of a listed workspace, read ahead under the same checks `elsewhere` makes first."""
+    try:
+        if not stat.S_ISDIR(os.lstat(path).st_mode) or str(Path(path).resolve(strict=True)) != path:
+            return
+        discovery.memo(("context", str(Path(path))), lambda: repository_context(Path(path), fresh=True),
+                       stage="first")
+    except (OSError, PodError, ValueError, RuntimeError):
+        return  # `elsewhere` meets the same outcome where it judges the path.
+
+
+def _resolve(path: str) -> Path:
+    return Path(path).expanduser().resolve()
+
+
+def _resolved(path: str) -> Path:
+    """A known repository path resolved once per call."""
+    return _shared(("resolved", path), lambda: _resolve(path))
 
 
 def _gated_read(argv):
@@ -237,6 +300,8 @@ def _fleet_sequential(discovery=None) -> dict | None:
             workers[key] = row
             if discovery is not None and row.get("workerState") == "abandoned":
                 discovery.prefetch_claim(row, runtime)
+            if discovery is not None:
+                discovery.prefetch_place(row)
         if not page["hasMore"]:
             if discovery is not None:
                 discovery.fleet_start = {"page": first, "rows": list(workers.values())}
@@ -944,7 +1009,11 @@ _EMPTY_SHA = hashlib.sha256(b"").hexdigest()
 
 def _after_context(path: Path) -> str:
     """The recheck identity of a record's context. Bytes equal to the discovery read's keep its identity
-    without a decode; anything else is read again in full, in the recheck stage."""
+    without a decode; anything else is read again in full, in the recheck stage. Judged once per call."""
+    return _shared(("after-context", str(path)), lambda: _after_context_read(path))
+
+
+def _after_context_read(path: Path) -> str:
     discovery = _SHARED.get()
     facts = discovery.done(("facts", str(path), False)) if discovery is not None else None
     if isinstance(facts, dict) and isinstance(facts.get("generation"), dict):
@@ -955,7 +1024,11 @@ def _after_context(path: Path) -> str:
 
 
 def _after_journal(path: Path) -> str:
-    """The recheck identity of a Governor journal, compared the same way before any decode."""
+    """The recheck identity of a Governor journal, compared the same way before any decode; judged once per call."""
+    return _shared(("after-journal", str(path)), lambda: _after_journal_read(path))
+
+
+def _after_journal_read(path: Path) -> str:
     from .ledger import _record_exists
     discovery = _SHARED.get()
     first = discovery.done(("journal", str(path))) if discovery is not None else None
@@ -1112,7 +1185,8 @@ def _terminal_history(gap: dict, project: Path, fleet_facts: dict, unattributed_
     unbound fleet and terminal inventories; this proves the record unchanged, without an unsettled governed effect,
     and every admission settled. Anything unproved keeps the gap."""
     directory = gap["directory"]
-    if not _terminal_validated(project, directory, gap["phase"]):
+    if not _shared(("terminal-validated", str(project), str(directory), gap["phase"]),
+                   lambda: _terminal_validated(project, directory, gap["phase"])):
         return False
     if (_after_context(directory / "context.json") != gap["identity"]
             or _after_journal(directory / "governor.json") != gap["journal_id"]):
@@ -1281,8 +1355,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     context = _context(project)
     if context["repo_key"] is None:
         raise PodError("admission_scope_unavailable", "The repository argument has no usable Git identity")
-    known = [context, *(_context(Path(path).expanduser().resolve()) for path in known_repositories or [])]
-    root = state_root(project)
+    known = [context, *(_context(_resolved(path)) for path in known_repositories or [])]
+    root = _shared(("state-root", str(project)), lambda: state_root(project))  # One repository's root, once a call.
     yield "prepared", root, project
     scope = {"repository": context["repository"], "repo_key": context["repo_key"], "path": str(project),
              "inventory": "pod_objectives_and_recorded_runs"}
@@ -1337,7 +1411,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
 
     def owner_claims():
         """The ownership claims whose current Run owner this query observes."""
-        selection = {"worktree": str(Path(worktree).resolve()) if worktree else None,
+        selection = {"worktree": physical(worktree) if worktree else None,
                      "branch": branch, "target": target, "effects": effects or []}
         for ownership in list(result["claims"]):
             if ownership["kind"] != "ownership" or "recorded_owner" not in ownership:
@@ -1613,6 +1687,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             discovery.abandoned |= abandoned_dispatches
             for ownership in owner_claims():
                 discovery.owner_runs |= {ref["runId"] for ref in ownership["recorded_native_refs"]}
+            discovery.start_owners()  # While the other queries read their records.
         yield "native"  # Every query's record pass runs while the native inventory is read.
         # Prefer the installed all-Run inventory for CE's unbound caller.
         # A bound caller retains exact-Run reads and the same outer deadline.
@@ -1655,7 +1730,11 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         def elsewhere(path):
             """Rule T 4b: `path` is proven a registered worktree of another repository. It is an existing directory
             reached without a symlink, outside this repository's worktrees, whose Git common directory differs from
-            this repository's and whose own worktree registry lists it. Anything unproved is not elsewhere."""
+            this repository's and whose own worktree registry lists it. Anything unproved is not elsewhere. Judged
+            once per call for each repository and path."""
+            return _shared(("elsewhere", str(project), str(path)), lambda: _elsewhere(path))
+
+        def _elsewhere(path):
             if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
                 return False
             try:
@@ -1666,8 +1745,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 other = _context(Path(path))
                 if other.get("repo_key") is None or other["repo_key"] == context["repo_key"]:
                     return False
-                registry = _shared(("places", path), lambda: _places(Path(path)))
-                return any(physical(root) == path for root in registry)
+                # The registry the identity read listed: one `git worktree list` of that repository, from that path.
+                return any(physical(root) == path for root in other.get("linked_worktrees") or [])
             except (OSError, PodError, ValueError, RuntimeError):
                 return False
 
@@ -1736,7 +1815,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 if ((in_repository or path is None or run in runs or run in run_sources
                         or shown["dispatch"] in gap_dispatches)
                         and source.get("workerState") != "abandoned" and shown["dispatch"] not in abandoned_dispatches
-                        and _settled_gone(source, shown, native["workers"], terminals, coordinator)):
+                        and _shared(("settled-gone", shown["dispatch"]), lambda: _settled_gone(
+                            source, shown, native["workers"], terminals, coordinator))):
                     # Rule S (R206): an ended Dispatch whose terminal, workspace and Run coordinator are all gone.
                     workers[shown["dispatch"]] = shown
                     fleet_facts[shown["dispatch"]] = "settled"
@@ -1791,7 +1871,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 actor_scope = {"repo_key": actor_repo, "worktree": path, "branch": branch_fact,
                                "locations_complete": bool(path) and branch_known}
                 if (source.get("workerState") == "abandoned" or shown["dispatch"] in abandoned_dispatches) and (effects or relevant(actor_scope,
-                        {"worktree": str(Path(worktree).resolve()) if worktree else None,
+                        {"worktree": physical(worktree) if worktree else None,
                          "branch": branch, "target": target, "effects": effects or []}, context["repo_key"])):
                     try:
                         observed_claim = _shared(("claim", shown["dispatch"], native["runtime"]),
@@ -1989,7 +2069,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         unknown(None, "inventory_unreadable")
     if objective and result["proof"] is None:
         result["proof"] = {"status": "unknown", "candidate": candidate, "reason": "admission_incomplete"}
-    request = {"worktree": str(Path(worktree).resolve()) if worktree else None,
+    request = {"worktree": physical(worktree) if worktree else None,
                "branch": branch, "target": target, "effects": effects or []}
     result["scope"]["selection"] = {**request, "target": requested_target}
     all_unknowns = result["unknowns"]
@@ -2032,7 +2112,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         if claim.get("objective") == objective and claim["kind"] == "ownership":
             continue
         dimensions = []
-        if worktree and claim.get("worktree") and overlap(claim["worktree"], str(Path(worktree).resolve())):
+        if worktree and claim.get("worktree") and overlap(claim["worktree"], physical(worktree)):
             dimensions.append("worktree")
         if branch and claim.get("branch") == branch:
             dimensions.append("branch")
@@ -2159,27 +2239,36 @@ def _prefetch_native(discovery, budget, *, fence: bool = False) -> None:
             return future.result()
         except (PodError, OSError):
             return None  # The queries raise it where they read it.
-    fleet, terminals = settled(("fleet",)), settled(("terminals",))
-    if isinstance(fleet, dict) and isinstance(fleet.get("workers"), list) and fleet.get("complete") is True:
-        for source in fleet["workers"]:
-            if isinstance(source, dict) and (source.get("workerState") == "abandoned"
-                                             or source.get("dispatchId") in discovery.abandoned):
-                discovery.prefetch_claim(source, fleet["runtime"])
+    # The reads that need only the terminal inventory start before the fleet is awaited.
+    terminals = settled(("terminals",))
     if isinstance(terminals, dict) and isinstance(terminals.get("runtime"), str):
-        for run in sorted(discovery.owner_runs):
-            discovery.submit(("owner", run, terminals["runtime"]), lambda run=run: _gated(
-                _owner_observation, run, terminals, terminals["runtime"]))
+        discovery.start_owners()
         if fence:
             # The same key and walk as the projection's `coordinator`, so rule S never reads it after the end fence;
             # without a fence the projection still reads it only when rule S needs it.
             discovery.submit(("run-coordinators", terminals["runtime"]),
                              lambda: _run_coordinators(terminals["runtime"], budget.check))
+    fleet = settled(("fleet",))
+    if isinstance(fleet, dict) and isinstance(fleet.get("workers"), list) and fleet.get("complete") is True:
+        for source in fleet["workers"]:
+            if isinstance(source, dict) and (source.get("workerState") == "abandoned"
+                                             or source.get("dispatchId") in discovery.abandoned):
+                discovery.prefetch_claim(source, fleet["runtime"])
     for key, future in list(discovery._memo.items()):
         if key[:2] in (("first", "claim"), ("first", "owner"), ("first", "run-coordinators")):
             try:
                 future.result()
             except (PodError, OSError):
                 pass
+
+
+def _start_run_list(discovery, budget) -> None:
+    """R206 rule S's Run-coordinator list, started once the terminal inventory is known, beside the walk."""
+    terminals = discovery.memo(("terminals",), _terminals, stage="first")  # The inventory read already started.
+    runtime = terminals.get("runtime") if isinstance(terminals, dict) else None
+    if isinstance(runtime, str):
+        discovery.submit(("run-coordinators", runtime), lambda: _run_coordinators(runtime, budget.check),
+                         stage="first")
 
 
 def _fenced(discovery) -> dict:
@@ -2207,11 +2296,12 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
     generators, results = [], [None] * len(queries)
     try:
         with read_deadline(budget):
-            for kwargs in queries:  # Git identity for every scope at once; each query still raises its own fault.
-                for path in (kwargs.get("repository") or project, *(kwargs.get("known_repositories") or [])):
-                    resolved = Path(path).expanduser().resolve()
-                    if resolved.is_dir():
-                        discovery.submit(("context", str(resolved)), lambda resolved=resolved: repository_context(resolved, fresh=True))
+            for path in dict.fromkeys(path for kwargs in queries  # Git identity for every scope at once, each path once;
+                                      for path in (kwargs.get("repository") or project,  # each query still raises its own fault.
+                                                   *(kwargs.get("known_repositories") or []))):
+                resolved = Path(path).expanduser().resolve()
+                if resolved.is_dir():
+                    discovery.submit(("context", str(resolved)), lambda resolved=resolved: repository_context(resolved, fresh=True))
             roots, projects = {}, {}
             for index, kwargs in enumerate(queries):
                 generator = _query(project, **kwargs)
@@ -2234,6 +2324,8 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
                         pass  # The query raises the same outcome where it reads its cohort.
             discovery.submit(("fleet",), _fleet)
             discovery.submit(("terminals",), _terminals)
+            if fence:
+                discovery.submit(("run-list-start",), lambda: _start_run_list(discovery, budget))
             for resolved in projects.values():
                 discovery.submit(("places", str(resolved)), lambda resolved=resolved: _places(resolved))
             # Every query's record pass; then every native read a result uses, after which the end fence
