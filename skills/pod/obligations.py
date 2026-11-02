@@ -2450,8 +2450,19 @@ def _closure_record(value: object) -> dict:
     return closed
 
 
-def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
-    """Recheck recorded closure with the same row, closure and report contracts."""
+def selected_unverifiable(rows: dict, history: dict[str, tuple[str, ...]]) -> list[str]:
+    """The rows whose selected evidence includes a receipt whose original scope cannot be verified.
+
+    An unselected such receipt is nonqualifying history (pod#203, pod#205)."""
+    from .assurance import selected_receipts
+    return [key for key, receipts in history.items() if selected_receipts(rows[key]) & set(receipts)]
+
+
+def validate_closed_snapshot(state: dict, ctx: dict, *, selected: bool = False) -> tuple[str, ...]:
+    """Recheck recorded closure with the same row, closure and report contracts.
+
+    Returns each row with a receipt whose original scope cannot be verified; with `selected`, only the rows whose
+    selected evidence includes one. The handoff hold reads every such row; closure readers read the selected ones."""
     closure = _closure_record(state.get("closure"))
     if ctx.get("settlement_changed") is not None:
         changed = ctx["settlement_changed"]
@@ -2464,8 +2475,9 @@ def validate_closed_snapshot(state: dict, ctx: dict) -> tuple[str, ...]:
     raw = state.get("obligations")
     if not isinstance(raw, list) or not raw:
         raise refuse("obligation_invalid", "malformed", "closure needs its complete obligation map", record="closure")
-    unverifiable = []
-    rows = _persisted_rows(state, ctx, unverifiable=unverifiable)
+    history = {}
+    rows = _persisted_rows(state, ctx, unverifiable_receipts=history)
+    unverifiable = selected_unverifiable(rows, history) if selected else list(history)
     criteria = set(ctx.get("criteria", []))
     from .pod_mapping import superseded_originals
     superseded = superseded_originals(state, rows, ctx)

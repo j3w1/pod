@@ -1739,7 +1739,8 @@ def _source_closure(project: Path, objective: str, root: Path, raw: dict, before
     validate_checkpoint_snapshot(project, state)
     if not (mapped or {}).get("closure"):
         raise PodError("closure_unverified", "A required recorded closure fact is unavailable")
-    unverifiable = validate_closed_snapshot(mapped, closed_snapshot_context(project, objective, state))
+    # Only a row's selected evidence can leave the closure unverified; unselected history cannot (pod#205).
+    unverifiable = validate_closed_snapshot(mapped, closed_snapshot_context(project, objective, state), selected=True)
     if unverifiable:
         raise PodError("closure_unverified", "A required recorded closure fact is unavailable",
                        {"detail": "receipt_unverifiable", "referent": {"obligations": ",".join(unverifiable)}})
