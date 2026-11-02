@@ -11187,7 +11187,9 @@
       ],
       "offline_test": [
         "tests.test_admission_host_exit.ConfigTests.test_an_unconfigured_host_starts_nothing_and_answers_as_before",
-        "tests.test_admission_host_exit.ConfigTests.test_an_unreadable_config_holds_every_candidate"
+        "tests.test_admission_host_exit.ConfigTests.test_an_unreadable_config_holds_every_candidate",
+        "tests.test_admission_host_exit.ConfigTests.test_an_invalid_or_unreadable_personal_file_holds_through_the_real_reader",
+        "tests.test_admission_host_exit.ConfigTests.test_a_missing_personal_file_is_unconfigured_and_answers_as_before"
       ],
       "status": "NOT_RUN"
     },
@@ -11205,7 +11207,11 @@
         "tests.test_process_exit.DecodeTests.test_every_id_is_answered_exactly_once_in_request_order",
         "tests.test_process_exit.DecodeTests.test_inconsistent_or_unbounded_entries_are_malformed",
         "tests.test_process_exit.DecodeTests.test_inconsistent_or_unbounded_verdict_facts_are_malformed",
-        "tests.test_process_exit.DecodeTests.test_an_unverified_verdict_carries_no_facts"
+        "tests.test_process_exit.DecodeTests.test_an_unverified_verdict_carries_no_facts",
+        "tests.test_admission_host_exit.FaultTests.test_a_calendar_boundary_scan_time_holds_only_its_request",
+        "tests.test_admission_host_exit.BatchEquivalenceTests.test_a_calendar_boundary_scan_time_aborts_no_other_query",
+        "tests.test_process_exit.DecodeTests.test_a_scan_time_at_a_calendar_boundary_is_malformed_not_an_error",
+        "tests.test_process_exit.TransportTests.test_a_calendar_boundary_scan_time_from_the_process_is_malformed"
       ],
       "status": "NOT_RUN"
     },

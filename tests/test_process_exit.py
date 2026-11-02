@@ -67,6 +67,12 @@ class DecodeTests(KernelCase):
         with self.assertRaises(ValueError):
             process_exit.decode({**verdict(), "pids": []}, IDS)
 
+    def test_a_scan_time_at_a_calendar_boundary_is_malformed_not_an_error(self):
+        """Both bounds parse but cannot be expressed in UTC; the verdict is unusable and nothing is raised."""
+        for observed in ("0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"):
+            with self.subTest(observed), self.assertRaises(ValueError):
+                process_exit.decode(verdict(observed_at=observed), IDS)
+
     def test_an_unverified_verdict_carries_no_facts(self):
         empty = {**verdict(), **{key: None for key in (*process_exit.FACT_FIELDS, "dispatches")}, "verified": False}
         self.assertFalse(process_exit.decode(empty, IDS)["verified"])
@@ -137,6 +143,13 @@ class TransportTests(VerifierMixin, KernelCase):
                 self.assertNotIn("sentinel", json.dumps(answer, default=str))
         missing = process_exit.ask([str(self.root / "no-such-verifier")], IDS)
         self.assertEqual(missing["code"], "host_exit_failed")
+
+    def test_a_calendar_boundary_scan_time_from_the_process_is_malformed(self):
+        for observed in ("0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"):
+            with self.subTest(observed):
+                self.answer(mode="overflow", overflow_at=observed)
+                answer = self.ask()
+                self.assertEqual((answer["code"], answer["verdict"]), ("host_exit_malformed", None))
 
     def test_a_timeout_kills_the_process_group_and_holds(self):
         self.answer(mode="timeout")

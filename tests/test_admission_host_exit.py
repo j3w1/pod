@@ -109,6 +109,29 @@ class ConfigTests(HostExitCase):
         self.assertEqual(exit_codes(result), {"stuck": "host_exit_verifier_unavailable"})
         self.assertEqual(self.requests(), [])
 
+    def test_an_invalid_or_unreadable_personal_file_holds_through_the_real_reader(self):
+        """`config.load` returns an invalid snapshot rather than raising; it is never read as unconfigured."""
+        from pod import config
+        personal = config.personal_path(self.project)
+        real = config._read_bytes
+        def unreadable(path, *args, **kwargs):
+            if Path(path) == personal:
+                raise PodError("config_unreadable", "fixture: the personal file cannot be read")
+            return real(path, *args, **kwargs)
+        with self.subTest("unreadable"), patch("pod.config._read_bytes", side_effect=unreadable):
+            self.assertEqual(exit_codes(self.read([stuck(self)])), {"stuck": "host_exit_verifier_unavailable"})
+        personal.write_text("schema: [\n")
+        with self.subTest("malformed"):
+            self.assertEqual(exit_codes(self.read([stuck(self)])), {"stuck": "host_exit_verifier_unavailable"})
+        self.assertEqual(self.requests(), [])
+
+    def test_a_missing_personal_file_is_unconfigured_and_answers_as_before(self):
+        from pod import config
+        config.personal_path(self.project).unlink()
+        rows = [stuck(self)]
+        self.assertEqual(self.read(rows), self.without_r212(rows))
+        self.assertEqual(self.requests(), [])
+
 
 class FaultTests(HostExitCase):
     """A850: a request-level fault holds every id of that request only; coverage then holds the query's other ids."""
@@ -126,6 +149,12 @@ class FaultTests(HostExitCase):
                 result = self.faulted(mode)
                 self.assertEqual(exit_codes(result), {"a": code, "b": "host_exit_query_uncovered"})
                 self.assertNotIn("sentinel", json.dumps(result))
+
+    def test_a_calendar_boundary_scan_time_holds_only_its_request(self):
+        for observed in ("0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"):
+            with self.subTest(observed):
+                result = self.faulted("overflow", overflow_at=observed)
+                self.assertEqual(exit_codes(result), {"a": "host_exit_malformed", "b": "host_exit_query_uncovered"})
 
     def test_shape_faults_hold_their_request(self):
         for mode, code in {"missing": "host_exit_malformed", "extra": "host_exit_malformed",
@@ -328,6 +357,22 @@ class BatchEquivalenceTests(VerifierMixin, Rows, batch.FencedCase):
         singles, answer = self.calls(self.b, self.a, self.a)
         self.assert_equal_to_singles(singles, answer)
         self.assertEqual(len(self.requests()), 1 + 3)  # one shared request in the batch, one per single query
+
+    def test_a_calendar_boundary_scan_time_aborts_no_other_query(self):
+        """One request's unusable scan time holds only its own query; another request and a query without candidates
+        answer exactly as their single queries."""
+        (self.project / "wc").mkdir(exist_ok=True)
+        self.stuck_rows("a00", path=self.project / "wa")
+        self.stuck_rows("b00", path=self.project / "wb")
+        self.answer(faults={"a00": "overflow"}, overflow_at="9999-12-31T23:59:59-01:00")
+        with patch.object(process_exit, "K", 1):
+            singles, answer = self.calls(self.a, self.b, {"worktree": str(self.project / "wc")})
+        self.assert_equal_to_singles(singles, answer)
+        results = [row["result"] for row in answer["responses"]]
+        self.assertEqual(exit_codes(results[0]), {"a00": "host_exit_malformed"})
+        self.assertEqual([row["counted"] for row in results[1]["host_exits"]], [True])
+        self.assertNotIn("host_exits", results[2])
+        self.assertEqual(answer["discovery"]["host_exit"]["requests"], 2)
 
     def test_a_verdict_relevant_to_one_query_leaves_the_other_unchanged(self):
         self.stuck_rows("a00", path=self.project / "wa")

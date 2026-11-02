@@ -105,7 +105,8 @@ def decode(value: object, ids: list[str]) -> dict:
         raise ValueError("verdict facts")
     try:
         observed = normalize_timestamp(value["observed_at"], field="scan time", code=MALFORMED)
-    except PodError:
+    except (PodError, OverflowError, ValueError):
+        # A calendar-boundary time such as year 1 at +01:00 parses but cannot be expressed in UTC.
         raise ValueError("observed_at") from None
     entries = value["dispatches"]
     if not isinstance(entries, list) or len(entries) != len(ids):
@@ -129,7 +130,7 @@ def ask(command: list[str], ids: list[str], *, clock=None) -> dict:
     received = now()
     try:
         verdict = decode(json.loads(raw.decode("utf-8"), object_pairs_hook=relay._unique), ids)
-    except (ValueError, TypeError, UnicodeError, RecursionError):
+    except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
         return {"code": MALFORMED, "verdict": None, "sent": sent, "received": received}
     return {"code": None, "verdict": verdict, "sent": sent, "received": received}
 

@@ -48,6 +48,8 @@ verdict = {"schema": request["schema"], "action": request["action"], "verified":
            "observed_at": control.get("observed_at") or datetime.now(timezone.utc).isoformat(),
            "dispatches": [entry(reference) for reference in references]}
 verdict.update(control.get("override", {}))
+if mode == "overflow":
+    verdict["observed_at"] = control.get("overflow_at", "0001-01-01T00:00:00+01:00")
 if mode == "unverified":
     verdict.update(verified=False, host=None, runtime=None, method=None, processes=None, observed_at=None,
                    dispatches=None)

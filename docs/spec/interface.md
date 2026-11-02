@@ -954,7 +954,7 @@ The verdict has exactly these fields, with no wrapper:
 | `runtime` | The native runtime whose records it read the Dispatches from (`[A-Za-z0-9._:-]{1,64}`). |
 | `method` | 1 to 128 characters of printable ASCII other than `"` and `\`; attribution only. |
 | `processes` | Integer 1 to 2^31−1: processes the scan examined. |
-| `observed_at` | Timezone-aware timestamp of at most 40 characters, normalized to UTC. |
+| `observed_at` | Timezone-aware timestamp of at most 40 characters, normalized to UTC; a time that cannot be expressed in UTC is malformed. |
 | `dispatches` | Exactly one entry per requested id, in request order; a missing, extra, repeated or reordered entry makes the verdict malformed. |
 
 Each entry has exactly `reference`; `known` (the host found the Dispatch in its own records, which alone never

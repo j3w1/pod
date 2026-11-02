@@ -981,9 +981,15 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
         return
     try:
         from .config import effective
-        command = effective(project)["preferences"].get("authorization_verifier")
+        preferences = effective(project)["preferences"]
     except (PodError, OSError, ValueError):
+        preferences = None
+    # Only readable preferences can say no verifier is configured: a missing file, or a valid or kept earlier (v1)
+    # file without one. An invalid or unreadable file holds every candidate as unavailable.
+    if not isinstance(preferences, dict) or preferences.get("status") not in ("valid", "missing", "setup_required"):
         command = False
+    else:
+        command = preferences.get("authorization_verifier")
     if command is None:
         for slot in asking:
             slot.candidates.clear()  # Unconfigured: today's behaviour, with no disclosure.
