@@ -2295,8 +2295,12 @@ def validate_map_record(state: dict) -> None:
             raise refuse("obligation_invalid", "malformed", "serialization observation retains its sequence", record="observations")
 
 
-def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = None) -> dict:
-    """Canonical persisted rows, shared by completed writes and closure reads."""
+def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = None,
+                    unverifiable_receipts: dict[str, tuple[str, ...]] | None = None) -> dict:
+    """Canonical persisted rows, shared by completed writes and closure reads.
+
+    `unverifiable` collects each row with a receipt whose original scope cannot be verified;
+    `unverifiable_receipts` maps each such row to those receipts' identities."""
     from .assurance import validate_receipts, validate_findings
     validate_map_record(state)
     raw = state.get("obligations")
@@ -2365,6 +2369,8 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
         unknown = validate_receipts(ob, ctx, seq=state["seq"])
         if unknown and unverifiable is not None:
             unverifiable.append(ob["id"])
+        if unknown and unverifiable_receipts is not None:
+            unverifiable_receipts[ob["id"]] = unknown
         validate_findings(ob, rows, seq=state["seq"], lineage=ctx["lineage"])
     _ancestry(rows, lineage=ctx["lineage"])
     return rows

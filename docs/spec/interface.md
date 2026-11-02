@@ -1147,7 +1147,7 @@ Install a reader supporting these formats before migrating. Preceding binaries d
 - <a id="a666"></a>**A666** — Routine writes queue cleanup without scanning retained history. A fixed queue threshold counts newly placed bytes, excluding identical pages already on disk, and starts a bounded sweep only after the semantic writer lock is released; migration and install/update also attempt cleanup. Status/doctor inventory reads bounded hints, reports queued or unknown bytes per record, and explicit GC preserves both authorities, pinned readers and the corruption-safe retry path. The preceding compaction request entry cannot publish.
 ### R185 — Read relevant admission facts without granting authorization
 
-Type: B,I · Scenarios: [A670](#a670), [A671](#a671), [A672](#a672), [A673](#a673), [A790](#a790)
+Type: B,I · Scenarios: [A670](#a670), [A671](#a671), [A672](#a672), [A673](#a673), [A790](#a790), [A843](#a843)
 
 `pod admission --repository PATH [--objective ID --candidate SHA] [--worktree PATH]
 [--branch NAME] [--target REF --target-commit SHA] [--effect GOVERNOR_ID]...
@@ -1237,8 +1237,13 @@ assurance, evidence, verification gaps and native validity. `objective_unfinishe
 and `objective_complete` separately describe closure: future merge/delivery rows
 are not circular prerequisites for candidate proof. Missing review, invalidated
 evidence, genuine verification gaps, unresolved required findings and outstanding
-material work still withhold candidate proof. At a root whose HEAD resolves
-exactly to the candidate, candidate proof judges bound evidence sources by that
+material work still withhold candidate proof. Each row is judged by its selected
+evidence. A retained receipt whose original eligibility scope cannot be verified (a
+REUSE receipt recorded under an older definition) makes the proof `unknown` with
+`evidence_unverified:<row>` only when the row selects it. Unselected, it is
+nonqualifying history and leaves the proof unchanged; every receipt is still
+validated, and the handoff hold and evidence closure still see it. At a root
+whose HEAD resolves exactly to the candidate, candidate proof judges bound evidence sources by that
 checkout's working files, as a review binds them. At any other root, such as a
 canonical checkout on the target branch, it judges them against the candidate's
 stored blobs with R204's read-only reader, never that root's unrelated files.
@@ -1288,6 +1293,7 @@ CE always parses the factual status and scope; zero is never permission.
 - <a id="a672"></a>**A672** — Missing, malformed, incomplete, changing or unavailable relevant facts produce specific scoped uncertainty and reconciliation. Complete native inventory prevents non-current runtime references from becoming permanent vetoes; positive current-owner observations distinguish retained purposes from foreign owners without inventing authority.
 - <a id="a673"></a>**A673** — Target, candidate, claim or resource changes fail the serialized recheck. Explicitly unrelated uncertainty stays disclosed without blocking independent work. Candidate proof, current owner identity, objective completion and CE permission remain distinct through CLI and CE consumer tests.
 - <a id="a790"></a>**A790** — A review bound to a source as the candidate holds it stays QUALIFIED, and the proof `ready`, when read from a root on another branch whose working file differs, where 0.21.32 withheld it as `invalidated`. Read from another root, a review bound to bytes the candidate's stored tree does not hold is withheld with `assurance_unbound`, even when that root holds those bytes. At a root checked out at the candidate the working files still decide, as before: uncommitted bound bytes it holds, and clean CRLF (`text eol=crlf`) and clean/smudge-filtered checkouts, stay `ready`. The same clean converted bytes read from another root are `invalidated`.
+- <a id="a843"></a>**A843** — A satisfied assurance that retains a REUSE receipt recorded under an older definition, while its selected evidence is a review carried by REUSE under its current definition, reads proof `ready`; 0.21.37 read it `unknown` with `evidence_unverified`. The selected read and `pod admission` return byte-identical proof blocks. When the row selects that old-definition receipt, both still read `unknown` with `evidence_unverified:<row>` and a `proof_unverified` unknown. The closed record's validation still names the row, so the handoff hold and evidence closure are unchanged.
 
 #### Admission storage read contract
 

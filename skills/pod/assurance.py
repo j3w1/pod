@@ -136,6 +136,12 @@ def _persisted_evidence(ob: dict, raw: Any, ctx: dict) -> dict:
     return record
 
 
+def selected_receipts(ob: dict) -> set:
+    """The receipt identities of a row's selected evidence."""
+    identity = "attempt" if ob["kind"] == "assurance" else "reference"
+    return {row.get(identity) for row in ob.get("evidence", []) if isinstance(row, dict)}
+
+
 def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
     """One persisted evidence/history contract for ordinary writes and closure reads."""
     from .obligations import MAX_RECEIPTS, _exact, _text, _path, refuse
@@ -145,7 +151,7 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
         raise refuse("obligation_invalid", "malformed", "receipt history is a bounded recorded list", obligation=ob["id"])
     identity = "attempt" if ob["kind"] == "assurance" else "reference"
     receipts = {}
-    selected = {row.get(identity) for row in ob.get("evidence", []) if isinstance(row, dict)}
+    selected = selected_receipts(ob)
     unverifiable = []
     for raw in history:
         receipt = _exact(raw, {"evidence", "accepted_seq", "reported_seq", "reuse"}, {"evidence"}, "receipt", obligation=ob["id"])
