@@ -139,20 +139,35 @@ class OrcaAdapterTests(unittest.TestCase):
         self.addCleanup(os.chmod, locked, 0o700)
         with patch.dict(os.environ, {"POD_CACHE_HOME": str(locked / "pod-cache"), "NODE_COMPILE_CACHE": external}):
             without_cache()  # cannot be created
-        # Without POD_CACHE_HOME the cache home comes from paths alone: no Git or other process ever runs for it,
-        # and a home inside the working tree Pod runs in is refused before anything is made.
-        tree = root / "tree"; (tree / "sub").mkdir(parents=True); (tree / ".git").write_text("gitdir: elsewhere\n")
+        # The cache home comes from paths alone: no Git or other process ever runs for it. A destination inside any
+        # Git working tree is refused before anything is made: the tree Pod runs in, a linked sibling worktree
+        # (its `.git` file), directly or through a symlink, from every source, and a home that is itself a tree.
+        sibling = root / "sibling"; sibling.mkdir(); (sibling / ".git").write_text("gitdir: elsewhere\n")
+        tree = root / "tree"; (tree / "sub").mkdir(parents=True); (tree / ".git").mkdir()
+        (root / "via").symlink_to(sibling)
         here = os.getcwd()
         self.addCleanup(os.chdir, here)
         with patch.dict(os.environ, {"XDG_CACHE_HOME": str(root / "xdg")}), \
              patch("pod.orca.subprocess.run", side_effect=AssertionError("compile_cache started a process")):
             os.environ.pop("POD_CACHE_HOME", None)
             self.assertEqual(compile_cache(), str((root / "xdg").resolve() / "pod" / "node-compile-cache"))
-            os.chdir(tree / "sub")
-            os.environ["XDG_CACHE_HOME"] = str(tree / "sub" / "cache")
-            self.assertIsNone(compile_cache())
-            self.assertFalse((tree / "sub" / "cache").exists())
-            os.chdir(here)
+            refused = {"XDG_CACHE_HOME in a linked sibling worktree": {"XDG_CACHE_HOME": str(sibling / "cache")},
+                       "XDG_CACHE_HOME through a symlink to it": {"XDG_CACHE_HOME": str(root / "via" / "cache")},
+                       "POD_CACHE_HOME in a linked sibling worktree": {"POD_CACHE_HOME": str(sibling / "pod-cache")},
+                       "POD_CACHE_HOME through a symlink to it": {"POD_CACHE_HOME": str(root / "via" / "pod-cache")},
+                       "XDG_CACHE_HOME in the tree Pod runs in": {"XDG_CACHE_HOME": str(tree / "sub" / "cache")},
+                       "a home that is a working tree": {"HOME": str(tree)}}
+            for label, values in refused.items():
+                with self.subTest(label), patch.dict(os.environ, values):
+                    if "HOME" in values:
+                        os.environ.pop("XDG_CACHE_HOME", None)
+                    os.chdir(tree / "sub" if "runs in" in label else here)
+                    self.assertIsNone(compile_cache())
+                    self.assertNotIn("NODE_COMPILE_CACHE", env_of_read())
+                    os.chdir(here)
+            self.assertEqual(sorted(path.name for path in sibling.iterdir()), [".git"])  # nothing was made there
+            self.assertEqual(sorted(path.name for path in (tree / "sub").iterdir()), [])
+            self.assertFalse((tree / ".cache").exists())
 
     def test_cleanup_terminal_inventory_is_an_exact_read_shape(self):
         from pod.orca import _read_allowed

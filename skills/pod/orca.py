@@ -121,8 +121,8 @@ _COMPILE_CACHE_HOMES: dict = {}
 
 def compile_cache() -> str | None:
     """Node's compile cache for the Orca CLI's own code: a private directory under Pod's cache home
-    (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`, never inside the working tree Pod runs in),
-    created 0700. Resolved from paths alone, with no Git or other process. None when it cannot be used: not a real
+    (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`), never inside any Git working tree, created 0700.
+    Resolved from paths alone, with no Git or other process. None when it cannot be used: not a real
     directory, another owner, group or other access, or any failure. The read then runs with the variable removed,
     so an inherited value is never used, and Orca's own configuration is never touched."""
     try:
@@ -145,6 +145,9 @@ def compile_cache() -> str | None:
 
 
 def _compile_cache_path() -> Path | None:
+    """The cache directory for this environment, or None. The home is resolved, symlinks included, and refused when
+    it or any ancestor holds a `.git` entry (a repository or a linked worktree's `.git` file), before anything is made.
+    The directory's own name is kept unresolved, so the per-read check still refuses a symlink there."""
     from .util import explicit_home
     try:
         home = explicit_home("POD_CACHE_HOME")
@@ -153,22 +156,14 @@ def _compile_cache_path() -> Path | None:
             base = Path(value) if value else Path.home() / ".cache"
             if not base.is_absolute() or "\x00" in str(base):
                 return None
-            home = base.resolve(strict=False) / "pod"
-            if _inside_working_tree(home):
-                return None
-        return home / COMPILE_CACHE
+            home = base / "pod"
+        home = home.resolve(strict=False)
+        path = home / COMPILE_CACHE
+        if any(os.path.lexists(parent / ".git") for parent in (path, *path.parents)):
+            return None  # Inside a Git working tree: no cache, never a file in someone's checkout.
+        return path
     except (OSError, PodError, ValueError, RuntimeError):
         return None
-
-
-def _inside_working_tree(path: Path) -> bool:
-    """Whether `path` lies in the Git working tree holding the current directory: the nearest ancestor with a `.git`
-    entry, found by path checks alone."""
-    here = Path.cwd().resolve()
-    for root in (here, *here.parents):
-        if os.path.lexists(root / ".git"):
-            return path.resolve(strict=False).is_relative_to(root)
-    return False
 
 
 def read_command(argv: list[str], *, timeout: int = 10) -> dict:
