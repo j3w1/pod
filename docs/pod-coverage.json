@@ -11209,7 +11209,7 @@
         "tests.test_process_exit.DecodeTests.test_inconsistent_or_unbounded_verdict_facts_are_malformed",
         "tests.test_process_exit.DecodeTests.test_an_unverified_verdict_carries_no_facts",
         "tests.test_admission_host_exit.FaultTests.test_a_calendar_boundary_scan_time_holds_only_its_request",
-        "tests.test_admission_host_exit.BatchEquivalenceTests.test_a_calendar_boundary_scan_time_aborts_no_other_query",
+        "tests.test_admission_host_exit.BatchEquivalenceTests.test_a_calendar_boundary_scan_time_stops_the_requests_but_not_the_call",
         "tests.test_process_exit.DecodeTests.test_a_scan_time_at_a_calendar_boundary_is_malformed_not_an_error",
         "tests.test_process_exit.TransportTests.test_a_calendar_boundary_scan_time_from_the_process_is_malformed"
       ],
@@ -11337,6 +11337,46 @@
         "live_native"
       ],
       "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A865",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.StopTests.test_a_transport_or_contract_fault_starts_no_further_request",
+        "tests.test_admission_host_exit_stop.StopTests.test_an_answer_under_the_contract_never_stops_the_call",
+        "tests.test_admission_host_exit_stop.StopTests.test_a_clean_first_answer_never_stops_later_requests",
+        "tests.test_admission_host_exit_stop.StopTests.test_a_fault_after_a_clean_first_answer_holds_only_its_request_and_the_query"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A866",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.StopBatchTests.test_a_failing_verifier_answers_each_query_as_its_single_query",
+        "tests.test_admission_host_exit_stop.StopBatchTests.test_a_correct_verifier_keeps_every_request_and_the_summary_shape"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A867",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.SequenceTests.test_the_rest_start_together_only_after_the_first_returned",
+        "tests.test_admission_host_exit_stop.SequenceTests.test_the_rest_hold_the_deadline_when_the_first_request_spent_it",
+        "tests.test_admission_host_exit_stop.SequenceTests.test_a_quick_first_answer_leaves_the_rest_their_own_bound",
+        "tests.test_admission_host_exit_stop.CountTests.test_a_failing_verifier_receives_one_request_and_a_correct_one_four"
+      ],
       "status": "NOT_RUN"
     }
   ],

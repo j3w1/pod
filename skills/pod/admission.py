@@ -1006,6 +1006,7 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
                 asked |= wanted
     plan = _host_exit_requests(asked, hosts) if command else []
     answers = {}
+    stopped = None  # the first request's transport or contract fault, which every candidate not asked holds with
     if not command:
         answers = {dispatch: (process_exit.UNAVAILABLE, None, None) for dispatch in asked}
     elif plan:
@@ -1018,12 +1019,20 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
         stamps = [discovery.finished_at.get(name) for name in ("fleet", "terminals")]
         native = (max(stamps) - discovery.started) if None not in stamps and discovery.started is not None else 0.0
         reserve = max(process_exit.RESERVE_S, process_exit.RESERVE_SCALE * native)
-        if budget.remaining() < process_exit.TIMEOUT_S + reserve:
-            answers = {dispatch: (process_exit.DEADLINE, None, None) for dispatch in asked}
-        else:
-            futures = [discovery.submit(("host-exit", index), lambda ids=ids: process_exit.ask(command, ids))
-                       for index, (_, ids) in enumerate(plan)]
-            for (host, ids), future in zip(plan, futures):
+        sent = []
+        # The first request in plan order runs alone; the rest start together only after it answered without a
+        # transport or contract fault, and only under the same deadline test (pod#219).
+        for start, end in ((0, 1), (1, len(plan))):
+            group = plan[start:end]
+            if not group:
+                break
+            if budget.remaining() < process_exit.TIMEOUT_S + reserve:
+                answers.update({dispatch: (process_exit.DEADLINE, None, None) for _, ids in plan[start:] for dispatch in ids})
+                break
+            futures = [discovery.submit(("host-exit", start + index), lambda ids=ids: process_exit.ask(command, ids))
+                       for index, (_, ids) in enumerate(group)]
+            sent.extend(group)
+            for (host, ids), future in zip(group, futures):
                 try:
                     answer = future.result()
                     code = process_exit.judge(answer, host=host, runtime=runtime)
@@ -1034,12 +1043,22 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
                 facts = ({key: verdict[key] for key in process_exit.FACT_FIELDS} if code is None else None)
                 for dispatch in ids:
                     answers[dispatch] = (code, entries.get(dispatch), facts)
-            discovery.host_exit_summary.update(requests=len(plan), asked=sum(len(ids) for _, ids in plan))
-    counted = set()
+                if start == 0 and code in process_exit.STOPPING:
+                    stopped = code
+            if stopped is not None:
+                break
+        discovery.host_exit_summary.update(requests=len(sent), asked=sum(len(ids) for _, ids in sent))
+    counted, not_asked = set(), set()
     for slot in asking:
         covered = all(dispatch in answers and answers[dispatch][0] is None for dispatch in slot.candidates)
+        # After a stop, a candidate not asked holds with the first fault, as its single query meets that fault on its
+        # own first request; only a set too large to be asked alone keeps `host_exit_call_limit`, as its single query.
+        unasked = (stopped if stopped is not None
+                   and len(_host_exit_requests(slot.candidates, hosts)) <= process_exit.R else process_exit.CALL_LIMIT)
         for dispatch, facts in slot.candidates.items():
-            code, entry, verdict = answers.get(dispatch, (process_exit.CALL_LIMIT, None, None))
+            code, entry, verdict = answers.get(dispatch, (unasked, None, None))
+            if dispatch not in answers and code == stopped:
+                not_asked.add(dispatch)
             if code is None:
                 code = process_exit.entry_code(entry, facts["terminal"])
                 if code is None and not covered:
@@ -1049,6 +1068,8 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
                 counted.add(dispatch)
     discovery.host_exit_counted = tuple(sorted(counted))
     discovery.host_exit_summary["counted"] = len(counted)
+    if stopped is not None:  # the call's own record of why candidates were not asked; never a per-query field
+        discovery.host_exit_summary.update(not_asked_after=stopped, not_asked=len(not_asked))
 
 
 def _host_exit_rows(slot: _HostExitSlot, used: set) -> list:
