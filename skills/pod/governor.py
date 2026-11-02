@@ -2570,6 +2570,31 @@ def _finalization_entry(record: str, kind: str, state: str, derived_from: str | 
     return {"record": record, "kind": kind, "state": state, "derived_from": derived_from}
 
 
+def report_owed(admission) -> str | None:
+    """The report consumption an admission still owes, as its finalization state, or None when it owes none.
+
+    The one rule for finalization, admission's record-side hold and the R108 list. A closed or deferred row
+    owes nothing, nor does abandoned accounting (non-success without output). An implementation result
+    settles by its disposition, which needs no report; every other role by its consumed report, and an
+    implementation with a report but no disposition reads `undispositioned`. Reads a stored admission or
+    the admission facts reader's projection, whose `report_consumed` and `disposition_recorded` say only
+    whether those bodies exist."""
+    if not isinstance(admission, dict) or admission.get("state") in ("closed", "deferred"):
+        return None
+    if "abandoned_accounting" in admission:
+        return None
+    consumed = (admission["report_consumed"] is True if "report_consumed" in admission
+                else admission.get("report") is not None)
+    disposed = (admission["disposition_recorded"] is True if "disposition_recorded" in admission
+                else admission.get("disposition") is not None)
+    implement = admission.get("role") == "implement"
+    if implement and disposed:
+        return None
+    if not consumed:
+        return str(admission.get("state"))
+    return "undispositioned" if implement else None
+
+
 def finalization(state: dict | None, journal: dict) -> dict:
     """What a coordinator still records before saying the objective is finished or its terminal safe to retire.
 
@@ -2597,22 +2622,13 @@ def finalization(state: dict | None, journal: dict) -> dict:
                     and _remote_delivery(map_state) is None:
                 records["delivery_record"].append(_finalization_entry(row["record_id"], kind, "PASS"))
         for key, admission in sorted(context.get("admissions", {}).items()):
-            if not isinstance(admission, dict) or admission.get("state") in ("closed", "deferred"):
-                continue
-            role = str(admission.get("role"))
-            if "abandoned_accounting" in admission:
-                # Non-success without output: nothing to consume. Whether a live claim remains is the
-                # native read's (outstanding assignments), so it is history here and never a record owed.
+            if isinstance(admission, dict) and admission.get("state") not in ("closed", "deferred") \
+                    and "abandoned_accounting" in admission:
+                # Whether a live claim remains is the native read's (outstanding assignments): history here.
                 history.append(key)
-                continue
-            # An implementation result settles by its disposition, which needs no report; other roles by
-            # their consumed report.
-            if role == "implement" and admission.get("disposition") is not None:
-                continue
-            if admission.get("report") is None:
-                records["report_consumption"].append(_finalization_entry(key, role, str(admission.get("state"))))
-            elif role == "implement":
-                records["report_consumption"].append(_finalization_entry(key, role, "undispositioned"))
+            owed = report_owed(admission)
+            if owed is not None:
+                records["report_consumption"].append(_finalization_entry(key, str(admission.get("role")), owed))
     remaining = [name for name in FINALIZATION_RECORDS
                  if records[name] or (name == "closure" and map_state is not None and not closed)]
     if remaining:

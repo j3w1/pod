@@ -11413,6 +11413,159 @@
         "tests.test_admission_host_exit_stop.CountTests.test_a_failing_verifier_receives_one_request_and_a_correct_one_four"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A870",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.HoldTests.test_an_orca_exited_worker_keeps_the_open_objectives_placement_held",
+        "tests.test_admission_unconsumed_report.HoldTests.test_an_exited_and_released_worker_keeps_the_placement_held",
+        "tests.test_admission_unconsumed_report.HoldTests.test_a_released_worker_with_unverifiable_liveness_stays_a_native_writer",
+        "tests.test_admission_unconsumed_report.HoldTests.test_a_dispatch_absent_from_the_inventory_stays_unknown"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A871",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.HoldTests.test_rule_s_keeps_the_branch_of_a_removed_worktree_held",
+        "tests.test_admission_unconsumed_report.HostExitHoldTests.test_a_host_counted_exit_keeps_the_placement_held"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A872",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.HoldTests.test_a_closed_record_holds",
+        "tests.test_admission_unconsumed_report.HoldTests.test_a_continued_record_holds",
+        "tests.test_admission_unconsumed_report.HoldTests.test_a_retired_record_holds_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A873",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.FinishedTests.test_a_finished_admission_settles_with_its_dispatch",
+        "tests.test_admission_unconsumed_report.FinishedTests.test_an_implementation_without_disposition_still_holds",
+        "tests.test_admission_unconsumed_report.FinishedTests.test_finalization_and_the_hold_share_one_rule",
+        "tests.test_admission_unconsumed_report.FinishedTests.test_the_facts_reader_projects_presence_never_bodies"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A874",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.RecheckTests.test_a_report_seen_consumed_only_by_the_claims_read_is_record_changed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A875",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.ListTests.test_an_open_objective_counts_owed_reports",
+        "tests.test_admission_unconsumed_report.ListTests.test_a_closed_objective_counts_owed_reports",
+        "tests.test_admission_unconsumed_report.ListTests.test_a_continued_objective_counts_owed_reports",
+        "tests.test_admission_unconsumed_report.ListTests.test_a_retired_objective_counts_owed_reports",
+        "tests.test_admission_unconsumed_report.ListTests.test_an_uncountable_record_is_marked_never_zero"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A876",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.TerminalHistoryTests.test_a_closed_record_owing_a_report_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_continued_record_owing_a_report_keeps_the_gap",
+        "tests.test_admission_query.TerminalHistoryTests.test_a_retired_record_owing_a_report_is_history"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A877",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_objectives_exited_worker_keeps_its_placement_here_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_objectives_released_worker_keeps_its_placement_here_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_finished_admission_holds_nothing",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_retired_foreign_objective_holds_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A878",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.PlacementRecheckTests.test_a_changed_placement_branch_is_record_changed",
+        "tests.test_admission_unconsumed_report.PlacementRecheckTests.test_a_changed_placement_worktree_is_record_changed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A879",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_objectives_removed_worktree_keeps_its_branch_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_rule_s_keeps_a_foreign_objectives_removed_worktree_branch_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_worker_without_a_native_location_is_read_from_its_owner",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_branch_only_placement_keeps_its_branch_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_consumed_local_binding_never_discharges_an_owing_foreign_admission",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_every_owing_admission_of_one_dispatch_holds_across_records",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_only_the_non_retired_owner_of_a_shared_dispatch_holds",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_placement_attributed_to_another_repository_holds_nothing_here",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_an_unreadable_owning_admission_keeps_its_dispatch_unknown",
+        "tests.test_admission_unconsumed_report.PlacementRecheckTests.test_a_placement_branch_becoming_unrecorded_is_record_changed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A880",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_reused_path_never_frees_the_owed_branch_recorded_here",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_nested_foreign_worktree_never_holds_this_repositorys_equal_branch",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_this_repositorys_admission_placed_in_another_repository_holds_nothing_here",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_placement_recorded_in_another_repositorys_worktree_holds_nothing",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_an_earlier_admission_without_a_role_holds_as_an_assignment",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_an_owner_judgment_fault_is_that_dispatchs_unknown_never_a_failed_query"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
