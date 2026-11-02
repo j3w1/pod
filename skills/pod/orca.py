@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -114,6 +115,57 @@ def _read_allowed(argv: list[str]) -> bool:
     return False
 
 
+COMPILE_CACHE = "node-compile-cache"
+_COMPILE_CACHE_HOMES: dict = {}
+
+
+def compile_cache() -> str | None:
+    """Node's compile cache for the Orca CLI's own code: a private directory under Pod's cache home
+    (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`), never inside any Git working tree, created 0700.
+    Resolved from paths alone, with no Git or other process. None when it cannot be used: not a real
+    directory, another owner, group or other access, or any failure. The read then runs with the variable removed,
+    so an inherited value is never used, and Orca's own configuration is never touched."""
+    try:
+        key = (os.environ.get("POD_CACHE_HOME"), os.environ.get("XDG_CACHE_HOME"), os.environ.get("HOME"), os.getcwd())
+        if key not in _COMPILE_CACHE_HOMES:  # Resolved once per process and environment, a refusal included.
+            _COMPILE_CACHE_HOMES[key] = _compile_cache_path()
+        path = _COMPILE_CACHE_HOMES[key]
+        if path is None:
+            return None
+        try:
+            path.mkdir(mode=0o700, parents=True)
+        except FileExistsError:
+            pass
+        info = os.lstat(path)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            return None
+        return str(path)
+    except (OSError, PodError, ValueError, RuntimeError):
+        return None
+
+
+def _compile_cache_path() -> Path | None:
+    """The cache directory for this environment, or None. The home is resolved, symlinks included, and refused when
+    it or any ancestor holds a `.git` entry (a repository or a linked worktree's `.git` file), before anything is made.
+    The directory's own name is kept unresolved, so the per-read check still refuses a symlink there."""
+    from .util import explicit_home
+    try:
+        home = explicit_home("POD_CACHE_HOME")
+        if home is None:
+            value = os.environ.get("XDG_CACHE_HOME")
+            base = Path(value) if value else Path.home() / ".cache"
+            if not base.is_absolute() or "\x00" in str(base):
+                return None
+            home = base / "pod"
+        home = home.resolve(strict=False)
+        path = home / COMPILE_CACHE
+        if any(os.path.lexists(parent / ".git") for parent in (path, *path.parents)):
+            return None  # Inside a Git working tree: no cache, never a file in someone's checkout.
+        return path
+    except (OSError, PodError, ValueError, RuntimeError):
+        return None
+
+
 def read_command(argv: list[str], *, timeout: int = 10) -> dict:
     if not _read_allowed(argv):
         raise PodError("unsupported_orca_read", "Orca adapter accepts only known read operations")
@@ -121,8 +173,13 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
         # Checked whatever the shape: Python would pass a surrogate-escaped argument to Orca as raw bytes (R18).
         raise PodError("unsupported_orca_read", "Orca read arguments must be UTF-8 text without NUL")
     command = [str(executable()), *argv]
+    # Outside glue for the CLI's start-up only: Pod's validated cache, or none at all, never an inherited one.
+    env = {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"}
+    cache = compile_cache()
+    if cache:
+        env["NODE_COMPILE_CACHE"] = cache
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PodError("orca_unavailable", "Orca read failed") from exc
     except UnicodeDecodeError:

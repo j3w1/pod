@@ -1322,7 +1322,7 @@ full audit and explicit migration are separate operations.
 
 ### R207 — Answer many admission queries over one shared discovery
 
-Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787), [A825](#a825)
+Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787), [A825](#a825), [A861](#a861), [A862](#a862)
 
 `pod admission --batch --timeout SECONDS --json` reads one `pod-admission-batch-request/v1`
 object from stdin and answers `pod-admission-batch/v1`. With `--batch` every per-query flag is
@@ -1357,13 +1357,21 @@ is complete and the fence is stable. A factual batch answer exits zero; it is ne
 One call reads each fact once and shares it with every query: the record cohort, each record's
 primary facts, claims and journal, the all-Run worker inventory, the terminal inventory, each
 abandoned worker's current claim, each Run's owner observation, each repository's identity and
-worktree inventory, each effect policy revision and each target resolution. Each query receives
+worktree inventory, each effect policy revision and each target resolution. It also derives once,
+for every query, the local facts each query would otherwise repeat: each repository's state root,
+each known repository path's resolution, each workspace's rule T 4b judgement, each Dispatch's
+rule S verdict, each terminal record's validation and each context's or journal's recheck
+identity. Each query receives
 the value or the fault of that one read at the point where the single query would read it, so a
 read fault stays a scoped unknown of every result it is relevant to, never a batch failure.
 Nothing is cached across calls. A bound caller keeps the `native_inventory_scope` unknown. The
 fleet, the terminal inventory and the worktree inventories are read in a bounded pool of threads,
 at most eight Orca reads at once, while the queries read their records, and an abandoned
-worker's claim read starts as soon as its inventory row is listed. Every thread ends before the
+worker's claim read starts as soon as its inventory row is listed. A listed worker's workspace
+Git identity read starts the same way, in its own pool of at most four, and rule T 4b takes that
+workspace's worktree registry from the same read. In a batch the Run-coordinator list starts as
+soon as the terminal inventory is known, and each Run owner read as soon as both a query's record
+pass has named it and the terminal inventory is known, whichever comes last. Every thread ends before the
 call returns, and exhausting the shared deadline is `discovery_budget` exactly as in the single
 query.
 
@@ -1393,7 +1401,8 @@ also returns its rows. A side that is not provably whole or failed has `complete
 `fleet_start` describes the complete all-Run worker read discovery used, and `fleet_end` a fresh
 one made with the terminal `end` read. The end reads start once every native read any result uses
 has finished (the fleet, the terminal list, every abandoned Dispatch's claim, every observed Run
-owner, R206 rule S's Run-coordinator list, read once whenever the terminal inventory is known, and
+owner, started once a record pass names it and the terminal inventory is known, R206 rule S's
+Run-coordinator list, read once and started once the terminal inventory is known, and
 each candidate proof's reads), so they are the call's last native reads; the remaining
 projection and the shared recheck run beside them, and a native read requested after they start
 is refused `native_read_after_fence` rather than made: a claim read becomes that scoped unknown, and
@@ -1453,6 +1462,8 @@ overlapped with the projections and the recheck.
 - <a id="a786"></a>**A786** — The fleet fence digests the documented row identities of every unreleased row, every released row, the newest page and every abandoned claim, from discovery's own reads and fresh end reads; with unchanged inventories it is stable; a created, settled, deleted or changed row, a changed abandoned claim, a balanced create, settle and delete with equal totals and counts, a runtime change, a bound or failed end read and a failed end partition each make it unstable and the batch `unknown` while every result is unchanged; a released row outside the newest page that becomes abandoned with a pending effect, or changes any other identity field, makes it unstable; a bound caller's fleet start is incomplete with `native_inventory_scope`; the end reads start only after every native read a result uses has finished.
 - <a id="a787"></a>**A787** — During one call, a changed record is `record_changed` and incomplete only in the results it is relevant to, an added or removed record is `inventory_changed`, and a changed effect policy is `effect_policy_changed`; a fault inside one query's projection prints no partial batch; an unlocated foreign worker together with an open record's stale runtime answers normally in both forms; an OSError from the fleet or from a record read stays the scoped `inventory_unreadable` or `unreadable` answer in both forms; a Run-owner read asked for after the end fence started is never made and adds a scoped `native_read_after_fence` unknown.
 - <a id="a825"></a>**A825** — In a batch, an ended Dispatch whose terminal, workspace and Run coordinator are gone settles under rule S exactly as in the single query, with the same result and the same blocking unknowns, the Run list walked once for the call; no native read is requested after the end fence starts.
+- <a id="a861"></a>**A861** — In a batch the Run-coordinator list and each named Run owner's read start while discovery's fleet walk still runs, once the terminal inventory is known; a Run named before the terminal inventory completes starts its owner read when it completes, before the next query's record pass; no read follows the end fence and no thread outlives the call.
+- <a id="a862"></a>**A862** — In one batch of several queries over one repository, each repository's state root, each known repository path's resolution, each context's and journal's recheck identity, each terminal record's validation and each Dispatch's rule S verdict are derived once, and every result equals its single query.
 
 ### R208 — Read one objective's exact-candidate facts without discovery
 

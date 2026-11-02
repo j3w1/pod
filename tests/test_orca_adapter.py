@@ -7,7 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from pod.errors import PodError
-from pod.orca import (contract, current_run, executable, mutate_command, read_command,
+from pod import orca as orca_module
+from pod.orca import (compile_cache, contract, current_run, executable, mutate_command, read_command,
                       worker_rows, worktree_identity, worktree_selector, _mutation_envelope)
 from pod.operations import OrcaPort
 from tests.common import envelope, ORCA_VERSION
@@ -86,16 +87,87 @@ class OrcaAdapterTests(unittest.TestCase):
         from pod.orca import MAX_OUTPUT
         argv = ["worktree", "list", "--limit", "1000", "--json"]
         payload = json.dumps({"ok": True, "result": {"worktrees": []}, "_meta": {"runtimeId": "r"}})
+        orca_module._COMPILE_CACHE_HOMES.clear()  # Order-independent: resolved here, before the patched window.
+        cache = compile_cache()
         with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
              patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
             self.assertEqual(read_command(argv)["runtime"], "r")
+            inherited = {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"}
             runner.assert_called_once_with(["/fixture/orca", *argv], capture_output=True, text=True,
-                                           timeout=10, check=False)
+                                           timeout=10, check=False,
+                                           env={**inherited, **({"NODE_COMPILE_CACHE": cache} if cache else {})})
         with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
              patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, " " * (MAX_OUTPUT + 1), "")), \
              self.assertRaises(PodError) as caught:
             read_command(argv)
         self.assertEqual(caught.exception.code, "orca_contract")
+
+    def test_reads_use_a_private_compile_cache_and_run_without_an_unsafe_one(self):
+        """R23 (A864): Orca reads run with Node's compile cache in a 0700 directory under Pod's cache home; a
+        directory that is not private, not a real directory or cannot be made leaves the read without it, and an
+        inherited NODE_COMPILE_CACHE is never passed on."""
+        import shutil, stat, tempfile
+        payload = json.dumps({"ok": True, "result": {"worktrees": []}, "_meta": {"runtimeId": "r"}})
+        argv = ["worktree", "list", "--json"]
+        def env_of_read():
+            with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
+                 patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
+                read_command(argv)
+            return runner.call_args.kwargs["env"]
+        root = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR")))
+        self.addCleanup(shutil.rmtree, root, True)
+        home = root / "pod-cache"
+        cache = home / "node-compile-cache"
+        external = str(root / "external-cache")  # A caller's own cache, outside every check: never passed on.
+        def without_cache():
+            env = env_of_read()
+            self.assertNotIn("NODE_COMPILE_CACHE", env)
+            self.assertEqual(env, {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"})
+        with patch.dict(os.environ, {"POD_CACHE_HOME": str(home), "NODE_COMPILE_CACHE": external}):
+            env = env_of_read()
+            self.assertEqual(env, {**os.environ, "NODE_COMPILE_CACHE": str(cache)})
+            self.assertEqual(stat.S_IMODE(os.lstat(cache).st_mode), 0o700)
+            os.chmod(cache, 0o750)
+            without_cache()  # group access: not private
+            os.chmod(cache, 0o700)
+            private = root / "private"; private.mkdir(mode=0o700)
+            os.rmdir(cache); os.symlink(private, cache)
+            without_cache()  # a redirected directory is never used
+            os.unlink(cache); cache.write_text("")
+            without_cache()  # not a directory
+        locked = root / "locked"; locked.mkdir(); os.chmod(locked, 0o500)
+        self.addCleanup(os.chmod, locked, 0o700)
+        with patch.dict(os.environ, {"POD_CACHE_HOME": str(locked / "pod-cache"), "NODE_COMPILE_CACHE": external}):
+            without_cache()  # cannot be created
+        # The cache home comes from paths alone: no Git or other process ever runs for it. A destination inside any
+        # Git working tree is refused before anything is made: the tree Pod runs in, a linked sibling worktree
+        # (its `.git` file), directly or through a symlink, from every source, and a home that is itself a tree.
+        sibling = root / "sibling"; sibling.mkdir(); (sibling / ".git").write_text("gitdir: elsewhere\n")
+        tree = root / "tree"; (tree / "sub").mkdir(parents=True); (tree / ".git").mkdir()
+        (root / "via").symlink_to(sibling)
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": str(root / "xdg")}), \
+             patch("pod.orca.subprocess.run", side_effect=AssertionError("compile_cache started a process")):
+            os.environ.pop("POD_CACHE_HOME", None)
+            self.assertEqual(compile_cache(), str((root / "xdg").resolve() / "pod" / "node-compile-cache"))
+            refused = {"XDG_CACHE_HOME in a linked sibling worktree": {"XDG_CACHE_HOME": str(sibling / "cache")},
+                       "XDG_CACHE_HOME through a symlink to it": {"XDG_CACHE_HOME": str(root / "via" / "cache")},
+                       "POD_CACHE_HOME in a linked sibling worktree": {"POD_CACHE_HOME": str(sibling / "pod-cache")},
+                       "POD_CACHE_HOME through a symlink to it": {"POD_CACHE_HOME": str(root / "via" / "pod-cache")},
+                       "XDG_CACHE_HOME in the tree Pod runs in": {"XDG_CACHE_HOME": str(tree / "sub" / "cache")},
+                       "a home that is a working tree": {"HOME": str(tree)}}
+            for label, values in refused.items():
+                with self.subTest(label), patch.dict(os.environ, values):
+                    if "HOME" in values:
+                        os.environ.pop("XDG_CACHE_HOME", None)
+                    os.chdir(tree / "sub" if "runs in" in label else here)
+                    self.assertIsNone(compile_cache())
+                    self.assertNotIn("NODE_COMPILE_CACHE", env_of_read())
+                    os.chdir(here)
+            self.assertEqual(sorted(path.name for path in sibling.iterdir()), [".git"])  # nothing was made there
+            self.assertEqual(sorted(path.name for path in (tree / "sub").iterdir()), [])
+            self.assertFalse((tree / ".cache").exists())
 
     def test_cleanup_terminal_inventory_is_an_exact_read_shape(self):
         from pod.orca import _read_allowed
@@ -138,11 +210,17 @@ class OrcaAdapterTests(unittest.TestCase):
                 self.assertEqual(executable(),Path('/fixture/orca-ide'))
             which.assert_called_once_with('orca-ide')
         native={'CODEX_HOME':'native-codex','CLAUDE_CONFIG_DIR':'native-claude'}
+        orca_module._COMPILE_CACHE_HOMES.clear()  # Whatever ran before, the read below is the only process.
         with patch.dict(os.environ,{**native,'POD_CONFIG_HOME':'/isolated/config'}), \
              patch('pod.orca.executable',return_value=Path('/fixture/orca')), \
              patch('pod.orca.subprocess.run',return_value=subprocess.CompletedProcess([],0,'orca 1\n','')) as runner:
             read_command(['--version'])
-            self.assertNotIn('env',runner.call_args.kwargs)
+            runner.assert_called_once()
+            # The native profile reaches Orca unchanged: every variable is inherited; the only addition is Node's
+            # compile cache in Pod's own cache home (R23, A864).
+            env=runner.call_args.kwargs['env']
+            self.assertEqual({**env,'NODE_COMPILE_CACHE':None},{**os.environ,'NODE_COMPILE_CACHE':None})
+            self.assertEqual(env.get('NODE_COMPILE_CACHE'),compile_cache())
 
     def test_output_that_is_not_utf8_is_no_evidence_and_a_cut_preview_is_harmless(self):
         # Review 3 H3: decoded by the real subprocess path, refused as a contract failure. Final audit L1: Orca cuts a

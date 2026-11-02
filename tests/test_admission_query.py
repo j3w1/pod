@@ -1340,6 +1340,19 @@ class TerminalHistoryTests(AdmissionQueryCase):
             with self.subTest(name):
                 self.assertIn("admission_facts_incomplete", self.codes(self.read(workers=[self.worker(path)])))
 
+    def test_a_foreign_worktree_is_proved_from_its_one_identity_read(self):
+        """A863: the 4b proof takes the foreign registry from the workspace's identity read, read once per stage."""
+        self.terminal("closed")
+        path = self.other_worktree()
+        workers = [self.worker(path), self.worker(path, dispatch="second-dispatch", run="second-run")]
+        with patch("pod.admission._places", wraps=admission._places) as places, \
+             patch("pod.admission.repository_context", wraps=admission.repository_context) as identity:
+            result = self.read(workers=workers)
+        self.moved(result, "admission_facts_incomplete")
+        self.assertEqual({Path(call.args[0]).resolve() for call in places.call_args_list}, {self.project.resolve()})
+        # Once in discovery's projection and once in the change recheck, whatever the number of rows naming it.
+        self.assertEqual(sum(1 for call in identity.call_args_list if str(call.args[0]) == path), 2)
+
     def test_an_admission_naming_this_repository_keeps_the_gap_elsewhere(self):
         row = self.bound("a")
         row["worktree"] = "path:" + str(self.project)
