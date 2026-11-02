@@ -72,12 +72,11 @@ def _window_fields(verdict: dict) -> None:
         raise ValueError("denied window")
 
 
-def _output(command: list[str], request: dict, *, timeout: float | None = None) -> bytes:
-    """Bound memory and wall time, including a child that never closes stdout. `timeout` replaces the five-second
-    bound for an action that names its own (R212's `process_exit`)."""
+def _output(command: list[str], request: dict) -> bytes:
+    """Bound memory and wall time, including a child that never closes stdout."""
     process = None
     try:
-        deadline = time.monotonic() + (TIMEOUT_S if timeout is None else timeout)
+        deadline = time.monotonic() + TIMEOUT_S
         process = subprocess.Popen(command, cwd="/", stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, start_new_session=True,
                                    env={k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")})

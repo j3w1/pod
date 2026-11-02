@@ -8,7 +8,12 @@ process-table scan is the only source, and every fault keeps the hold.
 from __future__ import annotations
 
 import json
+import os
 import re
+import selectors
+import signal
+import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 
 from .errors import PodError
@@ -115,6 +120,60 @@ def decode(value: object, ids: list[str]) -> dict:
             "dispatches": [_entry(entry, reference) for entry, reference in zip(entries, ids)]}
 
 
+def _output(command: list[str], payload: dict) -> bytes:
+    """This action's own bounded transport: relay's wire rules (no shell, `/`, 16 KiB of stdout, stderr discarded,
+    the whole process group killed) with this action's TIMEOUT_S. relay._output stays byte-identical for every older
+    action's wire compatibility, so it is not reused here; its refusal codes and stdout bound are."""
+    from .relay import MAX_VERDICT, refusal
+    process = None
+    try:
+        deadline = time.monotonic() + TIMEOUT_S
+        process = subprocess.Popen(command, cwd="/", stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, start_new_session=True,
+                                   env={k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")})
+        pending = memoryview(json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode() + b"\n")
+        os.set_blocking(process.stdin.fileno(), False)
+        output = bytearray()
+        with selectors.DefaultSelector() as ready:
+            ready.register(process.stdout, selectors.EVENT_READ)
+            ready.register(process.stdin, selectors.EVENT_WRITE)
+            while ready.get_map():
+                remaining = deadline - time.monotonic()
+                events = ready.select(max(0, remaining))
+                if remaining <= 0 or not events:
+                    raise refusal("relay_verifier_timeout")
+                for key, _ in events:
+                    if key.fileobj is process.stdin:
+                        pending = pending[os.write(process.stdin.fileno(), pending):]
+                        if not pending:
+                            ready.unregister(process.stdin)
+                            process.stdin.close()
+                    else:
+                        block = os.read(process.stdout.fileno(), min(4096, MAX_VERDICT + 1 - len(output)))
+                        if not block:
+                            ready.unregister(process.stdout)
+                        output.extend(block)
+                        if len(output) > MAX_VERDICT:
+                            raise refusal("relay_verifier_malformed")
+        process.wait(timeout=max(0, deadline - time.monotonic()))
+        if process.returncode:
+            raise refusal("relay_verifier_failed")
+        return bytes(output)
+    except subprocess.TimeoutExpired:
+        raise refusal("relay_verifier_timeout") from None
+    except OSError:
+        raise refusal("relay_verifier_failed") from None
+    finally:
+        if process is not None:
+            try:  # Also stop descendants retaining the pipe after the command itself exited.
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            process.stdin.close()
+            process.stdout.close()
+
+
 def ask(command: list[str], ids: list[str], *, clock=None) -> dict:
     """One bounded request for `ids`: its decoded verdict, or the request-level code that holds every id in it.
 
@@ -123,7 +182,7 @@ def ask(command: list[str], ids: list[str], *, clock=None) -> dict:
     now = clock or (lambda: datetime.now(timezone.utc))
     sent = now()
     try:
-        raw = relay._output(command, request(ids), timeout=TIMEOUT_S)
+        raw = _output(command, request(ids))
     except PodError as exc:
         return {"code": {"relay_verifier_timeout": TIMEOUT, "relay_verifier_malformed": MALFORMED}.get(exc.code, FAILED),
                 "verdict": None, "sent": sent, "received": now()}

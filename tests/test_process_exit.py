@@ -154,11 +154,12 @@ class TransportTests(VerifierMixin, KernelCase):
     def test_a_timeout_kills_the_process_group_and_holds(self):
         self.answer(mode="timeout")
         spawned = []
-        real = relay.subprocess.Popen
+        real = process_exit.subprocess.Popen
         def popen(*args, **kwargs):
             spawned.append(real(*args, **kwargs))
             return spawned[-1]
-        with patch.object(process_exit, "TIMEOUT_S", 0.3), patch.object(relay.subprocess, "Popen", side_effect=popen):
+        with patch.object(process_exit, "TIMEOUT_S", 0.3), \
+             patch.object(process_exit.subprocess, "Popen", side_effect=popen):
             answer = self.ask()
         self.assertEqual(answer["code"], "host_exit_timeout")
         self.assertIsNotNone(spawned[0].returncode)
@@ -166,10 +167,9 @@ class TransportTests(VerifierMixin, KernelCase):
             os.killpg(spawned[0].pid, signal.SIGKILL)  # the whole group is already gone
 
     def test_the_action_has_its_own_time_bound_and_relay_actions_keep_theirs(self):
-        seen = []
-        with patch.object(relay, "_output", side_effect=lambda command, request, **kw: seen.append(kw) or b"{}"):
-            self.ask()
-        self.assertEqual(seen, [{"timeout": 3.0}])
+        """Its own transport: relay's wire function, unchanged for older actions, is never called."""
+        with patch.object(relay, "_output", side_effect=AssertionError("relay._output is not this action's path")):
+            self.assertIsNone(self.ask()["code"])
         self.assertEqual((process_exit.TIMEOUT_S, relay.TIMEOUT_S), (3.0, 5))
 
 
