@@ -4,6 +4,7 @@ from io import StringIO
 import json
 import os
 from pathlib import Path
+import threading
 from unittest.mock import patch
 
 from pod import admission, cli, governor, history
@@ -512,20 +513,84 @@ class AttributionReadTests(AdmissionQueryCase):
         self.assertEqual(result["status"], "unknown")
         self.assertIn("record_attribution_unknown", [row["code"] for row in result["unknowns"]])
 
-    def test_unrelated_finished_primary_reencoding_preserves_claim_generation(self):
+    def rewritten_at(self, point, *, changed=False):
+        """Rewrite an unrelated finished record from the discovery thread the call's fleet read starts, exactly when
+        the record pass reaches `point` for that record (pod#221). The rewrite stores the same content as plain JSON
+        in place of the history tree, or, `changed`, adds a Run reference while keeping the revision."""
         self.intake(worktree=self.place)
         self.write([self.criterion("satisfied", evidence=[self.proof("O1")])], objective="old",
                    governance={"base_ref": "target"}, close=True, worktree=self.place)
         path, raw = self.raw("old")
+        if changed:
+            raw["checkpoint"]["native_refs"] = [*raw["checkpoint"]["native_refs"], {"runId": "run-new", "runtime": "runtime"}]
         before = self.query()
-        real = admission._fleet
-        def rewrite_history():
-            path.write_text(json.dumps(raw, indent=2))
-            return real()
-        with patch("pod.admission._fleet", side_effect=rewrite_history):
+        reached, rewritten, ended = threading.Event(), threading.Event(), threading.Event()
+
+        def rewrite():
+            if reached.wait(5) and not ended.is_set():
+                path.write_text(json.dumps(raw, indent=2))
+                rewritten.set()
+        fleet = admission._fleet
+
+        def fleet_read():
+            threading.Thread(target=rewrite, daemon=True).start()
+            return fleet()
+
+        def reach(name, read):
+            if name == point and read == path:
+                reached.set()
+                self.assertTrue(rewritten.wait(5))
+        facts = history.load_admission_facts
+
+        def facts_read(read, *, include_admissions=True):
+            reach("claims" if include_admissions else "attribution", read)
+            return facts(read, include_admissions=include_admissions)
+        recheck = admission._after_context_read
+
+        def recheck_read(read):
+            reach("recheck", read)
+            value = recheck(read)
+            reach("answered", read)
+            return value
+        with patch("pod.admission._fleet", side_effect=fleet_read), \
+             patch("pod.history.load_admission_facts", side_effect=facts_read), \
+             patch("pod.admission._after_context_read", side_effect=recheck_read):
             result = self.query()
+        ended.set(); reached.set()  # A point the call never reached fails here rather than rewriting late.
+        self.assertTrue(rewritten.is_set(), point)
+        return before, result
+
+    def reencoded_at(self, point):
+        before, result = self.rewritten_at(point)
         self.assertTrue(result["complete"], result["unknowns"])
         self.assertEqual(result["snapshot"], before["snapshot"])
+
+    def changed_at(self, point):
+        return [row["code"] for row in self.rewritten_at(point, changed=True)[1]["unknowns"]]
+
+    def test_unrelated_finished_primary_reencoding_preserves_claim_generation(self):
+        self.reencoded_at("recheck")  # After the record pass and before the change recheck.
+
+    def test_a_reencoding_before_the_attribution_read_stays_complete(self):
+        self.reencoded_at("attribution")
+
+    def test_a_reencoding_between_the_attribution_and_claims_reads_stays_complete(self):
+        self.reencoded_at("claims")
+
+    def test_a_reencoding_after_the_recheck_stays_complete(self):
+        self.reencoded_at("answered")
+
+    def test_a_change_before_the_attribution_read_is_read_whole(self):
+        self.assertEqual(self.changed_at("attribution"), [])
+
+    def test_a_change_between_the_attribution_and_claims_reads_is_record_changed(self):
+        self.assertEqual(self.changed_at("claims"), ["record_changed"])
+
+    def test_a_change_before_the_recheck_is_record_changed(self):
+        self.assertEqual(self.changed_at("recheck"), ["record_changed"])
+
+    def test_a_change_after_the_recheck_is_after_the_answer(self):
+        self.assertEqual(self.changed_at("answered"), [])
 
     def test_new_finished_record_without_current_claim_preserves_snapshot(self):
         self.intake(worktree=self.place)
@@ -598,11 +663,40 @@ class FactsContractTests(AdmissionQueryCase):
         def changed(path, *, include_admissions):
             facts = self.facts(include_admissions)
             if include_admissions:
-                facts["generation"]["sha256"] = "b" * 64
+                facts["generation"] = {"revision": 2, "sha256": "b" * 64}
+                facts["context"]["revision"] = 2
             return facts
         with patch("pod.history.load_admission_facts", create=True, side_effect=changed):
             result = self.query()
         self.assertIn("record_changed", [row["code"] for row in result["unknowns"]])
+
+    def claims_read_differs(self, change):
+        """The claims read meets other bytes than the attribution read; `change` alters what it gives (pod#221)."""
+        self.intake(worktree=self.place)
+        def read(path, *, include_admissions):
+            facts = self.facts(include_admissions)
+            facts["attribution"] = {"status": "proved", "repository": None, "repo_key": self.place["repo_key"],
+                                    "objective": "objective", "basis": {"record_key": path.parent.name,
+                                    "sources_count": 1, "sources_sha256": "c" * 64}}
+            if include_admissions:
+                facts["generation"]["sha256"] = "b" * 64
+                change(facts)
+            return facts
+        with patch("pod.history.load_admission_facts", create=True, side_effect=read):
+            return [row["code"] for row in self.query()["unknowns"]]
+
+    def test_other_bytes_keep_the_claims_only_while_every_attribution_fact_is_equal(self):
+        self.assertNotIn("record_changed", self.claims_read_differs(lambda facts: None))
+        def basis(facts):  # How the attribution was proved, which admission never reads.
+            facts["attribution"]["basis"] = {"record_key": facts["attribution"]["basis"]["record_key"],
+                                             "sources": ["checkpoint.worktree"]}
+        self.assertNotIn("record_changed", self.claims_read_differs(basis))
+        def owner(facts):
+            facts["context"]["owner"] = "other"
+        self.assertIn("record_changed", self.claims_read_differs(owner))
+        def attribution(facts):
+            facts["attribution"]["repository"] = "owner/other"
+        self.assertIn("record_changed", self.claims_read_differs(attribution))
 
     def test_effect_projection_avoids_full_journal_history(self):
         self.intake(worktree=self.place)

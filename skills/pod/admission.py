@@ -1188,6 +1188,15 @@ def _admissions(raw: dict, directory: Path, *, placement_unknown: bool = False) 
     return dict(rows)
 
 
+def _attributed(raw: dict) -> dict:
+    """The facts a record pass takes from a record's attribution read: all but the bytes' generation and the proof
+    basis of its attribution, which admission never reads (R207)."""
+    view = {key: value for key, value in raw.items() if key != "_facts_generation"}
+    if isinstance(view.get("_facts_attribution"), dict):
+        view["_facts_attribution"] = {key: value for key, value in view["_facts_attribution"].items() if key != "basis"}
+    return view
+
+
 def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = False) -> dict:
     from .installer import STATE_SCHEMAS
     from .ledger import _CONTEXT_FIELDS, _SUCCESSION_FIELDS
@@ -1202,8 +1211,12 @@ def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = Fal
         unplaced = placement_unknown and facts.get("errors") == [{"code": "objective_placement_unknown"}]
         if (facts.get("complete") is not True and not closed_empty and not unplaced) or not isinstance(facts.get("admissions"), dict):
             raise PodError("admission_facts_incomplete", "Current claim inventory is incomplete")
+        # Other bytes may still carry every fact the attribution read gave (a re-encoding). Then the attribution and
+        # these claims are one read of the newer bytes, and the change recheck still finds any later change (R207).
         if current["_facts_generation"] != raw["_facts_generation"]:
-            raise PodError("record_changed", "Attribution changed before current claims were read")
+            attributed, claimed = _attributed(raw), _attributed(current)
+            if any(key not in claimed or claimed[key] != value for key, value in attributed.items()):
+                raise PodError("record_changed", "Attribution changed before current claims were read")
         raw.clear()
         raw.update(current)
         raw["admissions"] = facts["admissions"]

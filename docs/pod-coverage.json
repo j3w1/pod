@@ -11131,6 +11131,25 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A868",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.AttributionReadTests.test_a_reencoding_before_the_attribution_read_stays_complete",
+        "tests.test_admission_query.AttributionReadTests.test_a_reencoding_between_the_attribution_and_claims_reads_stays_complete",
+        "tests.test_admission_query.AttributionReadTests.test_unrelated_finished_primary_reencoding_preserves_claim_generation",
+        "tests.test_admission_query.AttributionReadTests.test_a_reencoding_after_the_recheck_stays_complete",
+        "tests.test_admission_query.AttributionReadTests.test_a_change_before_the_attribution_read_is_read_whole",
+        "tests.test_admission_query.AttributionReadTests.test_a_change_between_the_attribution_and_claims_reads_is_record_changed",
+        "tests.test_admission_query.AttributionReadTests.test_a_change_before_the_recheck_is_record_changed",
+        "tests.test_admission_query.AttributionReadTests.test_a_change_after_the_recheck_is_after_the_answer",
+        "tests.test_admission_query.FactsContractTests.test_other_bytes_keep_the_claims_only_while_every_attribution_fact_is_equal"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A863",
       "required_evidence": [
         "unit",

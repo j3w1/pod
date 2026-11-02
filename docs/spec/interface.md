@@ -1366,7 +1366,7 @@ full audit and explicit migration are separate operations.
 
 ### R207 — Answer many admission queries over one shared discovery
 
-Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787), [A825](#a825), [A861](#a861), [A862](#a862)
+Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787), [A825](#a825), [A861](#a861), [A862](#a862), [A868](#a868)
 
 `pod admission --batch --timeout SECONDS --json` reads one `pod-admission-batch-request/v1`
 object from stdin and answers `pod-admission-batch/v1`. With `--batch` every per-query flag is
@@ -1431,6 +1431,13 @@ stability predicate orders neither before the other), and never reuses a discove
 generation keeps its identity without a decode, and only a changed one is read again in full.
 Each query then reports `record_changed` or `inventory_changed` for its own sources exactly as
 the single query does, so a change reaches only the queries it is relevant to.
+A record pass reads each record's attribution and then its claims, two reads of its bytes. When
+they read different bytes, the claims stand only if every fact the attribution read gave, all but
+the bytes' generation and the attribution's proof `basis`, which admission never reads, equals the
+claims read's: the two are then one read of the newer bytes, and the recheck finds any later change
+from there. Any other difference is `record_changed`. A re-encoding the recheck accepts, such as an
+unrelated finished record's history tree rewritten as the same plain content, is therefore accepted
+wherever in the call it lands.
 
 `native_fence` binds the native inventories to the moment the answer was made. `start`
 fingerprints the terminal read discovery made and every result used; `end` is a fresh complete
@@ -1508,6 +1515,7 @@ overlapped with the projections and the recheck.
 - <a id="a825"></a>**A825** — In a batch, an ended Dispatch whose terminal, workspace and Run coordinator are gone settles under rule S exactly as in the single query, with the same result and the same blocking unknowns, the Run list walked once for the call; no native read is requested after the end fence starts.
 - <a id="a861"></a>**A861** — In a batch the Run-coordinator list and each named Run owner's read start while discovery's fleet walk still runs, once the terminal inventory is known; a Run named before the terminal inventory completes starts its owner read when it completes, before the next query's record pass; no read follows the end fence and no thread outlives the call.
 - <a id="a862"></a>**A862** — In one batch of several queries over one repository, each repository's state root, each known repository path's resolution, each context's and journal's recheck identity, each terminal record's validation and each Dispatch's rule S verdict are derived once, and every result equals its single query.
+- <a id="a868"></a>**A868** — An unrelated finished record rewritten as the same content in another encoding, from a discovery thread at a forced point (before its attribution read, between that read and its claims read, between the record pass and the change recheck, or after the recheck), leaves the query complete with an unchanged snapshot; the same rewrite that also adds a Run reference without a new revision is `record_changed` between the two reads and before the recheck; made before the first read it is read whole, and made after the recheck it follows the answer, so both stay complete.
 
 ### R208 — Read one objective's exact-candidate facts without discovery
 
