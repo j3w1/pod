@@ -1459,6 +1459,21 @@ def _within(inner: str, outer: str) -> bool:
     return inner == outer or inner.startswith(outer if outer.endswith("/") else outer + "/")
 
 
+def _owed_hold(objective: str | None, record: str, key: str, row: dict) -> tuple[dict, str | None]:
+    """A bound admission's owed-report hold: the record-side claim an unfinished unbound admission makes, with the
+    same keys (R185), and the repository key its accepted placement records. Its locations are complete only with
+    both worktree and branch recorded."""
+    placement = _placement(row)
+    binding = row.get("native_binding") or {}
+    location = (listing._location(binding.get("worktreeId"))
+                or listing._location(row.get("worktree")) or placement.get("path"))
+    return ({"objective": objective, "record": record,
+             "kind": "writer" if row.get("role") == "implement" else "assignment",
+             "admission": key, "worktree": location, "branch": placement.get("branch"),
+             "locations_complete": bool(location) and bool(placement.get("branch")),
+             "liveness": "exited", "boundary": row.get("boundary")}, placement.get("repo_key"))
+
+
 def _record_locations(place: dict, rows: dict) -> dict:
     """The worktrees and branches a record's coordinator place and admissions name, and whether all are recorded."""
     placements = [_placement(row) for row in rows.values()]
@@ -1971,16 +1986,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         if owed is not None and phase != "retired":
                             # Its placement stays held until its report is consumed, whatever the native row
                             # shows; a `retired` record holds nothing (R112, R206).
-                            placement = _placement(row)
-                            location = (listing._location(binding.get("worktreeId"))
-                                        or listing._location(row.get("worktree")) or placement.get("path"))
-                            # The record-side claim an unfinished unbound admission makes, with the same keys;
-                            # its locations are complete only with both worktree and branch recorded.
-                            unfinished.append((binding["dispatchId"], {"objective": name, "record": record,
-                                "kind": "writer" if row["role"] == "implement" else "assignment",
-                                "admission": key, "worktree": location, "branch": placement.get("branch"),
-                                "locations_complete": bool(location) and bool(placement.get("branch")),
-                                "liveness": "exited", "boundary": row.get("boundary")}))
+                            unfinished.append((binding["dispatchId"], *_owed_hold(name, record, key, row)))
                     elif row["state"] not in ("closed", "deferred"):
                         held = {"objective": name, "record": record,
                             "kind": "writer" if row["role"] == "implement" else "assignment",
@@ -2086,14 +2092,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             except PodError as exc:
                 return exc, current
 
-        def foreign_owners(dispatch, run, path):
+        def foreign_owners(dispatch, run):
             """What the records owning `run` in other repositories say about `dispatch`, a Dispatch the native side
             saw without a claim: `(directory, generation, outcome)` per record read, where `outcome` is a hold, a
             PodError, or None. Each owing admission accounts for itself, whatever another record says of the same
-            Dispatch. A Dispatch placed provably in another repository's registered worktree reads nothing; a
-            missing, removed or unproved location reads its Run's recorded owners. Judged once per call."""
-            if path is not None and not workspace(path, places)[1] and elsewhere(path):
-                return ()
+            Dispatch. Which repository its placement belongs to is the record's to say, never the directory now at
+            its path, so the owners are read whatever that path holds today. Judged once per call."""
             found = []
             for directory, generation in run_sources.get(run, []):
                 if directory.name in own_records:
@@ -2112,26 +2116,20 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     binding = row.get("native_binding") or {}
                     if binding.get("dispatchId") != dispatch or report_owed(row) is None:
                         continue
-                    placement = _placement(row)
-                    location = (listing._location(binding.get("worktreeId"))
-                                or listing._location(row.get("worktree")) or placement.get("path"))
-                    here = placement.get("repo_key") == context["repo_key"] or bool(
-                        location and workspace(location, places)[1])
-                    if not here and (placement.get("repo_key") is not None or location and elsewhere(location)):
-                        continue  # proved placed in another repository: not this query's resource
-                    found.append((directory, generation, {"objective": listing._name(owner_raw),
-                        "record": directory.name, "kind": "writer" if row["role"] == "implement" else "assignment",
-                        "admission": key, "worktree": location, "branch": placement.get("branch"),
-                        "locations_complete": bool(location) and bool(placement.get("branch")),
-                        "liveness": "exited", "boundary": row.get("boundary")}))
+                    try:
+                        found.append((directory, generation, _owed_hold(listing._name(owner_raw), directory.name, key, row)))
+                    except (PodError, AttributeError, KeyError, TypeError, ValueError):
+                        # An owing admission whose placement cannot be read holds its Dispatch as an unknown.
+                        found.append((directory, generation, PodError("admission_placement_invalid",
+                                                                      "Accepted placement facts cannot be read")))
             return tuple(found)
 
         owners_consulted = set()
 
         def foreign_holds(dispatch, run, path):
             """Apply the shared judgment to this query: holds, unknowns, and every read record rechecked (R185)."""
-            for directory, generation, outcome in _shared(("foreign-owners", str(project), dispatch, run, path),
-                                                          lambda: foreign_owners(dispatch, run, path)):
+            for directory, generation, outcome in _shared(("foreign-owners", str(project), dispatch, run),
+                                                          lambda: foreign_owners(dispatch, run)):
                 if generation is not None and directory.name not in owners_consulted:
                     consulted.append((directory, generation))  # rechecked with every other consulted source
                     owners_consulted.add(directory.name)
@@ -2140,7 +2138,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             fact_scope={**scope, "worktree": path}, fact="worker_placement", dispatch=dispatch,
                             cause=outcome.code)
                 elif outcome is not None:
-                    unfinished.append((dispatch, outcome))
+                    unfinished.append((dispatch, *outcome))
 
         def names_here(row):
             """Rule T 4b (3): the admission itself names this repository's workspace or the requested branch."""
@@ -2379,8 +2377,15 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             if shown is None or shown["run"] not in run_sources:
                 continue
             foreign_holds(dispatch, shown["run"], shown["worktree"])
-        for dispatch, held in unfinished:
-            if dispatch in fleet_facts and dispatch not in natively_claimed:
+        def held_here(repo_key, location):
+            """Whether an owed placement is this repository's, by the identity its admission recorded: its repository
+            key decides, whatever path now nests it; without one, its location in this repository, and otherwise
+            anything not proved another repository's registered worktree."""
+            if repo_key is not None:
+                return repo_key == context["repo_key"]
+            return bool(location and workspace(location, places)[1]) or not (location and elsewhere(location))
+        for dispatch, held, repo_key in unfinished:
+            if dispatch in fleet_facts and dispatch not in natively_claimed and held_here(repo_key, held["worktree"]):
                 claim(held)  # `exited`: this call's own reads settled the worker; its placement is still owed
         from .retirement import _exited
         for terminal in terminals["terminals"]:

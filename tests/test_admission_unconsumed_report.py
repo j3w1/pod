@@ -1,6 +1,6 @@
 """R185 and R206: a bound admission whose report is still owed keeps its placement held by its record once the native
 side settles its Dispatch (Orca exited, released and exited, rule S, R212), in open, continued and closed records; a
-`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A879)."""
+`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A880)."""
 import json
 from unittest.mock import patch
 
@@ -342,26 +342,81 @@ class ForeignObjectiveTests(UnconsumedReportCase):
         self.assertIn(("worker_placement_unknown", "d1"),
                       [(row["code"], row.get("dispatch")) for row in single["unknowns"]])
 
-    def test_a_worker_in_another_repositorys_worktree_leaves_its_owner_unread(self):
-        """Positive proof of another repository's registered worktree: the owning record is never opened."""
-        destination = self.foreign()
-        record_dir = destination.parent
-        elsewhere = self.root / "foreign-repository"
-        git(elsewhere, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q",
+    def committed_repository(self, name):
+        """A second repository with one commit, so it can register linked worktrees."""
+        other = self.root / name
+        other.mkdir(exist_ok=True)
+        git(other, "init", "-q", "-b", "main")
+        git(other, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q",
             "--allow-empty", "-m", "base")
-        git(elsewhere, "worktree", "add", "-q", "-b", "theirs", str(self.root / "theirs"))
-        worker = self.native_worker(verdict="exited")
-        worker["resource"]["worktreeId"] = worker["projection"]["workspace"]["id"] = str(self.root / "theirs")
-        from pod import history
-        real, opened = history.load_admission_facts, []
+        return other
 
-        def facts(path, *, include_admissions=True):
-            if include_admissions and path.parent == record_dir:
-                opened.append(path)
-            return real(path, include_admissions=include_admissions)
-        with patch("pod.history.load_admission_facts", side_effect=facts):
-            self.assert_free(worker)
-        self.assertEqual(opened, [])
+    def test_a_placement_recorded_in_another_repositorys_worktree_holds_nothing(self):
+        """Its recorded repository key decides, even with no key: a location proved another repository's
+        registered worktree is not this repository's."""
+        other = self.committed_repository("theirs-repository")
+        theirs = self.root / "theirs"
+        git(other, "worktree", "add", "-q", "-b", BRANCH, str(theirs))
+        for key in (repository_context(other)["repo_key"], None):
+            with self.subTest(repo_key=key):
+                placement = {"path": str(theirs), "branch": BRANCH}
+                if key is not None:
+                    placement["repo_key"] = key
+                path = self.foreign(placement=placement)
+                raw = logical_json(path)
+                raw["admissions"]["a1"]["native_binding"]["worktreeId"] = raw["admissions"]["a1"]["worktree"] = str(theirs)
+                path.write_text(json.dumps(raw))
+                worker = self.native_worker(verdict="exited")
+                worker["resource"]["worktreeId"] = worker["projection"]["workspace"]["id"] = str(theirs)
+                self.assert_free(worker)
+
+    def test_a_reused_path_never_frees_the_owed_branch_recorded_here(self):
+        """Another repository registered a worktree where the worker's was; the record still names this
+        repository's branch, so it stays held (review of 4885817, P1)."""
+        self.foreign()
+        other = self.committed_repository("reuser-repository")
+        git(self.project, "worktree", "remove", "--force", str(self.worker_path))
+        git(other, "worktree", "add", "-q", "-b", "theirs", str(self.worker_path))
+        git(self.project, "show-ref", "--verify", "refs/heads/" + BRANCH)  # the owed branch still exists here
+        self.query_scope = {"branch": BRANCH}
+        self.branch_held(self.native_worker(verdict="exited"))
+
+    def test_a_nested_foreign_worktree_never_holds_this_repositorys_equal_branch(self):
+        """A foreign linked worktree nested under this repository's root, on a branch with this repository's
+        branch's name: its recorded repository key wins over the path (review of 4885817, P2)."""
+        other = self.committed_repository("nested-owner-repository")
+        nested = self.project / "nested-foreign"
+        git(other, "worktree", "add", "-q", "-b", BRANCH, str(nested))
+        path = self.foreign(placement={"path": str(nested), "branch": BRANCH,
+                                       "repo_key": repository_context(other)["repo_key"]})
+        raw = logical_json(path)
+        raw["admissions"]["a1"]["native_binding"]["worktreeId"] = raw["admissions"]["a1"]["worktree"] = str(nested)
+        path.write_text(json.dumps(raw))
+        worker = self.native_worker(verdict="exited")
+        worker["resource"]["worktreeId"] = worker["projection"]["workspace"]["id"] = str(nested)
+        self.query_scope = {"branch": BRANCH}
+        self.assert_free(worker)
+
+    def test_an_earlier_admission_without_a_role_holds_as_an_assignment(self):
+        """Earlier records may carry an admission with no role; its hold is an assignment, never a fault."""
+        row = admission_row(self.worker_path, self.place["repo_key"])
+        del row["role"]
+        held, repo_key = admission._owed_hold("foreign", "record", "a1", row)
+        self.assertEqual((held["kind"], set(held), repo_key), ("assignment", self.HELD_KEYS, self.place["repo_key"]))
+
+    def test_an_owner_judgment_fault_is_that_dispatchs_unknown_never_a_failed_query(self):
+        self.foreign()
+        with patch("pod.admission._owed_hold", side_effect=KeyError("role")):
+            single, answer = self.answers(self.native_worker(verdict="exited"))
+        self.assertEqual(answer["responses"][0]["result"], single)
+        self.assertFalse(single["complete"])
+        self.assertIn(("worker_placement_unknown", "d1"),
+                      [(row["code"], row.get("dispatch")) for row in single["unknowns"]])
+
+    def test_this_repositorys_admission_placed_in_another_repository_holds_nothing_here(self):
+        self.admit(recovery={"placement_binding": {"path": str(self.worker_path), "branch": BRANCH,
+                                                   "repo_key": "f" * 64}})
+        self.assert_free(self.native_worker(verdict="exited"))
 
 
 class PlacementRecheckTests(UnconsumedReportCase):
