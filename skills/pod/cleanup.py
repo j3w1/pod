@@ -780,7 +780,11 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
     target_ref = governance.get("base_ref")
     target = resolve_commit(project, target_ref) if isinstance(target_ref, str) else None
     target_branches = _target_branches(target_ref)
-    delivered = checkpoint.get("delivery") or {}
+    from .local_append import remote
+    # R209/L2: a local append's record proves no lasting reachability of its result (the host's train pointer may
+    # be rewritten), so it never counts a candidate as integrated and is no target to have moved after delivery;
+    # ordinary Git containment in the bound target and every other guard decide.
+    delivered = remote(checkpoint.get("delivery")) or {}
     delivered_result = delivered.get("result")
     # Later merges advance the target; it moved after delivery only when it no longer contains the delivered result.
     moved = bool(delivered) and (target is None or not isinstance(delivered_result, str)

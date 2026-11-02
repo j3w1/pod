@@ -666,15 +666,27 @@ def _assert_authority(project: Path, objective: str, owner: str, state: dict) ->
 
 
 def _owned_state(project: Path, objective: str, owner: str, context_path: Path,
-                 *, version: bool = False) -> dict:
-    """Read and join ownership inside the caller's existing lock when it holds one."""
+                 *, version: bool = False, guard=None) -> dict:
+    """Read and join ownership inside the caller's existing lock when it holds one.
+
+    `guard` refuses from the record alone before authority joins, so before any rebind is persisted."""
     state = _read(context_path)
     if version:
         _require_version(state)
     if state["owner"] not in (None, owner):
         raise PodError("coordinator_conflict", "Another coordinator owns this objective")
+    if guard is not None:
+        guard(state)
     _assert_authority(project, objective, owner, state)
     return state
+
+
+def _refuse_merge_after_local_delivery(state: dict) -> None:
+    """R209: once a local append delivered this objective, no remote merge is admitted for it."""
+    from .local_append import is_local, recorded
+    delivery = _checkpoint(state).get("delivery")
+    if is_local(delivery):
+        raise recorded(delivery, "kind")
 
 
 def _checkpoint(state: dict) -> dict:
@@ -1391,7 +1403,8 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
     record_path = _record_path(project, objective)
     moment = now.isoformat()
     with _lock(context_path), ExitStack() as decision_scope:
-        state = _owned_state(project, objective, owner, context_path, version=True)
+        state = _owned_state(project, objective, owner, context_path, version=True,
+                             guard=_refuse_merge_after_local_delivery if proposal["kind"] == "merge" else None)
         from .ledger import map_of, require_governance_current
         require_governance_current(project, map_of(state))
         journal = _read_journal(record_path)
@@ -2540,6 +2553,12 @@ _FINALIZATION_STEPS = {
 }
 
 
+def _remote_delivery(map_state: dict) -> dict | None:
+    """Only an R93 record settles a merge PASS; a local append never does (R209)."""
+    from .local_append import remote
+    return remote(map_state.get("delivery"))
+
+
 def finalization_step(name: str, entries: list[dict]) -> str:
     """The step that records one remaining finalization record, naming its records' short ids."""
     ids = [entry["record"][:12] for entry in entries]
@@ -2575,7 +2594,7 @@ def finalization(state: dict | None, journal: dict) -> dict:
                 records[name].append(_finalization_entry(row["record_id"], kind, row["outcome"],
                                                          row.get("derived_from")))
             elif kind == "merge" and row["outcome"] == "PASS" and map_state is not None \
-                    and map_state.get("delivery") is None:
+                    and _remote_delivery(map_state) is None:
                 records["delivery_record"].append(_finalization_entry(row["record_id"], kind, "PASS"))
         for key, admission in sorted(context.get("admissions", {}).items()):
             if not isinstance(admission, dict) or admission.get("state") in ("closed", "deferred"):

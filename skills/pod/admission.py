@@ -1199,11 +1199,15 @@ def _proof(project: Path, objective: str, candidate: str) -> dict:
     return _proof_view(project, objective, candidate)[0]
 
 
-def _proof_view(project: Path, objective: str, candidate: str) -> tuple[dict, dict, dict | None]:
+def _proof_view(project: Path, objective: str, candidate: str, *, state: dict | None = None,
+                native: dict | None = None) -> tuple[dict, dict, dict | None]:
     """The exact-candidate proof, with the record and kernel view it was judged from (None on a candidate
-    mismatch). The one proof implementation: `pod admission` and its selected read both return this proof."""
+    mismatch). The one proof implementation: `pod admission` and its selected read both return this proof.
+
+    A recording write (R209) passes its own authority-joined `state` and the `native` read it already made, so the
+    proof judges that snapshot rather than the bytes on disk; every other caller reads both as before."""
     from .ledger import kernel_view, read
-    state = read(project, objective)
+    state = read(project, objective) if state is None else state
     if state is None:
         raise PodError("objective_unknown", "The selected objective has no record")
     checkpoint = state.get("checkpoint") or {}
@@ -1213,7 +1217,7 @@ def _proof_view(project: Path, objective: str, candidate: str) -> tuple[dict, di
     # binds, including bytes a clean checkout converts (eol, filters). Any other root, such as a canonical checkout on
     # the target branch, judges them against the candidate's stored blobs instead of its own unrelated files (pod#184).
     at_candidate = gitio.resolve_commit(project, "HEAD") == candidate
-    view = kernel_view(project, objective, state=state, candidate=candidate,
+    view = kernel_view(project, objective, state=state, candidate=candidate, native=native,
                        sources_at=None if at_candidate else candidate)
     from .obligations import _persisted_rows, TERMINAL
     gaps, unavailable = [], []

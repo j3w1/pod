@@ -70,6 +70,10 @@ def _delivery_refusal(subcode: str, message: str, next_action: str, **referent) 
 
 
 def validate_delivery_record(value: object) -> dict:
+    if isinstance(value, dict) and "kind" in value:
+        # A typed delivery (R209); an R93 record never carries a kind, so its exact shape below is unchanged.
+        from .local_append import validate_record
+        return validate_record(value)
     if (not isinstance(value, dict) or set(value) != DELIVERY_FIELDS
             or type(value.get("seq")) is not int or value["seq"] < 1
             or any(not isinstance(value.get(key), str) or not value[key]
@@ -100,6 +104,9 @@ def verify_delivery(project: Path, objective: str, map_state: dict, record_id: s
     if prior is None:
         return _verified_delivery(project, objective, map_state, record_id, seq=seq)
     validate_delivery_record(prior)
+    from .local_append import is_local, recorded
+    if is_local(prior):
+        raise recorded(prior, "kind")  # A local append and a remote merge never replace one another (R209).
     if prior["record"] == record_id:
         return dict(prior)
     try:
@@ -191,6 +198,9 @@ def historical_merge_parent(row: dict, journal: dict, map_state: dict) -> dict |
     if delivery is None:
         return None
     validate_delivery_record(delivery)
+    from .local_append import is_local
+    if is_local(delivery):
+        return None  # A local append is never a merge parent (R209).
     _, governance = carried_merge_context(row, None, map_state["governance"])
     if (delivery["record"] == row["record_id"] or delivery["base"] != governance.get("base")
             or delivery["target_ref"] != target.get("ref")):
@@ -987,7 +997,9 @@ def unchanged_governance(project: Path, map_state: dict) -> tuple[dict, dict] | 
     delivery = map_state.get("delivery")
     if delivery is not None:
         validate_delivery_record(delivery)
-        if (delivery["target_ref"] != governance["base_ref"]
+        from .local_append import is_local
+        # A local append's result lives on the host's train, which need not be the governance target (R209).
+        if not is_local(delivery) and (delivery["target_ref"] != governance["base_ref"]
                 or git_is_ancestor(project, delivery["result"], observed["commit"]) is not True):
             return None
     return observed, {"base_ref": governance["base_ref"], "previous_base": governance["base"],
@@ -1045,6 +1057,9 @@ def closure_keeps_baseline(project: Path, map_state: dict, *, state: dict | None
     delivery = map_state.get("delivery")
     if governance.get("base_ref") is None or governance.get("base") is None:
         return None
+    from .local_append import is_local
+    if delivery is not None and is_local(delivery):
+        return _local_keeps_baseline(project, map_state, delivery)
     if delivery is not None:
         validate_delivery_record(delivery)
         if delivery["target_ref"] != governance["base_ref"]:
@@ -1084,6 +1099,33 @@ def closure_keeps_baseline(project: Path, map_state: dict, *, state: dict | None
             **({"delivery_proof": proved} if delivery is None else {}),
             "reason": "completion bookkeeping keeps the trusted baseline of the proved delivery; "
                       "the contained result and later policy are not adopted"}
+
+
+def _local_keeps_baseline(project: Path, map_state: dict, delivery: dict) -> dict | None:
+    """R209's completion predicate: the target moved forward from the bound base; nothing is adopted.
+
+    A local append's result is on the host's protected train, not the governance target, so the target need not
+    contain it. A later bound base qualifies only when it descends from the recorded base and the target moved
+    forward from it with changed governance (R202's shape). Retargets, default changes, backward or sideways moves
+    and unavailable ancestry grant nothing."""
+    validate_delivery_record(delivery)
+    governance = map_state["governance"]
+    if delivery["base_ref"] != governance["base_ref"]:
+        return None
+    if delivery["base"] != governance["base"]:
+        if (git_is_ancestor(project, delivery["base"], governance["base"]) is not True
+                or unchanged_governance(project, map_state) is not None):
+            return None
+    if (governance.get("selection") == "default"
+            and _symbolic_ref(project, "refs/remotes/origin/HEAD") != governance["base_ref"]):
+        return None
+    current = _resolve_commit(project, governance["base_ref"])
+    if current is None or current == governance["base"] or git_is_ancestor(project, governance["base"], current) is not True:
+        return None
+    return {"adopted": False, "base_ref": governance["base_ref"], "base": governance["base"], "target": current,
+            "delivery": delivery["result"], "delivery_kind": "local_append",
+            "reason": "completion bookkeeping keeps the trusted baseline of the verified local append; the moved "
+                      "target and its later policy are not adopted"}
 
 
 def withdrawal_closure_baseline(project: Path, map_state: dict) -> dict | None:
@@ -1141,6 +1183,9 @@ def accepted_current_target(map_state: dict, current: str) -> bool:
     if delivery is None:
         return False
     validate_delivery_record(delivery)
+    from .local_append import is_local
+    if is_local(delivery):
+        return False  # A local append is never a currency exception: its result is on the host's train (R209).
     return (current == delivery["result"] and delivery["base"] == governance["base"]
             and delivery["target_ref"] == governance["base_ref"])
 
@@ -1187,6 +1232,7 @@ def require_governance_current(project: Path, map_state: dict | None, *, checkpo
     # target it was verified against; a later snapshot decision or retarget ends that exception.
     if accepted_current_target(map_state, current):
         return
+    from .local_append import is_local
     delivery = map_state.get("delivery")
     unchanged = unchanged_governance(project, map_state)
     if checkpoint and unchanged is not None:
@@ -1199,6 +1245,16 @@ def require_governance_current(project: Path, map_state: dict | None, *, checkpo
               "and base; no owner decision is needed (revision_authority is optional and follows the decision "
               "policy) unless the refresh refuses because the target holds this objective's own work beyond its "
               "bound base or that comparison is unavailable")
+    if delivery is not None and is_local(delivery):
+        message = ("the target moved after the recorded local delivery; unchanged governance awaits checkpoint "
+                   "adoption" if unchanged is not None else
+                   "the target moved after the recorded local delivery and bound governance changed")
+        if unchanged is None and git_is_ancestor(project, governance["base"], current) is True:
+            action = ("a checkpoint that only records post-delivery bookkeeping (acceptance, external evidence, "
+                      "questions, next action or closure, with the same candidate, rows and settled proof) keeps the "
+                      "delivered baseline without a refresh (R202); for new work, " + action)
+        raise refuse("governance_changed", "governance_changed", message,
+                     next_action=action, recorded=delivery["result"][:12], current=current[:12])
     if delivery is not None:
         message = ("the target moved after the recorded delivery; unchanged governance awaits checkpoint adoption"
                    if unchanged is not None else

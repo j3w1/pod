@@ -2823,6 +2823,13 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
     return result
 
 
+def _currency_anchor(state: dict) -> str | None:
+    """The commit governance currency accepts: an R93 result, else the bound base (a local append's result is on the
+    host's train, never a currency exception, R209)."""
+    from .local_append import remote
+    return (remote(state.get("delivery")) or {}).get("result", state["governance"]["base"])
+
+
 def observations(prior: dict | None, state: dict, ctx: dict) -> dict:
     """Recorded observations, never gates: counts, flags and the inputs a rationale binds."""
     admissions = _admissions(ctx)
@@ -2834,8 +2841,7 @@ def observations(prior: dict | None, state: dict, ctx: dict) -> dict:
                                  "coordinator_slot": state.get("coordinator_slot")}),
                "governance_current": ctx.get("governance_current"),
                "governance_stale": (ctx.get("governance_current") is not None
-                                    and ctx["governance_current"] !=
-                                    (state.get("delivery") or {}).get("result", state["governance"]["base"])),
+                                    and ctx["governance_current"] != _currency_anchor(state)),
                "policy_gone": [ob["id"] for ob in state["obligations"]
                                if ob["provenance"] == "project_policy" and ob.get("source", {}).get("gone")]}
     snapshot = {**state, "observations": current}
@@ -2949,7 +2955,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
     if observed.get("governance_stale"):
         lines.append("Flag       governance base moved; refresh before new admission")
     if state.get("delivery") is not None:
-        lines.append(f"Delivery   {state['delivery']['method']} {state['delivery']['result'][:12]}")
+        from .local_append import is_local, projection_line
+        lines.append(projection_line(state["delivery"]) if is_local(state["delivery"])
+                     else f"Delivery   {state['delivery']['method']} {state['delivery']['result'][:12]}")
     def referent(ob):
         value = ob.get("executor") or ob.get("wait") or ob.get("external") or ob.get("withdrawal") or ob.get("renewal")
         return decision_channel(value) if isinstance(value, dict) and value.get("by") in ("user_direct", "agent_decision") else value

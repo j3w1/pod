@@ -81,7 +81,9 @@ _MAP_FIELDS = {
     "governance_refresh": {"type": "boolean"}, "revision_authority": record("revision authority"),
     "reopen": {"type": "boolean"}, "close": {"type": "boolean"}, "rebind": {"type": "list"},
     "governance_delta": record("governance delta"),
-    "dispositions": items(16, record("disposition")), "delivery": {"type": "object"},
+    "dispositions": items(16, record("disposition")),
+    "delivery": {"type": "object", "form": "R93 {record: ID} naming an allowed merge PASS, or R209 {local_append: "
+                                         "{operation: ID}} naming the host's append operation (1-512 characters)"},
     "route_settlements": {**items(16, record("route settlement")), "only": "checkpoint or report map"},
     "update": {"type": "object", "max_items": 128, "form": "obligation ids mapped to field updates; state changes clear conflicting state fields"},
     "renew": {**items(16, record("renewal request")), "only": "checkpoint"},

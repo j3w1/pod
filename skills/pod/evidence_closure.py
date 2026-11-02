@@ -92,7 +92,9 @@ def load(root: Path) -> dict:
         value = json.loads(data.decode("utf-8")) if len(data) <= MAX_FILE else None
     except (ValueError, UnicodeError, RecursionError):
         value = None
-    if (not isinstance(value, dict) or set(value) != _FIELDS or value["schema"] != SCHEMA
+    if (not isinstance(value, dict) or set(value) - {"local_delivery"} != _FIELDS or value["schema"] != SCHEMA
+            or "local_delivery" in value and (not isinstance(value["local_delivery"], list)
+                                             or not value["local_delivery"])
             or value["statement"] != STATEMENT or value["basis"] != BASIS
             or not all(_text(value[key]) for key in ("objective", "at", "caller"))
             or value["relation"] not in ("tail", "predecessor") or not isinstance(value["tail"], dict)
@@ -149,6 +151,8 @@ def compact(value: dict) -> dict:
             "relation": value["relation"], "tail": dict(value["tail"]),
             "runs": [row.get("run") for row in value["runs"] if isinstance(row, dict)][:MAX_LISTED],
             "delivery": [row.get("pr") for row in value["delivery"] if isinstance(row, dict)][:MAX_PRS],
+            **({"local_delivery": [row.get("operation") for row in value["local_delivery"]
+                                   if isinstance(row, dict)][:MAX_MEMBERS]} if "local_delivery" in value else {}),
             "counts": dict(value["counts"]), "worktrees": list(value["worktrees"]),
             "locations_complete": value["locations_complete"]}
 
@@ -161,7 +165,7 @@ def block(root: Path) -> dict | None:
         value = load(root)
     except PodError as exc:
         return {"status": "unreadable", "code": exc.code}
-    return {"status": "recorded", **{key: deepcopy(value[key]) for key in sorted(_FIELDS)}}
+    return {"status": "recorded", **{key: deepcopy(value[key]) for key in sorted(_FIELDS | ({"local_delivery"} & set(value)))}}
 
 
 # --------------------------------------------------------------------------- reading records
@@ -936,11 +940,27 @@ def _journal_prs(root: Path) -> list[int] | None:
 
 
 def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: _Remote) -> None:
-    """Every delivery pull request any member records, each merged as GitHub reads it now (R145)."""
+    """Every delivery pull request any member records, each merged as GitHub reads it now (R145), and every
+    verified local append a current member records (R209), read from its record with no host call."""
     proof.facts["delivery"] = []
+    proof.facts["local_delivery"] = []
     if members is None:
         return
     recorded: dict[int, str] = {}
+    from .local_append import is_local, validate_record
+    for row in members:
+        local = ((row["raw"].get("checkpoint") or {}).get("delivery") if isinstance(row.get("raw"), dict) else None)
+        if is_local(local):
+            try:
+                validate_record(local)
+            except PodError:
+                proof.add("unverified", "record_unreadable", f"The local delivery recorded by {row['objective']} "
+                          "is malformed.")
+            else:
+                proof.facts["local_delivery"].append(
+                    {"objective": row["objective"], "operation": local["operation"], "store": dict(local["store"]),
+                     "row": dict(local["row"]), "candidate": local["candidate"], "result": local["result"],
+                     "appended_at": local["appended_at"]})
     for row in members:
         numbers = _journal_prs(row["root"]) or []
         delivery = ((row["raw"].get("checkpoint") or {}).get("delivery") or {})
@@ -950,6 +970,8 @@ def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: 
         for number in numbers:
             recorded.setdefault(number, row["objective"])
     if not recorded:
+        if proof.facts["local_delivery"]:
+            return  # A verified local append is the delivery; no pull request or linked lookup is needed (R209).
         if not proof.facts.get("chain_complete", True):
             return  # An unread member may record its PRs; never assert absence from a partial chain.
         if members and any(row["doc"]["issue"] is not None for row in members):
@@ -1197,6 +1219,8 @@ def _content(project: Path, objective: str, facts: dict, *, caller: str, at: str
             "dispatches_settled": facts["dispatches_settled"], "source": deepcopy(facts["source"]),
             "sources": deepcopy(facts["sources"])[:MAX_MEMBERS],
             "delivery": [dict(row) for row in facts["delivery"]][:MAX_PRS],
+            **({"local_delivery": deepcopy(facts["local_delivery"])[:MAX_MEMBERS]}
+               if facts.get("local_delivery") else {}),
             "chain": [dict(row) for row in facts["chain"]][:MAX_MEMBERS],
             "preserved": deepcopy(facts["preserved"])[:MAX_PRESERVED], "counts": dict(facts["counts"]),
             "unfinished": list(facts["unfinished"])[:MAX_LISTED],
@@ -1258,6 +1282,7 @@ def _predecessor_content(project: Path, row: dict, tail: dict, work: dict, *, ca
              "runs": [dict(item) for item in work["runs"]][:32], "dispatches_settled": work["dispatches_settled"],
              "source": deepcopy(tail["source"]), "sources": deepcopy(tail["sources"]),
              "delivery": deepcopy(tail["delivery"]),
+             **({"local_delivery": deepcopy(tail["local_delivery"])} if tail.get("local_delivery") else {}),
              "chain": deepcopy(tail["chain"]), "preserved": preserved[:MAX_PRESERVED], "counts": counts(preserved),
              "unfinished": list(link.get("unfinished") or [])[:MAX_LISTED],
              "worktrees": located["worktrees"][:MAX_LISTED], "locations_complete": located["locations_complete"]}
