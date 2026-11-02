@@ -121,17 +121,24 @@ _COMPILE_CACHE_HOMES: dict = {}
 
 def compile_cache() -> str | None:
     """Node's compile cache for the Orca CLI's own code: a private directory under Pod's cache home
-    (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`), created 0700. None when it cannot be used: not a
-    real directory, another owner, group or other access, or any failure. The read then runs with the variable
-    removed, so an inherited value is never used, and Orca's own configuration is never touched."""
-    from .util import explicit_home, native_home
+    (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`, never inside the working tree Pod runs in),
+    created 0700. Resolved from paths alone, with no Git or other process. None when it cannot be used: not a real
+    directory, another owner, group or other access, or any failure. The read then runs with the variable removed,
+    so an inherited value is never used, and Orca's own configuration is never touched."""
+    from .util import explicit_home
     try:
         key = (os.environ.get("POD_CACHE_HOME"), os.environ.get("XDG_CACHE_HOME"), os.environ.get("HOME"), os.getcwd())
         path = _COMPILE_CACHE_HOMES.get(key)
         if path is None:
-            override = explicit_home("POD_CACHE_HOME")
-            home = override if override is not None else native_home(
-                "XDG_CACHE_HOME", default=Path.home() / ".cache").resolve(strict=False) / "pod"
+            home = explicit_home("POD_CACHE_HOME")
+            if home is None:
+                value = os.environ.get("XDG_CACHE_HOME")
+                base = Path(value) if value else Path.home() / ".cache"
+                if not base.is_absolute() or "\x00" in str(base):
+                    return None
+                home = base.resolve(strict=False) / "pod"
+                if _inside_working_tree(home):
+                    return None
             path = _COMPILE_CACHE_HOMES[key] = home / COMPILE_CACHE
         try:
             path.mkdir(mode=0o700, parents=True)
@@ -143,6 +150,16 @@ def compile_cache() -> str | None:
         return str(path)
     except (OSError, PodError, ValueError, RuntimeError):
         return None
+
+
+def _inside_working_tree(path: Path) -> bool:
+    """Whether `path` lies in the Git working tree holding the current directory: the nearest ancestor with a `.git`
+    entry, found by path checks alone."""
+    here = Path.cwd().resolve()
+    for root in (here, *here.parents):
+        if os.path.lexists(root / ".git"):
+            return path.resolve(strict=False).is_relative_to(root)
+    return False
 
 
 def read_command(argv: list[str], *, timeout: int = 10) -> dict:
