@@ -1966,13 +1966,13 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             placement = _placement(row)
                             location = (listing._location(binding.get("worktreeId"))
                                         or listing._location(row.get("worktree")) or placement.get("path"))
-                            unfinished.append({"objective": name, "record": record,
+                            # The record-side claim an unfinished unbound admission makes, with the same keys;
+                            # its locations are complete only with both worktree and branch recorded.
+                            unfinished.append((binding["dispatchId"], {"objective": name, "record": record,
                                 "kind": "writer" if row["role"] == "implement" else "assignment",
-                                "admission": key, "run": binding["runId"], "dispatch": binding["dispatchId"],
-                                "worktree": location, "branch": placement.get("branch"),
-                                "repo_key": placement.get("repo_key"),
+                                "admission": key, "worktree": location, "branch": placement.get("branch"),
                                 "locations_complete": bool(location) and bool(placement.get("branch")),
-                                "reason": "unconsumed_report", "report": owed, "boundary": row.get("boundary")})
+                                "liveness": "exited", "boundary": row.get("boundary")}))
                     elif row["state"] not in ("closed", "deferred"):
                         held = {"objective": name, "record": record,
                             "kind": "writer" if row["role"] == "implement" else "assignment",
@@ -2281,13 +2281,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         unknown(record, "native_identity_unverified", objective=name, admission=key)
         # A bound admission whose report is still owed keeps its placement held by its record once the native side
         # settles or skips its Dispatch (exited, rule S, R212 or a settled context-only row): consuming the report
-        # reads the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown.
+        # reads the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown,
+        # and a native writer claim for the Dispatch already holds it.
         natively_claimed = {row["dispatch"] for row in result["claims"] if "native_terminal" in row and row.get("dispatch")}
-        for held in unfinished:
-            dispatch = held["dispatch"]
+        for dispatch, held in unfinished:
             if dispatch in fleet_facts and dispatch not in natively_claimed:
-                claim({**held, "liveness": (workers.get(dispatch) or {}).get("liveness", "exited"),
-                       "native_settlement": fleet_facts[dispatch]})
+                claim(held)  # `exited`: this call's own reads settled the worker; its placement is still owed
         from .retirement import _exited
         for terminal in terminals["terminals"]:
             path = terminal.get("worktreePath") or listing._location(terminal.get("worktreeId"))

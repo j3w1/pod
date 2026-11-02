@@ -84,11 +84,14 @@ class UnconsumedReportCase(batch.FencedCase):
         single = admission.query(self.project, **self.query_scope)
         return single, self.batch(dict(self.query_scope))
 
+    HELD_KEYS = {"objective", "record", "kind", "admission", "worktree", "branch", "locations_complete", "liveness",
+                 "boundary"}  # exactly the record-side claim an unfinished unbound admission makes
+
     @staticmethod
     def holds(result):
-        return [row for row in result["claims"] if row.get("reason") == "unconsumed_report"]
+        return [row for row in result["claims"] if row.get("admission") == "a1"]
 
-    def assert_held(self, worker, objective="objective", report="bound"):
+    def assert_held(self, worker, objective="objective"):
         """Complete, with one record-side claim naming the admission's objective, Dispatch and placement, single
         and batch alike, and a stable fence."""
         single, answer = self.answers(worker)
@@ -98,11 +101,11 @@ class UnconsumedReportCase(batch.FencedCase):
         self.assertTrue(single["complete"], single["unknowns"])
         self.assertEqual((single["status"], answer["status"]), ("blocked", "blocked"))
         self.assertEqual(len(held), 1, single["claims"])
-        self.assertEqual({key: held[0][key] for key in ("objective", "kind", "admission", "run", "dispatch", "worktree",
-                                                         "branch", "repo_key", "locations_complete", "report")},
-                         {"objective": objective, "kind": "writer", "admission": "a1", "run": "run", "dispatch": "d1",
-                          "worktree": str(self.worker_path), "branch": BRANCH, "repo_key": self.place["repo_key"],
-                          "locations_complete": True, "report": report})
+        self.assertEqual(set(held[0]), self.HELD_KEYS)
+        self.assertEqual({key: held[0][key] for key in self.HELD_KEYS - {"record"}},
+                         {"objective": objective, "kind": "writer", "admission": "a1", "worktree": str(self.worker_path),
+                          "branch": BRANCH, "locations_complete": True, "liveness": "exited", "boundary": None})
+        self.assertNotIn("d1", [row.get("dispatch") for row in single["claims"]])  # no native claim beside it
         self.assertEqual([sorted(row["dimensions"]) for row in single["conflicts"] if row.get("claim") == held[0]],
                          [["branch", "worktree"]])
         return single
@@ -121,8 +124,7 @@ class HoldTests(UnconsumedReportCase):
     def test_an_orca_exited_worker_keeps_the_open_objectives_placement_held(self):
         self.admit()
         result = self.assert_held(self.native_worker(verdict="exited"))
-        self.assertEqual((self.holds(result)[0]["liveness"], self.holds(result)[0]["native_settlement"]),
-                         ("exited", "settled"))
+        self.assertEqual(result["unknowns"], [])
 
     def test_an_exited_and_released_worker_keeps_the_placement_held(self):
         self.admit()
@@ -187,7 +189,7 @@ class FinishedTests(UnconsumedReportCase):
 
     def test_an_implementation_without_disposition_still_holds(self):
         self.admit(report={"outcome": "succeeded"})
-        self.assert_held(self.native_worker(verdict="exited"), report="undispositioned")
+        self.assert_held(self.native_worker(verdict="exited"))
 
     def test_finalization_and_the_hold_share_one_rule(self):
         stored = admission_row(self.worker_path, self.place["repo_key"])
@@ -244,9 +246,10 @@ class HostExitHoldTests(HostExitCase):
             result = self.read([row], [lead], worktree=str(worker), branch=BRANCH)
         self.assertEqual([entry["counted"] for entry in result["host_exits"]], [True], result["host_exits"])
         self.assertTrue(result["complete"], result["unknowns"])
-        held = [claim for claim in result["claims"] if claim.get("reason") == "unconsumed_report"]
-        self.assertEqual([(claim["admission"], claim["dispatch"], claim["liveness"]) for claim in held],
-                         [("a1", "d1", "exited")])
+        held = [claim for claim in result["claims"] if claim.get("admission") == "a1"]
+        self.assertEqual([(claim["kind"], claim["worktree"], claim["branch"], claim["liveness"]) for claim in held],
+                         [("writer", str(worker), BRANCH, "exited")])
+        self.assertEqual(set(held[0]), UnconsumedReportCase.HELD_KEYS)
 
 
 class ListTests(UnconsumedReportCase):
