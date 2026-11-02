@@ -10744,6 +10744,19 @@
         "tests.test_admission_selected.AttemptTests.test_missing_effective_effort_is_an_attempt_gap_that_keeps_ready"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A805",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governance_delta_rebind.RefusalRouteTests.test_an_empty_change_routes_without_governance_delta",
+        "tests.test_governance_delta_rebind.RefusalRouteTests.test_a_changed_source_routes_through_the_attested_delta",
+        "tests.test_governance_delta_rebind.RefusalRouteTests.test_an_empty_sources_list_stays_malformed_and_says_to_omit_the_key"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
