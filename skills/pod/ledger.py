@@ -3129,10 +3129,11 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             report_placement = prepared["report_placement"]
             prepared_continuity = prepared["continuity"]
         if route_mismatch:
-            _update_admission_locked(project, objective, state=state, owner=owner,
-                                     admission_id=admission_id,
-                                     update=flag_route_mismatch,
-                                     expected_runtime=row["runtime"])
+            if not (map_of(state) or {}).get("closure"):  # a closed record never changes (R155)
+                _update_admission_locked(project, objective, state=state, owner=owner,
+                                         admission_id=admission_id,
+                                         update=flag_route_mismatch,
+                                         expected_runtime=row["runtime"])
             raise PodError("route_mismatch", "Native effective route changed after start",
                            {"next_action": route_next_action(row)})
         # The report path read its fresh identity at the observation's runtime (A2).

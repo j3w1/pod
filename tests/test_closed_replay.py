@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from pod import config, ledger
+from pod.errors import PodError
 from pod.evidence_closure import close_source_issues, sweep
 from pod.governor import objective_delivery_reporting
 from pod.internal import run as internal_run
@@ -19,6 +20,7 @@ from tests.kernel_support import git
 from tests.pod_tick_support import TickCase
 from tests.test_completed_closure import SourcePort
 from tests.test_runtime_continuity import ContinuityCase
+from tests.test_worker_tabs import TabCase
 from tests.test_standing_authorization import StandingCase
 
 
@@ -525,3 +527,51 @@ class ClosedContinuityTests(ContinuityCase):
                          [("automatic", "runtime-2")])
         self.assertEqual({row["runtime"] for row in read(self.project, "objective")["admissions"].values()},
                          {"runtime-2"})
+
+
+class LateReportTests(TabCase):
+    """R99 / R127 / A366: a late report's route mismatch on a closed objective keeps its refusal and is never recorded."""
+
+    def test_a_late_report_with_a_route_mismatch_on_a_closed_objective_refuses_and_writes_nothing(self):
+        frozen, admission = self.worker(); self.keep(admission); self.tab_case = "user_owned"
+        self.report(admission, frozen, map={"obligations": self.finished_rows(), "close": True})
+        before = self.saved()
+        self.port.effective = {"agent": "codex", "model": "gpt-6-luna", "effort": "medium"}
+        for name, value in (("closing", {"obligations": self.finished_rows(), "close": True}),
+                            ("plain", {"obligations": self.finished_rows()})):
+            with self.subTest(map=name):
+                with self.assertRaises(PodError) as caught:
+                    self.report(admission, frozen, map=value)
+                self.assertEqual(caught.exception.code, "route_mismatch", str(caught.exception))
+                self.assertEqual(self.saved(), before)
+                state = read(self.project, "objective")
+                self.assertFalse(state["admissions"][admission["admission_id"]]["route_decision"].get("route_mismatch"))
+                self.assertEqual(validate_closed_snapshot(
+                    ledger.map_of(state), closed_snapshot_context(self.project, "objective", state)), ())
+
+    def test_a_late_report_whose_route_turns_known_on_a_closed_objective_keeps_its_refusal_and_writes_nothing(self):
+        frozen, admission = self.worker(); self.keep(admission); self.tab_case = "user_owned"
+
+        def unknown(row):
+            row["route_decision"].update(effective_unknown=True, effective={
+                "agent": "codex", "model": "unknown", "effort": "unknown", "context": "unknown"})
+            row["effective_evidence"]["effective"] = dict(row["route_decision"]["effective"])
+        ledger.update_admission(self.project, "objective", owner="owner", admission_id=admission["admission_id"],
+                                update=unknown)
+        self.port.effective = {"agent": "codex"}
+        self.report(admission, frozen, map={"obligations": self.finished_rows(), "close": True})
+        before = self.saved()
+        self.port.effective = None  # the native route is now complete and matches the request
+        for name, value in (("closing", {"obligations": self.finished_rows(), "close": True}),
+                            ("plain", {"obligations": self.finished_rows()})):
+            with self.subTest(map=name):
+                with self.assertRaises(PodError) as caught:
+                    self.report(admission, frozen, map=value)
+                self.assertEqual(caught.exception.code, "objective_closed", str(caught.exception))
+                self.assertEqual([row["admission"] for row in caught.exception.detail["worker_tabs"]],
+                                 [admission["admission_id"]])
+                self.assertEqual(self.saved(), before)
+                state = read(self.project, "objective")
+                self.assertTrue(state["admissions"][admission["admission_id"]]["route_decision"]["effective_unknown"])
+                self.assertEqual(validate_closed_snapshot(
+                    ledger.map_of(state), closed_snapshot_context(self.project, "objective", state)), ())

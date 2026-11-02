@@ -183,16 +183,19 @@ def _prepare_report(request, state, admission, shown, *, closing):
     if (not route_mismatch and admission["route_decision"].get("effective_unknown")
             and all(effective[key] != "unknown" for key in ("agent", "model", "effort"))):
         route_refresh = {"effective": effective, "inherited": inherited}
-    from .ledger import update_admission, _update_admission_locked
+    from .ledger import map_of, update_admission, _update_admission_locked
+    # A closed record never changes (R155): its late report keeps the same refusal and writes nothing.
+    closed = bool((map_of(state) or {}).get("closure"))
     if route_mismatch:
         # Closing preparation already holds the consume lock. The mismatch
         # update still precedes body/map/open/tab validation, as on 0.15.0.
         update = _update_admission_locked if closing else update_admission
-        update(Path(request["project"]), request["objective"],
-               **({"state": state} if closing else {}),
-               owner=admission["owner"], admission_id=admission["admission_id"],
-               update=flag_route_mismatch,
-               expected_runtime=admission["runtime"])
+        if not closed:
+            update(Path(request["project"]), request["objective"],
+                   **({"state": state} if closing else {}),
+                   owner=admission["owner"], admission_id=admission["admission_id"],
+                   update=flag_route_mismatch,
+                   expected_runtime=admission["runtime"])
         raise PodError("route_mismatch", "Native effective route changed after start",
                        {"next_action": route_next_action(admission)})
     if not closing:
@@ -202,9 +205,10 @@ def _prepare_report(request, state, admission, shown, *, closing):
                 row["effective_evidence"]["effective"] = effective
                 if inherited is not None:
                     row["effective_evidence"]["inherited"] = inherited
-            update_admission(Path(request["project"]), request["objective"],
-                             owner=admission["owner"], admission_id=admission["admission_id"],
-                             update=refresh, expected_runtime=admission["runtime"])
+            if not closed:
+                update_admission(Path(request["project"]), request["objective"],
+                                 owner=admission["owner"], admission_id=admission["admission_id"],
+                                 update=refresh, expected_runtime=admission["runtime"])
             route_refresh = None
     validated = report(request["report"], request["packet"],
                        {"runtime": admission["runtime"], **{key: binding[key] for key in
