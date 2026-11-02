@@ -577,7 +577,9 @@ def _owner_observation(run: str, terminals: dict, runtime: str) -> dict:
 def _primary(path: Path) -> tuple[dict, str]:
     reader = getattr(history, "load_admission_facts", None)
     if reader is not None:
-        facts = _shared(("facts", str(path), False), lambda: reader(path, include_admissions=False))
+        # Read once per call, classified by revision: a record that keeps changing is never unreadable (R206).
+        facts = _shared(("facts", str(path), False),
+                        lambda: history.scan_read(path, lambda: reader(path, include_admissions=False)))
         raw = _facts_context(facts)
         return raw, digest(facts["generation"])
     # Reuse the existing no-follow, bounded physical reader; do not hydrate receipts.
@@ -837,7 +839,8 @@ def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = Fal
     projected = "_facts_generation" in raw
     if projected:
         path = directory / "context.json"
-        facts = _shared(("facts", str(path), True), lambda: history.load_admission_facts(path, include_admissions=True))
+        facts = _shared(("facts", str(path), True), lambda: history.scan_read(
+            path, lambda: history.load_admission_facts(path, include_admissions=True)))
         current = _facts_context(facts)
         closed_empty = (facts.get("phase") == "closed" and facts.get("admissions") == {}
                         and facts.get("errors") == [{"code": "objective_placement_unknown"}])
@@ -907,7 +910,9 @@ def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = Fal
 
 
 def _journal(path: Path) -> tuple[dict, str]:
-    journal, identity, _ = _shared(("journal", str(path)), lambda: _journal_read(path))
+    # Read once per call, classified by the journal bytes actually read: a journal another writer republishes and
+    # reclaims during the read is read again, and one that keeps changing is never unreadable (R206).
+    journal, identity, _ = _shared(("journal", str(path)), lambda: history.scan_read(path, lambda: _journal_read(path)))
     return journal, identity
 
 
@@ -1359,6 +1364,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                       "condition": "Reconcile the failed native inventory fact; incomplete coverage never proves absence"}
         elif record is None and code == "discovery_budget":
             repair = {"action": "inspect_read_budget", "condition": "Identify and reconcile the source read that exhausted CE's deadline before retrying"}
+        elif code == history.RECORD_CHANGED:
+            repair = {"action": "repeat_query", "record": record,
+                      "condition": "The record changed while it was read; repeat the admission query"}
         result["unknowns"].append({"record": record, "code": code, "scope": fact_scope,
             "fact": extra.pop("fact", code), "reconciliation": extra.pop("reconciliation", repair),
             **extra})
@@ -1370,13 +1378,20 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         if record in record_scopes:
             unknown(record, code)  # Its own recorded scope is known; the hold stays on exactly that scope.
             return
+        if code == history.RECORD_CHANGED:
+            # Being written, not damaged: the same record-only hold, with a retry step instead of a repair.
+            relevance = ("a record that changed while it was read holds only its own resources; current native "
+                         "writers are inventoried independently")
+            reconciliation = {"action": "repeat_query", "record": record,
+                              "condition": "The record changed while it was read; repeat the admission query"}
+        else:
+            relevance = ("an unreadable record holds only its own resources; current native writers are inventoried "
+                         "independently")
+            reconciliation = {"action": "inspect_record", "record": record,
+                              "condition": "Repair or remove the unreadable record; it holds only its own resources"}
         result.setdefault("unrelated_unknowns", []).append({
             "record": record, "code": code, "status": "unavailable", "fact": "record_readable",
-            "scope": {"record": record},
-            "relevance": "an unreadable record holds only its own resources; current native writers are inventoried "
-                         "independently",
-            "reconciliation": {"action": "inspect_record", "record": record,
-                               "condition": "Repair or remove the unreadable record; it holds only its own resources"}})
+            "scope": {"record": record}, "relevance": relevance, "reconciliation": reconciliation})
 
     def claim(row):
         try:

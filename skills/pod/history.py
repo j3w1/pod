@@ -6,6 +6,7 @@ relevant descendants; explicit audits verify the complete retained evidence.
 from __future__ import annotations
 
 import base64
+import contextvars
 import fcntl
 from functools import wraps
 from copy import deepcopy
@@ -292,7 +293,7 @@ class _ReadPin:
             fcntl.flock(self.fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             self.scope.__exit__(None, None, None); self.fd = None
-            raise PodError("history_busy", "Immutable storage is being reclaimed; retry a fresh read") from exc
+            raise _noted(PodError("history_busy", "Immutable storage is being reclaimed; retry a fresh read")) from exc
 
     def __enter__(self): return self
     def __exit__(self, *exc): self.close()
@@ -552,10 +553,10 @@ class ChunkStore:
         try:
             fd = os.open(self._name(address), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
         except FileNotFoundError as exc:
-            raise PodError("history_missing", "Referenced immutable history chunk is missing") from exc
+            raise _noted(PodError("history_missing", "Referenced immutable history chunk is missing")) from exc
         except OSError as exc:
             code = "history_unsafe" if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR) else "history_unavailable"
-            raise PodError(code, "History chunk cannot be safely opened") from exc
+            raise _noted(PodError(code, "History chunk cannot be safely opened")) from exc
         with os.fdopen(fd, "rb") as file:
             if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
                 _fail("history_unsafe", "History chunk must be a regular file")
@@ -565,8 +566,13 @@ class ChunkStore:
         return data
 
     def load(self, address):
-        with self.directory() as directory:
-            return self._load(directory, address)
+        try:
+            with self.directory() as directory:
+                return self._load(directory, address)
+        except PodError as exc:
+            if exc.code.startswith("history_"):
+                _noted(exc)  # A missing or unavailable store, as a chunk read meets it.
+            raise
 
     def put(self, chunks):
         if not chunks:
@@ -605,8 +611,40 @@ class ChunkStore:
         return written
 
 
+class _Observation:
+    """What one attempt of a scan's read saw: the bytes of each bounded record file it read, by path, and every
+    history-storage fault it met, including one a caller caught and turned into a fallback. Never evidence."""
+    def __init__(self):
+        self.revisions, self.faults = {}, []
+
+
+_OBSERVED = contextvars.ContextVar("pod_scan_observed", default=None)
+
+
+def _noted(exc):
+    """Note a history-storage fault for the scan read in progress, if any, and return it to raise."""
+    observed = _OBSERVED.get()
+    if observed is not None:
+        observed.faults.append(exc.code)
+    return exc
+
+
 def _context_bytes(path, limit):
     """Bound the actual read, retaining exact physical bytes for decision binding."""
+    observed = _OBSERVED.get()
+    if observed is None:
+        return _read_context_bytes(path, limit)
+    key = os.path.abspath(path)
+    try:
+        data = _read_context_bytes(path, limit)
+    except PodError as exc:
+        observed.revisions.setdefault(key, "refused:" + exc.code)
+        raise
+    observed.revisions.setdefault(key, _sha(data))
+    return data
+
+
+def _read_context_bytes(path, limit):
     _check_read_deadline()
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -813,6 +851,80 @@ def _load(path, *, limit=MAINTENANCE_LIMIT, validate=True):
 def load_context(path, *, validate=True):
     """The ordinary bounded boundary, also usable by raw-schema diagnostics."""
     return _load(path, validate=validate)[0]
+
+
+# A repository scan reads other objectives' records without their locks (R206). A writer replaces context.json
+# atomically and then reclaims the pages the earlier revision used, so a reader can meet a missing page or storage
+# under reclamation while the record is healthy. Each scan reads one record through `scan_read`.
+RECORD_CHANGED = "record_changed_during_read"
+RECORD_CHANGED_ACTION = ("retry the same command; the record was being written while Pod read it, so it is not "
+                         "damaged and needs no repair")
+SCAN_RETRIES = 2
+SCAN_FAULTS = (PodError, OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError)
+# Codes that name storage another writer is changing right now, whatever context.json reads.
+_IN_FLIGHT = ("history_busy", RECORD_CHANGED)
+
+
+def record_revision(path):
+    """The record's physical revision as a scan sees it: the SHA256 of its exact context.json bytes, or the code
+    that refuses them. It reads no history and takes no lock; outer deadline exhaustion still propagates."""
+    from .orca import DEADLINE_SPENT
+    token = _OBSERVED.set(None)
+    try:
+        return _sha(_context_bytes(Path(path), MAINTENANCE_LIMIT))
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
+        return "refused:" + exc.code
+    finally:
+        _OBSERVED.reset(token)
+
+
+def scan_read(path, read, *, faults=SCAN_FAULTS, revision=None, observed=False):
+    """One record's whole scan read, `read()`, classified by revision (R206).
+
+    The record's revision is the bytes of every bounded file of its directory the read itself read (its context.json
+    and Governor journal). A read that meets no fault costs nothing extra. After a record-local fault, raised or met
+    and caught inside `read` (a storage fault a classification turned into a fallback), those files are read again
+    and compared with what the failing read read, or, when it read none, with `revision` (what the caller's earlier
+    read of the record read) or the previous attempt's. At a stable revision the outcome stands: a raised fault is
+    raised unchanged, decoded once as before, and a caught one keeps the caller's fallback, so every caller keeps its
+    classification of a record that really is unreadable. While the revision changed, or another writer was
+    reclaiming its storage, the record is read again, at most SCAN_RETRIES times; a record still changing after that
+    raises RECORD_CHANGED, a transient cause that is never "unreadable". Nothing is locked or written, and outer
+    deadline exhaustion propagates at once. With `observed`, returns `(result, revision)` for a later consumer."""
+    from .orca import DEADLINE_SPENT
+    path = Path(path)
+    directory = os.path.abspath(path.parent)
+    causes, previous = [], revision
+    for _ in range(1 + SCAN_RETRIES):
+        seen = _Observation()
+        token = _OBSERVED.set(seen)
+        failure = None
+        try:
+            result = read()
+        except faults as exc:
+            failure = exc
+        finally:
+            _OBSERVED.reset(token)
+        # What this attempt's result rests on: the earlier revision it reused, updated by every file it read.
+        before = {**(previous or {}), **{key: value for key, value in seen.revisions.items()
+                                         if os.path.dirname(key) == directory}}
+        if failure is None and not seen.faults:
+            return (result, before) if observed else result
+        code = (getattr(failure, "code", None) or type(failure).__name__) if failure is not None else seen.faults[0]
+        if code == DEADLINE_SPENT:
+            raise failure
+        after = {key: record_revision(key) for key in (before or {os.path.abspath(path): None})}
+        if code not in _IN_FLIGHT and before and before == after:
+            if failure is not None:
+                raise failure
+            return (result, before) if observed else result
+        causes.append(code)
+        previous = after
+    raise PodError(RECORD_CHANGED, "The record changed while it was read, on every bounded attempt",
+                   {"record": path.parent.name, "attempts": len(causes), "causes": causes,
+                    "next_action": RECORD_CHANGED_ACTION})
 
 
 @_pinned_read

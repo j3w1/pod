@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 from .errors import PodError
-from .history import load_context
+from .history import RECORD_CHANGED, load_context, scan_read
 from .util import public_decisions
 
 
@@ -22,6 +22,7 @@ CONDITIONS = {"unsafe_state": "its directory or record is redirected", "unreadab
               "invalid_record": "its record is empty or not valid JSON", "state_unsupported": "its record is not an "
               "object Pod reads", "history_missing": "part of its stored history is missing",
               None: "its record cannot be read whole"}
+CHANGING = "it changed while Pod read it; it is being written, not damaged, so retry the list"
 
 
 def _location(selector: object) -> str | None:
@@ -175,7 +176,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     result = {"schema": "pod-cli/v5", "status": "listed", "scope": scope, "objectives": [],
               "total": 0, "truncated": False, "complete": True,
               "scan": {"directories": 0, "scanned": 0},
-              "unreadable_records": [], "unattributed_records": []}
+              "unreadable_records": [], "unattributed_records": [], "changing_records": []}
     try:
         if root.is_symlink():
             raise OSError("redirected")
@@ -187,7 +188,7 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     except OSError:
         return {**result, "status": "unreadable", "complete": False,
                 "next_safe_action": "the Pod state root cannot be enumerated; nothing can be proven absent"}
-    rows, unreadable, unattributed = [], [], []
+    rows, unreadable, unattributed, changing = [], [], [], []
     directories = [entry for entry in directories if not entry.name.startswith(".")]
     # Every record directory is read, however many the state root holds (R206).
     result["scan"] = {"directories": len(directories), "scanned": len(directories)}
@@ -207,27 +208,25 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
             if names - {".lock"}:
                 unattributed.append(entry.name)  # Pod files without the record that names them.
             continue
-        try:
+        def read(entry=entry):
             raw = load_context(Path(entry.path) / "context.json", validate=False)
+            if not isinstance(raw, dict):
+                return "unsupported", None
+            return _row(entry, raw, target, context, worktree)
+        try:
+            # The record's read and every lazy read of it, classified by revision (R206).
+            kind, row = scan_read(Path(entry.path) / "context.json", read)
         except PodError as exc:
             from .orca import DEADLINE_SPENT
             if exc.code == DEADLINE_SPENT:
                 raise  # Outer deadline exhaustion refuses the whole list; it is no record's fault.
-            unreadable.append({"record": entry.name, "code": exc.code})
-            continue
-        if not isinstance(raw, dict):
-            unreadable.append({"record": entry.name, "code": "state_unsupported"})
-            continue
-        try:
-            kind, row = _row(entry, raw, target, context, worktree)
-        except PodError as exc:
-            from .orca import DEADLINE_SPENT
-            if exc.code == DEADLINE_SPENT:
-                raise
-            unreadable.append({"record": entry.name, "code": exc.code})
+            (changing if exc.code == RECORD_CHANGED else unreadable).append({"record": entry.name, "code": exc.code})
             continue
         except (KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unreadable.append({"record": entry.name, "code": "invalid_record"})
+            continue
+        if kind == "unsupported":
+            unreadable.append({"record": entry.name, "code": "state_unsupported"})
             continue
         if kind == "unattributed":
             unattributed.append(entry.name)
@@ -251,12 +250,20 @@ def objective_list(project: Path, *, repository: str | None = None, worktree: st
     # this repository's, and a consumer must not take its absence as proof.
     unavailable = [{**item, "phase": "unavailable", "condition": CONDITIONS.get(item["code"], CONDITIONS[None])}
                    for item in unreadable]
+    # A record that kept changing while it was read is live, not damaged: it is named apart with a retry step, and the
+    # list is not complete until a retry reads it (R206).
+    moving = [{**item, "phase": "unavailable", "condition": CHANGING} for item in changing]
     result.update(objectives=rows, total=len(rows), truncated=False, unreadable_records=unavailable,
-                  unattributed_records=unattributed, complete=not unreadable and not unattributed)
+                  unattributed_records=unattributed, changing_records=moving,
+                  complete=not unreadable and not unattributed and not changing)
+    damaged = bool(unreadable or unattributed)
     result["next_safe_action"] = (
         "every record under the state root was read; this list is complete" if result["complete"]
         else "every readable objective is listed; treat each unavailable or unattributed record as possibly "
-             "touching this scope until it is repaired or removed")
+             "touching this scope until it is repaired or removed"
+             + ("; retry the list for each record that changed while it was read" if changing else "") if damaged
+        else "every readable objective is listed; retry the list: a record changed while it was read, and a retry "
+             "reads it")
     return public_decisions(result)
 
 
@@ -290,5 +297,7 @@ def render(result: dict) -> None:
         print(f"  Unavailable record {clean(item['record'])}: {clean(item['code'])} ({clean(item['condition'])})")
     for record in result["unattributed_records"]:
         print(f"  Unattributed record {clean(record)}")
+    for item in result.get("changing_records", []):
+        print(f"  Changing record {clean(item['record'])}: {clean(item['code'])} ({clean(item['condition'])})")
     print(f"State root: {clean(scope['state_root'])}")
     print(f"Next: {result['next_safe_action']}")

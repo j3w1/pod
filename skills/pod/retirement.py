@@ -674,28 +674,38 @@ def _governor_rows(project: Path, objective: str) -> list[dict]:
             if row["decision"] == "ALLOW" and row["outcome"] in PRESERVED_OUTCOMES]
 
 
-def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
-    """Objectives of this repository whose claim names this one as successor, and the records Pod cannot read, by
-    path. Every readable record is read whatever the others are, so an unreadable record never hides a readable claim;
-    `could_claim` says which unreadable ones could name this objective (R206). Directories without a record are
-    skipped."""
+def _claimants(project: Path, objective: str) -> tuple[list[str], list[str], list[str]]:
+    """Objectives of this repository whose claim names this one as successor, the records Pod cannot read, and the
+    records that kept changing while they were read, each by path. Every readable record is read whatever the others
+    are, so an unreadable or changing record never hides a readable claim; `could_claim` says which of them could name
+    this objective (R206). Directories without a record are skipped."""
     from .github import repository_context
     from .ledger import CONTEXT_LIMIT, _record_exists, record_name, state_root
     from .listing import _name
-    from .history import load_context
+    from .history import RECORD_CHANGED, load_context, scan_read
     from .orca import DEADLINE_SPENT
     context = repository_context(project)
     root = state_root(project)
     try:
         if root.is_symlink():
-            return [], [str(root)]
+            return [], [str(root)], []
         with os.scandir(root) as frontier:
             entries = sorted(frontier, key=lambda entry: entry.name)
     except FileNotFoundError:
-        return [], []
+        return [], [], []
     except OSError:
-        return [], [str(root)]
-    found, unreadable = [], []
+        return [], [str(root)], []
+    found, unreadable, changing = [], [], []
+
+    def read(entry):
+        raw = load_context(Path(entry.path) / "context.json", validate=False)
+        if not isinstance(raw, dict):
+            return None
+        # Lazy reads of this record stay inside its own boundary (R206).
+        link = raw.get("continued_by")
+        name = _name(raw)
+        return name, (isinstance(link, dict) and link.get("objective") == objective and name is not None
+                      and record_name(project, context, name) == entry.name)
     for entry in entries:
         if entry.name.startswith("."):
             continue
@@ -705,26 +715,22 @@ def _claimants(project: Path, objective: str) -> tuple[list[str], list[str]]:
                 continue
             if not entry.is_dir(follow_symlinks=False) or not _record_exists(Path(entry.path) / "context.json"):
                 continue
-            raw = load_context(Path(entry.path) / "context.json", validate=False)
-            if not isinstance(raw, dict):
+            outcome = scan_read(Path(entry.path) / "context.json", lambda entry=entry: read(entry))
+            if outcome is None:
                 unreadable.append(entry.path)
                 continue
-            # Lazy reads of this record stay inside its own boundary (R206).
-            link = raw.get("continued_by")
-            name = _name(raw)
-            claims = (isinstance(link, dict) and link.get("objective") == objective and name is not None
-                      and record_name(project, context, name) == entry.name)
+            name, claims = outcome
         except PodError as exc:
             if exc.code == DEADLINE_SPENT:
                 raise
-            unreadable.append(entry.path)
+            (changing if exc.code == RECORD_CHANGED else unreadable).append(entry.path)
             continue
         except (OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unreadable.append(entry.path)
             continue
         if claims:
             found.append(name)
-    return found, unreadable
+    return found, unreadable, changing
 
 
 def could_claim(project: Path, unreadable: list[str], objective: str) -> list[str]:
@@ -1190,7 +1196,7 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
     if present(objective_root(project, objective)):
         return fail("objective_closed", "The objective was closed by evidence, coordinator gone; a closed objective "
                     "needs no retirement.")
-    claimants, unreadable = _claimants(project, objective)
+    claimants, unreadable, changing = _claimants(project, objective)
     if claimants:
         # An interrupted claim recorded the predecessor's link before this objective's own back-link.
         return fail("objective_continues", f"Objective {claimants[0]} records this objective as its successor; "
@@ -1201,6 +1207,14 @@ def _detect(project: Path, objective: str, release: list[str], state: dict | Non
         if could_claim(project, unreadable, objective):
             return fail("scope_unreadable", "A Pod record that names this objective, and so could hold a claim of it "
                         "as a successor, is unreadable.")
+    if changing:
+        # A record being written is live, not damaged: it holds the same claim decision with a retry step (R206).
+        verdict["changing_records"] = changing[:MAX_LISTED]
+        if could_claim(project, changing, objective):
+            from .history import RECORD_CHANGED, RECORD_CHANGED_ACTION
+            return fail(RECORD_CHANGED, "A Pod record that names this objective, and so could hold a claim of it as "
+                        "a successor, changed while it was read.", RECORD_CHANGED_ACTION[0].upper()
+                        + RECORD_CHANGED_ACTION[1:] + "; nothing was written.")
     scoped_runs = None
     if doc is not None:
         # An older record is read whole: a field detection does not prove refuses before any native read (R205).

@@ -75,8 +75,8 @@ class MembershipTests(KernelCase):
 
     def consumers(self, peer):
         """Every consumer's answer for one unreadable record beside the healthy objective."""
-        found, unreadable = retirement._claimants(self.project, TARGET)
-        self.assertEqual(found, [])
+        found, unreadable, changing = retirement._claimants(self.project, TARGET)
+        self.assertEqual((found, changing), ([], []))
         self.assertIn(unreadable, ([], [str(peer)]))  # A readable record of any schema is scanned for claims.
         claim = bool(retirement.could_claim(self.project, unreadable, TARGET))
         incoming = incoming_claim(self.project, TARGET, ledger.read(self.project, TARGET), full=True)
@@ -228,7 +228,7 @@ class LazyPageTests(KernelCase):
         found, unreadable = evidence_closure._scan(self.project)
         self.assertEqual([row["objective"] for row in found], ["healthy"])
         self.assertEqual([row["record"] for row in unreadable], [path.parent.name])
-        self.assertEqual(retirement._claimants(self.project, "healthy"), ([], [str(path.parent)]))
+        self.assertEqual(retirement._claimants(self.project, "healthy"), ([], [str(path.parent)], []))
         self.assertEqual(run_scope(self.project, "healthy", "unrelated-run")["unreadable"], 1)  # Unknown: it holds.
         with patch.dict(os.environ):
             os.environ.pop("ORCA_TERMINAL_HANDLE", None)
