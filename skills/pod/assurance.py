@@ -621,6 +621,8 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
           and evidence_valid({key: value for key, value in ob.items() if key != "reuse"},
                              {**ctx, "candidate": rows[0].get("candidate")}, gov)):
         classification = "candidate-only"
+    elif unreconciled := _unreconciled_reviews(ob, ctx):
+        classification = "review report unreconciled"
     else:
         classification = "binding change"
     # The proposal derives from the evidence's own candidate; the caller's reuse.from may be wrong.
@@ -640,6 +642,12 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
     if classification == "ordering":
         correction = ("consume the fixer's report and satisfy the named corrections with proof; "
                       f"then admit and consume a fresh review before satisfying {ob['id']}")
+    if classification == "review report unreconciled":
+        attempt, deviations = unreconciled[0]
+        correction = ("the review report was consumed as reconciliation_required: "
+                      f"{', '.join(deviations) if deviations else 'its deviations are unverifiable'} "
+                      f"(attempt {attempt}); a consumed report never changes, so admit and consume a fresh review "
+                      f"for {ob['id']} whose report keeps its assigned scope and lists no files")
     if corrections:
         label = "ineligible"
         correction = ("an assurance is satisfied only when its corrections are; resolve "
@@ -653,6 +661,26 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
             **({"ordering": {"findings": ordering[:8], "remaining": max(0, len(ordering) - 8)}}
                if classification == "ordering" else {}),
             **({"corrections": corrections[:8], "remaining_corrections": max(0, len(corrections) - 8)} if corrections else {})}
+
+
+def _unreconciled_reviews(ob: dict, ctx: dict) -> list[tuple[str, list[str]]]:
+    """R211: selected review attempts whose consumed report is `reconciliation_required`, with the scope
+    deviations its digest verifies with ([] when they cannot be verified). Such a report never satisfies."""
+    if ob["kind"] != "assurance":
+        return []
+    from .obligations import _admissions
+    from .ledger import _report_deviations
+    found = []
+    for row in ob.get("evidence", []):
+        admission = _admissions(ctx).get(row.get("attempt")) if isinstance(row, dict) else None
+        report = admission.get("report") if isinstance(admission, dict) else None
+        if isinstance(report, dict) and report.get("status") == "reconciliation_required":
+            try:
+                deviations = _report_deviations(admission, set(ctx.get("report_runtimes") or ()))
+            except (KeyError, TypeError):
+                deviations = None
+            found.append((row["attempt"], deviations or []))
+    return found
 
 
 def evidence_valid(ob: dict, ctx: dict, gov: str, candidate: str | None = None) -> bool:

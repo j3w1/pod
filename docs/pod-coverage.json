@@ -11029,6 +11029,31 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A845",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_report_files.ReportTimeTests.test_a_review_report_listing_files_is_refused_with_guidance_then_the_corrected_report_is_accepted",
+        "tests.test_review_report_files.ReportTimeTests.test_an_implementation_report_outside_its_assignment_is_still_consumed_for_reconciliation",
+        "tests.test_review_report_files.ReportTimeTests.test_implementation_and_investigation_roles_are_not_checked"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A846",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_review_report_files.ConsumedReviewTests.test_selecting_a_review_consumed_with_listed_files_names_the_cause",
+        "tests.test_review_report_files.ConsumedReviewTests.test_a_changed_scope_names_its_own_deviation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A806",
       "required_evidence": [
         "unit",
