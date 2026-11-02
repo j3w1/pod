@@ -77,6 +77,19 @@ def _facts(raw: dict) -> dict:
     return {"worktrees": sorted(worktrees), "runs": sorted(runs), "locations_complete": complete}
 
 
+def _unfinished(raw: dict) -> dict:
+    """How many admissions still owe their report (`governor.report_owed`), from the record alone. A count Pod
+    cannot compute is omitted and named instead, never read as zero."""
+    from .governor import report_owed
+    from .history import is_reference
+    admissions = raw.get("admissions")
+    if not isinstance(admissions, dict):
+        return {"unfinished_admissions_unavailable": "admissions_unreadable"}
+    if any(not isinstance(row, dict) or is_reference(row) for row in admissions.values()):
+        return {"unfinished_admissions_unavailable": "admission_unreadable"}
+    return {"unfinished_admissions": sum(report_owed(row) is not None for row in admissions.values())}
+
+
 def _phase(raw: dict, root: Path | None = None, project: Path | None = None) -> str:
     """The recorded phase; with the record's directory and project, an older record's retirement certified beside
     it counts (R205). An entry's mere presence never reads `retired`."""
@@ -121,7 +134,7 @@ def _row(entry, raw: dict, target: Path, context: dict, worktree: str | None) ->
     if closure is not None and phase == "open":
         phase = "closed"  # Closed by evidence, whatever the record's schema (R145, R146).
     row = {"objective": name, "record": entry.name, "phase": phase, "schema": _schema(raw),
-           **facts}
+           **facts, **_unfinished(raw)}
     from .succession import links
     row.update(links(target, raw))
     from .readiness import label
@@ -281,6 +294,10 @@ def render(result: dict) -> None:
               f"runs {', '.join(clean(run) for run in row['runs'][:4]) or 'none'} | "
               f"worktrees {', '.join(clean(path) for path in row['worktrees'][:2]) or 'unrecorded'} | "
               f"readiness {row['readiness']}")
+        if row.get("unfinished_admissions"):
+            print(f"    Unfinished admissions: {row['unfinished_admissions']} (worker reports not yet consumed)")
+        elif "unfinished_admissions_unavailable" in row:
+            print(f"    Unfinished admissions: unknown ({clean(row['unfinished_admissions_unavailable'])})")
         continuation = row.get("continuation")
         if continuation is not None:
             if continuation["status"] == "available":

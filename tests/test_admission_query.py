@@ -1377,10 +1377,13 @@ class TerminalHistoryTests(AdmissionQueryCase):
             unknown = patch("pod.admission._membership", side_effect=membership)
             unknown.start(); self.addCleanup(unknown.stop)
 
-    def bound(self, key, dispatch="old-dispatch"):
+    def bound(self, key, dispatch="old-dispatch", settled=True):
+        """A bound admission as the facts reader projects it; settled history has consumed its report and recorded
+        its disposition, while `settled=False` still owes the report."""
         return {"schema": "pod-admission/v4", "admission_id": key, "objective": "old", "owner": "owner",
                 "state": "bound", "role": "implement", "runtime": "runtime", "run_id": "old-run", "task_id": "task",
                 "worktree": None, "placement_binding": None,
+                "report_consumed": settled, "disposition_recorded": settled,
                 "native_binding": {"runId": "old-run", "taskId": "task", "dispatchId": dispatch, "workerId": "worker",
                                    "worktreeId": self.GONE, "terminalHandle": "old-terminal"}}
 
@@ -1429,6 +1432,21 @@ class TerminalHistoryTests(AdmissionQueryCase):
 
     def test_a_retired_unattributed_record_with_settled_admissions_is_history(self):
         self.terminal("retired", unattributed=True)
+        self.moved(self.read(), "record_attribution_unknown")
+
+    # A876: a bound admission still owing its report keeps a closed or continued record's gap; a `retired` record
+    # holds nothing (R112, R206).
+
+    def test_a_closed_record_owing_a_report_keeps_the_gap(self):
+        self.terminal("closed", rows={"a": self.bound("a", settled=False)})
+        self.assertIn("admission_facts_incomplete", self.codes(self.read()))
+
+    def test_a_continued_record_owing_a_report_keeps_the_gap(self):
+        self.terminal("continued", rows={"a": self.bound("a", settled=False)})
+        self.assertIn("admission_facts_incomplete", self.codes(self.read()))
+
+    def test_a_retired_record_owing_a_report_is_history(self):
+        self.terminal("retired", rows={"a": self.bound("a", settled=False)}, unattributed=True)
         self.moved(self.read(), "record_attribution_unknown")
 
     def test_a_bound_dispatch_shown_current_keeps_the_gap(self):

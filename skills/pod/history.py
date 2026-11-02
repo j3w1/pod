@@ -1013,6 +1013,9 @@ def load_admission_facts(path, *, include_admissions=True):
                         or any(field not in value for field in fields)):
             _fail("history_invalid", "Current admission facts are incomplete")
         rows[key] = {field: plain(value[field]) for field in fields if field in value}
+        # Whether a report was consumed and a disposition recorded, never their bodies (governor.report_owed).
+        rows[key]["report_consumed"] = value.get("report") is not None
+        rows[key]["disposition_recorded"] = value.get("disposition") is not None
         recovery = value.get("recovery", {})
         if not isinstance(recovery, dict):
             _fail("admission_placement_invalid", "Current admission placement facts are unavailable")

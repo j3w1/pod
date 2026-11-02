@@ -1485,13 +1485,16 @@ def _claim_identity(raw: dict, rows: dict) -> str:
 
 
 def _claim_digest(raw: dict, rows: dict) -> str:
+    from .governor import report_owed
     checkpoint = raw["checkpoint"]
     phase = _phase(raw)
     return digest({"objective": listing._name(raw), "phase": phase,
                    "worktree": checkpoint.get("worktree") if phase == "open" else None,
                    "runs": checkpoint.get("native_refs"),
-                   "admissions": {key: {field: row.get(field) for field in
-                       ("state", "role", "native_binding", "runtime", "worktree", "request_uuid", "run_id", "task_id", "boundary")}
+                   "admissions": {key: {**{field: row.get(field) for field in
+                       ("state", "role", "native_binding", "runtime", "worktree", "request_uuid", "run_id", "task_id", "boundary")},
+                       # A report consumed between the read and the recheck ends a hold (R185).
+                       "report_owed": report_owed(row)}
                        for key, row in rows.items()}})
 
 
@@ -1517,6 +1520,10 @@ def _terminal_history(gap: dict, project: Path, fleet_facts: dict, unattributed_
         if state in ("closed", "deferred"):
             continue
         binding = row.get("native_binding")
+        if binding and gap["phase"] != "retired":
+            from .governor import report_owed
+            if report_owed(row) is not None:
+                return False  # Its report is still owed: the worker's placement is no settled history.
         if binding:
             # Absent from a complete all-Run inventory, or shown settled: no current Dispatch.
             if fleet_facts.get(binding.get("dispatchId")) in (None, "settled"):
@@ -1693,6 +1700,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     # is attributed to no open record.
     fleet_facts, fleet_paths, open_handles, unattributed = {}, {}, set(), {"actor": False}
     abandoned_dispatches = set()
+    # Bound admissions whose report is still owed, in a record that is not `retired`: each is held by its record
+    # whenever the native side makes no claim for its Dispatch.
+    unfinished = []
     physical, overlap = _physical, _overlap
     host_slot, host_used = None, set()  # R212: this query's own candidates, and those its projection counted exited
 
@@ -1702,6 +1712,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     def workspace(path, places):
         return _workspace(project, path, places)
     from .orca import _DEADLINE
+    from .governor import report_owed
     budget = _DEADLINE.get() or Budget(float(timeout))
 
     def owner_claims():
@@ -1948,6 +1959,20 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         runs.setdefault(binding["runId"], []).append((record, name, key,
                             {"native_binding": binding, "runtime": row.get("runtime"), "boundary": row.get("boundary")}))
                         run_owners.setdefault(binding["runId"], []).append((record, name, row.get("runtime")))
+                        owed = report_owed(row)
+                        if owed is not None and phase != "retired":
+                            # Its placement stays held until its report is consumed, whatever the native row
+                            # shows; a `retired` record holds nothing (R112, R206).
+                            placement = _placement(row)
+                            location = (listing._location(binding.get("worktreeId"))
+                                        or listing._location(row.get("worktree")) or placement.get("path"))
+                            unfinished.append({"objective": name, "record": record,
+                                "kind": "writer" if row["role"] == "implement" else "assignment",
+                                "admission": key, "run": binding["runId"], "dispatch": binding["dispatchId"],
+                                "worktree": location, "branch": placement.get("branch"),
+                                "repo_key": placement.get("repo_key"),
+                                "locations_complete": bool(location) and bool(placement.get("branch")),
+                                "reason": "unconsumed_report", "report": owed, "boundary": row.get("boundary")})
                     elif row["state"] not in ("closed", "deferred"):
                         held = {"objective": name, "record": record,
                             "kind": "writer" if row["role"] == "implement" else "assignment",
@@ -2064,6 +2089,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 and row.get("worktree") == ownership.get("worktree") and row.get("live") is True for row in observations)
             ownership["owner_identity_matches"] = matches
             owners[ownership["record"]] = matches
+        workers = {}
         for requested_run, native in native_groups:
             budget.check()
             if native.get("complete") is not True:
@@ -2253,6 +2279,15 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             or shown["worktree"] != listing._location(binding["worktreeId"])
                             or shown["terminal"] != binding["terminalHandle"]):
                         unknown(record, "native_identity_unverified", objective=name, admission=key)
+        # A bound admission whose report is still owed keeps its placement held by its record once the native side
+        # settles or skips its Dispatch (exited, rule S, R212 or a settled context-only row): consuming the report
+        # reads the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown.
+        natively_claimed = {row["dispatch"] for row in result["claims"] if "native_terminal" in row and row.get("dispatch")}
+        for held in unfinished:
+            dispatch = held["dispatch"]
+            if dispatch in fleet_facts and dispatch not in natively_claimed:
+                claim({**held, "liveness": (workers.get(dispatch) or {}).get("liveness", "exited"),
+                       "native_settlement": fleet_facts[dispatch]})
         from .retirement import _exited
         for terminal in terminals["terminals"]:
             path = terminal.get("worktreePath") or listing._location(terminal.get("worktreeId"))
