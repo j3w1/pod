@@ -49,7 +49,8 @@ does not have. Run only these locally, and only when the change affects them:
 
 Run them under `nice -n 10` with at most 8 workers (for a test run, `--jobs 8` or fewer), and
 inside the host's full-gate lock, which is for these checks only. The clean-home installer trial,
-the incident, PTY and installer lanes and the static gates all run in hosted CI, so they are not
+the incident, PTY and installer lanes, the recorded-trace check over every fixture and the
+static gates all run in hosted CI, so they are not
 repeated locally.
 
 ## Milestone gates
@@ -64,7 +65,7 @@ repeated locally.
 | Catalog check | `PYTHONPATH=skills python -m pod.catalog --check` | Exact supported ids/efforts, source aliases, attributed guidance and provider sources. |
 | Focused routes/refresh/workspace | `PYTHONPATH=skills python -m unittest tests.test_catalog tests.test_config tests.test_pin tests.test_selection tests.test_routes tests.test_route_upgrade tests.test_sources tests.test_observations tests.test_cli tests.test_workspace_state tests.test_tui_render -v` | Deterministic affected-domain checks; also included in the full unit gate. |
 | Source hygiene | `python tools/source_audit.py .` | Tracked-source privacy and removed-mechanism guards; no package/tag/release publication path. |
-| Recorded traces | `python tools/trace_check.py tests/fixtures/traces/*.json` | Deterministic record checks; a mapless trace is `NOT_EVALUABLE`, never kernel proof. |
+| Recorded traces | `python tools/trace_check.py tests/fixtures/traces/*.json`, over every fixture, in the hosted `checks` job | Deterministic record checks; a mapless trace is `NOT_EVALUABLE`, never kernel proof. |
 | PTY/subprocess | `POD_REQUIRE_PTY=1 PYTHONPATH=skills python -m unittest tests.test_tui_pty tests.test_workspace_pty tests.test_sparse_toggle_pty tests.test_catalog_optional_pty -v` | Real terminal behavior and persistence. |
 | Installer/copied bundle | `PYTHONPATH=skills python -m unittest tests.test_installer tests.test_bundle_install -v` | Shell entrypoints, interruption/recovery, parity and an independent placed bundle. |
 | Disposable installer | `POD_INSTALL_SOURCE=file://… sh install.sh` in scrubbed temporary home; `--installed` parity and launcher checks | Dependencies, both skills, receipt, preferences, PATH and update. |

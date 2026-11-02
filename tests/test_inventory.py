@@ -547,6 +547,7 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         for required in ("tools/suite_lanes.py run", "tools/suite_lanes.py check",
                          "unittest discover -s tests/incidents -t .", "pod.skill_validation skills/pod",
                          "pod.catalog --check", "tools/source_audit.py", "--installed",
+                         "tools/trace_check.py tests/fixtures/traces/*.json",
                          "POD_REQUIRE_PTY", "git archive", "POD_INSTALL_SOURCE=\"file://",
                          "raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh",
                          "codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${GITHUB_SHA}",

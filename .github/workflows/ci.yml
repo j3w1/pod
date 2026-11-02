@@ -133,6 +133,10 @@ jobs:
           PYTHONPATH: skills
       - name: Tracked source hygiene audit
         run: python tools/source_audit.py .
+      - name: Every recorded trace fixture
+        run: python tools/trace_check.py tests/fixtures/traces/*.json
+        env:
+          PYTHONPATH: skills
 
       - name: Copied bundle works without the checkout
         run: |
