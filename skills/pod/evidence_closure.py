@@ -1045,7 +1045,9 @@ def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: 
     recorded: dict[int, str] = {}
     from .local_append import is_local, validate_record
     for row in members:
-        local = ((row["raw"].get("checkpoint") or {}).get("delivery") if isinstance(row.get("raw"), dict) else None)
+        # A scanned member's record is read inside its own retry boundary, like every later use of it (R206).
+        local = _consume(row, lambda raw: plain((raw.get("checkpoint") or {}).get("delivery"))
+                         if isinstance(raw, dict) else None)
         if is_local(local):
             try:
                 validate_record(local)
