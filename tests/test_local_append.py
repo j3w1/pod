@@ -106,35 +106,66 @@ class ExactnessTests(LocalAppendCase):
         git(self.project, "checkout", "-q", "main")
         return commit
 
-    def test_a_conflicting_merge_refuses_even_with_ambient_union_attributes(self):
-        # Every ambient attribute layer says union: the global attributes file, the repository's
-        # info/attributes and the tree. Pod's merge ignores them all, so the conflict still refuses.
-        (self.project / "src" / "old.py").write_text("candidate\n")
-        (self.project / ".gitattributes").write_text("* merge=union\n")
-        git(self.project, "add", ".")
-        git(self.project, "commit", "-qm", "fix with attributes")
-        self.candidate = git(self.project, "rev-parse", "HEAD")
-        home = Path(os.environ["HOME"])
-        (home / ".config" / "git").mkdir(parents=True, exist_ok=True)
-        (home / ".config" / "git" / "attributes").write_text("* merge=union\n")
-        info = Path(git(self.project, "rev-parse", "--path-format=absolute", "--git-path", "info"))
-        info.mkdir(parents=True, exist_ok=True)
-        (info / "attributes").write_text("* merge=union\n")
-        self.ready()
+    def conflicting_train(self):
+        """The candidate and the train edit the same line, so a plain text merge conflicts."""
         git(self.project, "checkout", "-q", "-b", "train", self.base)
         (self.project / "src" / "old.py").write_text("train\n")
         git(self.project, "commit", "-qam", "train edit")
         self.previous = git(self.project, "rev-parse", "HEAD")
         git(self.project, "checkout", "-q", "main")
-        # The host claims a union merge it made with its own attributes.
+        # The host claims the union merge its own attributes produced.
         union = git(self.project, "merge-tree", "--write-tree", self.previous, self.candidate)
         self.result = self.commit_tree(union.splitlines()[0], self.previous, self.candidate)
         self.method = "merge"
+
+    def global_union(self):
+        """Git's active default global attributes file: $XDG_CONFIG_HOME/git/attributes in this fixture."""
+        path = Path(os.environ["XDG_CONFIG_HOME"]) / "git" / "attributes"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("* merge=union\n")
+
+    def object_files(self):
         objects = Path(git(self.project, "rev-parse", "--path-format=absolute", "--git-path", "objects"))
-        stored = sorted(str(path.relative_to(objects)) for path in objects.rglob("*") if path.is_file())
+        return sorted(str(path.relative_to(objects)) for path in objects.rglob("*") if path.is_file())
+
+    def test_the_global_attributes_layer_alone_never_cleans_a_conflict(self):
+        from pod import local_append
+        self.fix("src/old.py", "candidate\n")
+        self.ready()
+        self.global_union()
+        self.conflicting_train()
+        # Control: this layer alone, with no repository or in-tree attributes, makes Git's own merge clean.
+        plain = subprocess.run(["git", "-C", str(self.project), "merge-tree", "--write-tree", self.previous,
+                                self.candidate], capture_output=True, text=True)
+        self.assertEqual(plain.returncode, 0, plain.stdout)
+        self.assertEqual(merge_tree(self.project, self.previous, self.candidate), ("conflict", None))
+        # Restoring the ambient HOME and XDG_CONFIG_HOME (every other setting kept) lets the layer in again, so this
+        # regression fails if the isolation is lost.
+        isolated = local_append._isolated_environment
+        ambient = lambda home: {**isolated(home), "HOME": os.environ["HOME"],
+                                "XDG_CONFIG_HOME": os.environ["XDG_CONFIG_HOME"]}
+        with patch("pod.local_append._isolated_environment", side_effect=ambient):
+            self.assertEqual(merge_tree(self.project, self.previous, self.candidate)[0], "clean")
+        stored = self.object_files()
         self.assertEqual(self.refuse("local_append_not_exact").detail["referent"]["reason"], "merge_conflicts")
-        self.assertEqual(sorted(str(path.relative_to(objects)) for path in objects.rglob("*") if path.is_file()),
-                         stored)
+        self.assertEqual(self.object_files(), stored)
+
+    def test_a_conflicting_merge_refuses_with_every_ambient_union_layer(self):
+        # The active global file, the repository's info/attributes and the tree all say union.
+        (self.project / "src" / "old.py").write_text("candidate\n")
+        (self.project / ".gitattributes").write_text("* merge=union\n")
+        git(self.project, "add", ".")
+        git(self.project, "commit", "-qm", "fix with attributes")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        self.global_union()
+        info = Path(git(self.project, "rev-parse", "--path-format=absolute", "--git-path", "info"))
+        info.mkdir(parents=True, exist_ok=True)
+        (info / "attributes").write_text("* merge=union\n")
+        self.ready()
+        self.conflicting_train()
+        stored = self.object_files()
+        self.assertEqual(self.refuse("local_append_not_exact").detail["referent"]["reason"], "merge_conflicts")
+        self.assertEqual(self.object_files(), stored)
 
 
 class StateTests(LocalAppendCase):
@@ -375,6 +406,39 @@ class DecisionTests(LocalAppendCase):
                                           action=deepcopy(merge)).detail["reason"], "kind")
         self.assertEqual(self.saved(), before)
 
+    def test_a_closing_checkpoint_keeps_owing_the_merge_record(self):
+        from pod.governor import finalization, _read_journal
+        self.ready()
+        self.record()
+        write_merge_rows(self, merge_row(self, "PASS"))
+        view = lambda: finalization(read(self.project, "objective"),
+                                    _read_journal(_record_path(self.project, "objective")))["remaining"]
+        self.assertEqual(view(), ["delivery_record", "closure"])
+        before = self.durable()
+        error = self.failure("obligation_unaccounted", self.write, self.stored(), close=True)
+        self.assertEqual(error.detail["detail"], "closure_unfinished")
+        self.assertIn("delivery_record", str(error))
+        self.assertEqual((self.durable(), view()), (before, ["delivery_record", "closure"]))
+
+    def test_a_closing_report_keeps_owing_the_merge_record_and_its_report_unconsumed(self):
+        self.ready()
+        self.record()
+        self.write([*self.stored(), self.sub("S", "active", executor="coordinator")])
+        frozen = self.packet(["S"], role="investigate", resolves="verify delivery", stop_condition="report consumed")
+        assignment = self.start("closing-report", frozen)["admission"]
+        self.settle(assignment)
+        write_merge_rows(self, merge_row(self, "PASS"))
+        rows = self.stored()
+        rows[-1].pop("executor")
+        rows[-1].update(state="satisfied", evidence=[self.proof("S")])
+        before = self.durable()
+        error = self.failure("obligation_unaccounted", self.report, assignment, frozen,
+                             map={"obligations": rows, "close": True})
+        self.assertEqual(error.detail["detail"], "closure_unfinished")
+        self.assertIn("delivery_record", str(error))
+        self.assertEqual(self.durable(), before)
+        self.assertIsNone(read(self.project, "objective")["admissions"][assignment["admission_id"]].get("report"))
+
     def test_finalization_still_owes_the_merge_record_for_a_merge_pass(self):
         from pod.governor import finalization
         self.ready()
@@ -463,6 +527,23 @@ class RuntimeChangeTests(LocalAppendCase):
         self.answer(self.verdict())
         self.failure("local_append_unproved", self.write, delivery=self.request())
         self.assertEqual(self.saved(), before)
+
+    def test_a_reverse_kind_request_after_a_local_delivery_persists_no_rebind(self):
+        self.ready()
+        self.record()
+        self.change_runtime()
+        before = self.durable()
+        for request, reason in (({"record": "merge-1"}, "kind"), (self.request("host-op-0002"), "operation")):
+            with self.subTest(reason=reason):
+                error = self.failure("delivery_recorded", self.write, delivery=request)
+                self.assertEqual(error.detail["reason"], reason)
+                self.assertEqual(self.durable(), before)  # every durable authority file, history included
+        self.assertEqual({row["runtime"] for row in read(self.project, "objective")["checkpoint"]["native_refs"]},
+                         {"runtime"})
+        # A successful restatement of the stored record carries the rebind in its own write.
+        self.write(delivery=deepcopy(self.delivery()))
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["native_refs"],
+                         [{"runId": "run", "runtime": "runtime-2"}])
 
     def test_a_successful_recording_persists_the_rebind_with_its_write(self):
         self.ready()

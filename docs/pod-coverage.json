@@ -10791,7 +10791,8 @@
         "tests.test_local_append.RecordTests.test_clean_merge_records_with_the_candidate_independent_of_the_result",
         "tests.test_local_append.ExactnessTests.test_wrong_parents_squash_and_rebase_refuse",
         "tests.test_local_append.ExactnessTests.test_another_tree_a_conflict_and_a_differing_method_refuse",
-        "tests.test_local_append.ExactnessTests.test_a_conflicting_merge_refuses_even_with_ambient_union_attributes"
+        "tests.test_local_append.ExactnessTests.test_the_global_attributes_layer_alone_never_cleans_a_conflict",
+        "tests.test_local_append.ExactnessTests.test_a_conflicting_merge_refuses_with_every_ambient_union_layer"
       ],
       "status": "NOT_RUN"
     },
@@ -10860,7 +10861,9 @@
         "tests.test_local_append.DecisionTests.test_a_merge_that_landed_or_may_have_landed_blocks_the_local_kind",
         "tests.test_local_append.DecisionTests.test_a_failed_or_canceled_merge_does_not_block",
         "tests.test_local_append.DecisionTests.test_a_governor_merge_after_a_local_delivery_refuses_before_authority",
-        "tests.test_local_append.DecisionTests.test_finalization_still_owes_the_merge_record_for_a_merge_pass"
+        "tests.test_local_append.DecisionTests.test_finalization_still_owes_the_merge_record_for_a_merge_pass",
+        "tests.test_local_append.DecisionTests.test_a_closing_checkpoint_keeps_owing_the_merge_record",
+        "tests.test_local_append.DecisionTests.test_a_closing_report_keeps_owing_the_merge_record_and_its_report_unconsumed"
       ],
       "status": "NOT_RUN"
     },
@@ -10948,7 +10951,8 @@
       "offline_test": [
         "tests.test_local_append.RuntimeChangeTests.test_every_refusal_leaves_the_record_without_the_rebind",
         "tests.test_local_append.RuntimeChangeTests.test_an_unproved_refusal_also_leaves_the_rebind_unwritten",
-        "tests.test_local_append.RuntimeChangeTests.test_a_successful_recording_persists_the_rebind_with_its_write"
+        "tests.test_local_append.RuntimeChangeTests.test_a_successful_recording_persists_the_rebind_with_its_write",
+        "tests.test_local_append.RuntimeChangeTests.test_a_reverse_kind_request_after_a_local_delivery_persists_no_rebind"
       ],
       "status": "NOT_RUN"
     },
@@ -10985,6 +10989,17 @@
         "live_native"
       ],
       "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A842",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append_closure.EvidenceClosureTests.test_a_mixed_chain_needs_the_successors_merged_pull_request_and_keeps_both_facts"
+      ],
       "status": "NOT_RUN"
     }
   ],

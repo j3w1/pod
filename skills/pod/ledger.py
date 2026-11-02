@@ -2245,8 +2245,11 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             kept = _closure_preservation(project, objective, state, ctx)
             # A delivery recorded in the closing write itself does not count: closure is the last record, and
             # its report is derived before that write adds the delivery.
+            from .local_append import remote as remote_delivery
+            # Only a verified R93 record settles a merge PASS's delivery record; a local append never does (R209).
             ctx["closure_unrecorded"] = _closure_unrecorded(
-                project, objective, state, delivered=(prior_map or {}).get("delivery") is not None, preserved=kept)
+                project, objective, state, delivered=remote_delivery((prior_map or {}).get("delivery")) is not None,
+                preserved=kept)
             if local_operation is not None and (prior_map or {}).get("delivery") != verified_delivery:
                 # R117/R209: a local append has no Governor row to hold the order, so a closing write that would
                 # first record it names the delivery record; the closure report would otherwise omit it.
@@ -2433,8 +2436,13 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         closing = isinstance(proposed, dict) and proposed.get("close") is True
         reopening = isinstance(proposed, dict) and proposed.get("reopen") is True
         delivery_input = proposed.get("delivery") if isinstance(proposed, dict) else None
-        # R209: recording a local append may refuse after authority joins, so it defers a rebind as closure does.
-        local_recording = isinstance(delivery_input, dict) and bool({"local_append", "kind"} & set(delivery_input))
+        from .local_append import is_local
+        # R209: a delivery request that names the local kind, or any delivery request once a local delivery is stored
+        # (an R93 request then refuses `delivery_recorded`), may refuse after authority joins, so it defers a rebind
+        # as closure does. Objectives without a local delivery keep today's behaviour for R93 requests.
+        local_recording = isinstance(proposed, dict) and "delivery" in proposed and (
+            isinstance(delivery_input, dict) and bool({"local_append", "kind"} & set(delivery_input))
+            or is_local(previous.get("delivery")))
         # A closing or reopening write carries its rebind only in its own successful write.
         authority = require_authority(project, objective, owner=owner, state=state,
                                       expected_runtime=native["runtime"],
@@ -3313,8 +3321,10 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             if value.get("close") is True and not map_state.get("closure"):
                 from .succession import refuse_incomplete
                 refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's new closure (R118).
-                ctx["closure_unrecorded"] = _closure_unrecorded(project, objective, state,
-                                                                delivered=map_state.get("delivery") is not None)
+                from .local_append import remote as remote_delivery
+                # Only a verified R93 record settles a merge PASS's delivery record; a local append never does (R209).
+                ctx["closure_unrecorded"] = _closure_unrecorded(
+                    project, objective, state, delivered=remote_delivery(map_state.get("delivery")) is not None)
             new_map = accept_write(map_state, value, ctx, triaged=triaged)
         except PodError as exc:
             _map_refusal_context(exc, state)

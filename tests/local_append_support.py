@@ -174,6 +174,12 @@ class LocalAppendMixin:
     def delivery(self):
         return read(self.project, "objective")["checkpoint"].get("delivery")
 
+    def durable(self):
+        """Every durable authority file under the whole Pod state root, with reachable immutable history."""
+        from tests.common import authority_files
+        root = self.root / "state"
+        return {str(path.relative_to(root)): raw for path, raw in authority_files(root).items()}
+
     def journal_bytes(self):
         path = _record_path(self.project, "objective")
         return Path(path).read_bytes() if Path(path).exists() else None

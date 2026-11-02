@@ -21,7 +21,7 @@ from pod.status import status
 from tests import test_delivery as r93
 from tests.kernel_support import KernelCase, git
 from tests.local_append_support import OPERATION, LocalAppendCase, LocalAppendMixin, recorded_source_packet
-from tests.test_evidence_closure import TICKED, ClosureCase
+from tests.test_evidence_closure import MERGED, TICKED, ClosureCase
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 RELEASED = "7bcde17c82ed28e5675b1705d185137f01cf7ea0"  # Pod 0.21.37, the last release before R209
@@ -262,6 +262,29 @@ class EvidenceClosureTests(LocalEvidenceCase):
         self.assertEqual(row["outcome"], "not_proved")
         self.assertIn("pr_not_merged", [condition["code"] for condition in row["conditions"]])
         self.assertEqual(self.files(), before)
+
+    def test_a_mixed_chain_needs_the_successors_merged_pull_request_and_keeps_both_facts(self):
+        """The predecessor delivered by local append; its successor, a distinct chain member, recorded a PR."""
+        self.delivered()
+        tail = self.claimed_chain(1, tail_pr=9)
+        self.remote.pulls[9] = {"state": "OPEN"}
+        reads, before = len(self.requests()), self.everything()
+        verdict = self.swept(self.sweep()[1], tail)
+        self.assertEqual((verdict["outcome"], [row["code"] for row in verdict["conditions"]]),
+                         ("not_proved", ["pr_not_merged"]), verdict)
+        self.assertEqual(self.everything(), before)
+        self.remote.pulls[9] = dict(MERGED)
+        result = self.sweep()[1]
+        self.assertEqual((self.swept(result, tail)["outcome"], self.swept(result)["outcome"]), ("closed", "closed"))
+        local = [("objective", OPERATION, self.candidate)]
+        for name, relation in ((tail, "tail"), ("objective", "predecessor")):
+            stored = self.closure(name)
+            self.assertEqual((stored["relation"], [row["pr"] for row in stored["delivery"]],
+                              [(row["objective"], row["operation"], row["result"]) for row in stored["local_delivery"]]),
+                             (relation, [9], local), name)
+        self.assertEqual(self.closure()["tail"]["objective"], tail)
+        self.assertEqual([row["objective"] for row in self.closure(tail)["chain"]], [tail, "objective"])
+        self.assertEqual(len(self.requests()), reads)  # no verifier read for the recorded local delivery
 
     def test_historical_retirement_detection_names_the_local_operation(self):
         self.delivered()
