@@ -11030,7 +11030,9 @@
         "tests.test_scan_reread.RereadTests.test_storage_under_reclamation_is_read_again",
         "tests.test_scan_reread.LateDescendantTests.test_the_list_rereads_a_late_page_its_schema_check_caught",
         "tests.test_scan_reread.LateDescendantTests.test_a_recovery_member_read_after_the_scan_is_read_again",
-        "tests.test_scan_reread.JournalTests.test_a_journal_rewritten_during_the_read_is_read_again"
+        "tests.test_scan_reread.JournalTests.test_a_journal_rewritten_during_the_read_is_read_again",
+        "tests.test_scan_reread.LateDescendantTests.test_a_peer_rebuilt_onto_another_source_is_judged_again",
+        "tests.test_scan_reread.LateDescendantTests.test_a_peer_rebuilt_onto_another_run_is_judged_again"
       ],
       "status": "NOT_RUN"
     },

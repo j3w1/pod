@@ -393,6 +393,22 @@ def _unread_fact(proof: "_Proof", exc: PodError) -> None:
         proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
 
 
+def _shares(other: dict | None, issue: dict, shared: set) -> bool:
+    """R146's membership predicate: the peer's source issue is this one and it shares one of its Runs."""
+    return (other is not None and other["issue"] is not None
+            and other["issue"]["locator"].casefold() == issue["locator"].casefold() and bool(set(other["runs"]) & shared))
+
+
+def _judged(raw: dict) -> tuple[dict | None, str, dict | None]:
+    """A peer's membership facts and its classification, both from the same revision; None facts when they are
+    unreadable, which never admits it."""
+    try:
+        facts = {"issue": _record_issue(raw), "runs": _record_runs(raw)}
+    except PodError:
+        facts = None
+    return (facts, *_classified(raw))
+
+
 def _classified(raw: dict) -> tuple[str, dict | None]:
     """A recovery peer's record class and, for a supported one, its documented fields (None when unreadable)."""
     peer = _record_class(raw)
@@ -951,18 +967,20 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
                         proof.add("unverified", RECORD_CHANGED, CHANGING_RECORD)
                         invalid = True
             other = read[row["objective"]]
-            if other is None:
-                continue
-            if (other["issue"] is not None and other["issue"]["locator"].casefold() == issue["locator"].casefold()
-                    and set(other["runs"]) & shared):
+            if _shares(other, issue, shared):
                 try:
-                    peer, documented = _consume(row, _classified)
+                    # Eligibility and classification are read from one revision: a peer rebuilt by the retry is
+                    # judged again on its new source and Runs before it is admitted (R206).
+                    other, peer, documented = _consume(row, _judged)
                 except PodError as exc:
                     if exc.code != RECORD_CHANGED:
                         raise
                     proof.add("unverified", RECORD_CHANGED, CHANGING_RECORD)
                     invalid = True
                     continue
+                read[row["objective"]] = other
+                if not _shares(other, issue, shared):
+                    continue  # At its current revision it no longer binds this chain's source and Runs.
                 detail = None
                 if peer == "unknown":
                     proof.add("unverified", "schema_unknown", f"Recovery objective {row['objective']}, which shares "

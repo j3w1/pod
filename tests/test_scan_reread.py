@@ -241,6 +241,7 @@ class LateCase(ScanCase):
     def setUp(self):
         super().setUp()
         self.late = self.obligations_page()
+        self.also = lambda state: None  # What else the late rewrite changes in the same publication.
 
     def peer_rows(self):
         return [self.sub(f"S{index}", check=f"row-{index}" * 80) for index in range(20)]
@@ -251,7 +252,10 @@ class LateCase(ScanCase):
 
     def rewrite_obligations(self):
         self.generation += 1
-        self.publish(lambda state: state["checkpoint"]["obligations"][-1].update(check=f"changed-{self.generation}"))
+        def mutate(state):
+            state["checkpoint"]["obligations"][-1].update(check=f"changed-{self.generation}")
+            self.also(state)
+        self.publish(mutate)
         self.collect()
         self.late = self.obligations_page()
 
@@ -303,6 +307,25 @@ class LateDescendantTests(LateCase):
         self.assertEqual(rewrites, 1)  # Fired only when the members read classified the scanned peer.
         self.assertEqual(sorted(row["objective"] for row in members), ["healthy", "peer"])
         self.assertEqual(verdict["conditions"], [])
+
+    def moved(self, move):
+        """The membership read sees issue 82 and the shared Run; the rebuild, met during classification, has
+        moved: the peer is judged again from its rebuilt record and left out of the chain."""
+        self.also = move
+        members, verdict, rewrites = self.recovery(1)
+        self.assertEqual(rewrites, 1)
+        self.assertEqual([row["objective"] for row in members], ["healthy"])
+        self.assertEqual(verdict["conditions"], [])
+        raw = ledger.read(self.project, "healthy")
+        chain = evidence_closure._chain_issues("healthy", evidence_closure._documented(raw, current=True), members)
+        self.assertEqual([issue["number"] for issue, _ in chain], [82])
+
+    def test_a_peer_rebuilt_onto_another_source_is_judged_again(self):
+        self.moved(lambda state: state["checkpoint"].update(objective_source={
+            **SOURCE, "number": 83, "locator": "https://github.com/acme/example/issues/83"}))
+
+    def test_a_peer_rebuilt_onto_another_run_is_judged_again(self):
+        self.moved(lambda state: state["checkpoint"]["native_refs"][0].update(runId="run-elsewhere"))
 
     def test_a_recovery_member_that_keeps_changing_holds_with_the_transient_cause(self):
         members, verdict, rewrites = self.recovery(12)
