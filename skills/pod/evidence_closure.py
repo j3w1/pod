@@ -21,6 +21,7 @@ import secrets
 import stat
 
 from .errors import PodError
+from .history_tree import plain
 
 SCHEMA = "pod-evidence-closure/v1"
 FILE = "closure-evidence.json"
@@ -292,6 +293,8 @@ def _journal_bytes(root: Path) -> bytes | None:
 ROOT_UNREADABLE = "state_root_unreadable"
 UNATTRIBUTED = "unattributed"
 RECORD_CHANGED = "record_changed_during_read"  # history.RECORD_CHANGED: a record being written, never damaged.
+CHANGING_RECORD = ("A Pod record the proof reads changed while it was read; retry, since the record is being written "
+                   "and needs no repair.")
 CHANGING_CLAIM = ("A Pod record that names it, and so could name it as a claimed successor, changed while it was read; "
                   "retry, since the record is being written and needs no repair.")
 
@@ -341,7 +344,8 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
                             unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
                 continue
             # A record that keeps changing while it is read is named with its own transient code (R206).
-            raw, name, member = scan_read(Path(entry.path) / "context.json", lambda entry=entry: read(entry))
+            (raw, name, member), revision = scan_read(Path(entry.path) / "context.json",
+                                                      lambda entry=entry: read(entry), observed=True)
         except PodError as exc:
             from .orca import DEADLINE_SPENT
             if exc.code == DEADLINE_SPENT:
@@ -355,8 +359,54 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
             unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
             continue
         if member:
-            found.append({"objective": name, "root": Path(entry.path), "raw": raw})
+            # The revision this read saw: every later use of the still-lazy record is checked against it (R206).
+            found.append({"objective": name, "root": Path(entry.path), "raw": raw, "revision": revision})
     return found, unreadable
+
+
+def _consume(row: dict, use):
+    """One later use of a record `_scan` returned, `use(raw)`, inside that record's bounded retry (R206).
+
+    The scan returns records still lazy, so a consumer's read can meet a page a writer reclaimed after the scan. The
+    use is classified against the revision the scan saw: at a stable revision its outcome stands as before; when the
+    record changed, it is read again and the use reruns on the new revision, at most twice, and a record still
+    changing raises `record_changed_during_read`. A row the scan did not produce is used as it is."""
+    if "revision" not in row:
+        return use(row["raw"])
+    from .history import scan_read
+    attempts = []
+
+    def read():
+        if attempts:
+            row["raw"], _ = _read_record(row["root"])  # Rebuilt at its current revision.
+        attempts.append(True)
+        return use(row["raw"])
+    result, row["revision"] = scan_read(row["root"] / "context.json", read, revision=row["revision"], observed=True)
+    return result
+
+
+def _unread_fact(proof: "_Proof", exc: PodError) -> None:
+    """A fact the proof could not read; a record still being written reads as that transient cause (R206)."""
+    if exc.code == RECORD_CHANGED:
+        proof.add("unverified", RECORD_CHANGED, CHANGING_RECORD)
+    else:
+        proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
+
+
+def _classified(raw: dict) -> tuple[str, dict | None]:
+    """A recovery peer's record class and, for a supported one, its documented fields (None when unreadable)."""
+    peer = _record_class(raw)
+    if peer not in SUPPORTED:
+        return peer, None
+    try:
+        return peer, _documented(raw, current=peer == "current")
+    except PodError:
+        return peer, None
+
+
+def _obligations(member: dict) -> list:
+    """A member's recorded obligations, read inside its own retry boundary when the scan produced it."""
+    return _consume(member, lambda raw: plain(((raw or {}).get("checkpoint") or {}).get("obligations", [])))
 
 
 # --------------------------------------------------------------------------- the proof
@@ -410,13 +460,16 @@ def _settled_record(project: Path, row: dict, *, frozen: frozenset[str] = frozen
     from .succession import chain_state
     if present(row["root"]):
         return True
-    if _record_class(row["raw"]) not in SUPPORTED:
-        return False
-    phase = _phase(project, row["root"], row["raw"])
-    if phase in ("closed", "retired"):
-        return True
-    return phase == "continued" and (row["objective"] in frozen
-                                     or chain_state(project, row["raw"])["state"] == "successor_closed")
+
+    def settled(raw):
+        if _record_class(raw) not in SUPPORTED:
+            return False
+        phase = _phase(project, row["root"], raw)
+        if phase in ("closed", "retired"):
+            return True
+        return phase == "continued" and (row["objective"] in frozen
+                                         or chain_state(project, raw)["state"] == "successor_closed")
+    return _consume(row, settled)
 
 
 def prove(project: Path, objective: str, *, port=None, remote=None, now: datetime | None = None,
@@ -488,7 +541,7 @@ def prove(project: Path, objective: str, *, port=None, remote=None, now: datetim
                 now=now, readback=readback)
     except PodError as exc:
         # A fact the proof needs could not be read: nothing is closed on it (C2).
-        proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
+        _unread_fact(proof, exc)
     return proof.result()
 
 
@@ -632,7 +685,8 @@ def _runs(project: Path, doc: dict, owner: str | None, proof: _Proof, records, *
             # objectives that terminal records on the Run must still be finished, even if its handle did not change.
             claimed_owner = holder == owner and whose is not None
             found, unreadable = records()
-            mine = [row for row in found if row["raw"].get("owner") == holder and run in _record_runs(row["raw"])
+            mine = [row for row in found
+                    if _consume(row, lambda raw: raw.get("owner") == holder and run in _record_runs(raw))
                     and not (claimed_owner and row["objective"] == whose)]
             # An unreadable record holds this Run only when its bytes could name it (R206).
             if ((not mine and not claimed_owner) or _could_name(project, unreadable, run)
@@ -732,16 +786,17 @@ def _source(members: list[dict] | None, doc: dict, state: dict | None, proof: _P
                       "withdrawn, at least one satisfied, and a verified delivery record of its own or its "
                       "completed claimed chain; each claim-only successor needs its own criteria satisfied.")
         return
-    for current in [state, *[member.get("raw") for member in members or [] if member.get("kind") == "current"]]:
+    for obligations in [_obligations({"raw": state}), *[_obligations(member) for member in members or []
+                                                      if member.get("kind") == "current"]]:
         if any(ob.get("kind") == "criterion" and "renews" in ob and ob.get("state") not in ("satisfied", "withdrawn", "renewed")
-               for ob in ((current or {}).get("checkpoint") or {}).get("obligations", [])):
+               for ob in obligations):
             proof.add("not_proved", "renewal_pending", "Renewed criteria need fresh proof before evidence closure; existing issue ticks do not prove the replacement.")
     proof.facts["sources"] = []
     for issue, bound_by in issues:
         if issue.get("role") == "SEAL":
             from .lineage import Lineage
-            bound = next((row["raw"] for row in members or [] if row["objective"] == bound_by), state)
-            lineage = Lineage(((bound or {}).get("checkpoint") or {}).get("obligations", []))
+            bound = next((row for row in members or [] if row["objective"] == bound_by), {"raw": state})
+            lineage = Lineage(_obligations(bound))
             criteria = [row for row in lineage.rows.values() if row.get("kind") == "criterion"
                         and lineage.effective(row["id"]) == row["id"]]
             if not criteria or any(row.get("state") not in ("satisfied", "withdrawn") for row in criteria):
@@ -887,16 +942,27 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
                 continue
             if row["objective"] not in read:
                 try:
-                    read[row["objective"]] = {"issue": _record_issue(row["raw"]),
-                                              "runs": _record_runs(row["raw"])}
-                except PodError:
+                    read[row["objective"]] = _consume(row, lambda raw: {"issue": _record_issue(raw),
+                                                                         "runs": _record_runs(raw)})
+                except PodError as exc:
                     read[row["objective"]] = None
+                    if exc.code == RECORD_CHANGED:
+                        # It may share a Run and source; while it is being written it holds proof, with a retry.
+                        proof.add("unverified", RECORD_CHANGED, CHANGING_RECORD)
+                        invalid = True
             other = read[row["objective"]]
             if other is None:
                 continue
             if (other["issue"] is not None and other["issue"]["locator"].casefold() == issue["locator"].casefold()
                     and set(other["runs"]) & shared):
-                peer = _record_class(row["raw"])
+                try:
+                    peer, documented = _consume(row, _classified)
+                except PodError as exc:
+                    if exc.code != RECORD_CHANGED:
+                        raise
+                    proof.add("unverified", RECORD_CHANGED, CHANGING_RECORD)
+                    invalid = True
+                    continue
                 detail = None
                 if peer == "unknown":
                     proof.add("unverified", "schema_unknown", f"Recovery objective {row['objective']}, which shares "
@@ -904,11 +970,10 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
                     invalid = True
                 elif peer not in SUPPORTED:
                     detail = "does not validate under its schema."
+                elif documented is None:
+                    detail = "has an unreadable documented field."
                 else:
-                    try:
-                        other = _documented(row["raw"], current=peer == "current")
-                    except PodError:
-                        detail = "has an unreadable documented field."
+                    other = documented
                 if detail is not None:
                     proof.add("unverified", "record_unreadable", f"Recovery objective {row['objective']}, which "
                               f"shares a Run and source with {base['objective']}, {detail}")
@@ -917,7 +982,8 @@ def _members(project: Path, objective: str, raw: dict, kind: str, doc: dict, pro
                 pending.append(members[row["objective"]])
     rows = list(members.values())
     proof.facts["chain"] = [{"objective": row["objective"], "relation": row["relation"],
-                             "phase": _phase(project, row["root"], row["raw"])} for row in rows][:MAX_MEMBERS]
+                             "phase": _consume(row, lambda raw: _phase(project, row["root"], raw))}
+                            for row in rows][:MAX_MEMBERS]
     if len(rows) > MAX_MEMBERS:
         proof.add("not_proved", "scope_too_large", f"The delivery chain has more than {MAX_MEMBERS} objectives.")
         return None
@@ -974,8 +1040,8 @@ def _delivery(project: Path, members: list[dict] | None, proof: _Proof, remote: 
                      "row": dict(local["row"]), "candidate": local["candidate"], "result": local["result"],
                      "appended_at": local["appended_at"]})
     for row in members:
-        numbers = _journal_prs(row["root"]) or []
-        delivery = ((row["raw"].get("checkpoint") or {}).get("delivery") or {})
+        numbers, delivery = _consume(row, lambda raw: (_journal_prs(row["root"]) or [],
+                                                       plain((raw.get("checkpoint") or {}).get("delivery") or {})))
         provider = delivery.get("provider") if isinstance(delivery, dict) else None
         if isinstance(provider, dict) and type(provider.get("pr")) is int and provider["pr"] > 0:
             numbers.append(provider["pr"])
@@ -1029,7 +1095,7 @@ def _linked_delivery(project: Path, members: list[dict], proof: _Proof, remote: 
         if issue is None or issue["locator"].casefold() in seen_sources:
             continue
         seen_sources.add(issue["locator"].casefold())
-        governance = (member["raw"].get("checkpoint") or {}).get("governance") or {}
+        governance = _consume(member, lambda raw: plain((raw.get("checkpoint") or {}).get("governance") or {}))
         target = governance.get("base_ref")
         prefix = "refs/remotes/origin/"
         if (repository is None or repository.casefold() != issue["repository"].casefold()
@@ -1178,7 +1244,7 @@ def closure_preservation(project: Path, objective: str, state: dict, journal: di
         _source(members, doc, state, proof, remote)
         _delivery(project, members, proof, remote)
     except PodError as exc:
-        proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
+        _unread_fact(proof, exc)
     verdict = proof.result()
     out["proof"] = {"status": verdict["status"],
                     "conditions": [{"code": row["code"], "message": row["message"]} for row in verdict["conditions"]]}
@@ -1428,7 +1494,7 @@ def _replay(project: Path, root: Path, chain: list[dict], *, caller: str, port=N
     try:
         work = {row["objective"]: _member_work(project, row, proof, records, port=port) for row in owed}
     except PodError as exc:
-        proof.add("unverified", "record_unreadable", f"A fact the proof needs could not be read ({exc.code}).")
+        _unread_fact(proof, exc)
     verdict = proof.result()
     if verdict["status"] != "proved":
         return {**out, "status": verdict["status"], "conditions": verdict["conditions"]}
@@ -2052,7 +2118,8 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
     rows = []
     for row in found:
         try:
-            rows.append({"objective": row["objective"], "phase": _phase(target, row["root"], row["raw"])})
+            rows.append({"objective": row["objective"],
+                         "phase": _consume(row, lambda raw: _phase(target, row["root"], raw))})
         except PodError as exc:
             from .orca import DEADLINE_SPENT
             if exc.code == DEADLINE_SPENT:

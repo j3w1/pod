@@ -293,7 +293,7 @@ class _ReadPin:
             fcntl.flock(self.fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             self.scope.__exit__(None, None, None); self.fd = None
-            raise PodError("history_busy", "Immutable storage is being reclaimed; retry a fresh read") from exc
+            raise _noted(PodError("history_busy", "Immutable storage is being reclaimed; retry a fresh read")) from exc
 
     def __enter__(self): return self
     def __exit__(self, *exc): self.close()
@@ -553,10 +553,10 @@ class ChunkStore:
         try:
             fd = os.open(self._name(address), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
         except FileNotFoundError as exc:
-            raise PodError("history_missing", "Referenced immutable history chunk is missing") from exc
+            raise _noted(PodError("history_missing", "Referenced immutable history chunk is missing")) from exc
         except OSError as exc:
             code = "history_unsafe" if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR) else "history_unavailable"
-            raise PodError(code, "History chunk cannot be safely opened") from exc
+            raise _noted(PodError(code, "History chunk cannot be safely opened")) from exc
         with os.fdopen(fd, "rb") as file:
             if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
                 _fail("history_unsafe", "History chunk must be a regular file")
@@ -566,8 +566,13 @@ class ChunkStore:
         return data
 
     def load(self, address):
-        with self.directory() as directory:
-            return self._load(directory, address)
+        try:
+            with self.directory() as directory:
+                return self._load(directory, address)
+        except PodError as exc:
+            if exc.code.startswith("history_"):
+                _noted(exc)  # A missing or unavailable store, as a chunk read meets it.
+            raise
 
     def put(self, chunks):
         if not chunks:
@@ -606,8 +611,22 @@ class ChunkStore:
         return written
 
 
-# The revisions a scan's read observed, by record path: set only inside `scan_read`, never evidence.
+class _Observation:
+    """What one attempt of a scan's read saw: the bytes of each bounded record file it read, by path, and every
+    history-storage fault it met, including one a caller caught and turned into a fallback. Never evidence."""
+    def __init__(self):
+        self.revisions, self.faults = {}, []
+
+
 _OBSERVED = contextvars.ContextVar("pod_scan_observed", default=None)
+
+
+def _noted(exc):
+    """Note a history-storage fault for the scan read in progress, if any, and return it to raise."""
+    observed = _OBSERVED.get()
+    if observed is not None:
+        observed.faults.append(exc.code)
+    return exc
 
 
 def _context_bytes(path, limit):
@@ -619,9 +638,9 @@ def _context_bytes(path, limit):
     try:
         data = _read_context_bytes(path, limit)
     except PodError as exc:
-        observed.setdefault(key, "refused:" + exc.code)
+        observed.revisions.setdefault(key, "refused:" + exc.code)
         raise
-    observed.setdefault(key, _sha(data))
+    observed.revisions.setdefault(key, _sha(data))
     return data
 
 
@@ -861,36 +880,46 @@ def record_revision(path):
         _OBSERVED.reset(token)
 
 
-def scan_read(path, read, *, faults=SCAN_FAULTS):
+def scan_read(path, read, *, faults=SCAN_FAULTS, revision=None, observed=False):
     """One record's whole scan read, `read()`, classified by revision (R206).
 
-    A healthy read costs nothing extra. After a record-local fault the record's revision is read again and compared
-    with the revision the failing read itself observed (its own bounded context.json read, or else the revision
-    taken after the previous failure). A fault at a stable revision, the same bytes before and after the failing read,
-    is raised unchanged, so every caller keeps its classification of a record that really is unreadable, decoded once
-    as before. A fault while the revision changed, or while another writer was reclaiming its storage, reads the
-    record again, at most SCAN_RETRIES times; a record still changing after that raises RECORD_CHANGED, a transient
-    cause that is never "unreadable". Nothing is locked or written, and outer deadline exhaustion propagates at once."""
+    The record's revision is the bytes of every bounded file of its directory the read itself read (its context.json
+    and Governor journal). A read that meets no fault costs nothing extra. After a record-local fault, raised or met
+    and caught inside `read` (a storage fault a classification turned into a fallback), those files are read again
+    and compared with what the failing read read, or, when it read none, with `revision` (what the caller's earlier
+    read of the record read) or the previous attempt's. At a stable revision the outcome stands: a raised fault is
+    raised unchanged, decoded once as before, and a caught one keeps the caller's fallback, so every caller keeps its
+    classification of a record that really is unreadable. While the revision changed, or another writer was
+    reclaiming its storage, the record is read again, at most SCAN_RETRIES times; a record still changing after that
+    raises RECORD_CHANGED, a transient cause that is never "unreadable". Nothing is locked or written, and outer
+    deadline exhaustion propagates at once. With `observed`, returns `(result, revision)` for a later consumer."""
     from .orca import DEADLINE_SPENT
     path = Path(path)
-    key = os.path.abspath(path)
-    causes, previous = [], None
+    directory = os.path.abspath(path.parent)
+    causes, previous = [], revision
     for _ in range(1 + SCAN_RETRIES):
-        seen = {}
+        seen = _Observation()
         token = _OBSERVED.set(seen)
+        failure = None
         try:
-            return read()
+            result = read()
         except faults as exc:
-            code = getattr(exc, "code", None) or type(exc).__name__
-            if code == DEADLINE_SPENT:
-                raise
             failure = exc
         finally:
             _OBSERVED.reset(token)
-        before = seen.get(key, previous)
-        after = record_revision(path)
-        if code not in _IN_FLIGHT and before is not None and before == after:
+        # What this attempt's result rests on: the earlier revision it reused, updated by every file it read.
+        before = {**(previous or {}), **{key: value for key, value in seen.revisions.items()
+                                         if os.path.dirname(key) == directory}}
+        if failure is None and not seen.faults:
+            return (result, before) if observed else result
+        code = (getattr(failure, "code", None) or type(failure).__name__) if failure is not None else seen.faults[0]
+        if code == DEADLINE_SPENT:
             raise failure
+        after = {key: record_revision(key) for key in (before or {os.path.abspath(path): None})}
+        if code not in _IN_FLIGHT and before and before == after:
+            if failure is not None:
+                raise failure
+            return (result, before) if observed else result
         causes.append(code)
         previous = after
     raise PodError(RECORD_CHANGED, "The record changed while it was read, on every bounded attempt",

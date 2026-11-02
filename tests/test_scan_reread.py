@@ -8,8 +8,9 @@ import json
 import os
 from unittest.mock import patch
 
-from pod import admission, evidence_closure, history, ledger, listing, retirement
+from pod import admission, evidence_closure, governor, history, ledger, listing, retirement
 from pod.errors import PodError
+from pod.github import repository_context
 from pod.handoff import run_scope
 from pod.history_tree import plain
 from pod.succession import incoming_claim, refuse_incomplete
@@ -19,19 +20,24 @@ ORIGINAL_LOAD = history.ChunkStore.load
 
 
 class Interleaving:
-    """At the scan's next read of one of the peer's history pages, rewrite the peer `times` times in all."""
+    """At the scan's next read of one of the peer's history pages (or of the exact page `target()` names), rewrite
+    the peer `times` times in all, with `rewrite` (the case's context rewrite by default)."""
 
-    def __init__(self, case, times):
+    def __init__(self, case, times, *, target=None, rewrite=None):
         self.case, self.left, self.busy, self.rewrites = case, times, False, 0
+        self.target, self.rewrite = target, rewrite or case.rewrite
 
     def load(self, store, address):
-        if self.left and not self.busy and store.root.parent.parent == self.case.peer:
+        if (self.left and not self.busy and store.root.parent.parent == self.case.peer
+                and (self.target is None or address == self.target())):
             self.left -= 1
-            self.busy = True  # The writer's own reads pass straight through.
+            self.busy = True  # The writer's own reads pass straight through,
+            token = history._OBSERVED.set(None)  # outside the scan's own read.
             try:
-                self.case.rewrite()
+                self.rewrite()
                 self.rewrites += 1
             finally:
+                history._OBSERVED.reset(token)
                 self.busy = False
         return ORIGINAL_LOAD(store, address)
 
@@ -59,29 +65,42 @@ class ScanCase(KernelCase):
         environment.start()
         self.addCleanup(environment.stop)
         os.environ.pop("ORCA_TERMINAL_HANDLE", None)  # The plain list stays record-only.
-        self.intake(objective="healthy")
+        # Placed records, so admission reads each one's Governor journal too.
+        place = {"repository": None, "repo_key": repository_context(self.project)["repo_key"],
+                 "path": str(self.project), "branch": "main"}
+        self.intake(objective="healthy", worktree=place)
         # Large enough that its checkpoint is a page of its own, read lazily after context.json.
-        self.intake(objective="peer", next_safe_action="x" * 1024)
+        self.intake(*self.peer_rows(), objective="peer", next_safe_action="x" * 1024, worktree=place)
         self.peer = ledger.objective_root(self.project, "peer")
         self.run = ledger.read(self.project, "peer")["checkpoint"]["native_refs"][0]["runId"]
         self.generation = 0
 
-    def rewrite(self):
-        """The peer's writer publishes its next revision through Pod's one publication path, then a collection
-        reclaims the pages the earlier revision used. The scan's read pin would defer that collection; the injection
-        runs it anyway, as a reader outside the pin would meet it."""
-        self.generation += 1
-        path = self.peer / "context.json"
+    def peer_rows(self):
+        return []
+
+    def publish(self, mutate, directory=None):
+        """A writer publishes a record's next revision through Pod's one publication path."""
+        path = (directory or self.peer) / "context.json"
         state = plain(history.load_context(path, validate=False))
         state["revision"] += 1
-        state["checkpoint"]["next_safe_action"] = chr(ord("a") + self.generation % 26) * 1024
+        mutate(state)
         history.publish_context(path, *history.prepare_context(path, state, project=self.project))
+
+    def collect(self):
+        """A collection reclaims the pages the earlier revision used. The scan's read pin would defer it; the
+        injection runs it anyway, as a reader outside the pin would meet it."""
         with patch.object(history.fcntl, "flock"):
             collected = history.ChunkStore(self.peer).collect()
         self.assertEqual(collected["status"], "collected")
 
-    def interleaved(self, scan, times):
-        with Interleaving(self, times) as interleaving:
+    def rewrite(self):
+        self.generation += 1
+        self.publish(lambda state: state["checkpoint"].update(
+            next_safe_action=chr(ord("a") + self.generation % 26) * 1024))
+        self.collect()
+
+    def interleaved(self, scan, times, **injection):
+        with Interleaving(self, times, **injection) as interleaving:
             result = scan()
         return result, interleaving.rewrites
 
@@ -199,6 +218,138 @@ class ChangingTests(ScanCase):
         self.assertEqual(queried["unavailable_records"], [{"record": self.peer.name, "code": self.changed}])
         self.assertEqual(queried["unrelated_unknowns"]["by_code"], {self.changed: 1})
         self.assertFalse(queried["repository_complete"])
+
+
+SOURCE = {"schema": "pod-issue-source/v1", "repository": "acme/example", "number": 82,
+          "locator": "https://github.com/acme/example/issues/82", "body_sha256": "a" * 64, "amendments": []}
+
+
+def page(store, physical, *keys):
+    """The address of the page a record's logical path names, read with the unpatched store."""
+    reference = physical["root"]["ref"] if keys and keys[0] != "facts" else physical["facts"]["ref"]
+    for key in keys[1:] if keys and keys[0] == "facts" else keys:
+        value = json.loads(ORIGINAL_LOAD(store, reference["sha256"]))
+        assert value["level"] == 0 and value["kind"] == "dict", value["level"]
+        reference = dict(value["entries"])[key]["ref"]
+    return reference["sha256"]
+
+
+class LateCase(ScanCase):
+    """The peer's obligations have a page of their own that a scan first reads late, inside a classification that
+    catches the fault and falls back; the rewrite changes exactly that page."""
+
+    def setUp(self):
+        super().setUp()
+        self.late = self.obligations_page()
+
+    def peer_rows(self):
+        return [self.sub(f"S{index}", check=f"row-{index}" * 80) for index in range(20)]
+
+    def obligations_page(self):
+        return page(history.ChunkStore(self.peer), json.loads((self.peer / "context.json").read_bytes()),
+                    "checkpoint", "obligations")
+
+    def rewrite_obligations(self):
+        self.generation += 1
+        self.publish(lambda state: state["checkpoint"]["obligations"][-1].update(check=f"changed-{self.generation}"))
+        self.collect()
+        self.late = self.obligations_page()
+
+    def late_read(self, scan, times):
+        return self.interleaved(scan, times, target=lambda: self.late, rewrite=self.rewrite_obligations)
+
+
+class LateDescendantTests(LateCase):
+    def test_the_list_rereads_a_late_page_its_schema_check_caught(self):
+        listed, rewrites = self.late_read(lambda: listing.objective_list(self.project), 1)
+        self.assertEqual(rewrites, 1)
+        peer = next(row for row in listed["objectives"] if row["objective"] == "peer")
+        self.assertEqual((peer["schema"], listed["complete"], listed["changing_records"]), ("current", True, []))
+
+    def test_the_list_names_a_record_whose_late_page_keeps_changing(self):
+        listed, rewrites = self.late_read(lambda: listing.objective_list(self.project), 12)
+        self.assertGreaterEqual(rewrites, 1 + history.SCAN_RETRIES)
+        self.assertEqual([row["objective"] for row in listed["objectives"]], ["healthy"])  # Never `unsupported`.
+        self.assertEqual(([row["code"] for row in listed["changing_records"]], listed["unreadable_records"]),
+                         ([history.RECORD_CHANGED], []))
+        self.assertFalse(listed["complete"])
+
+    def test_run_scope_holds_a_record_whose_late_page_keeps_changing(self):
+        scope, rewrites = self.late_read(lambda: run_scope(self.project, "healthy", self.run), 1)
+        self.assertEqual((rewrites, scope["objectives"], scope["unreadable"], scope.get("changing")),
+                         (1, ["peer"], 0, None))
+        scope, _ = self.late_read(lambda: run_scope(self.project, "healthy", self.run), 12)
+        self.assertEqual((scope["objectives"], scope["unreadable"], scope["changing"]), ([], 0, 1))
+
+    def recovery(self, times):
+        """R146's chain: the peer shares the healthy objective's source and Run, so it is a recovery member."""
+        for directory in (ledger.objective_root(self.project, "healthy"), self.peer):
+            self.publish(lambda state: state["checkpoint"].update(objective_source=dict(SOURCE)), directory)
+        self.late = self.obligations_page()
+        raw = ledger.read(self.project, "healthy")
+        proof, scan = evidence_closure._Proof("healthy"), {}
+
+        def records():
+            if not scan:
+                scan["found"], scan["unreadable"] = evidence_closure._scan(self.project)
+            return scan["found"], scan["unreadable"]
+        doc = evidence_closure._documented(raw, current=True)
+        members, rewrites = self.late_read(lambda: evidence_closure._members(
+            self.project, "healthy", raw, "current", doc, proof, records), times)
+        return members, proof.result(), rewrites
+
+    def test_a_recovery_member_read_after_the_scan_is_read_again(self):
+        members, verdict, rewrites = self.recovery(1)
+        self.assertEqual(rewrites, 1)  # Fired only when the members read classified the scanned peer.
+        self.assertEqual(sorted(row["objective"] for row in members), ["healthy", "peer"])
+        self.assertEqual(verdict["conditions"], [])
+
+    def test_a_recovery_member_that_keeps_changing_holds_with_the_transient_cause(self):
+        members, verdict, rewrites = self.recovery(12)
+        self.assertGreaterEqual(rewrites, 1 + history.SCAN_RETRIES)
+        self.assertIsNone(members)
+        self.assertEqual([row["code"] for row in verdict["conditions"]], [history.RECORD_CHANGED])
+
+
+class JournalTests(ScanCase):
+    """Admission reads the peer's Governor journal without its lock; a journal rewrite changes no context.json."""
+
+    def setUp(self):
+        super().setUp()
+        self.journal = self.peer / "governor.json"
+        governor._publish_journal(self.journal, governor._empty_journal())
+        self.facts = self.facts_page()
+
+    def facts_page(self):
+        return json.loads(self.journal.read_bytes())["facts"]["ref"]["sha256"]
+
+    def rewrite_journal(self):
+        journal = plain(governor._read_journal(self.journal))
+        journal["revision"] += 1
+        governor._publish_journal(self.journal, journal)
+        self.collect()
+        self.facts = self.facts_page()
+
+    def peer_unknowns(self, result):
+        return [(row["code"], row["reconciliation"].get("action")) for row in result["unknowns"]
+                if row["record"] == self.peer.name]
+
+    def journal_read(self, times):
+        context = (self.peer / "context.json").read_bytes()
+        result, rewrites = self.interleaved(lambda: admission.query(self.project), times,
+                                            target=lambda: self.facts, rewrite=self.rewrite_journal)
+        self.assertEqual((self.peer / "context.json").read_bytes(), context)  # Only the journal changed.
+        return result, rewrites
+
+    def test_a_journal_rewritten_during_the_read_is_read_again(self):
+        self.assertEqual(self.peer_unknowns(admission.query(self.project)), [])
+        result, rewrites = self.journal_read(1)
+        self.assertEqual((rewrites, self.peer_unknowns(result)), (1, []))
+
+    def test_a_journal_that_keeps_changing_is_transient_never_unreadable(self):
+        result, rewrites = self.journal_read(12)
+        self.assertGreaterEqual(rewrites, 1 + history.SCAN_RETRIES)
+        self.assertEqual(self.peer_unknowns(result), [(history.RECORD_CHANGED, "repeat_query")])
 
 
 class StableDamageTests(ScanCase):

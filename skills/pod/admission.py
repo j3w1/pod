@@ -910,7 +910,9 @@ def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = Fal
 
 
 def _journal(path: Path) -> tuple[dict, str]:
-    journal, identity, _ = _shared(("journal", str(path)), lambda: _journal_read(path))
+    # Read once per call, classified by the journal bytes actually read: a journal another writer republishes and
+    # reclaims during the read is read again, and one that keeps changing is never unreadable (R206).
+    journal, identity, _ = _shared(("journal", str(path)), lambda: history.scan_read(path, lambda: _journal_read(path)))
     return journal, identity
 
 
