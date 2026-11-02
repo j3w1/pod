@@ -254,11 +254,12 @@ class TransportTests(LocalAppendCase):
         error = self.failure("local_append_verifier_failed", self.write, delivery=self.request())
         self.assertNotIn("sentinel", str(error) + json.dumps(error.detail))
         with patch.object(relay, "TIMEOUT_S", .15):
-            for mode in ("timeout",):
-                self.answer(mode=mode)
-                self.failure("local_append_verifier_timeout", self.write, delivery=self.request())
-            self.answer(mode="oversized")
-            self.failure("local_append_verifier_malformed", self.write, delivery=self.request())
+            self.answer(mode="timeout")
+            self.failure("local_append_verifier_timeout", self.write, delivery=self.request())
+        # The normal timeout: the oversized output passes the cap and refuses at once, never racing
+        # a short timeout on a slow runner.
+        self.answer(mode="oversized")
+        self.failure("local_append_verifier_malformed", self.write, delivery=self.request())
         self.configure([str(self.root / "absent-verifier")])
         self.failure("local_append_verifier_failed", self.write, delivery=self.request())
         self.assertEqual(self.saved(), before)
