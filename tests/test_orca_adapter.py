@@ -90,9 +90,10 @@ class OrcaAdapterTests(unittest.TestCase):
              patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
             self.assertEqual(read_command(argv)["runtime"], "r")
             cache = compile_cache()
+            inherited = {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"}
             runner.assert_called_once_with(["/fixture/orca", *argv], capture_output=True, text=True,
                                            timeout=10, check=False,
-                                           **({"env": {**os.environ, "NODE_COMPILE_CACHE": cache}} if cache else {}))
+                                           env={**inherited, **({"NODE_COMPILE_CACHE": cache} if cache else {})})
         with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
              patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, " " * (MAX_OUTPUT + 1), "")), \
              self.assertRaises(PodError) as caught:
@@ -101,7 +102,8 @@ class OrcaAdapterTests(unittest.TestCase):
 
     def test_reads_use_a_private_compile_cache_and_run_without_an_unsafe_one(self):
         """R23 (A864): Orca reads run with Node's compile cache in a 0700 directory under Pod's cache home; a
-        directory that is not private, not a real directory or cannot be made leaves the read without it."""
+        directory that is not private, not a real directory or cannot be made leaves the read without it, and an
+        inherited NODE_COMPILE_CACHE is never passed on."""
         import shutil, stat, tempfile
         payload = json.dumps({"ok": True, "result": {"worktrees": []}, "_meta": {"runtimeId": "r"}})
         argv = ["worktree", "list", "--json"]
@@ -109,27 +111,32 @@ class OrcaAdapterTests(unittest.TestCase):
             with patch("pod.orca.executable", return_value=Path("/fixture/orca")), \
                  patch("pod.orca.subprocess.run", return_value=subprocess.CompletedProcess([], 0, payload, "")) as runner:
                 read_command(argv)
-            return runner.call_args.kwargs.get("env")
+            return runner.call_args.kwargs["env"]
         root = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR")))
         self.addCleanup(shutil.rmtree, root, True)
         home = root / "pod-cache"
         cache = home / "node-compile-cache"
-        with patch.dict(os.environ, {"POD_CACHE_HOME": str(home)}):
+        external = str(root / "external-cache")  # A caller's own cache, outside every check: never passed on.
+        def without_cache():
+            env = env_of_read()
+            self.assertNotIn("NODE_COMPILE_CACHE", env)
+            self.assertEqual(env, {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"})
+        with patch.dict(os.environ, {"POD_CACHE_HOME": str(home), "NODE_COMPILE_CACHE": external}):
             env = env_of_read()
             self.assertEqual(env, {**os.environ, "NODE_COMPILE_CACHE": str(cache)})
             self.assertEqual(stat.S_IMODE(os.lstat(cache).st_mode), 0o700)
             os.chmod(cache, 0o750)
-            self.assertIsNone(env_of_read())  # group access: not private
+            without_cache()  # group access: not private
             os.chmod(cache, 0o700)
             private = root / "private"; private.mkdir(mode=0o700)
             os.rmdir(cache); os.symlink(private, cache)
-            self.assertIsNone(env_of_read())  # a redirected directory is never used
+            without_cache()  # a redirected directory is never used
             os.unlink(cache); cache.write_text("")
-            self.assertIsNone(env_of_read())  # not a directory
+            without_cache()  # not a directory
         locked = root / "locked"; locked.mkdir(); os.chmod(locked, 0o500)
         self.addCleanup(os.chmod, locked, 0o700)
-        with patch.dict(os.environ, {"POD_CACHE_HOME": str(locked / "pod-cache")}):
-            self.assertIsNone(env_of_read())  # cannot be created
+        with patch.dict(os.environ, {"POD_CACHE_HOME": str(locked / "pod-cache"), "NODE_COMPILE_CACHE": external}):
+            without_cache()  # cannot be created
 
     def test_cleanup_terminal_inventory_is_an_exact_read_shape(self):
         from pod.orca import _read_allowed
@@ -178,10 +185,9 @@ class OrcaAdapterTests(unittest.TestCase):
             read_command(['--version'])
             # The native profile reaches Orca unchanged: every variable is inherited; the only addition is Node's
             # compile cache in Pod's own cache home (R23, A864).
-            env=runner.call_args.kwargs.get('env')
-            if env is not None:
-                self.assertEqual({**env,'NODE_COMPILE_CACHE':None},{**os.environ,'NODE_COMPILE_CACHE':None})
-                self.assertEqual(env['NODE_COMPILE_CACHE'],compile_cache())
+            env=runner.call_args.kwargs['env']
+            self.assertEqual({**env,'NODE_COMPILE_CACHE':None},{**os.environ,'NODE_COMPILE_CACHE':None})
+            self.assertEqual(env.get('NODE_COMPILE_CACHE'),compile_cache())
 
     def test_output_that_is_not_utf8_is_no_evidence_and_a_cut_preview_is_harmless(self):
         # Review 3 H3: decoded by the real subprocess path, refused as a contract failure. Final audit L1: Orca cuts a

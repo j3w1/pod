@@ -67,7 +67,7 @@ class _Discovery:
         self.terminal_start = None
         self.fence_started = False  # After this, only the fence's own end reads may read Orca.
         self.abandoned: set = set()  # Dispatches the queries' records account as abandoned.
-        self.owner_runs: set = set()  # Runs whose current owner some query observes.
+        self.owner_runs: set = set()  # Runs whose current owner some query observes; changed under `_lock`.
         # The fleet read discovery used, for the batch fence: {"page": its newest-first page, "rows": every row}.
         self.fleet_start = None
         self._lock = threading.Lock()
@@ -156,12 +156,21 @@ class _Discovery:
             self._placed.add(path)
             self._git.submit(contextvars.copy_context().run, _prefetch_identity, self, path)
 
+    def name_owners(self, runs):
+        """A record pass names the Runs whose owner it observes; each read starts once the inventory is known."""
+        with self._lock:
+            self.owner_runs |= set(runs)
+        self.start_owners()
+
     def start_owners(self):
-        """Start each named Run owner's read once the terminal inventory is known; never waits."""
+        """Start each named Run owner's read once the terminal inventory is known; never waits. Called when a record
+        pass names Runs and when the terminal inventory completes, so each read starts once both are known."""
         terminals = self.done(("terminals",))
         if not isinstance(terminals, dict) or not isinstance(terminals.get("runtime"), str):
             return
-        for run in sorted(self.owner_runs):
+        with self._lock:
+            runs = sorted(self.owner_runs)
+        for run in runs:
             self.submit(("owner", run, terminals["runtime"]), lambda run=run: _gated(
                 _owner_observation, run, terminals, terminals["runtime"]), stage="first")
 
@@ -1685,9 +1694,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         if discovery is not None:
             # The call reads these native facts once, for every query, before the end fence starts.
             discovery.abandoned |= abandoned_dispatches
-            for ownership in owner_claims():
-                discovery.owner_runs |= {ref["runId"] for ref in ownership["recorded_native_refs"]}
-            discovery.start_owners()  # While the other queries read their records.
+            # Started while the other queries read their records, or as soon as the terminal inventory is known.
+            discovery.name_owners({ref["runId"] for ownership in owner_claims() for ref in ownership["recorded_native_refs"]})
         yield "native"  # Every query's record pass runs while the native inventory is read.
         # Prefer the installed all-Run inventory for CE's unbound caller.
         # A bound caller retains exact-Run reads and the same outer deadline.
@@ -2262,11 +2270,13 @@ def _prefetch_native(discovery, budget, *, fence: bool = False) -> None:
                 pass
 
 
-def _start_run_list(discovery, budget) -> None:
-    """R206 rule S's Run-coordinator list, started once the terminal inventory is known, beside the walk."""
+def _after_terminals(discovery, budget, fence: bool) -> None:
+    """Once the terminal inventory is known: start every Run owner a record pass has already named and, in a batch,
+    R206 rule S's Run-coordinator list, beside the walk. No other read."""
     terminals = discovery.memo(("terminals",), _terminals, stage="first")  # The inventory read already started.
     runtime = terminals.get("runtime") if isinstance(terminals, dict) else None
-    if isinstance(runtime, str):
+    discovery.start_owners()
+    if fence and isinstance(runtime, str):
         discovery.submit(("run-coordinators", runtime), lambda: _run_coordinators(runtime, budget.check),
                          stage="first")
 
@@ -2324,8 +2334,7 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
                         pass  # The query raises the same outcome where it reads its cohort.
             discovery.submit(("fleet",), _fleet)
             discovery.submit(("terminals",), _terminals)
-            if fence:
-                discovery.submit(("run-list-start",), lambda: _start_run_list(discovery, budget))
+            discovery.submit(("terminals-known",), lambda: _after_terminals(discovery, budget, fence))
             for resolved in projects.values():
                 discovery.submit(("places", str(resolved)), lambda resolved=resolved: _places(resolved))
             # Every query's record pass; then every native read a result uses, after which the end fence

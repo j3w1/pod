@@ -122,8 +122,8 @@ _COMPILE_CACHE_HOMES: dict = {}
 def compile_cache() -> str | None:
     """Node's compile cache for the Orca CLI's own code: a private directory under Pod's cache home
     (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`), created 0700. None when it cannot be used: not a
-    real directory, another owner, group or other access, or any failure. The read then runs without it, and
-    Orca's own configuration is never touched."""
+    real directory, another owner, group or other access, or any failure. The read then runs with the variable
+    removed, so an inherited value is never used, and Orca's own configuration is never touched."""
     from .util import explicit_home, native_home
     try:
         key = (os.environ.get("POD_CACHE_HOME"), os.environ.get("XDG_CACHE_HOME"), os.environ.get("HOME"), os.getcwd())
@@ -152,10 +152,13 @@ def read_command(argv: list[str], *, timeout: int = 10) -> dict:
         # Checked whatever the shape: Python would pass a surrogate-escaped argument to Orca as raw bytes (R18).
         raise PodError("unsupported_orca_read", "Orca read arguments must be UTF-8 text without NUL")
     command = [str(executable()), *argv]
-    cache = compile_cache()  # Outside glue for the CLI's start-up only; a read without it is unchanged.
-    options = {"env": {**os.environ, "NODE_COMPILE_CACHE": cache}} if cache else {}
+    # Outside glue for the CLI's start-up only: Pod's validated cache, or none at all, never an inherited one.
+    env = {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"}
+    cache = compile_cache()
+    if cache:
+        env["NODE_COMPILE_CACHE"] = cache
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, **options)
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PodError("orca_unavailable", "Orca read failed") from exc
     except UnicodeDecodeError:

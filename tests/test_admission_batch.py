@@ -303,6 +303,45 @@ class EarlyStartTests(BatchCase):
         self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
 
 
+    def test_owners_named_before_the_terminal_inventory_start_when_it_completes(self):
+        """The reversed order: the first query names its Run while the terminal list is pending; that owner read
+        starts when the list completes, before the second query's record pass, with no read after the fence."""
+        self.intake(worktree=self.place)
+        release, owner_started, seen = threading.Event(), threading.Event(), {}
+        real_terminals, real_query = admission._terminals, admission._query
+        def terminals():
+            release.wait(5)  # Held until the first query has named its Run; the bound only ends a failure.
+            return real_terminals()
+        def owner(run, inventory, runtime):
+            owner_started.set()
+            return {"run": run, "runtime": runtime, "terminal": None, "consumer_generation": 1, "worktree": None,
+                    "live": False, "source": "native_run_and_terminal"}
+        queries = []
+        def query(*args, **kwargs):
+            index = len(queries); queries.append(index)
+            generator = real_query(*args, **kwargs)
+            value = next(generator)
+            while True:
+                yield value
+                if index == 1 and not release.is_set():  # the second query's record pass is about to run
+                    seen["named_before_terminals"] = bool(admission._SHARED.get().owner_runs)
+                    release.set()
+                    seen["owner_before_second_pass"] = owner_started.wait(5)
+                try:
+                    value = next(generator)
+                except StopIteration as done:
+                    return done.value
+        with patch("pod.admission._terminals", side_effect=terminals), \
+             patch("pod.admission._owner_observation", side_effect=owner), \
+             patch("pod.admission._query", side_effect=query):
+            answer = self.batch({"worktree": str(self.project), "branch": "main"},
+                                {"worktree": str(self.project), "branch": "main"})
+        self.assertEqual(seen, {"named_before_terminals": True, "owner_before_second_pass": True})
+        for row in answer["responses"]:
+            self.assertNotIn("native_read_after_fence", [unknown["code"] for unknown in row["result"]["unknowns"]])
+        self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
+
+
 class CallSharingTests(BatchCase):
     """R207 (A862): the local facts every query repeats are derived once per call, and each result still equals its
     single query."""

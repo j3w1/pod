@@ -11113,7 +11113,8 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_admission_batch.EarlyStartTests.test_the_run_list_and_the_run_owners_start_while_the_walk_runs"
+        "tests.test_admission_batch.EarlyStartTests.test_the_run_list_and_the_run_owners_start_while_the_walk_runs",
+        "tests.test_admission_batch.EarlyStartTests.test_owners_named_before_the_terminal_inventory_start_when_it_completes"
       ],
       "status": "NOT_RUN"
     },

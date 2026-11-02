@@ -1370,8 +1370,8 @@ at most eight Orca reads at once, while the queries read their records, and an a
 worker's claim read starts as soon as its inventory row is listed. A listed worker's workspace
 Git identity read starts the same way, in its own pool of at most four, and rule T 4b takes that
 workspace's worktree registry from the same read. In a batch the Run-coordinator list starts as
-soon as the terminal inventory is known, and each Run owner read as soon as a query's record pass
-names it and the terminal inventory is known. Every thread ends before the
+soon as the terminal inventory is known, and each Run owner read as soon as both a query's record
+pass has named it and the terminal inventory is known, whichever comes last. Every thread ends before the
 call returns, and exhausting the shared deadline is `discovery_budget` exactly as in the single
 query.
 
@@ -1462,7 +1462,7 @@ overlapped with the projections and the recheck.
 - <a id="a786"></a>**A786** — The fleet fence digests the documented row identities of every unreleased row, every released row, the newest page and every abandoned claim, from discovery's own reads and fresh end reads; with unchanged inventories it is stable; a created, settled, deleted or changed row, a changed abandoned claim, a balanced create, settle and delete with equal totals and counts, a runtime change, a bound or failed end read and a failed end partition each make it unstable and the batch `unknown` while every result is unchanged; a released row outside the newest page that becomes abandoned with a pending effect, or changes any other identity field, makes it unstable; a bound caller's fleet start is incomplete with `native_inventory_scope`; the end reads start only after every native read a result uses has finished.
 - <a id="a787"></a>**A787** — During one call, a changed record is `record_changed` and incomplete only in the results it is relevant to, an added or removed record is `inventory_changed`, and a changed effect policy is `effect_policy_changed`; a fault inside one query's projection prints no partial batch; an unlocated foreign worker together with an open record's stale runtime answers normally in both forms; an OSError from the fleet or from a record read stays the scoped `inventory_unreadable` or `unreadable` answer in both forms; a Run-owner read asked for after the end fence started is never made and adds a scoped `native_read_after_fence` unknown.
 - <a id="a825"></a>**A825** — In a batch, an ended Dispatch whose terminal, workspace and Run coordinator are gone settles under rule S exactly as in the single query, with the same result and the same blocking unknowns, the Run list walked once for the call; no native read is requested after the end fence starts.
-- <a id="a861"></a>**A861** — In a batch the Run-coordinator list and each named Run owner's read start while discovery's fleet walk still runs, once the terminal inventory is known, and no thread outlives the call.
+- <a id="a861"></a>**A861** — In a batch the Run-coordinator list and each named Run owner's read start while discovery's fleet walk still runs, once the terminal inventory is known; a Run named before the terminal inventory completes starts its owner read when it completes, before the next query's record pass; no read follows the end fence and no thread outlives the call.
 - <a id="a862"></a>**A862** — In one batch of several queries over one repository, each repository's state root, each known repository path's resolution, each context's and journal's recheck identity, each terminal record's validation and each Dispatch's rule S verdict are derived once, and every result equals its single query.
 
 ### R208 — Read one objective's exact-candidate facts without discovery
