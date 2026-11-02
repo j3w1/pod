@@ -82,6 +82,9 @@ def parser() -> argparse.ArgumentParser:
     admission.add_argument("--timeout", type=float, default=10.0)
     admission.add_argument("--batch", action="store_true",
                            help="answer a pod-admission-batch-request/v1 object from stdin over one shared discovery")
+    admission.add_argument("--selected", action="store_true",
+                           help="read one objective's exact-candidate facts without repository or fleet discovery")
+    admission.add_argument("--tree", help="with --selected: the candidate's expected tree")
     admission.add_argument("--json", action="store_true")
     sweep = sub.add_parser("sweep", help="close every provably delivered open objective by evidence")
     sweep.add_argument("--repository", metavar="PATH", action="append",
@@ -376,6 +379,12 @@ def _models(project: Path, action: str | None, *, check: bool = False,
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
+    if args.command == "admission" and args.selected:
+        from .admission import selected_command
+        return selected_command(args, project)
+    if args.command == "admission" and args.tree is not None:
+        from .admission import _selected_fault
+        raise _selected_fault("--tree requires --selected")
     if args.command == "admission" and args.batch:
         from .admission import batch_command
         return batch_command(args, project)
@@ -493,7 +502,8 @@ def _print_observation_status(report: dict) -> None:
 
 
 def _exit_code(args: argparse.Namespace, result: dict) -> int:
-    if args.command == "admission" and result.get("schema") in ("pod-admission-query/v1", "pod-admission-batch/v1"):
+    if args.command == "admission" and result.get("schema") in ("pod-admission-query/v1", "pod-admission-batch/v1",
+                                                                  "pod-admission-selected/v1"):
         return 0  # A factual answer, including scoped uncertainty, is not authorization.
     if args.command in ("policy", "tool"):
         return 1 if result["status"] == "blocked" else 0

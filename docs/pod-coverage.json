@@ -10621,6 +10621,123 @@
         "tests.test_admission_batch.CorrectionRoundTests.test_a_late_run_owner_read_is_never_made_and_marks_the_result_incomplete"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A796",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.NoDiscoveryTests.test_selected_read_reads_only_its_record_and_exact_bound_workers",
+        "tests.test_admission_selected.NoDiscoveryTests.test_binding_names_repository_record_candidate_and_tree"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A797",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.ProofAgreementTests.test_ready_proof_is_byte_identical",
+        "tests.test_admission_selected.ProofAgreementTests.test_partial_invalidated_proof_is_byte_identical",
+        "tests.test_admission_selected.ProofAgreementTests.test_missing_unbound_proof_is_byte_identical",
+        "tests.test_admission_selected.ProofAgreementTests.test_changed_candidate_proof_is_byte_identical",
+        "tests.test_admission_selected.ProofAgreementTests.test_verification_gaps_and_outstanding_are_byte_identical"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A798",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.AssuranceTests.test_recorded_scope_currency_and_accepted_attempts",
+        "tests.test_admission_selected.AssuranceTests.test_scope_is_the_recorded_scope_never_inferred",
+        "tests.test_admission_selected.AssuranceTests.test_withdrawn_assurance_has_no_currency"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A799",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.AttemptTests.test_effective_facts_come_from_the_record_not_a_reused_terminal",
+        "tests.test_admission_selected.AttemptTests.test_attempt_rows_carry_recorded_native_references",
+        "tests.test_admission_selected.ImplementationLinkageTests.test_unrecorded_effective_facts_are_explicit"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A800",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.ImplementationLinkageTests.test_implementation_linkage_names_whether_the_result_is_in_the_candidate"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A801",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.RefusalTests.test_wrong_commit_tree_and_repository_refuse_before_any_record_read",
+        "tests.test_admission_selected.RefusalTests.test_a_record_naming_another_repository_refuses",
+        "tests.test_admission_selected.RefusalTests.test_cli_refuses_discovery_flags_and_requires_json",
+        "tests.test_admission_selected.RefusalTests.test_cli_answers_factually_with_exit_zero"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A802",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.DigestTests.test_digest_is_stable_and_expect_reports_a_change_as_a_conflict",
+        "tests.test_admission_selected.DigestTests.test_a_source_or_policy_change_changes_the_digest",
+        "tests.test_admission_selected.DigestTests.test_cli_expect_mismatch_exits_zero_with_the_conflict",
+        "tests.test_admission_selected.RefusalTests.test_wrong_commit_tree_and_repository_refuse_before_any_record_read"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A803",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.UncertaintyTests.test_exhausted_deadline_is_unknown",
+        "tests.test_admission_selected.UncertaintyTests.test_a_record_changed_during_the_read_is_unknown",
+        "tests.test_admission_selected.UncertaintyTests.test_a_failed_exact_worker_read_is_unknown",
+        "tests.test_admission_selected.UncertaintyTests.test_an_answer_over_the_output_bound_is_withheld"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A804",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_selected.AttemptTests.test_missing_effective_effort_is_an_attempt_gap_that_keeps_ready"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
