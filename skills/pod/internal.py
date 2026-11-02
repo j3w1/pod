@@ -239,6 +239,10 @@ def _op_report(request: dict) -> dict:
     if (not admission or admission.get("state") != "bound" or not admission.get("native_binding")
             or admission.get("packet_id") != request["packet"].get("packet_id")):
         raise PodError("report_attempt_unverified", "No exact native admission binding")
+    if admission.get("report") is None:
+        # Before any read or write; a consumed report keeps its exact replay and conflict answers.
+        from .records import refuse_review_files
+        refuse_review_files(admission.get("role"), request["report"], admission=admission["admission_id"])
     from .operations import OrcaPort
     port = OrcaPort(Path(request["project"]))
     binding = admission["native_binding"]

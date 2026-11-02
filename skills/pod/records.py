@@ -240,6 +240,25 @@ def report_record(value: Any) -> dict:
     return r
 
 
+REVIEW_FILES_ACTION = ("a review changes no repository files: send the report with files [], put output artifacts "
+                       "(notes, logs, evidence paths) in its evidence or checks, then submit the corrected report")
+
+
+def refuse_review_files(role: Any, value: Any, *, admission: str) -> None:
+    """R211: a review report that lists files is refused before consumption, naming the field, never its paths.
+
+    A consumed review can satisfy its assurance only as a validated observation, and nothing reconciles one,
+    so the report is corrected and submitted again instead of being consumed as `reconciliation_required`.
+    """
+    files = value.get("files") if isinstance(value, dict) else None
+    if role != "review" or not isinstance(files, list) or not files:
+        return
+    from .obligations import refuse
+    raise refuse("review_report_files", "files_listed",
+                 f"a review report must list no files; this one lists {len(files)}",
+                 next_action=REVIEW_FILES_ACTION, record="report", field="files", admission=admission)
+
+
 @input_record("report")
 def report(value: Any, frozen: dict, native_binding: dict) -> dict:
     if not isinstance(frozen, dict) or not isinstance(frozen.get("body"), dict) or digest(frozen["body"]) != frozen.get("packet_id"):

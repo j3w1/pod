@@ -488,10 +488,13 @@ class KernelCase(unittest.TestCase):
     def settle(self, admission):
         self.port.workers[admission["native_binding"]["dispatchId"]]["outcome"] = "succeeded"
 
-    def report(self, admission, frozen, *, outcome="succeeded", scope=("src",), **extra):
+    def report(self, admission, frozen, *, outcome="succeeded", scope=("src",), files=None, **extra):
+        # A review changes no repository files, so its report lists none (R211).
+        if files is None:
+            files = [] if frozen["body"].get("role") == "review" else ["src/new.py"]
         body = {"schema": "pod-report/v1", "assignment": frozen["packet_id"],
                 "attempt": admission["native_binding"]["dispatchId"], "candidate": self.candidate,
-                "outcome": outcome, "scope": list(scope), "files": ["src/new.py"], "checks": ["unit"],
+                "outcome": outcome, "scope": list(scope), "files": list(files), "checks": ["unit"],
                 "failures": [] if outcome == "succeeded" else ["review not completed"], "evidence": [],
                 "uncertainty": [], "questions": []}
         with patch.object(OrcaPort, "show_worker", autospec=True,
