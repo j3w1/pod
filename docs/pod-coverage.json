@@ -11023,7 +11023,7 @@
       ],
       "offline_test": [
         "tests.test_closed_history.ClosedHistoryTests.test_unselected_history_counts_as_closed_and_closes_by_evidence",
-        "tests.test_closed_history.ClosedHistoryTests.test_a_selected_unverifiable_receipt_still_refuses",
+        "tests.test_closed_history.SelectedClosedHistoryTests.test_a_selected_unverifiable_receipt_still_refuses",
         "tests.test_closed_history.ClosedHistoryTests.test_unselected_history_still_holds_handoff"
       ],
       "status": "NOT_RUN"
