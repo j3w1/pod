@@ -46,6 +46,10 @@ MAX_OBSERVED = 40
 FAILED, TIMEOUT, MALFORMED = "host_exit_failed", "host_exit_timeout", "host_exit_malformed"
 MISMATCH, UNVERIFIED = "host_exit_mismatch", "host_exit_unverified"
 FOREIGN_HOST, FOREIGN_RUNTIME, STALE = "host_exit_foreign_host", "host_exit_foreign_runtime", "host_exit_stale"
+# Transport and contract faults: the verifier did not answer this action at all, whatever ids it was given, so the
+# call starts no further request (pod#219). The other request-level codes are answers under the contract that depend
+# on the group's host or the request's own time, and never stop a call.
+STOPPING = frozenset({FAILED, TIMEOUT, MALFORMED, MISMATCH})
 # Entry-level codes: only that id holds.
 HOST_UNKNOWN, IDENTITY_MISMATCH = "host_exit_host_unknown", "host_exit_identity_mismatch"
 PRESENT, PARTIAL = "host_exit_present", "host_exit_partial"

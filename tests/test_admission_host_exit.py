@@ -1,5 +1,6 @@
 """R212: admission asks the host verifier, at read time and before the end fence, about settled local Dispatches Orca
-cannot observe, and counts one exited only on that call's own verdict (A847-A859)."""
+cannot observe, and counts one exited only on that call's own verdict (A847-A859; the stop after a first fault, A865-A867,
+is in test_admission_host_exit_stop)."""
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -134,7 +135,9 @@ class ConfigTests(HostExitCase):
 
 
 class FaultTests(HostExitCase):
-    """A850: a request-level fault holds every id of that request only; coverage then holds the query's other ids."""
+    """A850: a transport or contract fault holds its request and starts no further one, so the query's other ids hold
+    with the same code without being asked; an answer under the contract holds its request and the query's other ids
+    with `host_exit_query_uncovered` (A865 adds the call-level stop)."""
 
     def faulted(self, mode, **control):
         self.answer(faults={"a": mode}, **control)
@@ -146,21 +149,29 @@ class FaultTests(HostExitCase):
                            "oversized": "host_exit_malformed", "invalid_json": "host_exit_malformed",
                            "duplicate": "host_exit_malformed"}.items():
             with self.subTest(mode):
+                self.log.unlink(missing_ok=True)
                 result = self.faulted(mode)
-                self.assertEqual(exit_codes(result), {"a": code, "b": "host_exit_query_uncovered"})
+                self.assertEqual(exit_codes(result), {"a": code, "b": code})
+                self.assertEqual(self.asked(), ["a"])
                 self.assertNotIn("sentinel", json.dumps(result))
 
     def test_a_calendar_boundary_scan_time_holds_only_its_request(self):
         for observed in ("0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"):
             with self.subTest(observed):
                 result = self.faulted("overflow", overflow_at=observed)
-                self.assertEqual(exit_codes(result), {"a": "host_exit_malformed", "b": "host_exit_query_uncovered"})
+                self.assertEqual(exit_codes(result), {"a": "host_exit_malformed", "b": "host_exit_malformed"})
 
     def test_shape_faults_hold_their_request(self):
-        for mode, code in {"missing": "host_exit_malformed", "extra": "host_exit_malformed",
-                           "unverified": "host_exit_unverified"}.items():
+        for mode in ("missing", "extra"):
             with self.subTest(mode):
-                self.assertEqual(exit_codes(self.faulted(mode)), {"a": code, "b": "host_exit_query_uncovered"})
+                self.log.unlink(missing_ok=True)
+                self.assertEqual(exit_codes(self.faulted(mode)), {"a": "host_exit_malformed", "b": "host_exit_malformed"})
+                self.assertEqual(self.asked(), ["a"])
+        with self.subTest("unverified"):  # an answer under the contract: the next request is still asked
+            self.log.unlink(missing_ok=True)
+            self.assertEqual(exit_codes(self.faulted("unverified")),
+                             {"a": "host_exit_unverified", "b": "host_exit_query_uncovered"})
+            self.assertEqual(self.asked(), ["a", "b"])
         for mode in ("repeated", "reordered"):  # two ids in one request: every id of it holds
             with self.subTest(mode):
                 self.answer(mode=mode)
@@ -358,21 +369,25 @@ class BatchEquivalenceTests(VerifierMixin, Rows, batch.FencedCase):
         self.assert_equal_to_singles(singles, answer)
         self.assertEqual(len(self.requests()), 1 + 3)  # one shared request in the batch, one per single query
 
-    def test_a_calendar_boundary_scan_time_aborts_no_other_query(self):
-        """One request's unusable scan time holds only its own query; another request and a query without candidates
-        answer exactly as their single queries."""
+    def test_a_calendar_boundary_scan_time_stops_the_requests_but_not_the_call(self):
+        """One request's unusable scan time holds its query and, unasked, the next request's query; the call still
+        answers, and a query without candidates answers exactly as its single query. This verifier faults for one id
+        only, so the second query's single query counts: a fault that depends on the ids is outside the equality."""
         (self.project / "wc").mkdir(exist_ok=True)
         self.stuck_rows("a00", path=self.project / "wa")
         self.stuck_rows("b00", path=self.project / "wb")
         self.answer(faults={"a00": "overflow"}, overflow_at="9999-12-31T23:59:59-01:00")
         with patch.object(process_exit, "K", 1):
             singles, answer = self.calls(self.a, self.b, {"worktree": str(self.project / "wc")})
-        self.assert_equal_to_singles(singles, answer)
         results = [row["result"] for row in answer["responses"]]
+        self.assertEqual(results[0], singles[0])
+        self.assertEqual(results[2], singles[2])
         self.assertEqual(exit_codes(results[0]), {"a00": "host_exit_malformed"})
-        self.assertEqual([row["counted"] for row in results[1]["host_exits"]], [True])
+        self.assertEqual(exit_codes(results[1]), {"b00": "host_exit_malformed"})
+        self.assertEqual([row["counted"] for row in singles[1]["host_exits"]], [True])
         self.assertNotIn("host_exits", results[2])
-        self.assertEqual(answer["discovery"]["host_exit"]["requests"], 2)
+        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 1, "asked": 1, "counted": 0,
+                                                            "not_asked_after": "host_exit_malformed", "not_asked": 1})
 
     def test_a_verdict_relevant_to_one_query_leaves_the_other_unchanged(self):
         self.stuck_rows("a00", path=self.project / "wa")

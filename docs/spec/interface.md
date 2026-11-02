@@ -938,7 +938,8 @@ transport as `local_append`: the personal `authorization_verifier` argv (never p
 16 KiB of stdout, process-group kill, stderr discarded, duplicate keys rejected and raw output never in diagnostics.
 Its whole invocation is bounded by 3 seconds, a constant of this action only; every other action keeps 5 seconds.
 It is a read of the host's own process table, not consent: there is no receipt and no write. No verifier configured
-means nothing is asked.
+means nothing is asked. Within one call the first request runs alone and the others start together after it; a
+transport or contract fault on the first starts no further request (R212).
 
 The request has exactly `schema` (`pod-relay-verification/v1`), `action` (`process_exit`) and `references`: 1 to 24
 unique, sorted Dispatch ids, each matching `[A-Za-z0-9._:-]{1,64}`. Pod sends no runtime, host, terminal, Run or
@@ -1421,7 +1422,8 @@ Discovery reads the all-Run inventory with the newest-first cursor walk alone, t
 checks as the single query before 0.21.31. Its cursor is a keyset position, so every Dispatch that
 exists for the whole walk is listed exactly once, whatever state it changes to, and a malformed row
 fails where it always did. `discovery.fleet_read` is `sequential`, or `bound` for a bound caller,
-and `discovery.orca_reads` counts the call's Orca reads; `discovery` is diagnostic only. The
+`discovery.orca_reads` counts the call's Orca reads, and `discovery.host_exit` counts R212's
+requests (`requests`, `asked`, `counted`, and after a stop `not_asked_after` and `not_asked`); `discovery` is diagnostic only. The
 inventory's cost grows with the Dispatches Orca keeps, about 0.15 s per 100 finished Dispatches.
 
 The change recheck runs once, after every query's first pass, beside the end reads (the

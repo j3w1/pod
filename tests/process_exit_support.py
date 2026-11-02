@@ -135,3 +135,50 @@ def held(result, dispatch):
 def exit_codes(result):
     """Each held candidate's R212 code, from its unknown."""
     return {row["dispatch"]: row["host_exit"]["code"] for row in result["unknowns"] if "host_exit" in row}
+
+
+class FakeVerifier:
+    """A `process_exit` verifier behind Pod's transport, so no process starts: it replaces `process_exit._output`.
+
+    `modes` sets the answer by a request's first id, `mode` for every other request; `before` runs on each request
+    first, in the requesting thread. Each request's ids are recorded in arrival order."""
+
+    def __init__(self, mode=None, modes=None, before=None):
+        import threading
+        self.mode, self.modes, self.before = mode, dict(modes or {}), before
+        self.requests, self.lock = [], threading.Lock()
+        self.scanned = now()  # one scan time, so repeated calls answer identically
+
+    def __call__(self, command, payload):
+        from pod import relay
+        ids = list(payload["references"])
+        with self.lock:
+            self.requests.append(ids)
+        if self.before is not None:
+            self.before(ids)
+        mode = self.modes.get(ids[0], self.mode)
+        if mode in ("fail", "timeout"):
+            raise relay.refusal({"fail": "relay_verifier_failed", "timeout": "relay_verifier_timeout"}[mode])
+        if mode == "malformed":
+            return b"{"
+        verdict = {"schema": payload["schema"], "action": payload["action"], "verified": True, "host": "local",
+                   "runtime": "runtime", "method": "fake whole process-table scan", "processes": 42,
+                   "observed_at": self.scanned,
+                   "dispatches": [{"reference": reference, "known": True, "state": "absent",
+                                   "terminal_handle": reference + "-terminal", "carriers": 0,
+                                   "checked": ["terminal_handle"]} for reference in ids]}
+        if mode == "mismatch":
+            verdict["action"] = "local_append"
+        elif mode == "unverified":
+            verdict.update(verified=False, host=None, runtime=None, method=None, processes=None, observed_at=None,
+                           dispatches=None)
+        elif mode == "foreign_host":
+            verdict["host"] = "builder-2"
+        elif mode == "foreign_runtime":
+            verdict["runtime"] = "older-runtime"
+        elif mode == "stale":
+            verdict["observed_at"] = "2001-01-01T00:00:00+00:00"
+        return json.dumps(verdict).encode()
+
+    def asked(self):
+        return [reference for ids in self.requests for reference in ids]
