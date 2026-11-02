@@ -10769,6 +10769,238 @@
         "tests.test_admission_batch.RunCoordinatorFenceTests.test_a_normal_batch_requests_no_native_read_after_the_fence"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A826",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.RecordTests.test_fast_forward_records_every_field_from_its_source"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A827",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.RecordTests.test_clean_merge_records_with_the_candidate_independent_of_the_result",
+        "tests.test_local_append.ExactnessTests.test_wrong_parents_squash_and_rebase_refuse",
+        "tests.test_local_append.ExactnessTests.test_another_tree_a_conflict_and_a_differing_method_refuse",
+        "tests.test_local_append.ExactnessTests.test_the_global_attributes_layer_alone_never_cleans_a_conflict",
+        "tests.test_local_append.ExactnessTests.test_a_conflicting_merge_refuses_with_every_ambient_union_layer"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A828",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.StateTests.test_each_unfinished_state_refuses_with_its_own_code",
+        "tests.test_local_append.StateTests.test_a_failed_unknown_or_unverified_operation_refuses_with_its_own_code",
+        "tests.test_local_append.StateTests.test_a_requested_append_records_once_the_host_reports_success"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A829",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.CheckTests.test_foreign_repository_objective_and_source_name_only_the_field",
+        "tests.test_local_append.CheckTests.test_another_candidate_tree_or_row_refuses",
+        "tests.test_local_append.CheckTests.test_echo_and_tip_checks_refuse"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A830",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.TransportTests.test_no_verifier_refuses_before_any_process",
+        "tests.test_local_append.TransportTests.test_failing_timed_out_and_oversized_verifiers_refuse",
+        "tests.test_local_append.TransportTests.test_invalid_and_duplicate_key_output_refuses",
+        "tests.test_local_append.TransportTests.test_wrong_top_level_and_identity_shapes_refuse",
+        "tests.test_local_append.TransportTests.test_wrong_provenance_shapes_refuse",
+        "tests.test_local_append.TransportTests.test_project_config_cannot_supply_the_verifier"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A831",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.RecoveryTests.test_the_original_request_after_a_lost_acknowledgement_reads_back",
+        "tests.test_local_append.RecoveryTests.test_fresh_sequence_and_closing_restatements_keep_the_record_without_a_read",
+        "tests.test_local_append.RecoveryTests.test_another_operation_or_kind_never_replaces_the_record"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A832",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.DecisionTests.test_a_merge_that_landed_or_may_have_landed_blocks_the_local_kind",
+        "tests.test_local_append.DecisionTests.test_a_failed_or_canceled_merge_does_not_block",
+        "tests.test_local_append.DecisionTests.test_a_governor_merge_after_a_local_delivery_refuses_before_authority",
+        "tests.test_local_append.DecisionTests.test_finalization_still_owes_the_merge_record_for_a_merge_pass",
+        "tests.test_local_append.DecisionTests.test_a_closing_checkpoint_keeps_owing_the_merge_record",
+        "tests.test_local_append.DecisionTests.test_a_closing_report_keeps_owing_the_merge_record_and_its_report_unconsumed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A833",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append_closure.ClosureTests.test_delivered_reads_finalizing_until_the_coordinator_closes",
+        "tests.test_local_append_closure.ClosureTests.test_a_moved_target_with_changed_governance_keeps_the_bound_base",
+        "tests.test_local_append_closure.ClosureTests.test_a_closing_checkpoint_and_report_keep_the_bound_base",
+        "tests.test_local_append_closure.ClosureTests.test_a_closing_write_that_first_records_the_append_refuses",
+        "tests.test_local_append_closure.ClosureTests.test_sideways_moves_and_retargets_keep_their_refusals",
+        "tests.test_local_append_closure.ClosureTests.test_unchanged_sources_adopt_although_the_target_lacks_the_result",
+        "tests.test_local_append_closure.ClosureTests.test_proof_the_delivery_relied_on_is_judged_on_the_delivered_candidate"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A834",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append_closure.EvidenceClosureTests.test_sweep_closes_a_lost_coordinators_local_delivery_without_a_pr_or_verifier",
+        "tests.test_local_append_closure.EvidenceClosureTests.test_a_direct_objective_closes_by_evidence",
+        "tests.test_local_append_closure.EvidenceClosureTests.test_a_recorded_unmerged_pull_request_still_holds_the_chain",
+        "tests.test_local_append_closure.EvidenceClosureTests.test_historical_retirement_detection_names_the_local_operation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A835",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append_closure.ClosureTests.test_delivered_reads_finalizing_until_the_coordinator_closes",
+        "tests.test_local_append_closure.ReaderTests.test_admission_and_the_selected_read_carry_no_delivery_fact",
+        "tests.test_local_append_closure.ReaderTests.test_the_tick_line_is_unchanged_by_the_recording",
+        "tests.test_local_append_closure.ReaderTests.test_a_subgoal_citing_the_receipt_after_the_delivery_records_nothing",
+        "tests.test_local_append_closure.ReaderTests.test_a_subgoal_citing_a_receipt_before_any_delivery_records_none",
+        "tests.test_local_append_closure.ReaderTests.test_cleanup_counts_no_train_only_candidate_integrated"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A836",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append_closure.ReleasedReaderTests.test_the_released_reader_refuses_the_context_and_the_evidence_file",
+        "tests.test_local_append_closure.ReleasedReaderTests.test_the_released_list_shows_that_record_alone_unsupported",
+        "tests.test_local_append_closure.ReleasedReaderTests.test_released_admission_discovery_reports_unknowns_without_a_write",
+        "tests.test_delivery.VerifiedDeliveryTests.test_wrong_target_and_second_record_refuse_without_state_write"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A837",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.ProofTests.test_a_blocked_or_unknown_proof_refuses_naming_its_status",
+        "tests.test_local_append.ProofTests.test_a_write_that_also_changes_the_candidate_is_judged_on_the_recorded_one",
+        "tests.test_local_append.ProofTests.test_a_restatement_needs_no_proof",
+        "tests.test_local_append.ProofTests.test_the_proof_judges_the_authority_joined_snapshot"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A838",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.RuntimeChangeTests.test_every_refusal_leaves_the_record_without_the_rebind",
+        "tests.test_local_append.RuntimeChangeTests.test_an_unproved_refusal_also_leaves_the_rebind_unwritten",
+        "tests.test_local_append.RuntimeChangeTests.test_a_successful_recording_persists_the_rebind_with_its_write",
+        "tests.test_local_append.RuntimeChangeTests.test_a_reverse_kind_request_after_a_local_delivery_persists_no_rebind"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A839",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.InputTests.test_mixed_unsupported_and_differing_inputs_refuse_with_their_codes",
+        "tests.test_local_append_closure.R93UnchangedTests.test_a_restated_complete_r93_record_keeps_its_bytes",
+        "tests.test_local_append.RecoveryTests.test_fresh_sequence_and_closing_restatements_keep_the_record_without_a_read"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A840",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append.GitQualificationTests.test_sha1_and_sha256_repositories_merge_in_their_own_format",
+        "tests.test_local_append.GitQualificationTests.test_a_linked_worktree_reads_the_common_object_directory",
+        "tests.test_local_append.GitQualificationTests.test_a_source_with_alternates_and_a_rename_merge",
+        "tests.test_local_append.GitQualificationTests.test_a_partial_clone_is_refused_without_a_fetch"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A841",
+      "required_evidence": [
+        "live_native"
+      ],
+      "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A842",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_local_append_closure.EvidenceClosureTests.test_a_mixed_chain_needs_the_successors_merged_pull_request_and_keeps_both_facts"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

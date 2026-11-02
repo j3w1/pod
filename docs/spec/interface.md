@@ -605,7 +605,7 @@ Each row has `layer` (`task_worktree`, `coordinator_tab`, `worker_worktree` or `
 R120 permits verified relayed `publish` or `merge` consent through the existing
 Governor operations. The same verifier also confirms a relayed standing-authorization
 activation or revocation and a responder answer, through the two further actions
-described after the refusal table (R136, R138). R166 adds the separate `decision` action; all these old wire shapes, including `orca_window`, remain unchanged. No verifier is installed or configured
+described after the refusal table (R136, R138). R166 adds the separate `decision` action and R209 the `local_append` read-back below; all these old wire shapes, including `orca_window`, remain unchanged. No verifier is installed or configured
 by default. The host
 may set `authorization_verifier` in its one personal `pod/v2` config to an argv
 list of 1-16 nonempty strings, each at most 4096 characters without NUL; the first
@@ -883,6 +883,53 @@ addition to the verdict's authorization digest. R149 requires validation before
 consumption and exact recovery; the installed issue-intake procedure owns its
 runtime steps and holds. Host authentication, installed producer availability
 and live proof remain separate from synthetic subprocess tests.
+
+#### Local append requests
+
+R209 adds `action: local_append` on the same bounded transport: the personal `authorization_verifier` argv (never
+project config), no shell, five seconds, 16 KiB of stdout, process-group kill, stderr discarded, duplicate keys
+rejected and raw output never in diagnostics. No verifier configured refuses before any process starts. It is a
+read-back of the host's own protected record, not consent: Pod keeps no single-use receipt for it, and a verdict binds
+exactly one repository key and objective. Transport refusals use `local_append_verifier_unconfigured`,
+`local_append_verifier_failed`, `local_append_verifier_timeout`, `local_append_verifier_malformed` and
+`local_append_verifier_mismatch` (a verdict for another schema, action or reference), each with no write.
+
+The request has exactly `schema` (`pod-relay-verification/v1`), `action` (`local_append`) and `reference`, the
+checkpoint's `delivery.local_append.operation`. Pod sends no objective, repository, candidate or other expectation, so
+the verifier has nothing to echo.
+
+The verdict has exactly these fields, with no wrapper:
+
+| Field | Contract |
+| --- | --- |
+| `schema`, `action`, `reference` | Equal to the request. |
+| `verified` | Boolean. `true`: the host authenticated its own protected record of this operation. `false`: it holds no such authenticated record, and `state` and `operation` are `null`. |
+| `state` | When verified: `succeeded`, `requested`, `running`, `failed` or `unknown`, the host record's state mapped onto this closed list. |
+| `operation` | When verified: the object below, from the host's own record; otherwise `null`. |
+
+`operation` has exactly these fields. The first four are present for every verified operation; the rest are present
+only for `succeeded` and `null` otherwise. Commit and tree ids are full lowercase ids of the repository's one format.
+
+| Field | Contract |
+| --- | --- |
+| `repository` | The Pod `repo_key` the append request bound (64 lowercase hex). |
+| `objective` | The Pod objective id, at most 256 characters. |
+| `source` | `{repository, number, locator}` exactly as the objective's recorded `objective_source` holds them, or `null` for a direct objective. A host normally takes these and the two fields above from the selected read (R208) it made before appending. |
+| `candidate` | `{commit, tree}`: the commit the host appended and its tree. |
+| `store` | `{instance, epoch}`: opaque nonempty text, at most 256 characters each. |
+| `row` | `{sequence, digest, operation}`: the immutable ledger row; `sequence` 1 to 2^53-1, `digest` 1 to 128 printable ASCII characters, `operation` the id the row records. |
+| `previous`, `result` | `{commit, tree}`: the train tip before and after the append. |
+| `method` | `fast-forward` or `merge`, which must equal Pod's own derivation. |
+| `certificate` | `{tier, deferred}`: `tier` opaque, 1 to 64 characters; `deferred` 0 to 32 unique opaque entries of 1 to 256 characters. |
+| `appended_at` | Timezone-aware timestamp, normalized to UTC. |
+
+The verifier is a trusted, read-only lookup that authenticates the host's own record and never derives a field from
+Pod. Across reads of one operation the identity fields (`reference`, `operation.repository`, `objective`, `source`,
+`candidate`) are stable; `state` only moves forward, `requested` then `running` then `succeeded` or `failed`, with
+`unknown` possible before a terminal state and resolving to one of them; `succeeded` and `failed` are terminal; and
+once `succeeded`, every provenance field (`store`, `row`, `previous`, `result`, `method`, `certificate`,
+`appended_at`) is immutable. Pod reads the verdict only at a first recording and never re-reads a recorded one, so it
+stores no unfinished read. R209 defines Pod's checks of the facts, the stored record and every refusal after the read.
 
 ### Recorded-question status contract
 

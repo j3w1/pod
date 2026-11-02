@@ -1512,6 +1512,8 @@ def _delivered(project: Path, verdict: dict, *, port) -> dict:
                 "abandonment": "R112 retirement remains an optional abandonment decision; it never proves delivery."}
     return {**verdict, "status": "delivered", "condition": "delivered", "retirement": verdict["condition"],
             "delivery": [row["pr"] for row in proof["facts"]["delivery"]],
+            **({"local_delivery": [row["operation"] for row in proof["facts"]["local_delivery"]]}
+               if proof["facts"].get("local_delivery") else {}),
             "message": "Delivery is proved; this objective closes by evidence, with no owner decision.",
             "next_action": DELIVERED_ACTION}
 

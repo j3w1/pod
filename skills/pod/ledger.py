@@ -1994,6 +1994,23 @@ def _adoption_only_refusal() -> PodError:
                      "referent": {"reason": "adoption_only"}})
 
 
+def _verify_local_append(project: Path, objective: str, state: dict, authority: dict, prior_map: dict,
+                         operation: str, core: dict) -> dict:
+    """R209 at the recording write: the host's read-back, Pod's own checks and the shared exact-candidate proof,
+    judged on this write's authority-joined snapshot rather than the bytes on disk."""
+    from copy import deepcopy
+    from .config import effective
+    from .local_append import verify
+
+    def proof():
+        from .admission import _proof_view
+        return _proof_view(project, objective, core.get("candidate"), state=deepcopy(state),
+                           native=authority.get("native"))[0]
+    return verify(project, objective, prior_map, operation, seq=prior_map["seq"] + 1, candidate=core.get("candidate"),
+                  source=core.get("objective_source"),
+                  command=effective(project)["preferences"].get("authorization_verifier"), proof=proof)
+
+
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict, issue_revision=None) -> tuple[dict, dict | None]:
@@ -2009,14 +2026,22 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     if proposed or prior_map is not None:
         refresh = proposed.get("governance_refresh") is True
         verified_delivery = None
+        local_operation = None
         if has_delivery:
             from .governance import verify_delivery
+            from .local_append import request as local_request
+            # R209: the new request is read strictly; every other object keeps R93's parsing below.
+            local_operation = local_request(delivery_request, (prior_map or {}).get("delivery"))
             if prior_map is None:
                 raise PodError("delivery_unverified", "A delivery needs a bound obligation map",
                                {"detail": "map_missing", "next_action": "checkpoint the objective map first"})
-            record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
-            verified_delivery = verify_delivery(project, objective, prior_map, record_id,
-                                                seq=prior_map["seq"] + 1, candidate=core.get("candidate"))
+            if local_operation is not None:
+                verified_delivery = _verify_local_append(project, objective, state, authority, prior_map,
+                                                         local_operation, core)
+            else:
+                record_id = delivery_request.get("record") if isinstance(delivery_request, dict) else None
+                verified_delivery = verify_delivery(project, objective, prior_map, record_id,
+                                                    seq=prior_map["seq"] + 1, candidate=core.get("candidate"))
         kept = None
         bookkeeping = False
         delivered = None
@@ -2220,11 +2245,31 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             kept = _closure_preservation(project, objective, state, ctx)
             # A delivery recorded in the closing write itself does not count: closure is the last record, and
             # its report is derived before that write adds the delivery.
+            from .local_append import remote as remote_delivery
+            # Only a verified R93 record settles a merge PASS's delivery record; a local append never does (R209).
             ctx["closure_unrecorded"] = _closure_unrecorded(
-                project, objective, state, delivered=(prior_map or {}).get("delivery") is not None, preserved=kept)
+                project, objective, state, delivered=remote_delivery((prior_map or {}).get("delivery")) is not None,
+                preserved=kept)
+            if local_operation is not None and (prior_map or {}).get("delivery") != verified_delivery:
+                # R117/R209: a local append has no Governor row to hold the order, so a closing write that would
+                # first record it names the delivery record; the closure report would otherwise omit it.
+                unrecorded = ctx["closure_unrecorded"] or {"remaining": []}
+                ctx["closure_unrecorded"] = {
+                    "remaining": ["delivery_record", *[name for name in unrecorded["remaining"]
+                                                       if name != "delivery_record"]],
+                    "next_action": "record the local append in its own checkpoint first (delivery: {local_append: "
+                                   "{operation}}, without close), then write the closing checkpoint"}
         try:
             map_state = accept_write(prior_map, proposed, ctx)
         except PodError as exc:
+            if (exc.code == "map_stale" and local_operation is not None and verified_delivery is not None
+                    and (prior_map or {}).get("delivery") == verified_delivery):
+                # R209: a lost acknowledgement is recovered by readback, never by a second write.
+                action = (f"the local append {local_operation[:64]} is already recorded; read it back with "
+                          "pod status --objective (checkpoint.delivery). A later checkpoint at the next sequence "
+                          "may restate it; nothing is appended or replayed")
+                exc.detail = {**(exc.detail or {}), "next_action": action, "recorded_delivery": local_operation}
+                exc.args = (str(exc).rsplit(". Next: ", 1)[0] + f". Next: {action}", *exc.args[1:])
             if ctx.get("closure_preservation") and isinstance(exc.detail, dict):
                 # Today's refusal stands, naming why no row could be preserved (C11).
                 exc.detail = {**exc.detail, "closure_preservation": ctx["closure_preservation"]}
@@ -2390,10 +2435,19 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         issue_requested = requested(proposed.get("revision_authority"))
         closing = isinstance(proposed, dict) and proposed.get("close") is True
         reopening = isinstance(proposed, dict) and proposed.get("reopen") is True
+        delivery_input = proposed.get("delivery") if isinstance(proposed, dict) else None
+        from .local_append import is_local
+        # R209: a delivery request that names the local kind, or any delivery request once a local delivery is stored
+        # (an R93 request then refuses `delivery_recorded`), may refuse after authority joins, so it defers a rebind
+        # as closure does. Objectives without a local delivery keep today's behaviour for R93 requests.
+        local_recording = isinstance(proposed, dict) and "delivery" in proposed and (
+            isinstance(delivery_input, dict) and bool({"local_append", "kind"} & set(delivery_input))
+            or is_local(previous.get("delivery")))
         # A closing or reopening write carries its rebind only in its own successful write.
         authority = require_authority(project, objective, owner=owner, state=state,
                                       expected_runtime=native["runtime"],
-                                      persist_rebind=not (issue_requested or closing or reopening), reopen=reopening)
+                                      persist_rebind=not (issue_requested or closing or reopening or local_recording),
+                                      reopen=reopening)
         if issue_requested and authority.get("continuity") is not None:
             raise issue_refuse("native_continuity_requires_separate_checkpoint")
         if native["runtime"] != authority["runtime"]:
@@ -2471,7 +2525,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         _write(path, state, native=authority.get("native"),
                before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None,
                project=project)
-        if closing or reopening:
+        if closing or reopening or local_recording:
             _record_continuity_event(authority.get("continuity"))
         result = dict(state)
         result.update(route_settlement_projection(list(state["admissions"].values())))
@@ -3267,8 +3321,10 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             if value.get("close") is True and not map_state.get("closure"):
                 from .succession import refuse_incomplete
                 refuse_incomplete(project, objective, state, full=True)  # As a checkpoint's new closure (R118).
-                ctx["closure_unrecorded"] = _closure_unrecorded(project, objective, state,
-                                                                delivered=map_state.get("delivery") is not None)
+                from .local_append import remote as remote_delivery
+                # Only a verified R93 record settles a merge PASS's delivery record; a local append never does (R209).
+                ctx["closure_unrecorded"] = _closure_unrecorded(
+                    project, objective, state, delivered=remote_delivery(map_state.get("delivery")) is not None)
             new_map = accept_write(map_state, value, ctx, triaged=triaged)
         except PodError as exc:
             _map_refusal_context(exc, state)

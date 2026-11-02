@@ -25,6 +25,11 @@ def _governor_projection(project: Path, objective: str, owner: str, *, mutating:
     from .operations import OrcaPort
 
     state = read(project, objective)
+    if isinstance(forward_action, dict) and forward_action.get("kind") == "merge" and state is not None:
+        # R209: refuse from the record alone, before a runtime change is classified and persisted below; the
+        # Governor repeats this under the objective lock before it joins authority.
+        from .governor import _refuse_merge_after_local_delivery
+        _refuse_merge_after_local_delivery(state)
     if mutating:
         from .handoff import refuse_nonowner
         refuse_nonowner(project, objective, state, owner)
@@ -805,8 +810,9 @@ def _finalization_refusal(operation: str, exc: PodError) -> bool:
     if isinstance(exc.detail, dict) and exc.detail.get("basis") == "evidence":
         return False  # Closed by evidence: nothing remains to record, and the refusal says so (R145).
     detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else None
+    from .local_append import CODES as LOCAL_APPEND_CODES
     return (operation in _FINALIZATION_OPERATIONS
-            and (exc.code in _FINALIZATION_REFUSALS or detail == "closure_unfinished"
+            and (exc.code in _FINALIZATION_REFUSALS or exc.code in LOCAL_APPEND_CODES or detail == "closure_unfinished"
                  or isinstance(exc.detail, dict) and bool(exc.detail.get("worker_tabs"))))
 
 
