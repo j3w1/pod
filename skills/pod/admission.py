@@ -2651,13 +2651,25 @@ def selected(project: Path, *, repository: str | None = None, objective: str | N
         unknowns.append({"code": "invalid_record", "fact": "selected_record"})
     if result["proof"] is None:
         result["proof"] = {"status": "unknown", "candidate": candidate, "reason": "admission_incomplete"}
+    answer = _selected_published(result, expect, candidate)
+    # Publication is part of the deadline: an answer finished after it ran out is never ready.
+    if budget.remaining() <= 0:
+        if not any(row["code"] == DEADLINE_SPENT for row in result["unknowns"]):
+            result["unknowns"].append({"code": DEADLINE_SPENT, "fact": "read_deadline"})
+        answer = _selected_published(result, expect, candidate)
+    return answer
+
+
+def _selected_published(result: dict, expect: str | None, candidate: str) -> dict:
+    """The finished answer, withheld when its final serialized form exceeds the projection bound."""
     answer = _selected_finish(result, expect)
     from .orca import MAX_OUTPUT
     if len(json.dumps(answer, sort_keys=True, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT:
         omitted = {"assurances": len(result["assurances"]), "attempts": len(result["attempts"])}
         result.update(snapshot=None, assurances=[], attempts=[],
                       proof={"status": "unknown", "candidate": candidate, "reason": "selected_projection_limit"},
-                      unknowns=[{"code": "selected_projection_limit", "fact": "projection", "omitted": omitted}])
+                      unknowns=[{"code": "selected_projection_limit", "fact": "projection", "omitted": omitted},
+                                *(row for row in result["unknowns"] if row["code"] == DEADLINE_SPENT)])
         answer = _selected_finish(result, expect)
     return answer
 

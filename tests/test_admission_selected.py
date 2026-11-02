@@ -508,6 +508,27 @@ class UncertaintyTests(SelectedCase):
         self.assertEqual((result["binding"]["candidate"], result["binding"]["tree"]), (self.base, None))
         self.assertEqual(facts_digest(result), result["digest"])
 
+    def test_a_deadline_spent_while_the_answer_is_published_is_unknown(self):
+        """The reviewer's probe: the real budget expires right after the answer is finished."""
+        from pod.window import Budget
+        self.ready()
+        budgets, real_finish = [], admission._selected_finish
+
+        def make(timeout):
+            budgets.append(Budget(timeout))
+            return budgets[-1]
+
+        def finish(result, expect):
+            answer = real_finish(result, expect)
+            budgets[-1].deadline = budgets[-1]._clock() - 1  # expired once the answer, digest and form exist
+            return answer
+        with patch("pod.admission.Budget", side_effect=make), \
+             patch("pod.admission._selected_finish", side_effect=finish):
+            result = self.selected()
+        self.assertEqual((result["status"], [row["code"] for row in result["unknowns"]]),
+                         ("unknown", ["discovery_budget"]))
+        self.assertEqual(facts_digest(result), result["digest"])
+
     def test_the_final_serialized_answer_is_bounded(self):
         self.ready()
         answer = self.selected()

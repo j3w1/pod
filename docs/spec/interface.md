@@ -1445,8 +1445,9 @@ The answer holds:
 
 Top-level `unknowns` are only the facts that make the read itself incomplete or uncertain:
 `proof_unverified` (an unknown proof, including a failed exact worker read), `discovery_budget` (the
-deadline ran out during any read, including the last one; the deadline is checked after the last read,
-and its expiry is never a refusal),
+deadline ran out during any read, including the last one, or before the finished answer, its digest and
+its printed form were complete; the deadline is checked after the last read and again once the answer
+is finished, and its expiry is never a refusal),
 `record_changed` (the record's primary or journal bytes changed during the read), `invalid_record`
 and `state_unsupported`, and `selected_projection_limit`. `status` is `unknown` when any is present,
 else `ready` when the proof is ready, else `blocked`. A fact an attempt lacks
@@ -1485,5 +1486,5 @@ of 10 seconds and maximum of 30, and every read spends it.
 - <a id="a800"></a>**A800** — An implementation attempt reports its disposition and whether its integrated or result commit is in the candidate: true, false, null without a commit, and null with `implementation_ancestry_unknown` when Git cannot tell.
 - <a id="a801"></a>**A801** — A candidate that is not a full id or not a commit in the repository, a different `--tree`, a malformed `--tree` and a repository without the record each refuse with their code and exit 1, before the record is read; a record that names another repository refuses; the CLI refuses every discovery flag, `--batch`, a missing `--json`, and `--tree` without `--selected`, and answers a factual read with exit 0.
 - <a id="a802"></a>**A802** — The same facts give the same digest, recomputable from the returned answer without `digest`, `status`, `conflicts` and `next_action`; a changed plan revision or policy revision gives a new digest; `--expect` with a stale digest adds `digest_changed` and makes the answer `blocked` with exit 0 while returning the unchanged facts digest; a malformed `--expect` and the `--tree` mismatch refuse with exit 1.
-- <a id="a803"></a>**A803** — An exhausted deadline (during the proof, at the end of the last read, or before the record is read), a record changed during the read, a failed exact worker read and an answer over the projection bound each give `unknown` with exactly their code, never `ready` and never a refusal; the bound applies to the final printed answer, and the over-bound answer has a null digest and no snapshot, assurances or attempts.
+- <a id="a803"></a>**A803** — An exhausted deadline (during the proof, at the end of the last read, before the record is read, or once the answer is finished), a record changed during the read, a failed exact worker read and an answer over the projection bound each give `unknown` with exactly their code, never `ready` and never a refusal; the bound applies to the final printed answer, and the over-bound answer has a null digest and no snapshot, assurances or attempts.
 - <a id="a804"></a>**A804** — A ready proof whose reviewer attempt lacks its recorded effort stays `ready` with no top-level unknown; the gap is visible in that attempt's `unknowns`, and filling it changes the digest.

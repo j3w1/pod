@@ -10729,7 +10729,8 @@
         "tests.test_admission_selected.UncertaintyTests.test_an_answer_over_the_output_bound_is_withheld",
         "tests.test_admission_selected.UncertaintyTests.test_a_deadline_spent_by_the_last_read_is_unknown",
         "tests.test_admission_selected.UncertaintyTests.test_a_deadline_spent_before_the_record_is_read_is_unknown_not_a_refusal",
-        "tests.test_admission_selected.UncertaintyTests.test_the_final_serialized_answer_is_bounded"
+        "tests.test_admission_selected.UncertaintyTests.test_the_final_serialized_answer_is_bounded",
+        "tests.test_admission_selected.UncertaintyTests.test_a_deadline_spent_while_the_answer_is_published_is_unknown"
       ],
       "status": "NOT_RUN"
     },
