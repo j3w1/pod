@@ -1188,6 +1188,16 @@ def _admissions(raw: dict, directory: Path, *, placement_unknown: bool = False) 
     return dict(rows)
 
 
+def _attributed(raw: dict) -> dict:
+    """The facts a record pass takes from a record's attribution read: all but the bytes' generation and the proof
+    basis of its attribution, which admission never reads (R207). Everything else is compared, so a fact a later
+    reader adds to the attribution read is compared too."""
+    view = {key: value for key, value in raw.items() if key != "_facts_generation"}
+    if isinstance(view.get("_facts_attribution"), dict):
+        view["_facts_attribution"] = {key: value for key, value in view["_facts_attribution"].items() if key != "basis"}
+    return view
+
+
 def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = False) -> dict:
     from .installer import STATE_SCHEMAS
     from .ledger import _CONTEXT_FIELDS, _SUCCESSION_FIELDS
@@ -1202,8 +1212,14 @@ def _admission_rows(raw: dict, directory: Path, *, placement_unknown: bool = Fal
         unplaced = placement_unknown and facts.get("errors") == [{"code": "objective_placement_unknown"}]
         if (facts.get("complete") is not True and not closed_empty and not unplaced) or not isinstance(facts.get("admissions"), dict):
             raise PodError("admission_facts_incomplete", "Current claim inventory is incomplete")
+        # Other bytes may still carry every fact the attribution read gave (a re-encoding). Then the attribution and
+        # these claims are one read of the newer bytes, and the change recheck compares the record with them, so any
+        # later change, a return to the attribution read's bytes included, is found (R207). Only a shared discovery
+        # keeps the claims read for that recheck.
         if current["_facts_generation"] != raw["_facts_generation"]:
-            raise PodError("record_changed", "Attribution changed before current claims were read")
+            attributed, claimed = _attributed(raw), _attributed(current)
+            if _SHARED.get() is None or any(key not in claimed or claimed[key] != value for key, value in attributed.items()):
+                raise PodError("record_changed", "Attribution changed before current claims were read")
         raw.clear()
         raw.update(current)
         raw["admissions"] = facts["admissions"]
@@ -1306,6 +1322,15 @@ def _after_context(path: Path) -> str:
 def _after_context_read(path: Path) -> str:
     discovery = _SHARED.get()
     facts = discovery.done(("facts", str(path), False)) if discovery is not None else None
+    claims = discovery.done(("facts", str(path), True)) if discovery is not None else None
+    if (isinstance(facts, dict) and isinstance(facts.get("generation"), dict) and isinstance(claims, dict)
+            and isinstance(claims.get("generation"), dict) and claims["generation"] != facts["generation"]):
+        # The claims came from later bytes than the attribution (R207): the record is unchanged only while it still
+        # holds those bytes. Any other bytes, the attribution read's included, are a change, never its identity.
+        data = _shared(("after-bytes", str(path)), lambda: history._context_bytes(path, history.MAINTENANCE_LIMIT))
+        if hashlib.sha256(data).hexdigest() == claims["generation"].get("sha256"):
+            return digest(facts["generation"])
+        return "changed:" + _primary(path)[1]
     if isinstance(facts, dict) and isinstance(facts.get("generation"), dict):
         data = _shared(("after-bytes", str(path)), lambda: history._context_bytes(path, history.MAINTENANCE_LIMIT))
         if hashlib.sha256(data).hexdigest() == facts["generation"].get("sha256"):
@@ -1859,6 +1884,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         "journal_id": journal_id, "phase": phase, "rows": terminal_rows,
                         "codes": [("admission_facts_incomplete", {}, None)]})
                     continue
+                if name == objective and "_facts_generation" in raw and digest(raw["_facts_generation"]) != identity:
+                    # The selected record binds exact bytes: its claims must come from the bytes its attribution did.
+                    raise PodError("record_changed", "The selected record changed between its attribution and claims reads")
                 phases[record] = phase if raw["checkpoint"]["schema"] == "pod-checkpoint/v3" else "noncurrent"
                 place = raw["checkpoint"].get("worktree") or {}
                 for row in rows.values():

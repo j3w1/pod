@@ -1025,6 +1025,20 @@ class CorrectionRoundTests(BatchCase):
         self.assertFalse(ownership["owner_identity_matches"])
 
 
+class RestoredRecordTests(BatchCase):
+    """A record restored after its claims read and before the change recheck (A/B/A, the pod#222 review)."""
+
+    def test_a_restored_writer_is_record_changed_in_every_query(self):
+        self.intake(worktree=self.place)
+        path, intermediate = self.reserved_writer()
+        with self.claims_read_meets(path, intermediate):
+            answer = self.batch({"worktree": str(self.project)}, {"branch": "main"})
+        self.assertFalse(answer["complete"])
+        for row in answer["responses"]:
+            self.assertFalse(row["result"]["complete"])
+            self.assertIn("record_changed", [unknown["code"] for unknown in row["result"]["unknowns"]])
+
+
 class RunCoordinatorFenceTests(BatchCase):
     """R206 rule S in a batch (A825): the Run-coordinator list is read before the end fence, through the same
     gated reads the fence guards, so an ended Dispatch whose resources are gone settles as in the single query."""
