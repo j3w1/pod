@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 from .errors import PodError
-from . import gitio, history, listing
+from . import gitio, history, listing, process_exit
 from .github import repository_context
 from .ledger import binding_valid, record_name, state_root
 from .orca import DEADLINE_SPENT, WORKER_TERMINAL_STATES as TERMINAL_STATES, _read, _passable, complete_list, read_deadline
@@ -68,6 +68,14 @@ class _Discovery:
         self.fence_started = False  # After this, only the fence's own end reads may read Orca.
         self.abandoned: set = set()  # Dispatches the queries' records account as abandoned.
         self.owner_runs: set = set()  # Runs whose current owner some query observes; changed under `_lock`.
+        # R212: each query's candidate scope, registered at its record-pass yield; the Dispatches some query counts
+        # exited, fixed before the end fence starts; and the call's own clock for the verifier's reserve.
+        self.host_exit_slots: list = []
+        self.host_exit_counted: tuple = ()
+        self.host_exit_summary = {"requests": 0, "asked": 0, "counted": 0}
+        self.clock = time.monotonic
+        self.started = None
+        self.finished_at: dict = {}
         # The fleet read discovery used, for the batch fence: {"page": its newest-first page, "rows": every row}.
         self.fleet_start = None
         self._lock = threading.Lock()
@@ -110,6 +118,11 @@ class _Discovery:
             future.set_result(context.run(fn))
         except BaseException as exc:
             future.set_exception(exc)
+
+    def finish(self, name, value):
+        """Stamp when a discovery inventory read returned, on the call's clock (R212's reserve)."""
+        self.finished_at[name] = self.clock()
+        return value
 
     def done(self, key):
         """A completed first-stage value, or None; never waits and never reads."""
@@ -465,11 +478,13 @@ def _claim_fact(dispatch: str, claim) -> dict:
     return {"dispatch": dispatch, "process": claim.get("process"), "effects": claim.get("effects")}
 
 
-def _fleet_side(observed, claims) -> dict:
+def _fleet_side(observed, claims, counted=()) -> dict:
     """One side of the fleet identity fence over one complete all-Run read, or the code that refused it.
 
     `observed` is {"page": the unfiltered newest-first page, "rows": every row read} or the fault;
-    `claims` maps each abandoned Dispatch whose claim discovery read to its claim, or to the fault."""
+    `claims` maps each abandoned Dispatch whose claim discovery read to its claim, or to the fault;
+    `counted` names the Dispatches some query counted exited on the host's verdict (R212), whose extended identity
+    this side digests too."""
     runtime = None
     try:
         if isinstance(observed, BaseException):
@@ -498,11 +513,15 @@ def _fleet_side(observed, claims) -> dict:
             if isinstance(claims[dispatch], BaseException):
                 raise claims[dispatch]
             facts.append(_claim_fact(dispatch, claims[dispatch]))
+        by_dispatch = {row.get("dispatchId"): row for row in observed["rows"] if isinstance(row, dict)}
+        exits = [_host_exit_identity(by_dispatch[dispatch]) if dispatch in by_dispatch
+                 else {"dispatchId": dispatch, "missing": True} for dispatch in counted]
         side = {"runtime": runtime, "complete": True, "total": page["total"], "counts": dict(counts),
                 "unreleased": len(unreleased), "unreleased_sha256": _rows_digest(runtime, unreleased),
                 "released": len(released), "released_sha256": _rows_digest(runtime, released),
                 "newest": len(newest), "newest_sha256": _rows_digest(runtime, newest),
-                "claims_read": len(facts), "claims_sha256": _rows_digest(runtime, facts)}
+                "claims_read": len(facts), "claims_sha256": _rows_digest(runtime, facts),
+                "host_exit": len(exits), "host_exit_sha256": _rows_digest(runtime, exits)}
     except PodError as exc:
         return {"runtime": runtime if isinstance(runtime, str) and _passable(runtime) else None,
                 "complete": False, "code": exc.code}
@@ -568,16 +587,19 @@ def _native_fence(discovery) -> dict:
             observed[name] = exc
     end_claims = {dispatch: observed.get("claim:" + dispatch, PodError("native_identity_unverified", "No source row"))
                   for dispatch in start_claims}
+    counted = discovery.host_exit_counted  # fixed before the end fence started
     fence = {"start": _fence_side(start, rows=False), "end": _fence_side(observed["end"], rows=True),
-             "fleet_start": _fleet_side(fleet_start, start_claims), "fleet_end": _fleet_side(observed["fleet"], end_claims)}
+             "fleet_start": _fleet_side(fleet_start, start_claims, counted),
+             "fleet_end": _fleet_side(observed["fleet"], end_claims, counted)}
     sides = list(fence.values())
     compared = ("total", "counts", "unreleased", "unreleased_sha256", "released", "released_sha256",
                 "newest", "newest_sha256", "claims_read",
-                "claims_sha256")
+                "claims_sha256", "host_exit", "host_exit_sha256")
     fence["stable"] = bool(all(side["complete"] for side in sides)
                            and len({side["runtime"] for side in sides}) == 1
                            and fence["start"]["sha256"] == fence["end"]["sha256"]
                            and all(fence["fleet_start"][key] == fence["fleet_end"][key] for key in compared))
+    fence["host_exit_dispatches"] = list(counted)
     return fence
 
 
@@ -816,6 +838,238 @@ def _released_by_later(source: dict, dispatch: str, handle: str, rows: list) -> 
               and (row.get("agentTerminalHandle") == handle or (resource(row) or {}).get("terminalHandle") == handle)
               and not ended_released(row)]
     return len(later) == 1 and not others
+
+
+def _physical(path) -> str:
+    """A path resolved once per call, whichever query or reader asks first."""
+    return _shared(("physical", str(path)), lambda: str(Path(path).resolve()))
+
+
+def _overlap(left, right) -> bool:
+    try:
+        left, right = _physical(left), _physical(right)
+        return _within(left, right) or _within(right, left)
+    except (OSError, ValueError):
+        return True  # An inaccessible path cannot establish independence.
+
+
+def _workspace(project: Path, path, places) -> tuple:
+    """The registered worktree of `project` holding `path`, and whether `path` is in that repository at all."""
+    if not path:
+        return None, False
+    def locate():
+        inside = _physical(path)
+        roots = [root for root in places if _within(inside, _physical(root))]
+        return (max(roots, key=len) if roots else None,
+                bool(roots) or any(_overlap(path, root) for root in places))
+    # The same path in the same repository's worktree registry is located once per call.
+    return _shared(("workspace", str(project), str(path)), locate)
+
+
+def _coordinator(run: str, terminals: dict, budget) -> dict:
+    """The Run's current coordinator from one complete Run list per call, before the end fence (rule S, 4)."""
+    coordinators = _shared(("run-coordinators", terminals["runtime"]),
+                           lambda: _run_coordinators(terminals["runtime"], budget.check))
+    if coordinators is None or run not in coordinators:
+        raise PodError("orca_contract", "The Run's current coordinator is unproved")
+    handle = coordinators[run]
+    terminal = next((row for row in terminals["terminals"] if row.get("handle") == handle), None) if handle else None
+    if terminal is None:
+        return {"terminal": handle, "state": "absent"}  # none recorded, or absent from the complete inventory
+    from .retirement import _exited
+    if _exited(terminal):
+        return {"terminal": handle, "state": "exited"}
+    live = (terminal.get("connected") is True and terminal.get("writable") is True
+            and terminal.get("orphaned") is False)
+    return {"terminal": handle, "state": "live" if live else "unverified"}
+
+
+class _HostExitSlot:
+    """One query's R212 scope, registered at its record-pass yield, and what the call decided for its own candidates.
+
+    Candidates and decisions are the query's own: a verdict asked for because of another query never changes this
+    query's result."""
+
+    def __init__(self, project: Path, request: dict, runs: set, gaps: set, abandoned: set):
+        self.project, self.request, self.runs, self.gaps, self.abandoned = project, request, runs, gaps, abandoned
+        self.candidates: dict = {}  # Dispatch -> {"host", "terminal", "run", "worktree"}
+        self.decisions: dict = {}  # Dispatch -> {"counted", "code", "entry", "verdict"}
+
+
+def _host_exit_host(source: dict, shown: dict, handles: set, abandoned: set) -> str | None:
+    """The local execution-host id of a Dispatch R212 may ask about, or None. Settled and not abandoned, liveness
+    neither live nor exited, its agent terminal absent from the complete terminal inventory, and every identity in the
+    request alphabet. A remote, foreign, missing or malformed host is never asked (F4)."""
+    if ((source.get("workerState"), source.get("dispatchStatus")) not in _SETTLED_WORKERS
+            or source.get("workerState") == "abandoned" or shown["dispatch"] in abandoned
+            or shown["liveness"] in ("live", "exited")
+            or not process_exit.eligible_identity(shown["dispatch"])
+            or not process_exit.eligible_identity(shown["terminal"]) or shown["terminal"] in handles):
+        return None
+    host = (source.get("projection") or {}).get("host")
+    if not isinstance(host, dict) or host.get("kind") != "local" or not process_exit.eligible_identity(host.get("id")):
+        return None
+    return host["id"]
+
+
+def _host_exit_scope(slot: _HostExitSlot, shown: dict, places) -> bool:
+    """Rule S's own scope: a row this query would otherwise hold or read a record for."""
+    path = shown["worktree"]
+    return (path is None or shown["run"] in slot.runs or shown["dispatch"] in slot.gaps
+            or _workspace(slot.project, path, places)[1])
+
+
+def _host_exit_relevant(slot: _HostExitSlot, shown: dict, places) -> bool:
+    """The conservative relevance superset S(r, q): it contains `_relevant` for the writer claim and the
+    process-liveness unknown such a row produces, and may admit extra rows."""
+    request = slot.request
+    if not any(request.values()) or shown["dispatch"] in slot.gaps:
+        return True
+    path = shown["worktree"]
+    registered = _workspace(slot.project, path, places)[0] if path else None
+    branch = places.get(registered) if registered is not None else None
+    if path is None or branch is None:
+        return True  # An incomplete location: the projection may only know less, never more.
+    return bool(request["worktree"] and _overlap(request["worktree"], path)
+                or request["branch"] and branch == request["branch"])
+
+
+def _host_exit_requests(ids, hosts: dict) -> list:
+    """Requests of at most K ids, grouped by host and sorted."""
+    by_host = {}
+    for dispatch in sorted(ids):
+        by_host.setdefault(hosts[dispatch], []).append(dispatch)
+    return [(host, group[index:index + process_exit.K]) for host, group in sorted(by_host.items())
+            for index in range(0, len(group), process_exit.K)]
+
+
+def _host_exit_prefetch(discovery, budget, project: Path) -> None:
+    """R212: ask the host verifier, before the end fence, about each query's own candidates; decide per query.
+
+    Runs last in the prefetch, after every other native read a result uses, so only local projection work, the
+    recheck and a batch's end reads follow it. Unconfigured, nothing is asked and every result is as before."""
+    slots = discovery.host_exit_slots
+    fleet, terminals = discovery.done(("fleet",)), discovery.done(("terminals",))
+    if (not slots or not isinstance(fleet, dict) or fleet.get("complete") is not True
+            or not isinstance(fleet.get("workers"), list) or not isinstance(terminals, dict)
+            or terminals.get("complete") is not True or terminals.get("runtime") != fleet.get("runtime")):
+        return
+    runtime = fleet["runtime"]
+    handles = {row.get("handle") for row in terminals["terminals"] if isinstance(row, dict)}
+    for slot in slots:
+        try:
+            places = _shared(("places", str(slot.project)), lambda slot=slot: _places(slot.project))
+        except (PodError, OSError):
+            continue  # The query raises the same fault where it reads its places.
+        for source in fleet["workers"]:
+            if not isinstance(source, dict) or source.get("workerState") == "unsupervised":
+                continue
+            try:
+                shown = _worker_fact(source)
+                host = _host_exit_host(source, shown, handles, slot.abandoned)
+                if (host is None or not _host_exit_scope(slot, shown, places)
+                        or not _host_exit_relevant(slot, shown, places)
+                        or _shared(("settled-gone", shown["dispatch"]), lambda: _settled_gone(
+                            source, shown, fleet["workers"], terminals, lambda run: _coordinator(run, terminals, budget)))):
+                    continue
+            except (PodError, OSError, ValueError):
+                continue  # The projection meets the same fact and keeps its hold.
+            slot.candidates[shown["dispatch"]] = {"host": host, "terminal": shown["terminal"], "run": shown["run"],
+                                                  "worktree": shown["worktree"]}
+    asking = [slot for slot in slots if slot.candidates]
+    if not asking:
+        return
+    try:
+        from .config import effective
+        command = effective(project)["preferences"].get("authorization_verifier")
+    except (PodError, OSError, ValueError):
+        command = False
+    if command is None:
+        for slot in asking:
+            slot.candidates.clear()  # Unconfigured: today's behaviour, with no disclosure.
+        return
+    hosts = {dispatch: facts["host"] for slot in asking for dispatch, facts in slot.candidates.items()}
+    union = set(hosts)
+    if len(_host_exit_requests(union, hosts)) <= process_exit.R:
+        asked = union
+    else:
+        # Over the bound: whole query sets, smallest first, then by their sorted ids; never by query order.
+        asked = set()
+        for wanted in sorted({frozenset(slot.candidates) for slot in asking}, key=lambda ids: (len(ids), sorted(ids))):
+            if len(_host_exit_requests(asked | wanted, hosts)) <= process_exit.R:
+                asked |= wanted
+    plan = _host_exit_requests(asked, hosts) if command else []
+    answers = {}
+    if not command:
+        answers = {dispatch: (process_exit.UNAVAILABLE, None, None) for dispatch in asked}
+    elif plan:
+        try:
+            # A single query reads rule S's Run list lazily; read it now so only local work follows the requests.
+            _shared(("run-coordinators", terminals["runtime"]),
+                    lambda: _run_coordinators(terminals["runtime"], budget.check))
+        except (PodError, OSError):
+            pass  # The projection meets the same outcome and keeps its gap.
+        stamps = [discovery.finished_at.get(name) for name in ("fleet", "terminals")]
+        native = (max(stamps) - discovery.started) if None not in stamps and discovery.started is not None else 0.0
+        reserve = max(process_exit.RESERVE_S, process_exit.RESERVE_SCALE * native)
+        if budget.remaining() < process_exit.TIMEOUT_S + reserve:
+            answers = {dispatch: (process_exit.DEADLINE, None, None) for dispatch in asked}
+        else:
+            futures = [discovery.submit(("host-exit", index), lambda ids=ids: process_exit.ask(command, ids))
+                       for index, (_, ids) in enumerate(plan)]
+            for (host, ids), future in zip(plan, futures):
+                try:
+                    answer = future.result()
+                    code = process_exit.judge(answer, host=host, runtime=runtime)
+                except (PodError, OSError):
+                    answer, code = {"verdict": None}, process_exit.FAILED
+                verdict = answer["verdict"]
+                entries = dict(zip(ids, verdict["dispatches"])) if code is None else {}
+                facts = ({key: verdict[key] for key in process_exit.FACT_FIELDS} if code is None else None)
+                for dispatch in ids:
+                    answers[dispatch] = (code, entries.get(dispatch), facts)
+            discovery.host_exit_summary.update(requests=len(plan), asked=sum(len(ids) for _, ids in plan))
+    counted = set()
+    for slot in asking:
+        covered = all(dispatch in answers and answers[dispatch][0] is None for dispatch in slot.candidates)
+        for dispatch, facts in slot.candidates.items():
+            code, entry, verdict = answers.get(dispatch, (process_exit.CALL_LIMIT, None, None))
+            if code is None:
+                code = process_exit.entry_code(entry, facts["terminal"])
+                if code is None and not covered:
+                    code = process_exit.UNCOVERED
+            slot.decisions[dispatch] = {"counted": code is None, "code": code, "entry": entry, "verdict": verdict}
+            if code is None:
+                counted.add(dispatch)
+    discovery.host_exit_counted = tuple(sorted(counted))
+    discovery.host_exit_summary["counted"] = len(counted)
+
+
+def _host_exit_rows(slot: _HostExitSlot, used: set) -> list:
+    """This query's own disclosure: every candidate it asked about, whether it counted, and the host's attribution."""
+    rows = []
+    for dispatch in sorted(slot.decisions):
+        decision, facts = slot.decisions[dispatch], slot.candidates[dispatch]
+        entry, verdict = decision["entry"] or {}, decision["verdict"] or {}
+        rows.append({"dispatch": dispatch, "run": facts["run"], "worktree": facts["worktree"],
+                     "counted": dispatch in used, "code": decision["code"],
+                     **{key: verdict.get(key) for key in process_exit.FACT_FIELDS},
+                     "state": entry.get("state"), "checked": entry.get("checked")})
+    return rows
+
+
+def _host_exit_identity(row: dict) -> dict:
+    """A counted Dispatch's fence identity (R212): the claim identity plus every native field its exit depends on."""
+    def part(value, *names):
+        value = value if isinstance(value, dict) else {}
+        return {name: value.get(name) for name in names}
+    identity = _identity_row(row)
+    projection = row.get("projection") if isinstance(row.get("projection"), dict) else {}
+    identity["projection"].update(liveness=part(projection.get("liveness"), "verdict", "reason", "observedAt"),
+                                  evidence=part(projection.get("evidence"), "lastObservedAt", "liveStatus"),
+                                  host=part(projection.get("host"), "kind", "id"))
+    identity["resource"].update(part(row.get("resource"), "endpointId", "endpointIncarnation"))
+    return identity
 
 
 def _placement(row: dict) -> dict:
@@ -1387,34 +1641,14 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     # is attributed to no open record.
     fleet_facts, fleet_paths, open_handles, unattributed = {}, {}, set(), {"actor": False}
     abandoned_dispatches = set()
-    physical_paths = {}
-
-    def physical(path):
-        if path not in physical_paths:
-            # Each path is resolved once per call, whichever query asks first.
-            physical_paths[path] = _shared(("physical", str(path)), lambda: str(Path(path).resolve()))
-        return physical_paths[path]
-
-    def overlap(left, right):
-        try:
-            left, right = physical(left), physical(right)
-            return _within(left, right) or _within(right, left)
-        except (OSError, ValueError):
-            return True  # An inaccessible path cannot establish independence.
+    physical, overlap = _physical, _overlap
+    host_slot, host_used = None, set()  # R212: this query's own candidates, and those its projection counted exited
 
     def relevant(facts, selection, key, fact=None):
         return _relevant(facts, selection, key, overlap, fact)
 
     def workspace(path, places):
-        if not path:
-            return None, False
-        def locate():
-            inside = physical(path)
-            roots = [root for root in places if _within(inside, physical(root))]
-            return (max(roots, key=len) if roots else None,
-                    bool(roots) or any(overlap(path, root) for root in places))
-        # The same path in the same repository's worktree registry is located once per call.
-        return _shared(("workspace", str(project), str(path)), locate)
+        return _workspace(project, path, places)
     from .orca import _DEADLINE
     budget = _DEADLINE.get() or Budget(float(timeout))
 
@@ -1690,12 +1924,20 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 proof_outcome = (_proof(project, objective, candidate), None)
             except PodError as exc:
                 proof_outcome = ({"status": "unknown", "candidate": candidate, "reason": exc.code}, exc.code)
+        # The Dispatches that rule T must find settled: those bound by a deferred terminal record's admissions.
+        gap_dispatches = {(row.get("native_binding") or {}).get("dispatchId") for gap in terminal_gaps
+                          for row in gap["rows"].values() if row.get("native_binding")}
         discovery = _SHARED.get()
         if discovery is not None:
             # The call reads these native facts once, for every query, before the end fence starts.
             discovery.abandoned |= abandoned_dispatches
             # Started while the other queries read their records, or as soon as the terminal inventory is known.
             discovery.name_owners({ref["runId"] for ownership in owner_claims() for ref in ownership["recorded_native_refs"]})
+            # R212: this query's own candidate scope, which the call asks the host about before the end fence.
+            host_slot = _HostExitSlot(project, {"worktree": physical(worktree) if worktree else None,
+                                                "branch": branch, "target": target, "effects": effects or []},
+                                      {*runs, *run_sources}, gap_dispatches, set(abandoned_dispatches))
+            discovery.host_exit_slots.append(host_slot)
         yield "native"  # Every query's record pass runs while the native inventory is read.
         # Prefer the installed all-Run inventory for CE's unbound caller.
         # A bound caller retains exact-Run reads and the same outer deadline.
@@ -1714,26 +1956,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         else:
             native_groups = [(None, fleet)]
         places = _shared(("places", str(project)), lambda: _places(project))
-        # The Dispatches that rule T must find settled: those bound by a deferred terminal record's admissions.
-        gap_dispatches = {(row.get("native_binding") or {}).get("dispatchId") for gap in terminal_gaps
-                          for row in gap["rows"].values() if row.get("native_binding")}
 
         def coordinator(run):
-            """The Run's current coordinator from one complete Run list per call, before the end fence (rule S, 4)."""
-            coordinators = _shared(("run-coordinators", terminals["runtime"]),
-                                   lambda: _run_coordinators(terminals["runtime"], budget.check))
-            if coordinators is None or run not in coordinators:
-                raise PodError("orca_contract", "The Run's current coordinator is unproved")
-            handle = coordinators[run]
-            terminal = next((row for row in terminals["terminals"] if row.get("handle") == handle), None) if handle else None
-            if terminal is None:
-                return {"terminal": handle, "state": "absent"}  # none recorded, or absent from the complete inventory
-            from .retirement import _exited
-            if _exited(terminal):
-                return {"terminal": handle, "state": "exited"}
-            live = (terminal.get("connected") is True and terminal.get("writable") is True
-                    and terminal.get("orphaned") is False)
-            return {"terminal": handle, "state": "live" if live else "unverified"}
+            return _coordinator(run, terminals, budget)
 
         def elsewhere(path):
             """Rule T 4b: `path` is proven a registered worktree of another repository. It is an existing directory
@@ -1820,11 +2045,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 registered, in_repository = workspace(path, places)
                 # Only a row this query would otherwise hold or read a record for is judged, so the Run coordinator
                 # reads stay bounded by this repository's own native actors.
-                if ((in_repository or path is None or run in runs or run in run_sources
-                        or shown["dispatch"] in gap_dispatches)
-                        and source.get("workerState") != "abandoned" and shown["dispatch"] not in abandoned_dispatches
-                        and _shared(("settled-gone", shown["dispatch"]), lambda: _settled_gone(
-                            source, shown, native["workers"], terminals, coordinator))):
+                judged = ((in_repository or path is None or run in runs or run in run_sources
+                           or shown["dispatch"] in gap_dispatches)
+                          and source.get("workerState") != "abandoned" and shown["dispatch"] not in abandoned_dispatches)
+                host_decision = host_slot.decisions.get(shown["dispatch"]) if host_slot is not None else None
+                if judged and _shared(("settled-gone", shown["dispatch"]), lambda: _settled_gone(
+                        source, shown, native["workers"], terminals, coordinator)):
                     # Rule S (R206): an ended Dispatch whose terminal, workspace and Run coordinator are all gone.
                     workers[shown["dispatch"]] = shown
                     fleet_facts[shown["dispatch"]] = "settled"
@@ -1836,6 +2062,13 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                                        shown["dispatch"], "--json"],
                                            "condition": "Settled with its terminal, workspace and Run coordinator gone; "
                                                         "it holds no current resource"}})
+                    continue
+                if judged and host_decision is not None and host_decision["counted"]:
+                    # R212: this call's host scan found no process carrying this settled local Dispatch's identity.
+                    shown["liveness"], shown["exit_source"] = "exited", "host_process_exit"
+                    workers[shown["dispatch"]] = shown
+                    fleet_facts[shown["dispatch"]] = "settled"
+                    host_used.add(shown["dispatch"])
                     continue
                 branch_fact, branch_known = places.get(registered), registered is not None
                 binding, placement = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
@@ -1939,6 +2172,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     unknown("run:" + str(run), "native_location_unavailable", dispatch=shown["dispatch"])
                 if shown["liveness"] not in ("live", "exited"):
                     unknown("run:" + str(run), "native_liveness_unverified", dispatch=shown["dispatch"],
+                            **({"host_exit": {"code": host_decision["code"]}} if host_decision is not None else {}),
                             fact="process_liveness", fact_scope={"repo_key": actor_repo, "worktree": path, "branch": branch_fact,
                                 "locations_complete": bool(path) and branch_known},
                             reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
@@ -2145,6 +2379,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     "branch": branch, "target": target, "effects": effects or []}})
     if expect and result["snapshot"] != expect:
         result["conflicts"].append({"kind": "snapshot_changed"})
+    if host_slot is not None and host_slot.decisions:
+        result["host_exits"] = _host_exit_rows(host_slot, host_used)  # this query's own candidates only (R212)
     result["status"] = "unknown" if not result["complete"] else "blocked" if (result["conflicts"] or
         result["proof"] is not None and result["proof"]["status"] != "ready") else "observed"
     return public_decisions(result)
@@ -2234,10 +2470,11 @@ def _bounded(result: dict, kwargs: dict) -> dict:
     return result
 
 
-def _prefetch_native(discovery, budget, *, fence: bool = False) -> None:
+def _prefetch_native(discovery, budget, *, fence: bool = False, project: Path | None = None) -> None:
     """Read, in parallel, every native fact the projections will use: the fleet and terminals already
     started, each abandoned or record-accounted abandoned Dispatch's claim, each observed Run owner and,
-    before an end fence, rule S's Run-coordinator list under the call's deadline (`budget`).
+    before an end fence, rule S's Run-coordinator list under the call's deadline (`budget`). Last, R212's host
+    verdicts for each query's own candidates, after every other read and before the end fence.
     Faults are kept for the queries, which raise them where they read."""
     def settled(key):
         future = discovery._memo.get(("first", *key))
@@ -2268,6 +2505,8 @@ def _prefetch_native(discovery, budget, *, fence: bool = False) -> None:
                 future.result()
             except (PodError, OSError):
                 pass
+    if project is not None:
+        _host_exit_prefetch(discovery, budget, project)
 
 
 def _after_terminals(discovery, budget, fence: bool) -> None:
@@ -2302,6 +2541,8 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
     """
     started = time.monotonic()
     discovery = _Discovery()
+    discovery.clock = getattr(budget, "_clock", time.monotonic)
+    discovery.started = discovery.clock()
     token = _SHARED.set(discovery)
     generators, results = [], [None] * len(queries)
     try:
@@ -2332,8 +2573,8 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
                         _shared(("cohort", str(root)), lambda root=root: _cohort(root, budget))
                     except (PodError, OSError):
                         pass  # The query raises the same outcome where it reads its cohort.
-            discovery.submit(("fleet",), _fleet)
-            discovery.submit(("terminals",), _terminals)
+            discovery.submit(("fleet",), lambda: discovery.finish("fleet", _fleet()))
+            discovery.submit(("terminals",), lambda: discovery.finish("terminals", _terminals()))
             discovery.submit(("terminals-known",), lambda: _after_terminals(discovery, budget, fence))
             for resolved in projects.values():
                 discovery.submit(("places", str(resolved)), lambda resolved=resolved: _places(resolved))
@@ -2343,7 +2584,7 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
             for step, stage in enumerate(("first", "first", "recheck")):
                 discovery.stage = stage
                 if step == 1:
-                    _prefetch_native(discovery, budget, fence=fence)
+                    _prefetch_native(discovery, budget, fence=fence, project=project)
                     if fence:
                         discovery.fence_started = True
                         fenced = discovery.submit(("native",), lambda: _fenced(discovery), stage="fence")
@@ -2363,7 +2604,8 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
             answer = {"results": results, "discovery": {
                 "elapsed_s": None, "native_workers": len(fleet["workers"]) if isinstance(fleet, dict) else None,
                 "records": sum(len(discovery.done(("cohort", key)) or []) for key in roots),
-                "fleet_read": discovery.fleet_read, "orca_reads": None}}
+                "fleet_read": discovery.fleet_read, "orca_reads": None,
+                "host_exit": dict(discovery.host_exit_summary)}}
             if fenced is not None:
                 answer["native_fence"] = fenced.result()
     finally:

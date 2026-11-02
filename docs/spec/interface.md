@@ -605,7 +605,7 @@ Each row has `layer` (`task_worktree`, `coordinator_tab`, `worker_worktree` or `
 R120 permits verified relayed `publish` or `merge` consent through the existing
 Governor operations. The same verifier also confirms a relayed standing-authorization
 activation or revocation and a responder answer, through the two further actions
-described after the refusal table (R136, R138). R166 adds the separate `decision` action and R209 the `local_append` read-back below; all these old wire shapes, including `orca_window`, remain unchanged. No verifier is installed or configured
+described after the refusal table (R136, R138). R166 adds the separate `decision` action, R209 the `local_append` read-back and R212 the `process_exit` read below; all these old wire shapes, including `orca_window`, remain unchanged. No verifier is installed or configured
 by default. The host
 may set `authorization_verifier` in its one personal `pod/v2` config to an argv
 list of 1-16 nonempty strings, each at most 4096 characters without NUL; the first
@@ -930,6 +930,48 @@ Pod. Across reads of one operation the identity fields (`reference`, `operation.
 once `succeeded`, every provenance field (`store`, `row`, `previous`, `result`, `method`, `certificate`,
 `appended_at`) is immutable. Pod reads the verdict only at a first recording and never re-reads a recorded one, so it
 stores no unfinished read. R209 defines Pod's checks of the facts, the stored record and every refusal after the read.
+
+#### Process exit requests
+
+[R212](orca.md#r212--count-a-settled-local-dispatch-exited-on-a-read-time-host-process-verdict) adds `action: process_exit`, which admission sends during discovery, before the end fence. It uses the same
+transport as `local_append`: the personal `authorization_verifier` argv (never project config), no shell, run from `/`,
+16 KiB of stdout, process-group kill, stderr discarded, duplicate keys rejected and raw output never in diagnostics.
+Its whole invocation is bounded by 3 seconds, a constant of this action only; every other action keeps 5 seconds.
+It is a read of the host's own process table, not consent: there is no receipt and no write. No verifier configured
+means nothing is asked.
+
+The request has exactly `schema` (`pod-relay-verification/v1`), `action` (`process_exit`) and `references`: 1 to 24
+unique, sorted Dispatch ids, each matching `[A-Za-z0-9._:-]{1,64}`. Pod sends no runtime, host, terminal, Run or
+expectation, so the host has nothing to echo.
+
+The verdict has exactly these fields, with no wrapper:
+
+| Field | Contract |
+| --- | --- |
+| `schema`, `action` | Equal to the request. |
+| `verified` | `true`: the host scanned the whole process table of `host`. `false`: it could not, and every field below is `null`. |
+| `host` | The native execution-host id whose process table it scanned, as Orca names it (`[A-Za-z0-9._:-]{1,64}`). |
+| `runtime` | The native runtime whose records it read the Dispatches from (`[A-Za-z0-9._:-]{1,64}`). |
+| `method` | 1 to 128 characters of printable ASCII other than `"` and `\`; attribution only. |
+| `processes` | Integer 1 to 2^31−1: processes the scan examined. |
+| `observed_at` | Timezone-aware timestamp of at most 40 characters, normalized to UTC. |
+| `dispatches` | Exactly one entry per requested id, in request order; a missing, extra, repeated or reordered entry makes the verdict malformed. |
+
+Each entry has exactly `reference`; `known` (the host found the Dispatch in its own records, which alone never
+establishes scan coverage); and, when `known` is `true`:
+- `state`: `absent`, `present` or `partial`;
+- `terminal_handle`: the agent terminal handle the host resolved from its own records, in the alphabet above;
+- `carriers`: processes carrying any identity it checked, an integer 0 to 2^31−1, or `null` only for `partial`;
+- `checked`: 1 to 4 unique kinds from `terminal_handle`, `pane`, `process_incarnation` and `worktree`, always
+  including `terminal_handle`.
+
+With `known: false` these four are `null`. `absent` requires `carriers` 0, `present` at least 1, and `partial`
+`null` or 0 with an incomplete scan. The verdict carries no process ids, command lines or environment values.
+
+The verifier is a trusted, read-only lookup. It resolves each Dispatch from its own records, never from Pod, and
+checks at least the agent terminal handle in process environments. With every string at its bound and every count at
+2^31−1, a 24-entry verdict is 7,393 bytes compact and 11,845 bytes indented by four; real values are a fraction of
+that. R212 defines the checks, the hold codes and how admission uses a verdict.
 
 ### Recorded-question status contract
 
@@ -1258,6 +1300,7 @@ pre-merge proof contract rather than equating this status with permission.
 `unknowns` names each specific relevant fact, source record/resource, scope and
 concrete `reconciliation` path. `complete` concerns the requested factual scope;
 `repository_complete` separately reports broader inventory completeness.
+`host_exits`, present only when the call asked the host about this query's own candidates (R212), lists each with whether it counted and the host's attribution; a candidate that still holds adds `host_exit: {code}` to its `native_liveness_unverified` unknown.
 A record that cannot be read or attributed before any of its own resources is known
 holds only those resources (R206): it is named in `unavailable_records` with its code
 and in `unrelated_unknowns`, never in `unknowns`, and makes `repository_complete` false.
@@ -1357,11 +1400,10 @@ is complete and the fence is stable. A factual batch answer exits zero; it is ne
 One call reads each fact once and shares it with every query: the record cohort, each record's
 primary facts, claims and journal, the all-Run worker inventory, the terminal inventory, each
 abandoned worker's current claim, each Run's owner observation, each repository's identity and
-worktree inventory, each effect policy revision and each target resolution. It also derives once,
-for every query, the local facts each query would otherwise repeat: each repository's state root,
-each known repository path's resolution, each workspace's rule T 4b judgement, each Dispatch's
-rule S verdict, each terminal record's validation and each context's or journal's recheck
-identity. Each query receives
+worktree inventory, each effect policy revision, each target resolution and R212's host process-exit verdicts.
+It also derives once, for every query, the local facts each query would otherwise repeat: each repository's state
+root, each known repository path's resolution, each workspace's rule T 4b judgement, each Dispatch's rule S verdict,
+each terminal record's validation and each context's or journal's recheck identity. Each query receives
 the value or the fault of that one read at the point where the single query would read it, so a
 read fault stays a scoped unknown of every result it is relevant to, never a batch failure.
 Nothing is cached across calls. A bound caller keeps the `native_inventory_scope` unknown. The
@@ -1402,8 +1444,8 @@ also returns its rows. A side that is not provably whole or failed has `complete
 one made with the terminal `end` read. The end reads start once every native read any result uses
 has finished (the fleet, the terminal list, every abandoned Dispatch's claim, every observed Run
 owner, started once a record pass names it and the terminal inventory is known, R206 rule S's
-Run-coordinator list, read once and started once the terminal inventory is known, and
-each candidate proof's reads), so they are the call's last native reads; the remaining
+Run-coordinator list, read once and started once the terminal inventory is known,
+each candidate proof's reads and R212's host requests), so they are the call's last native reads; the remaining
 projection and the shared recheck run beside them, and a native read requested after they start
 is refused `native_read_after_fence` rather than made: a claim read becomes that scoped unknown, and
 a Run-owner read keeps its owner observation with that code, `owner_identity_matches` false, and
@@ -1414,7 +1456,7 @@ page of up to 100 rows (the walk's first page at the start; a fresh page at the 
 scope and runtime checks and read in parallel, at the end); `newest` and `newest_sha256` over that
 page's rows; and `claims_read` and `claims_sha256` over the claim Pod derived,
 `{dispatch, process, effects}`, for every abandoned Dispatch whose current claim discovery read,
-read again at the end (a claim that is gone reads as process `exited` with no effects). A row's
+read again at the end (a claim that is gone reads as process `exited` with no effects). Each side also holds `host_exit` and `host_exit_sha256` over every Dispatch some query counted exited on the host's verdict (R212), each by its row identity extended with `projection.liveness` (`verdict`, `reason`, `observedAt`), `projection.evidence` (`lastObservedAt`, `liveStatus`), `projection.host` (`kind`, `id`) and `resource` (`endpointId`, `endpointIncarnation`), and a missing row as `{dispatchId, missing: true}`; `native_fence.host_exit_dispatches` names them. A row's
 identity is `dispatchId`, `runId`, `taskId`, `terminalState`, `workerState`, `dispatchStatus` and
 `agentTerminalHandle`, with `resource` holding `id`, `ownerDispatchId`, `ownershipState`,
 `releaseState`, `terminalHandle` and `worktreeId`, and `projection` holding `id`,
@@ -1437,7 +1479,7 @@ connected, writable or orphaned state; any row, in any terminal state, appearing
 changing an identity field, including a Dispatch settling into `released` or leaving it, or a
 released Dispatch becoming abandoned; any change
 among the newest 100 rows, which holds every Dispatch created during the call; a deleted Dispatch,
-which lowers `total`; a change in an abandoned Dispatch's derived claim; and a runtime change.
+which lowers `total`; a change in an abandoned Dispatch's derived claim; a change to any extended field of a Dispatch counted exited on the host's verdict; and a runtime change.
 A change during the discovery walk is one of these, since the start side is that walk: a Dispatch
 created during it is on the end's newest page, a deletion lowers the end's total, and any identity
 change alters the end's counts or row digests. The end fence is a pure comparison, so a race during its

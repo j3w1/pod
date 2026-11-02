@@ -482,7 +482,8 @@ class RequestTests(BatchCase):
         answer = json.loads(out)
         self.assertEqual((code, answer["schema"], [row["id"] for row in answer["responses"]]),
                          (0, "pod-admission-batch/v1", ["one"]))
-        self.assertEqual(set(answer["discovery"]), {"elapsed_s", "native_workers", "records", "fleet_read", "orca_reads"})
+        self.assertEqual(set(answer["discovery"]),
+                         {"elapsed_s", "native_workers", "records", "fleet_read", "orca_reads", "host_exit"})
         refusals = {("--batch", "--json", "--repository", str(self.project)): "admission_batch_request",
                     ("--batch", "--json", "--effect", "deploy:x"): "admission_batch_request",
                     ("--batch",): "admission_batch_request",
@@ -583,7 +584,8 @@ class FleetFenceTests(FencedCase):
             "unreleased": 3, "unreleased_sha256": canonical("runtime", unreleased),
             "released": 120, "released_sha256": canonical("runtime", released),
             "newest": 100, "newest_sha256": canonical("runtime", newest),
-            "claims_read": 1, "claims_sha256": canonical("runtime", [{"dispatch": "t2", **LIVE_CLAIM}])})
+            "claims_read": 1, "claims_sha256": canonical("runtime", [{"dispatch": "t2", **LIVE_CLAIM}]),
+            "host_exit": 0, "host_exit_sha256": canonical("runtime", [])})  # R212: nothing counted exited
         self.assertEqual(fence["fleet_end"], fence["fleet_start"])
         self.assertTrue(answer["complete"])
         reads = self.native.calls
