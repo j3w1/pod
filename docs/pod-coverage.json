@@ -11014,6 +11014,49 @@
         "tests.test_proof_history.UnselectedHistoryTests.test_closed_history_still_holds_handoff_and_evidence_closure"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A806",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_scan_reread.RereadTests.test_the_list_reads_the_rewritten_record",
+        "tests.test_scan_reread.RereadTests.test_claim_scans_read_the_rewritten_record",
+        "tests.test_scan_reread.RereadTests.test_the_evidence_scan_reads_the_rewritten_record",
+        "tests.test_scan_reread.RereadTests.test_run_scope_and_lookup_read_the_rewritten_record",
+        "tests.test_scan_reread.RereadTests.test_admission_discovery_reads_the_rewritten_record",
+        "tests.test_scan_reread.RereadTests.test_storage_under_reclamation_is_read_again"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A807",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_scan_reread.ChangingTests.test_the_list_names_a_changing_record_apart_with_a_retry_step",
+        "tests.test_scan_reread.ChangingTests.test_claim_scans_hold_with_the_transient_cause",
+        "tests.test_scan_reread.ChangingTests.test_the_evidence_scan_names_the_transient_cause",
+        "tests.test_scan_reread.ChangingTests.test_run_scope_and_lookup_hold_with_the_transient_cause",
+        "tests.test_scan_reread.ChangingTests.test_admission_discovery_holds_with_the_transient_cause"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A808",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_scan_reread.StableDamageTests.test_a_missing_page_at_a_stable_revision_is_still_unreadable_with_todays_code",
+        "tests.test_record_membership.LazyPageTests.test_a_missing_descendant_page_stays_inside_its_record"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

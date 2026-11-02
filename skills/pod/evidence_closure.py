@@ -291,6 +291,9 @@ def _journal_bytes(root: Path) -> bytes | None:
 
 ROOT_UNREADABLE = "state_root_unreadable"
 UNATTRIBUTED = "unattributed"
+RECORD_CHANGED = "record_changed_during_read"  # history.RECORD_CHANGED: a record being written, never damaged.
+CHANGING_CLAIM = ("A Pod record that names it, and so could name it as a claimed successor, changed while it was read; "
+                  "retry, since the record is being written and needs no repair.")
 
 
 def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dict]]:
@@ -317,6 +320,13 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
         return [], [{"record": None, "code": ROOT_UNREADABLE}]
     found = []
     unreadable = []
+    from .history import scan_read
+
+    def read(entry):
+        raw, _ = _read_record(Path(entry.path))
+        # Lazy reads of this record stay inside its own boundary (R206).
+        name = _name(raw)
+        return raw, name, name is not None and record_name(project, context, name) == entry.name
     for entry in entries:
         try:
             if entry.is_symlink():
@@ -330,10 +340,8 @@ def _scan(project: Path, *, orphans: bool = False) -> tuple[list[dict], list[dic
                         if any(item.name != ".lock" for item in contents):
                             unreadable.append({"record": entry.name, "code": UNATTRIBUTED})
                 continue
-            raw, _ = _read_record(Path(entry.path))
-            # Lazy reads of this record stay inside its own boundary (R206).
-            name = _name(raw)
-            member = name is not None and record_name(project, context, name) == entry.name
+            # A record that keeps changing while it is read is named with its own transient code (R206).
+            raw, name, member = scan_read(Path(entry.path) / "context.json", lambda entry=entry: read(entry))
         except PodError as exc:
             from .orca import DEADLINE_SPENT
             if exc.code == DEADLINE_SPENT:
@@ -533,18 +541,22 @@ def _claims(project: Path, objective: str, raw: dict, kind: str, proof: _Proof) 
             proof.add("unverified", "claim_ambiguous", "More than one predecessor names it as successor.")
         elif found["predecessor"] is not None:
             proof.add("unverified", "claim_incomplete", f"An incomplete claim of {found['predecessor']} names it.")
+        elif "changing" in found:
+            proof.add("unverified", RECORD_CHANGED, CHANGING_CLAIM)
         else:
             proof.add("unverified", "claim_unverified", "A Pod record that names it, and so could name it as a "
                       "claimed successor, is unreadable.")
         return
     from .retirement import _claimants, could_claim
-    claimants, unreadable = _claimants(project, objective)
+    claimants, unreadable, changing = _claimants(project, objective)
     if claimants:
         proof.add("unverified", "claim_incomplete", f"Objective {claimants[0]} records it as its successor.")
     elif unreadable and could_claim(project, unreadable, objective):
         # Only an unreadable record that names it could hold a claim of it (R206).
         proof.add("unverified", "claim_unverified", "A Pod record that names it, and so could name it as a claimed "
                   "successor, is unreadable.")
+    elif changing and could_claim(project, changing, objective):
+        proof.add("unverified", RECORD_CHANGED, CHANGING_CLAIM)
 
 
 def _coordinator(doc: dict, proof: _Proof):
@@ -2052,7 +2064,8 @@ def _sweep_scope(target: Path, names: list[str]) -> tuple[list[dict], list[str],
 def _scope_reason(problems: list[dict]) -> str:
     """Plain words for what kept a sweep from reading every record of a repository."""
     orphaned = [row["record"] for row in problems if row["code"] == UNATTRIBUTED]
-    unread = [row for row in problems if row["code"] != UNATTRIBUTED]
+    moving = [row["record"] for row in problems if row["code"] == RECORD_CHANGED]
+    unread = [row for row in problems if row["code"] not in (UNATTRIBUTED, RECORD_CHANGED)]
     parts = []
     if any(row["code"] == ROOT_UNREADABLE for row in problems):
         return "the Pod state root cannot be enumerated; nothing can be proven absent"
@@ -2060,6 +2073,10 @@ def _scope_reason(problems: list[dict]) -> str:
         parts.append(f"{len(unread)} record(s) cannot be read ("
                      + ", ".join(f"{row['record'][:16]}: {row['code']}" for row in unread[:4])
                      + (", ..." if len(unread) > 4 else "") + ")")
+    if moving:
+        # A record being written is not damaged; a retry of the sweep reads it (R206).
+        parts.append(f"{len(moving)} record(s) changed while they were read, so retry the sweep ("
+                     + ", ".join(name[:16] for name in moving[:4]) + (", ..." if len(moving) > 4 else "") + ")")
     if orphaned:
         parts.append(f"{len(orphaned)} director(ies) hold Pod files without a record naming them ("
                      + ", ".join(name[:16] for name in orphaned[:4]) + (", ..." if len(orphaned) > 4 else "") + ")")

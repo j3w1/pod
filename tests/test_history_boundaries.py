@@ -223,7 +223,7 @@ class HistoryScanTests(KernelCase):
         self.record["continued_by"] = {"objective": "successor"}
         # Raw diagnostic scan intentionally does not validate the whole link schema.
         self.path.write_bytes(encoded(self.record, compact=True))
-        self.assertEqual(_claimants(self.project, "successor"), (["synthetic-capacity"], []))
+        self.assertEqual(_claimants(self.project, "successor"), (["synthetic-capacity"], [], []))
 
     def test_fresh_native_outstanding_exact_identity_vetoes_move(self):
         from pod.history import hydrate

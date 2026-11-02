@@ -127,7 +127,9 @@ def incoming_claim(project: Path, objective: str, state: dict | None, *, full: b
     never hides; `{"predecessor": None, "ambiguous": names}` for more than one predecessor; or
     `{"predecessor": None, "unreadable": paths}` when no readable incomplete claim is found and an unreadable record
     could hold one, which a completed claim of its own answers only where `full` asks for proof. Only a record whose
-    readable bytes name this objective exactly, or cannot all be read, could hold one (R206).
+    readable bytes name this objective exactly, or cannot all be read, could hold one (R206). Failing that,
+    `{"predecessor": None, "changing": paths}` names records that could hold one and kept changing while they were
+    read: a transient hold with a retry step, never an unreadable record.
     """
     if not isinstance(state, dict) or state.get("checkpoint") is None:
         return None
@@ -137,7 +139,7 @@ def incoming_claim(project: Path, objective: str, state: dict | None, *, full: b
         return None
     from .retirement import _claimants
     from .retirement import could_claim
-    claimants, unreadable = _claimants(project, objective)
+    claimants, unreadable, changing = _claimants(project, objective)
     found = sorted({*claimants, *([named] if named is not None else [])})
     if len(found) > 1:
         return {"predecessor": None, "ambiguous": found[:MAX_LISTED]}
@@ -147,7 +149,11 @@ def incoming_claim(project: Path, objective: str, state: dict | None, *, full: b
     if found and not completed:
         return {"predecessor": found[0]}
     holding = could_claim(project, unreadable, objective) if unreadable else []
-    return {"predecessor": None, "unreadable": holding[:MAX_LISTED]} if holding else None
+    if holding:
+        return {"predecessor": None, "unreadable": holding[:MAX_LISTED]}
+    # A record that kept changing while it was read is live, not damaged: it holds with its own cause (R206).
+    moving = could_claim(project, changing, objective) if changing else []
+    return {"predecessor": None, "changing": moving[:MAX_LISTED]} if moving else None
 
 
 def _copied_from(project: Path, objective: str) -> str | None:
@@ -186,6 +192,8 @@ def refuse_incomplete(project: Path, objective: str, state: dict | None, *, clai
         raise _claim_ambiguous(found["ambiguous"])
     if claim is not None and found["predecessor"] == claim:
         return
+    if found["predecessor"] is None and "changing" in found:
+        raise _claim_changing(found["changing"])
     if found["predecessor"] is None:
         named = found["unreadable"]
         raise PodError("claim_unverified", "A Pod record that names this objective, and so could name it as the "
@@ -194,6 +202,15 @@ def refuse_incomplete(project: Path, objective: str, state: dict | None, *, clai
                        {"unreadable": named,
                         "next_action": "repair or remove the unreadable record, then retry"})
     raise _claim_incomplete(found["predecessor"])
+
+
+def _claim_changing(named: list[str]) -> PodError:
+    """The transient hold of a record that could name a claim and kept changing while it was read (R206)."""
+    from .history import RECORD_CHANGED, RECORD_CHANGED_ACTION
+    return PodError(RECORD_CHANGED, "A Pod record that names this objective, and so could name it as the successor of an "
+                    "incomplete claim, changed while it was read: " + ", ".join(named[:3])
+                    + (f"; and {len(named) - 3} more" if len(named) > 3 else ""),
+                    {"changing": named, "next_action": RECORD_CHANGED_ACTION})
 
 
 def _closure_recorded(project: Path, objective: str, state: dict | None) -> bool:
@@ -523,6 +540,11 @@ def _incomplete_claim(project: Path, objective: str, state: dict) -> tuple | Non
         return ("claim_ambiguous", "More than one predecessor objective names the predecessor as its successor ("
                 + ", ".join(found["ambiguous"]) + "); it is not continued.", AMBIGUOUS_ACTION[0].upper()
                 + AMBIGUOUS_ACTION[1:] + ".")
+    if found["predecessor"] is None and "changing" in found:
+        from .history import RECORD_CHANGED, RECORD_CHANGED_ACTION
+        return (RECORD_CHANGED, "A Pod record that names the predecessor, and so could name it as a claimed "
+                "successor, changed while it was read: " + ", ".join(found["changing"][:3]) + ".",
+                RECORD_CHANGED_ACTION[0].upper() + RECORD_CHANGED_ACTION[1:] + ".")
     if found["predecessor"] is None:
         return ("predecessor_unverified", "A Pod record that names the predecessor, and so could name it as a claimed "
                 "successor, is unreadable: " + ", ".join(found["unreadable"][:3]) + ".",

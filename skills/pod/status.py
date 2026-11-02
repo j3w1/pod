@@ -406,6 +406,9 @@ def status(project: Path, run: str | None, *, objective: str | None = None, curr
                        "next_safe_action": (((exc.detail or {}).get("next_action") or "Use internal storage inspect and migrate "
                                              "with the exact source revision and SHA256; no owner decision is required.")
                                             if exc.code == "record_too_large"
+                                            # A record being written while it was read needs no repair (R206).
+                                            else (exc.detail or {}).get("next_action") or "retry the same command"
+                                            if exc.code == "record_changed_during_read"
                                             else "inspect the objective state")})
         if objective is not None:
             result["readiness"] = unavailable(exc.code, f"the objective record cannot be read ({exc.code})")

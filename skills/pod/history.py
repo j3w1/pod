@@ -6,6 +6,7 @@ relevant descendants; explicit audits verify the complete retained evidence.
 from __future__ import annotations
 
 import base64
+import contextvars
 import fcntl
 from functools import wraps
 from copy import deepcopy
@@ -605,8 +606,26 @@ class ChunkStore:
         return written
 
 
+# The revisions a scan's read observed, by record path: set only inside `scan_read`, never evidence.
+_OBSERVED = contextvars.ContextVar("pod_scan_observed", default=None)
+
+
 def _context_bytes(path, limit):
     """Bound the actual read, retaining exact physical bytes for decision binding."""
+    observed = _OBSERVED.get()
+    if observed is None:
+        return _read_context_bytes(path, limit)
+    key = os.path.abspath(path)
+    try:
+        data = _read_context_bytes(path, limit)
+    except PodError as exc:
+        observed.setdefault(key, "refused:" + exc.code)
+        raise
+    observed.setdefault(key, _sha(data))
+    return data
+
+
+def _read_context_bytes(path, limit):
     _check_read_deadline()
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -813,6 +832,70 @@ def _load(path, *, limit=MAINTENANCE_LIMIT, validate=True):
 def load_context(path, *, validate=True):
     """The ordinary bounded boundary, also usable by raw-schema diagnostics."""
     return _load(path, validate=validate)[0]
+
+
+# A repository scan reads other objectives' records without their locks (R206). A writer replaces context.json
+# atomically and then reclaims the pages the earlier revision used, so a reader can meet a missing page or storage
+# under reclamation while the record is healthy. Each scan reads one record through `scan_read`.
+RECORD_CHANGED = "record_changed_during_read"
+RECORD_CHANGED_ACTION = ("retry the same command; the record was being written while Pod read it, so it is not "
+                         "damaged and needs no repair")
+SCAN_RETRIES = 2
+SCAN_FAULTS = (PodError, OSError, KeyError, TypeError, ValueError, AttributeError, RecursionError)
+# Codes that name storage another writer is changing right now, whatever context.json reads.
+_IN_FLIGHT = ("history_busy", RECORD_CHANGED)
+
+
+def record_revision(path):
+    """The record's physical revision as a scan sees it: the SHA256 of its exact context.json bytes, or the code
+    that refuses them. It reads no history and takes no lock; outer deadline exhaustion still propagates."""
+    from .orca import DEADLINE_SPENT
+    token = _OBSERVED.set(None)
+    try:
+        return _sha(_context_bytes(Path(path), MAINTENANCE_LIMIT))
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            raise
+        return "refused:" + exc.code
+    finally:
+        _OBSERVED.reset(token)
+
+
+def scan_read(path, read, *, faults=SCAN_FAULTS):
+    """One record's whole scan read, `read()`, classified by revision (R206).
+
+    A healthy read costs nothing extra. After a record-local fault the record's revision is read again and compared
+    with the revision the failing read itself observed (its own bounded context.json read, or else the revision
+    taken after the previous failure). A fault at a stable revision, the same bytes before and after the failing read,
+    is raised unchanged, so every caller keeps its classification of a record that really is unreadable, decoded once
+    as before. A fault while the revision changed, or while another writer was reclaiming its storage, reads the
+    record again, at most SCAN_RETRIES times; a record still changing after that raises RECORD_CHANGED, a transient
+    cause that is never "unreadable". Nothing is locked or written, and outer deadline exhaustion propagates at once."""
+    from .orca import DEADLINE_SPENT
+    path = Path(path)
+    key = os.path.abspath(path)
+    causes, previous = [], None
+    for _ in range(1 + SCAN_RETRIES):
+        seen = {}
+        token = _OBSERVED.set(seen)
+        try:
+            return read()
+        except faults as exc:
+            code = getattr(exc, "code", None) or type(exc).__name__
+            if code == DEADLINE_SPENT:
+                raise
+            failure = exc
+        finally:
+            _OBSERVED.reset(token)
+        before = seen.get(key, previous)
+        after = record_revision(path)
+        if code not in _IN_FLIGHT and before is not None and before == after:
+            raise failure
+        causes.append(code)
+        previous = after
+    raise PodError(RECORD_CHANGED, "The record changed while it was read, on every bounded attempt",
+                   {"record": path.parent.name, "attempts": len(causes), "causes": causes,
+                    "next_action": RECORD_CHANGED_ACTION})
 
 
 @_pinned_read

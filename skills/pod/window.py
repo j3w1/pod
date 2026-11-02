@@ -97,6 +97,8 @@ NEXT = {
     "workers_unreadable": "the Run's worker list could not be read completely; retry the same command",
     "run_shared": "another open objective records this Run; resolve the shared Run before continuing",
     "scope_unreadable": "another objective record could not prove whether it uses this Run; resolve it first",
+    "record_changed_during_read": "another objective record changed while it was read; it is being written and needs "
+                                  "no repair, so retry the same command",
     "peer_history_unverifiable": "a peer's retained history cannot prove its closure; resolve it first",
     "peer_closure_unverified": "read pod status --objective for this objective; it and the command prove a closed peer "
                                "sharing the Run, which the list does not",
@@ -609,6 +611,10 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                     definitive=True)
     if scope["unreadable"]:
         return fail("scope_unreadable", f"{scope['unreadable']} objective record(s) could not prove Run membership.")
+    if scope.get("changing"):
+        from .history import RECORD_CHANGED
+        return fail(RECORD_CHANGED, f"{scope['changing']} objective record(s) changed while they were read; retry, "
+                    "since they are being written and need no repair.")
     if scope.get("closure_unchecked"):
         return fail("peer_closure_unverified", "a closed objective that records this Run is proved closed only by the "
                     "command itself: " + ", ".join(scope["closure_unchecked"][:8]) + ".")

@@ -869,25 +869,37 @@ def contexts_for_run(run_id: str) -> list[tuple[Path, dict]]:
         return []
     if root.is_symlink():
         raise PodError("unsafe_state", "State root is redirected")
+    from .history import RECORD_CHANGED, RECORD_CHANGED_ACTION, scan_read
+
+    def bound(path):
+        state = _read(path)
+        checkpoint_value = state.get("checkpoint")
+        refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
+        admission_match = any(row.get("run_id") == run_id for row in state["admissions"].values())
+        return state, admission_match or any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs)
     matches, holding, first = [], [], None
     for path in sorted(root.glob("*/context.json")):
         try:
-            state = _read(path)
+            # The record's read and its Run match, classified by revision (R206).
+            state, match = scan_read(path, lambda path=path: bound(path), faults=(PodError,))
         except PodError as exc:
             from .handoff import record_mentions
             if not record_mentions(path.parent, run_id):
                 continue
-            holding.append(_holding_record(path, exc))
-            if first is None or first.code == "state_unsupported" and exc.code != "state_unsupported":
+            # A record that kept changing while it was read is live, not damaged; it holds with a retry step.
+            holding.append({"record": path.parent.name, "code": exc.code, "class": "changing"}
+                           if exc.code == RECORD_CHANGED else _holding_record(path, exc))
+            if (first is None or first.code == RECORD_CHANGED and exc.code != RECORD_CHANGED
+                    or first.code == "state_unsupported" and exc.code not in ("state_unsupported", RECORD_CHANGED)):
                 first = exc
             continue
-        checkpoint_value = state.get("checkpoint")
-        refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
-        admission_match = any(row.get("run_id") == run_id for row in state["admissions"].values())
-        if admission_match or any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs):
+        if match:
             matches.append((path.parent, state))
     if holding:
-        raise PodError(first.code, str(first), {**(first.detail or {}), "holding": holding})
+        detail = {**(first.detail or {}), "holding": holding}
+        if first.code == RECORD_CHANGED:
+            detail["next_action"] = RECORD_CHANGED_ACTION
+        raise PodError(first.code, str(first), detail)
     return matches
 
 
@@ -3367,11 +3379,16 @@ def state_inventory(project: Path) -> dict:
     result = {"current": 0, "unsupported": 0, "unreadable": 0, "blocked": False, "superseded": []}
     if not root.exists():
         return result
+    from .history import RECORD_CHANGED, scan_read
     for path in root.glob("*/context.json"):
         try:
-            load_context(path)
+            scan_read(path, lambda path=path: load_context(path), faults=(PodError, OSError))
             result["current"] += 1
         except PodError as exc:
+            if exc.code == RECORD_CHANGED:
+                # Being written, not damaged: counted apart and never blocking (R206).
+                result["changing"] = result.get("changing", 0) + 1
+                continue
             result["unsupported" if exc.code == "state_unsupported" else "unreadable"] += 1
         except OSError:
             result["unreadable"] += 1
@@ -3385,17 +3402,23 @@ def superseded_for_run(run_id: str) -> list[dict]:
     """Superseded objective records that name this Run; read-only, for status."""
     root = state_root()
     rows = []
-    for row in superseded_objectives(root):
-        try:
-            value = load_context(root / row["record"] / "context.json", validate=False)
-        except (OSError, PodError):
-            continue
+    from .history import scan_read
+
+    def names_run(path):
+        value = load_context(path, validate=False)
         checkpoint_value = value.get("checkpoint") if isinstance(value, dict) else None
         refs = checkpoint_value.get("native_refs", []) if isinstance(checkpoint_value, dict) else []
         admissions = value.get("admissions", {}) if isinstance(value, dict) else {}
-        if (any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs if isinstance(refs, list))
+        return (any(isinstance(ref, dict) and ref.get("runId") == run_id for ref in refs if isinstance(refs, list))
                 or isinstance(admissions, dict) and any(isinstance(item, dict) and item.get("run_id") == run_id
-                                                        for item in admissions.values())):
+                                                        for item in admissions.values()))
+    for row in superseded_objectives(root):
+        path = root / row["record"] / "context.json"
+        try:
+            named = scan_read(path, lambda path=path: names_run(path), faults=(OSError, PodError))
+        except (OSError, PodError):
+            continue
+        if named:
             rows.append({**row, "blocked": True, "converted": False})
     return rows
 
