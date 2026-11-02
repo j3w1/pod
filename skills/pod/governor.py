@@ -984,8 +984,12 @@ def merge_target_name(unit: dict | None) -> str | None:
 
 
 def applicable_authorization(unit: dict, authorization: object, *, candidate: str | None,
-                             tree: str | None, scope: str, context: dict | None = None) -> bool:
-    """Both delivery status and authority waits require the same current target truth."""
+                             tree: str | None, scope: str, context: dict | None = None,
+                             as_closed: bool = False) -> bool:
+    """Both delivery status and authority waits require the same current target truth.
+
+    `as_closed` judges a standing consent as the closing write did (R155), for the closure report alone;
+    every new effect keeps the current mode, which a recorded closure has ended."""
     relayed = isinstance(authorization, dict) and authorization.get("channel") == "relayed"
     standing = isinstance(authorization, dict) and "standing" in authorization
     target = merge_target_name(unit) if scope == "merge" or relayed or standing else None
@@ -1004,9 +1008,10 @@ def applicable_authorization(unit: dict, authorization: object, *, candidate: st
     except PodError:
         return False
     if consent is not None and standing:
-        from .standing import state as standing_state
+        from .standing import closing_mode, state as standing_state
         decisions = (context or {}).get("standing_authorization", {}).get("decisions", [])
-        if (standing_state(context or {}) != "active" or not decisions
+        mode = closing_mode(context or {}) if as_closed else standing_state(context or {})
+        if (mode != "active" or not decisions
                 or decisions[-1]["id"] != consent["standing"]["id"]
                 or not set(consent["scope"]) <= set(decisions[-1]["scope"])):
             return False
@@ -2445,7 +2450,7 @@ def discover_triggers(project: Path) -> dict:
     return proposal
 
 
-def _unit_delivery(unit: dict, rows: list[dict], *, context: dict | None = None) -> dict:
+def _unit_delivery(unit: dict, rows: list[dict], *, context: dict | None = None, as_closed: bool = False) -> dict:
     """Whether this unit's current candidate holds publish/merge consent, and its hosted-check state.
 
     Consent counts only when an ALLOW row for the exact prepared commit carries an authorization that still
@@ -2463,7 +2468,7 @@ def _unit_delivery(unit: dict, rows: list[dict], *, context: dict | None = None)
                     continue
                 granted = applicable_authorization(
                     unit, row["action"].get("authorization"), candidate=binding["commit"],
-                    tree=binding["tree"], scope=scope, context=context)
+                    tree=binding["tree"], scope=scope, context=context, as_closed=as_closed)
                 if granted:
                     break
         authorization[scope] = "RECORDED" if granted else "MISSING"
@@ -2496,18 +2501,22 @@ def _unit_projection(unit: dict, actions: list[dict], *, context: dict | None = 
             "active_validation": active, "unresolved": unresolved, **delivery}
 
 
-def objective_delivery_reporting(project: Path, objective: str) -> dict:
-    """Read only exact Governor evidence for the obligation report."""
+def objective_delivery_reporting(project: Path, objective: str, *, context: dict | None = None) -> dict:
+    """Read only exact Governor evidence for the obligation report.
+
+    A closure report passes its closing `context` (R155): the closing write its proposed record with this
+    closure, the replay the recorded one, so both judge consent from the same facts at the same instant."""
     try:
         journal = _read_journal(_record_path(project, objective))
-        context = _read(_path(project, objective))
+        context = _read(_path(project, objective)) if context is None else context
     except PodError:
         return {"units": {}, "hosted_checks": "UNAVAILABLE"}
     units = {}
     for name, unit in journal["units"].items():
         rows = [row for row in journal["actions"] if row["action"]["unit"] == unit.get("name", name)
                 and row["decision"] == "ALLOW"]
-        units[name] = _unit_delivery(unit, rows, context=context)
+        # A recorded closure's report keeps the consent its closing write judged (R155).
+        units[name] = _unit_delivery(unit, rows, context=context, as_closed=True)
     statuses = [unit["hosted_checks"] for unit in units.values()]
     hosted = ("RECORDED_PASS_UNVERIFIED" if "RECORDED_PASS_UNVERIFIED" in statuses
               else "PENDING" if "PENDING" in statuses else "FAILED" if "FAILED" in statuses

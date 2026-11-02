@@ -65,7 +65,15 @@ class RefusalCompatibilityTests(unittest.TestCase):
         self.assertFalse(self.closing_compatible("malformed")["closed"])
 
     def test_already_closed_closing_report_keeps_genuine_0150_route_mismatch(self):
-        self.assertTrue(self.closing_compatible("closed")["closed"])
+        previous = observe(self.bundle, "closed")
+        current = observe(REPOSITORY, "closed")
+        self.assertEqual(previous.pop("version"), "0.15.0")
+        current.pop("version")
+        # R155: a closed record never changes, so the mismatch 0.15.0 saved on it is reported but not saved.
+        self.assertEqual((previous.pop("route_mismatch"), previous.pop("record_unchanged")), (True, False))
+        self.assertEqual((current.pop("route_mismatch"), current.pop("record_unchanged")), (False, True))
+        self.assertEqual(current, previous)
+        self.assertEqual((current["code"], current["closed"]), ("route_mismatch", True))
 
     def runtime_mismatch_compatible(self, scenario):
         result = self.closing_compatible(scenario)

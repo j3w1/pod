@@ -208,6 +208,46 @@ def state(context: dict, *, now: datetime | None = None) -> str:
     return "active"
 
 
+def _recorded_at_closure(context: dict) -> dict:
+    closure = (context.get("checkpoint") or {}).get("closure") or {}
+    value = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {}) \
+        if isinstance(closure.get("report"), dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
+def closure_instant(context: dict, *, closure_utc: str | None = None, now: datetime | None = None) -> str:
+    """The one instant a closure judged the mode at (R155): the recorded one, else the closure's own `at`."""
+    record = context.get("standing_authorization", {})
+    closure = (context.get("checkpoint") or {}).get("closure") or {}
+    return normalize_timestamp(_recorded_at_closure(context).get("utc") or closure.get("at") or record.get("closed_at")
+                               or closure_utc or _timestamp(_clock(now)),
+                               field="Standing closure time", code="state_unsupported")
+
+
+def closing_state(context: dict, *, closure_utc: str | None = None, now: datetime | None = None) -> str:
+    """The mode as the closing write judged it (R155).
+
+    An open record has its current mode. A recorded closure ends yolo for every later effect, so `state` reads
+    `ended`; the closure's own judgment is this record without its closure, at the closure's one instant.
+    Consent revoked, expired, suspended or replaced before closure still reads so here.
+    """
+    checkpoint = context.get("checkpoint") or {}
+    if not checkpoint.get("closure"):
+        return state(context, now=now)
+    stamp = closure_instant(context, closure_utc=closure_utc, now=now)
+    before = {**context, "checkpoint": {**checkpoint, "closure": None}}
+    return state(before, now=datetime.fromisoformat(stamp.replace("Z", "+00:00")))
+
+
+def closing_mode(context: dict) -> str:
+    """The mode a closure's report judges consent by: the state its closure recorded, read back exactly,
+    or, for a closure being written or an earlier one without that fact, `closing_state`."""
+    recorded = _recorded_at_closure(context).get("state")
+    if isinstance(recorded, str) and (context.get("checkpoint") or {}).get("closure"):
+        return recorded
+    return closing_state(context)
+
+
 def _names(value: object, allowed: tuple, *, nonempty: bool = False) -> list:
     if (not isinstance(value, list) or len(value) > len(allowed) or nonempty and not value
             or any(not isinstance(item, str) or item not in allowed for item in value)
@@ -762,14 +802,16 @@ def projection(context: dict, journal: dict | None = None, *, now: datetime | No
     checkpoint = context.get("checkpoint") or {}
     closure = checkpoint.get("closure")
     if closure and (decisions or record.get("closed_at")):
-        stored = closure.get("report", {}).get("standing_authorization", {}).get("at_closure", {})
-        stamp = normalize_timestamp(stored.get("utc") or record.get("closed_at") or closure_utc or _timestamp(_clock(now)),
-                                    field="Standing closure time", code="state_unsupported")
-        before = {**context, "checkpoint": {**checkpoint, "closure": None}}
-        active = state(before, now=datetime.fromisoformat(stamp.replace("Z", "+00:00"))) == "active"
+        stamp = closure_instant(context, closure_utc=closure_utc, now=now)
+        judged = closing_state(context, closure_utc=closure_utc, now=now)
+        active = judged == "active"
         result["at_closure"] = {"utc": stamp, "mode": "yolo" if active else "normal",
                                 "ran_in_yolo": latest is not None,
                                 "decision": latest["id"] if latest else None, "active_until_closure": active}
+        if "report" not in closure or "state" in _recorded_at_closure(context):
+            # R155: the consent facts the closure report judged, recorded once; earlier closures keep their shape.
+            before = {**context, "checkpoint": {**checkpoint, "closure": None}}
+            result["at_closure"].update(state=judged, scope_digest=scope_digest(before))
     return result
 
 

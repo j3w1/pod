@@ -6,8 +6,14 @@ import sys
 from pod import __version__
 from pod.errors import PodError
 from pod.internal import run
-from pod.ledger import read, update_admission
+from pod.ledger import objective_root, read, update_admission
 from tests.issue41_support import ProductionCase
+
+
+def record_bytes(project):
+    root = objective_root(project, "objective")
+    return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*"))
+            if path.is_file() and path.name != ".lock"}
 
 
 def closing(scenario):
@@ -35,12 +41,15 @@ def closing(scenario):
         if runtime_changed:
             case.port.runtime = "changed-runtime"
         continuity = None
+        before = record_bytes(case.project) if scenario == "closed" else None
+        refusal = None
         try:
             case.report(admission, packet, outcome="bogus" if scenario in ("malformed", "runtime_malformed") else "succeeded",
                         map={"obligations": finished(), "close": True})
         except PodError as exc:
             code = exc.code
             continuity = (exc.detail or {}).get("runtime_continuity")
+            refusal = str(exc)
         else:
             code = "ACCEPTED"
         if scenario == "discard":
@@ -50,6 +59,8 @@ def closing(scenario):
         result = {"version": __version__, "code": code,
                   "route_mismatch": state["admissions"][admission["admission_id"]]["route_decision"]["route_mismatch"],
                   "closed": bool(state["checkpoint"].get("closure"))}
+        if scenario == "closed":
+            result.update(message=refusal, record_unchanged=record_bytes(case.project) == before)
         if runtime_changed:
             history = state["checkpoint"]["continuity"]["history"]
             keys = ("from_runtime", "to_runtime", "provenance")

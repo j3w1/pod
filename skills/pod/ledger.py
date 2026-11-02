@@ -421,7 +421,7 @@ def _run_references(state: dict) -> dict[str, str]:
 def require_authority(project: Path, objective: str, *, owner: str,
                       state: dict | None = None, run_id: str | None = None,
                       native_port=None, expected_runtime: str | None = None, claim: str | None = None,
-                      persist_rebind: bool = True) -> dict:
+                      persist_rebind: bool = True, reopen: bool = False) -> dict:
     """Join a stable native current Run to this objective's persisted owner and refs.
 
     Every caller passing ``state`` holds the objective lock, so a proven runtime
@@ -429,6 +429,8 @@ def require_authority(project: Path, objective: str, *, owner: str,
     runtime. Closing writes defer its persistence to their successful write.
     ``expected_runtime`` is the runtime the caller's own
     mutation already observed; continuity only rebinds to that runtime.
+    A closed record is never rebound: only a ``reopen`` write may carry a rebind,
+    and it defers that rebind to its own successful write.
     """
     from .operations import OrcaPort
     from .orca import current_run
@@ -463,14 +465,15 @@ def require_authority(project: Path, objective: str, *, owner: str,
         if not locked:
             raise
         continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                      expected_runtime=expected_runtime, persist=persist_rebind)
+                                      expected_runtime=expected_runtime, persist=persist_rebind, reopen=reopen)
         if continuity is None:
             raise
         native = port.read_native(owner, authority_runs=selected, assignments=bound_assignments(state))
     else:
         if locked and native.get("runtime") not in set(refs.values()):
             continuity = _continuity_step(project, objective, state, owner=owner, port=port,
-                                          current=native, expected_runtime=expected_runtime, persist=persist_rebind)
+                                          current=native, expected_runtime=expected_runtime, persist=persist_rebind,
+                                          reopen=reopen)
             if continuity is not None and bound_assignments(state):
                 native = port.read_native(owner, authority_runs=selected,
                                           assignments=bound_assignments(state))
@@ -720,11 +723,13 @@ def _ambiguous(objective: str, verdict: dict) -> PodError:
 
 def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, port,
                      current: dict | None = None, expected_runtime: str | None = None,
-                     persist: bool = True) -> dict | None:
+                     persist: bool = True, reopen: bool = False) -> dict | None:
     """Under the caller's objective lock: rebind a proven continuity and record it.
 
     Returns None when no continuity path applies or continuity is disproven, so the
     caller's existing check refuses with its own code; raises when it is ambiguous.
+    A closed record refuses `objective_closed` before any rebind, so nothing about
+    it changes after closure (R155); a reopen write defers its rebind instead.
     """
     try:
         refs = _run_references(state)
@@ -742,6 +747,11 @@ def _continuity_step(project: Path, objective: str, state: dict, *, owner: str, 
             or (expected_runtime is not None and runtime != expected_runtime)):
         # No observed change, or a port that cannot show the current Run binding.
         return None
+    closure = (map_of(state) or {}).get("closure")
+    if closure and not (reopen and not persist):
+        from .obligations import refuse
+        raise refuse("objective_closed", "objective_closed", "the objective is closed; a closed record takes no "
+                     "runtime rebind", record="runtime continuity", closure_revision=closure["revision"])
     if current.get("caller") is not None and current["caller"] != state.get("owner"):
         from .handoff import refuse_nonowner
         refuse_nonowner(project, objective, state, owner, port=port, current=current)
@@ -1035,8 +1045,15 @@ def map_of(state: dict | None) -> dict | None:
     return None
 
 
-def _outstanding_ids(state: dict, native: dict | None) -> list[str]:
-    """Objective-local outstanding admissions; without native evidence nothing is settled."""
+def _outstanding_ids(state: dict, native: dict | None, *, recorded: dict | None = None) -> list[str]:
+    """Objective-local outstanding admissions; without native evidence nothing is settled.
+
+    This is the one settlement rule for an ordinary write and for the replay of a recorded closure (R155).
+    A write reads native settlement. A replay passes ``recorded`` (``runtimes`` the record's reports may carry
+    and the closed map's ``seq``) and reads the durable record each settled admission carries instead, which
+    Pod writes only after this same native check held for that exact Dispatch, so the replay settles what the
+    closing write settled.
+    """
     evidence: dict[str, list[dict]] = {}
     for row in (native or {}).get("assignments", []) if isinstance(native, dict) else []:
         if isinstance(row, dict) and isinstance(row.get("admission_id"), str):
@@ -1046,18 +1063,165 @@ def _outstanding_ids(state: dict, native: dict | None) -> list[str]:
         if admission["state"] in ("closed", "deferred"):
             continue
         binding = admission.get("native_binding")
-        matches = evidence.get(key, [])
-        settled = bool(admission["state"] == "bound" and binding_valid(binding) and len(matches) == 1
-                       and isinstance(native, dict)
-                       and matches[0].get("settled") is True
-                       and matches[0].get("runtime") == admission["runtime"] == native.get("runtime")
-                       and matches[0].get("run_id") == binding["runId"]
-                       and matches[0].get("task_id") == binding["taskId"]
-                       and matches[0].get("dispatch_id") == binding["dispatchId"]
-                       and matches[0].get("worker_id") == binding["workerId"])
+        if not (admission["state"] == "bound" and binding_valid(binding)):
+            settled = False
+        elif recorded is not None:
+            settled = _settlement_recorded(admission, recorded)
+        else:
+            matches = evidence.get(key, [])
+            settled = bool(len(matches) == 1 and isinstance(native, dict)
+                           and matches[0].get("settled") is True
+                           and matches[0].get("runtime") == admission["runtime"] == native.get("runtime")
+                           and matches[0].get("run_id") == binding["runId"]
+                           and matches[0].get("task_id") == binding["taskId"]
+                           and matches[0].get("dispatch_id") == binding["dispatchId"]
+                           and matches[0].get("worker_id") == binding["workerId"])
         if not settled:
             outstanding.append(key)
     return outstanding
+
+
+def _settlement_recorded(admission: dict, recorded: dict) -> bool:
+    """For a closure recorded without a settlement digest: the durable record of a bound admission's native
+    settlement, under its writers' own eligibility and semantic checks.
+
+    Pod writes each only after native readback showed the exact Dispatch settled: a consumed report
+    (`report_attempt_unverified` refuses an unsettled one), a disposition (only a settled implementation
+    result takes one), a terminal review or investigation route discard (R160 discards only after exact native
+    settlement) and abandoned accounting (its fence requires a settled readback). A present consumed report
+    must verify, so no other record stands in for a corrupted one. A disposition must hold the shape its
+    writer records and pass the writer's check again: an `integrated_into` validated by ancestry needs the
+    result commit to be an ancestor of the recorded target in Git now. Anything unprovable stays outstanding.
+    """
+    if admission.get("disposition") is not None and not _recorded_disposition(
+            admission, recorded["seq"], is_ancestor=recorded.get("is_ancestor")):
+        return False
+    if admission.get("report") is not None:
+        return _report_deviations(admission, recorded["runtimes"]) is not None
+    if admission.get("disposition") is not None:
+        return True
+    if "abandoned_accounting" in admission:
+        from .abandoned import validate
+        try:
+            validate(admission)
+        except PodError:
+            return False
+        return True
+    from .util import route_discarded
+    try:
+        return route_discarded(admission)
+    except PodError:
+        return False
+
+
+def _report_deviations(admission: dict, runtimes: set[str]) -> list[str] | None:
+    """The scope deviations a consumed report's digest verifies with (none for `validated_observation`),
+    or None when its digest does not verify."""
+    try:
+        value = _consumed_report(admission, runtimes)
+    except PodError:
+        return None
+    if value is None:
+        return None
+    if value["status"] == "validated_observation":
+        return []  # `_consumed_report` verified this digest.
+    from itertools import combinations
+    from .records import REPORT_DEVIATIONS, report_record
+    observation = report_record(value["observation"])
+    binding = {key: admission["native_binding"][key] for key in ("runId", "taskId", "dispatchId", "workerId")}
+    for size in range(1, len(REPORT_DEVIATIONS) + 1):
+        for codes in combinations(REPORT_DEVIATIONS, size):
+            if any(digest({"status": value["status"], "deviations": list(codes), "observation": observation,
+                           "native_binding": {"runtime": runtime, **binding}}) == value["observation_digest"]
+                   for runtime in runtimes | {admission["runtime"]}):
+                return list(codes)
+    return None
+
+
+# Admission fields a closure's settled set leaves out (R155): `updated_at` is only the time a row was last
+# written and says nothing about its settlement, and a checkpoint's route settlements
+# (`route_decision.settlements` and its `mismatch_occurrence`) land after the closure in the same write; an R160
+# terminal discard is bound through the evidence instead.
+SETTLEMENT_EXCLUDED = ("updated_at",)
+SETTLEMENT_ROUTE_EXCLUDED = ("settlements", "mismatch_occurrence")
+
+
+def settlement_facts(admissions: dict, *, runtimes: set[str], seq: int, pending=()) -> tuple[str, dict]:
+    """R155: the canonical settled set a closing write accepts, and its replay recomputes.
+
+    Every admission a closure counts (all but closed and deferred ones, each of which the closing write saw
+    settled): its full stored row, which binds its identity (role, state, native binding, runtime, worktree,
+    placement, boundary, serves, packet, candidate and request), apart from `SETTLEMENT_EXCLUDED`, with its
+    settlement evidence: the deviations its consumed report's digest verifies with and an R160 terminal discard
+    (judged with this write's pending settlements, which land after the closure is built). Returns the digest of
+    that set with the closed map's `seq`, and a short digest per admission so a mismatch names the admission."""
+    from .util import route_discarded
+    entries = {}
+    for key in sorted(admissions):
+        row = admissions[key]
+        if not isinstance(row, dict) or row.get("state") in ("closed", "deferred"):
+            continue
+        report = row.get("report") if isinstance(row.get("report"), dict) else None
+        try:
+            discarded = route_discarded(row, pending=list(pending or ()))
+        except PodError:
+            discarded = None
+        # R160 decision inputs: each terminal discard as recorded, or as this write's pending input records it.
+        decision = ("basis", "decision", "source", "reason", "corrections")
+        recorded = [entry for entry in (row.get("route_decision") or {}).get("settlements", [])
+                    if isinstance(entry, dict)]
+        recorded += [entry for entry in pending or () if isinstance(entry, dict) and entry.get("admission") == key]
+        discards = sorted(({field: entry[field] for field in decision if field in entry} for entry in recorded
+                           if entry.get("basis") == "lead_decision" and entry.get("decision") == "discard"),
+                          key=lambda entry: digest(entry))
+        stored = {field: value for field, value in row.items() if field not in SETTLEMENT_EXCLUDED}
+        if isinstance(stored.get("route_decision"), dict):
+            stored["route_decision"] = {field: value for field, value in stored["route_decision"].items()
+                                        if field not in SETTLEMENT_ROUTE_EXCLUDED}
+        entries[key] = {"admission": stored, "evidence": {
+            "deviations": None if report is None else _report_deviations(row, runtimes),
+            "route_discarded": discarded, "route_discards": discards}}
+    return (digest({"seq": seq, "admissions": entries}),
+            {key[:16]: digest(value)[:16] for key, value in entries.items()})
+
+
+def _recorded_disposition(admission: dict, seq: int | None, *, is_ancestor=None) -> bool:
+    """Whether a stored disposition has exactly the shape `obligations.disposition` records for this admission,
+    and an ancestry-validated integration still passes that writer's Git check through `is_ancestor`."""
+    value = admission["disposition"]
+    if (admission.get("role") != "implement" or admission.get("state") == "deferred" or not isinstance(value, dict)
+            or type(value.get("seq")) is not int or value["seq"] < 1 or type(seq) is not int or value["seq"] > seq):
+        return False
+    try:
+        for field in ("reason", "attestation", "integrated_into"):
+            key = "candidate" if field == "integrated_into" else field
+            if key in value:
+                bounded_text(value[key], name=field, limit=bound("disposition", field))
+    except PodError:
+        return False
+    if value.get("kind") == "discarded":
+        return set(value) == {"kind", "reason", "seq"}
+    if value.get("kind") != "integrated_into" or "abandoned_accounting" in admission:
+        return False
+    optional = {"reason", "attestation"}  # The writer keeps either when given, whatever validated it.
+    if admission.get("changed_paths") is None:
+        return (set(value) - {"reason"} == {"kind", "candidate", "validated", "attestation", "boundary_check", "seq"}
+                and value["validated"] == "attestation" and value["boundary_check"] == "unavailable"
+                and (admission.get("result") or {}).get("base") is None)
+    result = admission.get("result") or {}
+    head = result.get("head")
+    expected = "ancestry" if isinstance(head, str) and head != result.get("base") else "attestation"
+    if not (value.get("validated") == expected
+            and {"kind", "candidate", "validated", "seq"} | ({"attestation"} if expected == "attestation" else set())
+            <= set(value) <= {"kind", "candidate", "validated", "seq"} | optional
+            and (not admission.get("boundary_exceeded") or "reason" in value)):
+        return False
+    if expected == "ancestry":
+        try:
+            return is_ancestor is not None and is_ancestor(head, value["candidate"]) is True
+        except PodError:
+            return False
+    return True
 
 
 def _governor_pending(project: Path, objective: str, excluded: frozenset = frozenset()) -> bool:
@@ -1189,6 +1353,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "authorization_granted": _authorization_granted(project, objective, context=state),
             "governor_pending": _governor_pending(project, objective),
             "governor_delivery": objective_delivery_reporting(project, objective),
+            "closing_delivery": lambda context: objective_delivery_reporting(project, objective, context=context),
             "git_delta": lambda source, target: git_delta(project, source, target),
             "candidate_check": lambda candidate: require_candidate(project, candidate, assurance=True),
             "is_ancestor": lambda commit, target: git_is_ancestor(project, commit, target)}
@@ -1258,9 +1423,24 @@ def closed_snapshot_context(project: Path, objective: str, state: dict) -> dict:
         ctx["closure_preserved"] = preserved
         ctx["governor_pending"] = _governor_pending(project, objective, excluded=frozenset(
             row.get("record") for row in preserved if isinstance(row, dict)))
-    ctx["outstanding"] = [key for key in ctx["outstanding"]
-                          if state["admissions"][key]["state"] != "bound"
-                          or (state["admissions"][key].get("report") or {}).get("status") != "validated_observation"]
+    # R155: a closure recorded with its settled set replays exactly that set; an earlier one reads each
+    # admission's durable settlement record under its writers' checks.
+    mapped = map_of(state) or {}
+    closure = mapped.get("closure") if isinstance(mapped.get("closure"), dict) else {}
+    runtimes = set(ctx["report_runtimes"])
+    if "settlement_digest" in closure:
+        recorded, short = settlement_facts(state["admissions"], runtimes=runtimes, seq=mapped.get("seq"))
+        if recorded == closure["settlement_digest"]:
+            ctx["outstanding"] = []
+        else:
+            stored = closure.get("settlement_admissions") if isinstance(closure.get("settlement_admissions"), dict) else {}
+            differing = sorted(key for key in set(short) | set(stored) if short.get(key) != stored.get(key))
+            named = [key for key in state["admissions"] if key[:16] in differing[:1]]
+            ctx["settlement_changed"] = named[0] if named else "closure"
+            ctx["outstanding"] = named
+    else:
+        ctx["outstanding"] = _outstanding_ids(state, None, recorded={
+            "runtimes": runtimes, "seq": mapped.get("seq"), "is_ancestor": ctx.get("is_ancestor")})
     # R204: proof a recorded delivery relied on replays against the delivered candidate's tree, as it was
     # judged on the closing route, not against whatever the worktree holds now.
     return delivered_read_context(project, state, ctx)
@@ -2208,9 +2388,12 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                          if isinstance(row, dict)}
         from .issue_revision import Revision
         issue_requested = requested(proposed.get("revision_authority"))
+        closing = isinstance(proposed, dict) and proposed.get("close") is True
+        reopening = isinstance(proposed, dict) and proposed.get("reopen") is True
+        # A closing or reopening write carries its rebind only in its own successful write.
         authority = require_authority(project, objective, owner=owner, state=state,
                                       expected_runtime=native["runtime"],
-                                      persist_rebind=not (issue_requested or isinstance(proposed, dict) and proposed.get("close") is True))
+                                      persist_rebind=not (issue_requested or closing or reopening), reopen=reopening)
         if issue_requested and authority.get("continuity") is not None:
             raise issue_refuse("native_continuity_requires_separate_checkpoint")
         if native["runtime"] != authority["runtime"]:
@@ -2288,7 +2471,7 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         _write(path, state, native=authority.get("native"),
                before_publish=(lambda: issue_revision.consume(project, objective, owner, path, state)) if issue_revision else None,
                project=project)
-        if isinstance(proposed, dict) and proposed.get("close") is True:
+        if closing or reopening:
             _record_continuity_event(authority.get("continuity"))
         result = dict(state)
         result.update(route_settlement_projection(list(state["admissions"].values())))
@@ -2845,8 +3028,15 @@ def _update_admission_locked(project: Path, objective: str, *, state: dict, owne
         from .handoff import refuse_nonowner
         refuse_nonowner(project, objective, state, owner, code="unknown_admission")
         raise PodError("unknown_admission", "No owned admission identity")
+    closure = (map_of(state) or {}).get("closure")
     if open_required:
         _require_open(state)
+    elif closure:
+        # A closed record's admissions are its settled set (R155): a late report's route refresh or
+        # mismatch flag, or any other update, refuses before it or a runtime rebind is written.
+        from .obligations import refuse
+        raise refuse("objective_closed", "objective_closed", "the objective is closed; its admissions take no "
+                     "update", record="admission update", closure_revision=closure["revision"])
     authority = require_authority(project, objective, owner=owner, state=state,
                                   run_id=state["admissions"][admission_id]["run_id"],
                                   expected_runtime=expected_runtime)
@@ -2939,10 +3129,11 @@ def consume_report(project: Path, objective: str, *, owner: str, admission_id: s
             report_placement = prepared["report_placement"]
             prepared_continuity = prepared["continuity"]
         if route_mismatch:
-            _update_admission_locked(project, objective, state=state, owner=owner,
-                                     admission_id=admission_id,
-                                     update=flag_route_mismatch,
-                                     expected_runtime=row["runtime"])
+            if not (map_of(state) or {}).get("closure"):  # a closed record never changes (R155)
+                _update_admission_locked(project, objective, state=state, owner=owner,
+                                         admission_id=admission_id,
+                                         update=flag_route_mismatch,
+                                         expected_runtime=row["runtime"])
             raise PodError("route_mismatch", "Native effective route changed after start",
                            {"next_action": route_next_action(row)})
         # The report path read its fresh identity at the observation's runtime (A2).
