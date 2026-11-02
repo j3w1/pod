@@ -1,5 +1,6 @@
 """R185: production admission reads, selective evidence and conservative gaps."""
 from contextlib import contextmanager, redirect_stdout
+import copy
 from io import StringIO
 import json
 import os
@@ -41,6 +42,40 @@ class AdmissionQueryCase(KernelCase):
 
     def query(self, **kwargs):
         return admission.query(self.project, **kwargs)
+
+    def without_admissions(self, row):
+        """The open objective's record with admission `row` (A), and the same record without it, at the same revision
+        (B): an admissions-only change the attribution read cannot see."""
+        path, raw = self.raw()
+        raw["admissions"]["a"] = row
+        path.write_bytes(json.dumps(raw).encode())
+        raw["admissions"] = {}
+        return path, json.dumps(raw).encode()
+
+    def reserved_writer(self):
+        return self.without_admissions({"schema": "pod-admission/v4", "admission_id": "a", "state": "reserved",
+                                        "role": "implement", "native_binding": None, "runtime": "runtime",
+                                        "worktree": str(self.project), "boundary": None,
+                                        "recovery": {"placement_binding": dict(self.place)}})
+
+    @contextmanager
+    def claims_read_meets(self, path, intermediate, *, restore=True):
+        """The call's first claims read of `path` meets `intermediate`; with `restore` the original bytes return
+        right after it, before the change recheck (A/B/A, the pod#222 review)."""
+        original, read = path.read_bytes(), history.load_admission_facts
+
+        def claims(target, *, include_admissions=True):
+            changing = target == path and include_admissions and admission._SHARED.get().stage == "first"
+            if changing:
+                path.write_bytes(intermediate)
+            try:
+                return read(target, include_admissions=include_admissions)
+            finally:
+                if changing and restore:
+                    path.write_bytes(original)
+        with patch("pod.history.load_admission_facts", side_effect=claims):
+            yield
+        self.assertEqual(path.read_bytes(), original if restore else intermediate)
 
     @contextmanager
     def current_chunks_only(self):
@@ -592,6 +627,46 @@ class AttributionReadTests(AdmissionQueryCase):
     def test_a_change_after_the_recheck_is_after_the_answer(self):
         self.assertEqual(self.changed_at("answered"), [])
 
+    def codes(self, result):
+        return [row["code"] for row in result["unknowns"]]
+
+    def test_a_writer_restored_after_the_claims_read_is_record_changed(self):
+        self.intake(worktree=self.place)
+        path, intermediate = self.reserved_writer()
+        self.assertIn("assignment_unbound", self.codes(self.query(worktree=str(self.project))))
+        with self.claims_read_meets(path, intermediate):
+            result = self.query(worktree=str(self.project))
+        self.assertFalse(result["complete"])
+        self.assertIn("record_changed", self.codes(result))
+
+    def test_a_bound_admission_restored_after_the_claims_read_is_record_changed(self):
+        self.intake(worktree=self.place)
+        binding = {"runId": "run", "taskId": "task", "workerId": "worker", "dispatchId": "dispatch",
+                   "worktreeId": str(self.project), "terminalHandle": "terminal"}
+        path, intermediate = self.without_admissions({"schema": "pod-admission/v4", "admission_id": "a",
+                                                      "state": "closed", "role": "implement",
+                                                      "native_binding": binding, "runtime": "runtime"})
+        self.assertIn("native_identity_unverified", self.codes(self.query()))
+        with self.claims_read_meets(path, intermediate):
+            result = self.query()
+        self.assertFalse(result["complete"])
+        self.assertIn("record_changed", self.codes(result))
+
+    def test_claims_kept_from_the_later_bytes_are_those_bytes_claims(self):
+        self.intake(worktree=self.place)
+        path, intermediate = self.reserved_writer()
+        with self.claims_read_meets(path, intermediate, restore=False):
+            result = self.query(worktree=str(self.project))
+        self.assertTrue(result["complete"], result["unknowns"])
+        self.assertNotIn("a", [row.get("admission") for row in result["claims"]])
+
+    def test_the_selected_record_needs_one_set_of_bytes_for_both_reads(self):
+        self.intake(worktree=self.place)
+        path, raw = self.raw()
+        with self.claims_read_meets(path, json.dumps(raw, indent=2).encode(), restore=False):
+            result = self.query(objective="objective", candidate=self.candidate)
+        self.assertIn("record_changed", self.codes(result))
+
     def test_new_finished_record_without_current_claim_preserves_snapshot(self):
         self.intake(worktree=self.place)
         before = self.query()
@@ -684,6 +759,52 @@ class FactsContractTests(AdmissionQueryCase):
             return facts
         with patch("pod.history.load_admission_facts", create=True, side_effect=read):
             return [row["code"] for row in self.query()["unknowns"]]
+
+    def test_every_attribution_fact_but_the_generation_and_basis_is_compared(self):
+        """Driven by the real reader's attribution read, so a fact it gains later is compared without a list here."""
+        self.intake(worktree=self.place)
+        path, _ = self.raw()
+        attributed = history.load_admission_facts(path, include_admissions=False)
+        claimed = history.load_admission_facts(path, include_admissions=True)
+        view = admission._facts_context(attributed)
+
+        def leaves(value, trail):
+            if trail in (("_facts_generation",), ("_facts_attribution", "basis")):
+                return
+            if isinstance(value, dict) and value:
+                for key, item in value.items():
+                    yield from leaves(item, (*trail, key))
+            else:
+                yield trail
+        paths = list(leaves(view, ()))
+        self.assertTrue({("revision",), ("owner",), ("_facts_phase",), ("checkpoint", "native_refs"),
+                         ("_facts_attribution", "repo_key")} <= set(paths), paths)
+
+        def rows(trail=None):
+            facts = copy.deepcopy(claimed)
+            facts["generation"] = {**facts["generation"], "sha256": "b" * 64}
+            if trail == ("_facts_phase",):
+                facts["phase"] = "closed" if facts["phase"] != "closed" else "open"
+            elif trail is not None:
+                holder = facts["attribution"] if trail[0] == "_facts_attribution" else facts["context"]
+                for key in trail[1:-1] if trail[0] == "_facts_attribution" else trail[:-1]:
+                    holder = holder[key]
+                old = holder[trail[-1]]
+                holder[trail[-1]] = (old + 1 if type(old) is int else not old if type(old) is bool
+                                     else [*old, "changed"] if isinstance(old, list) else str(old) + "-changed")
+            discovery = admission._Discovery()
+            token = admission._SHARED.set(discovery)
+            try:
+                with patch("pod.history.load_admission_facts", return_value=facts):
+                    return admission._admission_rows(dict(view), path.parent)
+            finally:
+                admission._SHARED.reset(token)
+                discovery.close()
+        rows()  # Other bytes with every fact equal keep the claims.
+        for trail in paths:
+            with self.subTest(trail=trail), self.assertRaises(PodError) as caught:
+                rows(trail)
+            self.assertEqual(caught.exception.code, "record_changed", trail)
 
     def test_other_bytes_keep_the_claims_only_while_every_attribution_fact_is_equal(self):
         self.assertNotIn("record_changed", self.claims_read_differs(lambda facts: None))

@@ -11150,6 +11150,22 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A869",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_query.AttributionReadTests.test_a_writer_restored_after_the_claims_read_is_record_changed",
+        "tests.test_admission_query.AttributionReadTests.test_a_bound_admission_restored_after_the_claims_read_is_record_changed",
+        "tests.test_admission_batch.RestoredRecordTests.test_a_restored_writer_is_record_changed_in_every_query",
+        "tests.test_admission_query.AttributionReadTests.test_claims_kept_from_the_later_bytes_are_those_bytes_claims",
+        "tests.test_admission_query.AttributionReadTests.test_the_selected_record_needs_one_set_of_bytes_for_both_reads",
+        "tests.test_admission_query.FactsContractTests.test_every_attribution_fact_but_the_generation_and_basis_is_compared"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A863",
       "required_evidence": [
         "unit",
