@@ -1,4 +1,6 @@
 import unittest
+from contextlib import contextmanager
+import gc
 import hashlib
 import os
 import subprocess
@@ -12,6 +14,23 @@ from pod.records import (acceptance, integration_observation, packet, report,
 from pod.internal import run as helper_run
 from pod.errors import PodError
 from tests.common import fixture
+
+
+@contextmanager
+def without_collection():
+    """Keep the cyclic collector out of a window that patches a process-wide function such as `os.open`.
+
+    A lazy history reader left in a reference cycle by an earlier test releases its storage lease when the collector
+    finalizes it, and that release opens `/`. Collect first, so such finalizers run before the patch, and pause
+    automatic collection inside it."""
+    gc.collect()
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
 
 
 def packet_body():
@@ -81,7 +100,8 @@ class RecordTests(unittest.TestCase):
         with fixture() as root:
             for path in excluded:
                 with self.subTest(path=path):
-                    with patch("pod.records.os.open", side_effect=AssertionError("source opened")) as opened:
+                    with without_collection(), \
+                            patch("pod.records.os.open", side_effect=AssertionError("source opened")) as opened:
                         with self.assertRaises(PodError) as rejected:
                             source_identity(root, path)
                     self.assertEqual(rejected.exception.code, "secret_source")
@@ -94,6 +114,22 @@ class RecordTests(unittest.TestCase):
                         with self.subTest(field=field, kind=reference.get("kind")):
                             with self.assertRaises(PodError):
                                 packet({**packet_body(), field: [reference]})
+
+    def test_a_pending_storage_finalizer_runs_before_the_patched_window(self):
+        """An earlier test's cyclic history reader, whose lease collects on close, never opens `/` inside the window."""
+        from pod.history import ChunkStore
+        from pod.history_tree import Reader
+        with fixture() as root:
+            objective = Path(root) / "objective"
+            (objective / "history" / "sha256").mkdir(parents=True)
+            reader = Reader(ChunkStore(objective))
+            reader._lease.collect_on_close = True  # as a published write leaves it
+            reader.cycle = reader  # only the cyclic collector can release it
+            del reader
+            with without_collection(), \
+                    patch("pod.records.os.open", side_effect=AssertionError("source opened")) as opened:
+                gc.collect()  # stands in for an automatic collection landing in the window
+            opened.assert_not_called()
 
     def test_ordinary_sources_and_public_key_files_remain_admissible(self):
         with fixture() as root:

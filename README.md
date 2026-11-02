@@ -129,6 +129,8 @@ Lost worker-start replies retain the same Orca request for reconciliation. A kno
 
 A recorded worker route mismatch holds the objective until a matching report, a qualifying replacement or a recorded project-lead decision settles it. Its history stays visible, and status names the lead's supported next step. See [route settlement](docs/spec/orca.md#r160--settle-each-recorded-route-mismatch-occurrence) for the conditions.
 
+A finished worker that Orca can no longer observe can hold admission for its worktree. When the host's personal verifier supports the `process_exit` action, `pod admission` asks it at read time whether any process still carries that worker's identity, and counts the worker exited only on that answer, only for that call. Nothing is stored, and the check needs an admission deadline of about 12 seconds or more; below that the worker keeps holding. See [R212](docs/spec/orca.md#r212--count-a-settled-local-dispatch-exited-on-a-read-time-host-process-verdict).
+
 ## What's inside
 
 - One `skills/pod` tree serves as the skill and importable Python package.
