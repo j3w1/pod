@@ -52,12 +52,16 @@ jobs:
       matrix:
         # One row per lane share, each run once; tests/suite_lanes.json names the same shards.
         include:
-          - {lane: parallel, shard: 1, of: 6}
-          - {lane: parallel, shard: 2, of: 6}
-          - {lane: parallel, shard: 3, of: 6}
-          - {lane: parallel, shard: 4, of: 6}
-          - {lane: parallel, shard: 5, of: 6}
-          - {lane: parallel, shard: 6, of: 6}
+          - {lane: parallel, shard: 1, of: 10}
+          - {lane: parallel, shard: 2, of: 10}
+          - {lane: parallel, shard: 3, of: 10}
+          - {lane: parallel, shard: 4, of: 10}
+          - {lane: parallel, shard: 5, of: 10}
+          - {lane: parallel, shard: 6, of: 10}
+          - {lane: parallel, shard: 7, of: 10}
+          - {lane: parallel, shard: 8, of: 10}
+          - {lane: parallel, shard: 9, of: 10}
+          - {lane: parallel, shard: 10, of: 10}
           - {lane: serial, shard: 1, of: 1}
           - {lane: installer, shard: 1, of: 2}
           - {lane: installer, shard: 2, of: 2}

@@ -132,7 +132,8 @@ interpreter version that ran it, and `refresh` requires the whole run to have us
 without a version keep their own evidence, and no interpreter is preferred for calibration. Split a growing table into
 named group methods (`tests.common.GroupedTable`) before any method nears the ceiling. When
 `check` projects a share over its target, raise that lane's shards in the manifest and add the
-matching `ci.yml` rows, up to `max_parallel_shards` for parallel. Raw largest-worker overload remains
+matching `ci.yml` rows, up to `max_parallel_shards` for parallel (10, the owner's decision of
+2026-11-02, with the lane target kept at 180 s). Raw largest-worker overload remains
 a hard finding. Below that parallel cap, calibrated share overload is also a hard finding. At the
 parallel cap, calibrated-only overload is a warning naming projected seconds, target and residual;
 it does not suggest another shard. Report actual hosted share times and any residual after the
