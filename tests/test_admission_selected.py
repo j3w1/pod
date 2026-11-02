@@ -4,6 +4,7 @@ from io import StringIO
 import argparse
 import json
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,18 +16,31 @@ from tests.common import logical_json
 from tests.kernel_support import KernelCase, assurance_review, assurance_satisfied, git
 
 
+def facts_digest(answer):
+    """R208's digest, recomputed by a caller from the answer it received."""
+    from pod.util import digest
+    return digest({key: value for key, value in answer.items()
+                   if key not in ("digest", "status", "conflicts", "next_action")})
+
+
 class SelectedCase(KernelCase):
     review, satisfied = assurance_review, assurance_satisfied
+    production_native = False  # True: keep the real OrcaPort.read_native and double only the worker-show boundary
 
     def setUp(self):
         super().setUp()
         self.native_reads = []
         port = self.port
-
-        def read_native(_port, owner, **kwargs):
-            self.native_reads.extend(row["native_binding"]["dispatchId"] for row in kwargs.get("assignments", ()))
-            return port.read_native(owner, **kwargs)
-        native = patch.object(OrcaPort, "read_native", autospec=True, side_effect=read_native)
+        if self.production_native:
+            def show_worker(_port, dispatch):
+                self.native_reads.append(dispatch)  # each actual exact native read
+                return port.show_worker(dispatch)
+            native = patch.object(OrcaPort, "show_worker", show_worker)
+        else:
+            def read_native(_port, owner, **kwargs):
+                self.native_reads.extend(row["native_binding"]["dispatchId"] for row in kwargs.get("assignments", ()))
+                return port.read_native(owner, **kwargs)
+            native = patch.object(OrcaPort, "read_native", autospec=True, side_effect=read_native)
         native.start(); self.addCleanup(native.stop)
 
     def ready(self):
@@ -89,7 +103,18 @@ class SelectedCase(KernelCase):
         def scandir(path=".", *args):
             self.assertNotEqual(Path(os.fsdecode(path)).resolve(), root.resolve(), "the record cohort was listed")
             return real_scandir(path, *args)
+        real_popen = subprocess.Popen
+
+        class Guarded(real_popen):
+            def __init__(popen, args, *rest, **kwargs):
+                first = args[0] if isinstance(args, (list, tuple)) else str(args).split()[0]
+                if Path(os.fsdecode(first)).name.startswith("orca"):
+                    raise AssertionError("Orca CLI invocation")
+                super().__init__(args, *rest, **kwargs)
         with ExitStack() as stack:
+            # The subprocess boundary: any Orca executable launched from anywhere, the production port included.
+            stack.enter_context(patch("subprocess.Popen", Guarded))
+            stack.enter_context(patch("pod.orca.executable", return_value=Path("/forbidden/orca")))
             for name in ("_cohort", "_after_cohort", "_fleet", "_fleet_sequential", "_terminals", "_places",
                          "_run_coordinators", "_owner_observation", "_native_claim", "complete_list"):
                 stack.enter_context(patch("pod.admission." + name, side_effect=forbidden))
@@ -102,6 +127,8 @@ class SelectedCase(KernelCase):
 
 
 class NoDiscoveryTests(SelectedCase):
+    production_native = True
+
     def test_selected_read_reads_only_its_record_and_exact_bound_workers(self):
         self.ready()
         self.write([self.criterion("satisfied", evidence=[self.proof("O1")])], objective="other",
@@ -116,6 +143,25 @@ class NoDiscoveryTests(SelectedCase):
                        if row["state"] == "bound")
         self.assertEqual(sorted(self.native_reads), bound)  # exact worker reads by id, nothing else native
         self.assertEqual(self.files(), before)  # no write, compaction, migration or collection
+
+    def test_a_discovery_read_inside_the_production_native_port_fails_the_control(self):
+        """Mutation check: the controls catch a forbidden read made from inside OrcaPort.read_native itself."""
+        from pod import operations, orca
+        self.ready()
+        real = OrcaPort.read_native
+        injected = {
+            "orca_cli": lambda: operations.read_command(["orchestration", "worker-list", "--include-remote", "--json",
+                                                         "--limit", "100"]),
+            "terminal_inventory": lambda: orca.complete_list("terminal"),
+            "fleet": lambda: admission._fleet(),
+        }
+        for name, call in injected.items():
+            def mutated(port, owner, call=call, **kwargs):
+                call()
+                return real(port, owner, **kwargs)
+            with self.subTest(name), patch.object(OrcaPort, "read_native", mutated), self.no_discovery():
+                with self.assertRaises(AssertionError):
+                    self.selected()
 
     def test_binding_names_repository_record_candidate_and_tree(self):
         self.ready()
@@ -347,7 +393,8 @@ class DigestTests(SelectedCase):
         first = self.selected()
         again = self.selected(expect=first["digest"])
         self.assertEqual((again["digest"], again["conflicts"], again["status"]), (first["digest"], [], "ready"))
-        canonical = {key: value for key, value in first.items() if key not in ("digest", "conflicts", "next_action")}
+        canonical = {key: value for key, value in first.items()
+                     if key not in ("digest", "status", "conflicts", "next_action")}
         from pod.util import digest
         self.assertEqual(first["digest"], digest(canonical))
         self.edit(lambda raw: raw["checkpoint"].update(plan_revision="changed"))
@@ -355,6 +402,19 @@ class DigestTests(SelectedCase):
         self.assertNotEqual(changed["digest"], first["digest"])
         self.assertEqual(changed["conflicts"], [{"kind": "digest_changed", "expected": first["digest"]}])
         self.assertEqual(changed["status"], "blocked")  # never ready, and never a refusal
+
+    def test_the_returned_digest_is_the_digest_of_the_returned_facts_even_after_an_expect_conflict(self):
+        self.ready()
+        fresh = self.selected()
+        stale = self.selected(expect="0" * 64)
+        self.assertEqual((stale["status"], stale["conflicts"][0]["kind"]), ("blocked", "digest_changed"))
+        self.assertEqual(stale["digest"], fresh["digest"])  # the expect conflict changes no fact
+        for answer in (fresh, stale):
+            self.assertEqual(facts_digest(answer), answer["digest"])
+        self.assertEqual(self.selected(expect=stale["digest"])["status"], "ready")
+        with self.assertRaises(PodError) as caught:
+            self.selected(expect="not-a-digest")
+        self.assertEqual(caught.exception.code, "admission_selected_request")
 
     def test_a_source_or_policy_change_changes_the_digest(self):
         self.ready()
@@ -400,6 +460,65 @@ class UncertaintyTests(SelectedCase):
         self.assertEqual(result["proof"]["status"], "unknown")
         self.assertEqual((result["status"], [row["code"] for row in result["unknowns"]]),
                          ("unknown", ["proof_unverified"]))
+
+    def spent_after(self, calls):
+        """A budget that runs out right after the given number of selected-record identity reads finish."""
+        from pod.window import Budget
+        budgets = []
+
+        class Spending(Budget):
+            spent = False
+
+            def check(self):
+                if self.spent:
+                    raise PodError("discovery_budget", "spent")
+                return super().check()
+
+            def limit(self, seconds):
+                self.check()
+                return super().limit(seconds)
+
+        def make(timeout):
+            budgets.append(Spending(timeout))
+            return budgets[-1]
+        real, seen = admission._record_identity, []
+
+        def identity(directory):
+            value = real(directory)
+            seen.append(directory)
+            if len(seen) == calls:
+                budgets[-1].spent = True
+            return value
+        return patch("pod.admission.Budget", side_effect=make), patch("pod.admission._record_identity", side_effect=identity)
+
+    def test_a_deadline_spent_by_the_last_read_is_unknown(self):
+        self.ready()
+        budget, identity = self.spent_after(2)
+        with budget, identity:
+            result = self.selected()
+        self.assertEqual((result["status"], [row["code"] for row in result["unknowns"]]),
+                         ("unknown", ["discovery_budget"]))
+
+    def test_a_deadline_spent_before_the_record_is_read_is_unknown_not_a_refusal(self):
+        self.ready()
+        with patch("pod.gitio.resolve_commit", side_effect=PodError("discovery_budget", "spent")):
+            result = self.selected()
+        self.assertEqual((result["status"], [row["code"] for row in result["unknowns"]]),
+                         ("unknown", ["discovery_budget"]))
+        self.assertEqual((result["binding"]["candidate"], result["binding"]["tree"]), (self.base, None))
+        self.assertEqual(facts_digest(result), result["digest"])
+
+    def test_the_final_serialized_answer_is_bounded(self):
+        self.ready()
+        answer = self.selected()
+        size = len(json.dumps(answer, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+        with patch("pod.orca.MAX_OUTPUT", size - 1):  # only the complete answer is over the bound
+            result = self.selected()
+        self.assertEqual((result["status"], result["digest"]), ("unknown", None))
+        self.assertEqual(result["unknowns"][0]["code"], "selected_projection_limit")
+        self.assertLessEqual(len(json.dumps(result, sort_keys=True, ensure_ascii=False).encode("utf-8")), size - 1)
+        with patch("pod.orca.MAX_OUTPUT", size):
+            self.assertEqual(self.selected()["status"], "ready")
 
     def test_an_answer_over_the_output_bound_is_withheld(self):
         self.ready()

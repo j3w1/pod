@@ -10630,7 +10630,8 @@
       ],
       "offline_test": [
         "tests.test_admission_selected.NoDiscoveryTests.test_selected_read_reads_only_its_record_and_exact_bound_workers",
-        "tests.test_admission_selected.NoDiscoveryTests.test_binding_names_repository_record_candidate_and_tree"
+        "tests.test_admission_selected.NoDiscoveryTests.test_binding_names_repository_record_candidate_and_tree",
+        "tests.test_admission_selected.NoDiscoveryTests.test_a_discovery_read_inside_the_production_native_port_fails_the_control"
       ],
       "status": "NOT_RUN"
     },
@@ -10710,7 +10711,8 @@
         "tests.test_admission_selected.DigestTests.test_digest_is_stable_and_expect_reports_a_change_as_a_conflict",
         "tests.test_admission_selected.DigestTests.test_a_source_or_policy_change_changes_the_digest",
         "tests.test_admission_selected.DigestTests.test_cli_expect_mismatch_exits_zero_with_the_conflict",
-        "tests.test_admission_selected.RefusalTests.test_wrong_commit_tree_and_repository_refuse_before_any_record_read"
+        "tests.test_admission_selected.RefusalTests.test_wrong_commit_tree_and_repository_refuse_before_any_record_read",
+        "tests.test_admission_selected.DigestTests.test_the_returned_digest_is_the_digest_of_the_returned_facts_even_after_an_expect_conflict"
       ],
       "status": "NOT_RUN"
     },
@@ -10724,7 +10726,10 @@
         "tests.test_admission_selected.UncertaintyTests.test_exhausted_deadline_is_unknown",
         "tests.test_admission_selected.UncertaintyTests.test_a_record_changed_during_the_read_is_unknown",
         "tests.test_admission_selected.UncertaintyTests.test_a_failed_exact_worker_read_is_unknown",
-        "tests.test_admission_selected.UncertaintyTests.test_an_answer_over_the_output_bound_is_withheld"
+        "tests.test_admission_selected.UncertaintyTests.test_an_answer_over_the_output_bound_is_withheld",
+        "tests.test_admission_selected.UncertaintyTests.test_a_deadline_spent_by_the_last_read_is_unknown",
+        "tests.test_admission_selected.UncertaintyTests.test_a_deadline_spent_before_the_record_is_read_is_unknown_not_a_refusal",
+        "tests.test_admission_selected.UncertaintyTests.test_the_final_serialized_answer_is_bounded"
       ],
       "status": "NOT_RUN"
     },

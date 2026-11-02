@@ -2572,40 +2572,45 @@ def selected(project: Path, *, repository: str | None = None, objective: str | N
         raise PodError("admission_candidate", "Supply an objective and its full candidate object id together")
     if tree is not None and not gitio.OBJECT_ID.fullmatch(tree):
         raise _selected_fault("--tree must be a full object id")
+    if expect is not None and not re.fullmatch(r"[0-9a-f]{64}", expect):
+        raise _selected_fault("--expect must be a digest this read returned (64 lowercase hex characters)")
     budget = Budget(_timeout(timeout))
-    with read_deadline(budget):
-        project = Path(repository or project).expanduser().resolve()
-        if not project.is_dir():
-            raise PodError("admission_scope_unavailable", "The repository argument is not an existing directory")
-        context = repository_context(project, fresh=True)
-        if context["repo_key"] is None:
-            raise PodError("admission_scope_unavailable", "The repository argument has no usable Git identity")
-        if gitio.resolve_commit(project, candidate) != candidate:
-            raise PodError("admission_candidate", "The candidate is not a commit in this repository")
-        read_tree = gitio.read(project, ["rev-parse", "--verify", "--quiet", "--end-of-options", candidate + "^{tree}"])
-        observed_tree = read_tree.stdout.strip() if read_tree is not None and read_tree.returncode == 0 else ""
-        if not gitio.OBJECT_ID.fullmatch(observed_tree):
-            raise PodError("git_unavailable", "Git cannot read the candidate's tree")
-        if tree is not None and tree != observed_tree:
-            raise PodError("selected_tree_mismatch", "The candidate's tree differs from --tree")
-        root = state_root(project)
-        if root.is_symlink() or any(parent.is_symlink() for parent in root.parents):
-            raise PodError("unsafe_state", "State root is redirected")
-        name = record_name(project, context, objective)
-        directory = root / name
-        from .ledger import _record_exists
-        if not _record_exists(directory / "context.json"):
-            raise PodError("objective_unknown", "The selected objective has no record in this repository")
-        result = {"schema": SELECTED_SCHEMA, "status": "unknown", "authorization": False,
-                  "binding": {"repository": context["repository"], "repo_key": context["repo_key"],
-                              "path": str(project), "objective": objective, "record": name,
-                              "candidate": candidate, "tree": observed_tree},
-                  "snapshot": None, "proof": None, "assurances": [], "attempts": [], "unknowns": [],
-                  "conflicts": []}
-        unknowns = result["unknowns"]
-        state = view = None
-        try:
+    project = Path(repository or project).expanduser().resolve()
+    result = {"schema": SELECTED_SCHEMA, "status": "unknown", "authorization": False,
+              "binding": {"repository": None, "repo_key": None, "path": str(project), "objective": objective,
+                          "record": None, "candidate": candidate, "tree": None},
+              "snapshot": None, "proof": None, "assurances": [], "attempts": [], "unknowns": [], "conflicts": []}
+    unknowns, binding = result["unknowns"], result["binding"]
+    reading = False  # True once the selected record exists and its read has started
+    try:
+        with read_deadline(budget):
+            if not project.is_dir():
+                raise PodError("admission_scope_unavailable", "The repository argument is not an existing directory")
+            context = repository_context(project, fresh=True)
+            if context["repo_key"] is None:
+                raise PodError("admission_scope_unavailable", "The repository argument has no usable Git identity")
+            binding.update(repository=context["repository"], repo_key=context["repo_key"])
+            if gitio.resolve_commit(project, candidate) != candidate:
+                raise PodError("admission_candidate", "The candidate is not a commit in this repository")
+            read_tree = gitio.read(project, ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                             candidate + "^{tree}"])
+            observed_tree = read_tree.stdout.strip() if read_tree is not None and read_tree.returncode == 0 else ""
+            if not gitio.OBJECT_ID.fullmatch(observed_tree):
+                raise PodError("git_unavailable", "Git cannot read the candidate's tree")
+            if tree is not None and tree != observed_tree:
+                raise PodError("selected_tree_mismatch", "The candidate's tree differs from --tree")
+            binding["tree"] = observed_tree
+            root = state_root(project)
+            if root.is_symlink() or any(parent.is_symlink() for parent in root.parents):
+                raise PodError("unsafe_state", "State root is redirected")
+            binding["record"] = name = record_name(project, context, objective)
+            directory = root / name
+            from .ledger import _record_exists
+            if not _record_exists(directory / "context.json"):
+                raise PodError("objective_unknown", "The selected objective has no record in this repository")
+            reading = True
             before = _record_identity(directory)
+            state = view = None
             try:
                 proof, state, view = _proof_view(project, objective, candidate)
             except PodError as exc:
@@ -2627,43 +2632,58 @@ def selected(project: Path, *, repository: str | None = None, objective: str | N
                 result["snapshot"] = _selected_snapshot(state, view)
                 result["assurances"] = _selected_assurances(state, proof)
                 result["attempts"] = _selected_attempts(project, state, candidate)
-            budget.check()
-            if _record_identity(directory) != before:
+            after = _record_identity(directory)
+            budget.check()  # after the last read: a deadline spent by any read is never ready
+            if after != before:
                 unknowns.append({"code": "record_changed", "fact": "selected_record"})
-        except PodError as exc:
-            if exc.code == DEADLINE_SPENT:
-                unknowns.append({"code": DEADLINE_SPENT, "fact": "read_deadline"})
-            elif exc.code == "objective_unknown":
-                unknowns.append({"code": "record_changed", "fact": "selected_record"})
-            elif exc.code in ("selected_repository_mismatch", "unsafe_state"):
-                raise
-            else:
-                unknowns.append({"code": "invalid_record", "fact": "selected_record", "reason": exc.code})
-        except OSError:
-            unknowns.append({"code": "invalid_record", "fact": "selected_record"})
+    except PodError as exc:
+        if exc.code == DEADLINE_SPENT:
+            unknowns.append({"code": DEADLINE_SPENT, "fact": "read_deadline"})
+        elif not reading or exc.code in ("selected_repository_mismatch", "unsafe_state"):
+            raise  # A binding refusal: no answer exists.
+        elif exc.code == "objective_unknown":
+            unknowns.append({"code": "record_changed", "fact": "selected_record"})
+        else:
+            unknowns.append({"code": "invalid_record", "fact": "selected_record", "reason": exc.code})
+    except OSError:
+        if not reading:
+            raise PodError("admission_scope_unavailable", "The repository cannot be read") from None
+        unknowns.append({"code": "invalid_record", "fact": "selected_record"})
     if result["proof"] is None:
         result["proof"] = {"status": "unknown", "candidate": candidate, "reason": "admission_incomplete"}
-    unknowns.sort(key=digest)
+    answer = _selected_finish(result, expect)
     from .orca import MAX_OUTPUT
-    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT:
+    if len(json.dumps(answer, sort_keys=True, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT:
         omitted = {"assurances": len(result["assurances"]), "attempts": len(result["attempts"])}
         result.update(snapshot=None, assurances=[], attempts=[],
                       proof={"status": "unknown", "candidate": candidate, "reason": "selected_projection_limit"},
                       unknowns=[{"code": "selected_projection_limit", "fact": "projection", "omitted": omitted}])
-    result["status"] = ("unknown" if result["unknowns"] else "ready" if result["proof"]["status"] == "ready"
+        answer = _selected_finish(result, expect)
+    return answer
+
+
+def selected_digest(answer: dict) -> str:
+    """The digest of an answer's facts: everything but `digest`, `status`, `conflicts` and `next_action`. Status is
+    derived from the proof and the unknowns, which it covers, so an `--expect` conflict never changes it."""
+    return digest({key: value for key, value in answer.items()
+                   if key not in ("digest", "status", "conflicts", "next_action")})
+
+
+def _selected_finish(result: dict, expect: str | None) -> dict:
+    answer = {**result, "unknowns": sorted(result["unknowns"], key=digest), "conflicts": []}
+    withheld = any(row["code"] == "selected_projection_limit" for row in answer["unknowns"])
+    answer["status"] = ("unknown" if answer["unknowns"] else "ready" if answer["proof"]["status"] == "ready"
                         else "blocked")
-    withheld = any(row["code"] == "selected_projection_limit" for row in result["unknowns"])
-    result["digest"] = None if withheld else digest({key: value for key, value in result.items()
-                                                    if key not in ("conflicts", "next_action")})
-    if expect is not None and result["digest"] != expect:
+    answer["digest"] = None if withheld else selected_digest(answer)
+    if expect is not None and answer["digest"] != expect:
         # R185's shape: a factual conflict, never a refusal; the answer is never ready.
-        result["conflicts"].append({"kind": "digest_changed", "expected": expect})
-        if result["status"] == "ready":
-            result["status"] = "blocked"
-    result["next_action"] = ("Join CE authority and repeat this read with --expect under effect serialization"
-                             if result["status"] == "ready" else
+        answer["conflicts"].append({"kind": "digest_changed", "expected": expect})
+        if answer["status"] == "ready":
+            answer["status"] = "blocked"
+    answer["next_action"] = ("Join CE authority and repeat this read with --expect under effect serialization"
+                             if answer["status"] == "ready" else
                              "Reconcile the named proof gaps or unknowns, then repeat the read")
-    return result
+    return answer
 
 
 def selected_command(args, project: Path) -> dict:

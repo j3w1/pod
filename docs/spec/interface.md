@@ -1444,26 +1444,32 @@ The answer holds:
 - `unknowns`, `conflicts`, `digest` and `next_action`.
 
 Top-level `unknowns` are only the facts that make the read itself incomplete or uncertain:
-`proof_unverified` (an unknown proof, including a failed exact worker read), `discovery_budget`,
+`proof_unverified` (an unknown proof, including a failed exact worker read), `discovery_budget` (the
+deadline ran out during any read, including the last one; the deadline is checked after the last read,
+and its expiry is never a refusal),
 `record_changed` (the record's primary or journal bytes changed during the read), `invalid_record`
 and `state_unsupported`, and `selected_projection_limit`. `status` is `unknown` when any is present,
 else `ready` when the proof is ready, else `blocked`. A fact an attempt lacks
 (`effective_unknown`, `effective_not_recorded`, `implementation_ancestry_unknown`) is listed in that
 attempt's own `unknowns`; it never changes `status`, and it is part of the digest.
 
-`digest` is the SHA-256 of the answer without `digest`, `conflicts` and `next_action`, in Pod's
-canonical JSON (sorted keys, no whitespace, UTF-8). Every list has a defined order, and the answer
-carries no time or diagnostic field, so the same facts give the same digest. `--expect` compares it
-as R185 compares its snapshot: a different digest adds `{"kind": "digest_changed", "expected":
-DIGEST}` to `conflicts` and makes a ready answer `blocked`. It is never a refusal, the digest is still
-returned, and a factual answer exits zero. An answer over R185's projection bound withholds the
-snapshot, assurances and attempts, sets the proof unknown with `selected_projection_limit` and
-returns a null digest. No list is truncated otherwise; the record's own validation bounds it.
+`digest` is a digest of the facts: the SHA-256 of the returned answer without `digest`, `status`,
+`conflicts` and `next_action`, in Pod's canonical JSON (sorted keys, no whitespace, UTF-8), so a caller
+recomputes it from the answer it received. `status` is left out because it is derived from the proof
+and the unknowns, which the digest covers. Every list has a defined order, and the answer carries no
+time or diagnostic field, so the same facts give the same digest. `--expect DIGEST` (64 lowercase hex
+characters) compares it as R185 compares its snapshot: a different digest adds `{"kind":
+"digest_changed", "expected": DIGEST}` to `conflicts` and makes a ready answer `blocked`. It is never a
+refusal, the returned digest is still the facts digest, unchanged by the conflict, and a factual answer
+exits zero. The bound is R185's projection bound, applied to the final answer exactly as `--json`
+prints it, with digest, conflicts and next action included: an answer over it withholds the snapshot,
+assurances and attempts, sets the proof unknown with `selected_projection_limit` and returns a null
+digest. No list is truncated otherwise; the record's own validation bounds it.
 
 Refusals print only Pod's error object and exit 1: `admission_selected_request` for `--selected`
 without `--json`, `--objective` or `--candidate`, with `--batch`, `--worktree`, `--branch`, `--target`,
 `--target-commit`, `--effect` or `--known-repository`, for a malformed `--tree`, and for `--tree`
-without `--selected`; `admission_candidate` for a candidate that is not a full object id or not a
+without `--selected`, and for a malformed `--expect`; `admission_candidate` for a candidate that is not a full object id or not a
 commit in the repository; `selected_tree_mismatch` when `--tree` differs from the candidate's tree;
 `objective_unknown` when the repository holds no record for the objective, which is what a wrong
 repository finds, since the record name binds the repository identity; `selected_repository_mismatch`
@@ -1472,12 +1478,12 @@ when the record's checkpoint names another repository; and R185's `admission_sco
 found before the record's contents are read, except `selected_repository_mismatch`. The timeout keeps R185's default
 of 10 seconds and maximum of 30, and every read spends it.
 
-- <a id="a796"></a>**A796** — With another objective's record and an unreadable record in the same state root, and every cohort listing, other-record read, all-Run inventory, terminal inventory, Run owner read and Orca CLI read made to fail the test, the selected read answers `ready`; its only native reads are the exact worker reads of the record's bound admissions, and no byte or modification time under the state root changes.
+- <a id="a796"></a>**A796** — With another objective's record and an unreadable record in the same state root, and every cohort listing, other-record read, all-Run inventory, terminal inventory, Run owner read and Orca executable launch made to fail the test, the selected read through the production native port, doubled only at its worker-show boundary, answers `ready`; its only native reads are the exact worker reads of the record's bound admissions, and no byte or modification time under the state root changes. A discovery read injected inside the production native port fails the control.
 - <a id="a797"></a>**A797** — For a ready, an invalidated, an unbound, a changed-candidate and a verification-gap proof, the selected read's `proof` is byte-identical to `pod admission --objective O --candidate C`.
 - <a id="a798"></a>**A798** — Each assurance reports its recorded `scope.paths` exactly as recorded, its own `evidence_current` and gap, and its accepted attempts by admission id; a withdrawn assurance has a null currency.
 - <a id="a799"></a>**A799** — A reviewer's recorded effective route survives a later reuse of its terminal at another effort, with no terminal or worker show read; a missing effective fact is an explicit attempt gap, `effective_not_recorded` or `effective_unknown`, never inferred.
 - <a id="a800"></a>**A800** — An implementation attempt reports its disposition and whether its integrated or result commit is in the candidate: true, false, null without a commit, and null with `implementation_ancestry_unknown` when Git cannot tell.
 - <a id="a801"></a>**A801** — A candidate that is not a full id or not a commit in the repository, a different `--tree`, a malformed `--tree` and a repository without the record each refuse with their code and exit 1, before the record is read; a record that names another repository refuses; the CLI refuses every discovery flag, `--batch`, a missing `--json`, and `--tree` without `--selected`, and answers a factual read with exit 0.
-- <a id="a802"></a>**A802** — The same facts give the same digest, equal to the canonical digest of the answer without `digest`, `conflicts` and `next_action`; a changed plan revision or policy revision gives a new digest; `--expect` with a stale digest adds `digest_changed` and makes the answer `blocked` with exit 0, while the `--tree` mismatch refuses with exit 1.
-- <a id="a803"></a>**A803** — An exhausted deadline, a record changed during the read, a failed exact worker read and an answer over the projection bound each give `unknown` with exactly their code, never `ready`; the over-bound answer has a null digest and no snapshot, assurances or attempts.
+- <a id="a802"></a>**A802** — The same facts give the same digest, recomputable from the returned answer without `digest`, `status`, `conflicts` and `next_action`; a changed plan revision or policy revision gives a new digest; `--expect` with a stale digest adds `digest_changed` and makes the answer `blocked` with exit 0 while returning the unchanged facts digest; a malformed `--expect` and the `--tree` mismatch refuse with exit 1.
+- <a id="a803"></a>**A803** — An exhausted deadline (during the proof, at the end of the last read, or before the record is read), a record changed during the read, a failed exact worker read and an answer over the projection bound each give `unknown` with exactly their code, never `ready` and never a refusal; the bound applies to the final printed answer, and the over-bound answer has a null digest and no snapshot, assurances or attempts.
 - <a id="a804"></a>**A804** — A ready proof whose reviewer attempt lacks its recorded effort stays `ready` with no top-level unknown; the gap is visible in that attempt's `unknowns`, and filling it changes the digest.
