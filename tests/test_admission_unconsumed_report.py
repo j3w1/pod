@@ -1,6 +1,6 @@
 """R185 and R206: a bound admission whose report is still owed keeps its placement held by its record once the native
 side settles its Dispatch (Orca exited, released and exited, rule S, R212), in open, continued and closed records; a
-`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A878)."""
+`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A879)."""
 import json
 from unittest.mock import patch
 
@@ -232,20 +232,22 @@ class ForeignObjectiveTests(UnconsumedReportCase):
     """A877: another repository's objective whose worker was placed in this repository holds that placement the
     same way; only the records owning the settled Dispatch's Run are read."""
 
-    def foreign(self, phase="open", **fields):
-        """Record the objective `foreign` of a second repository, owning Run `run`, with admission a1 placed in
-        this repository's worker worktree."""
-        other = self.root / "other-repository"
+    def foreign(self, phase="open", name="foreign", placement=None, **fields):
+        """Record the objective `name` of its own second repository, owning Run `run`, with admission a1 placed in
+        this repository's worker worktree (or the given accepted `placement`)."""
+        other = self.root / (name + "-repository")
         other.mkdir(exist_ok=True)
         git(other, "init", "-q", "-b", "main")
         raw = logical_json(self.context_path())
-        raw["checkpoint"]["objective"] = "foreign"
+        raw["checkpoint"]["objective"] = name
         raw["checkpoint"]["worktree"] = {**self.place, "path": str(other), "repo_key": repository_context(other)["repo_key"]}
         raw["checkpoint"]["native_refs"] = [{"runId": "run", "runtime": "runtime"}]
         raw["admissions"] = {"a1": admission_row(self.worker_path, self.place["repo_key"], **fields)}
+        if placement is not None:
+            raw["admissions"]["a1"]["recovery"]["placement_binding"] = placement
         if phase == "retired":
             raw["historical_retirement"] = {"fixture": phase}
-        destination = objective_root(other, "foreign") / "context.json"
+        destination = objective_root(other, name) / "context.json"
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps(raw))
         return destination
@@ -266,6 +268,100 @@ class ForeignObjectiveTests(UnconsumedReportCase):
     def test_a_retired_foreign_objective_holds_nothing(self):
         self.foreign(phase="retired")
         self.assert_free(self.native_worker(verdict="exited"))
+
+    # The review of 91dd204 and the systematic foreign-path cases (A879).
+
+    def removed(self):
+        git(self.project, "worktree", "remove", "--force", str(self.worker_path))
+        self.query_scope = {"branch": BRANCH}
+
+    def branch_held(self, worker, records=("foreign",)):
+        single, answer = self.answers(worker)
+        self.assertTrue(answer["native_fence"]["stable"])
+        self.assertEqual(answer["responses"][0]["result"], single)
+        self.assertTrue(single["complete"], single["unknowns"])
+        held = self.holds(single)
+        self.assertEqual(sorted((row["objective"], row["branch"]) for row in held),
+                         sorted((record, BRANCH) for record in records))
+        for row in held:
+            self.assertEqual(set(row), self.HELD_KEYS)
+        return single
+
+    def test_a_foreign_objectives_removed_worktree_keeps_its_branch_held(self):
+        self.foreign()
+        self.removed()
+        self.branch_held(self.native_worker(verdict="exited"))
+
+    def test_rule_s_keeps_a_foreign_objectives_removed_worktree_branch_held(self):
+        self.foreign()
+        self.removed()
+        with patch("pod.admission._run_coordinators", side_effect=lambda runtime, check=None: {"run": None}):
+            single = self.branch_held(self.native_worker(verdict="unverifiable"))
+        self.assertIn("native_liveness_unverified", single["unrelated_unknowns"]["by_code"])  # rule S applied
+
+    def test_a_foreign_worker_without_a_native_location_is_read_from_its_owner(self):
+        self.foreign()
+        worker = self.native_worker(verdict="exited")
+        worker["resource"]["worktreeId"] = None
+        worker["projection"]["workspace"] = {}
+        self.branch_held(worker)
+
+    def test_a_foreign_branch_only_placement_keeps_its_branch_held(self):
+        self.foreign(placement={"branch": BRANCH, "repo_key": self.place["repo_key"]})
+        self.removed()
+        self.branch_held(self.native_worker(verdict="exited"))
+
+    def test_a_consumed_local_binding_never_discharges_an_owing_foreign_admission(self):
+        self.foreign()
+        self.admit(report={"outcome": "succeeded"}, disposition={"kind": "accepted"})
+        self.assert_held(self.native_worker(verdict="exited"), objective="foreign")
+
+    def test_every_owing_admission_of_one_dispatch_holds_across_records(self):
+        self.foreign()
+        self.foreign(name="second")
+        self.admit()
+        self.removed()
+        self.branch_held(self.native_worker(verdict="exited"), records=("foreign", "objective", "second"))
+
+    def test_only_the_non_retired_owner_of_a_shared_dispatch_holds(self):
+        self.foreign()
+        self.foreign(phase="retired", name="second")
+        self.removed()
+        self.branch_held(self.native_worker(verdict="exited"))
+
+    def test_a_placement_attributed_to_another_repository_holds_nothing_here(self):
+        self.foreign(placement={"path": str(self.worker_path), "branch": BRANCH, "repo_key": "f" * 64})
+        self.removed()
+        self.assert_free(self.native_worker(verdict="exited"))
+
+    def test_an_unreadable_owning_admission_keeps_its_dispatch_unknown(self):
+        self.foreign(placement={"path": str(self.worker_path), "branch": 5})
+        single, answer = self.answers(self.native_worker(verdict="exited"))
+        self.assertEqual(answer["responses"][0]["result"], single)
+        self.assertFalse(single["complete"])
+        self.assertIn(("worker_placement_unknown", "d1"),
+                      [(row["code"], row.get("dispatch")) for row in single["unknowns"]])
+
+    def test_a_worker_in_another_repositorys_worktree_leaves_its_owner_unread(self):
+        """Positive proof of another repository's registered worktree: the owning record is never opened."""
+        destination = self.foreign()
+        record_dir = destination.parent
+        elsewhere = self.root / "foreign-repository"
+        git(elsewhere, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q",
+            "--allow-empty", "-m", "base")
+        git(elsewhere, "worktree", "add", "-q", "-b", "theirs", str(self.root / "theirs"))
+        worker = self.native_worker(verdict="exited")
+        worker["resource"]["worktreeId"] = worker["projection"]["workspace"]["id"] = str(self.root / "theirs")
+        from pod import history
+        real, opened = history.load_admission_facts, []
+
+        def facts(path, *, include_admissions=True):
+            if include_admissions and path.parent == record_dir:
+                opened.append(path)
+            return real(path, include_admissions=include_admissions)
+        with patch("pod.history.load_admission_facts", side_effect=facts):
+            self.assert_free(worker)
+        self.assertEqual(opened, [])
 
 
 class PlacementRecheckTests(UnconsumedReportCase):
@@ -297,6 +393,10 @@ class PlacementRecheckTests(UnconsumedReportCase):
     def test_a_changed_placement_branch_is_record_changed(self):
         self.query_scope = {"branch": "new-branch"}
         self.changed_before_recheck(lambda placement: placement.update(branch="new-branch"))
+
+    def test_a_placement_branch_becoming_unrecorded_is_record_changed(self):
+        self.query_scope = {"branch": "other-branch"}
+        self.changed_before_recheck(lambda placement: placement.pop("branch"))
 
     def test_a_changed_placement_worktree_is_record_changed(self):
         self.changed_before_recheck(lambda placement: placement.update(path=str(self.root / "elsewhere")))

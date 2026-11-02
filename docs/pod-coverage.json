@@ -11530,6 +11530,27 @@
         "tests.test_admission_unconsumed_report.PlacementRecheckTests.test_a_changed_placement_worktree_is_record_changed"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A879",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_objectives_removed_worktree_keeps_its_branch_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_rule_s_keeps_a_foreign_objectives_removed_worktree_branch_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_worker_without_a_native_location_is_read_from_its_owner",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_branch_only_placement_keeps_its_branch_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_consumed_local_binding_never_discharges_an_owing_foreign_admission",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_every_owing_admission_of_one_dispatch_holds_across_records",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_only_the_non_retired_owner_of_a_shared_dispatch_holds",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_placement_attributed_to_another_repository_holds_nothing_here",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_worker_in_another_repositorys_worktree_leaves_its_owner_unread",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_an_unreadable_owning_admission_keeps_its_dispatch_unknown",
+        "tests.test_admission_unconsumed_report.PlacementRecheckTests.test_a_placement_branch_becoming_unrecorded_is_record_changed"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
