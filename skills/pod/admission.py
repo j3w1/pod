@@ -1459,6 +1459,17 @@ def _within(inner: str, outer: str) -> bool:
     return inner == outer or inner.startswith(outer if outer.endswith("/") else outer + "/")
 
 
+def _record_locations(place: dict, rows: dict) -> dict:
+    """The worktrees and branches a record's coordinator place and admissions name, and whether all are recorded."""
+    placements = [_placement(row) for row in rows.values()]
+    paths = [place.get("path"), *(listing._location((row.get("native_binding") or {}).get("worktreeId"))
+              or listing._location(row.get("worktree")) or placement.get("path")
+              for row, placement in zip(rows.values(), placements))]
+    return {"worktrees": sorted({path for path in paths if path}),
+            "branches": [place.get("branch"), *(placement.get("branch") for placement in placements)],
+            "locations_complete": bool(paths) and all(paths)}
+
+
 def _placement_matches(binding: dict, shown: dict) -> bool:
     return (binding_valid(binding) and all(binding.get(key) == shown.get(field) for key, field in
         (("dispatchId", "dispatch"), ("runId", "run"), ("taskId", "task"),
@@ -1493,8 +1504,9 @@ def _claim_digest(raw: dict, rows: dict) -> str:
                    "runs": checkpoint.get("native_refs"),
                    "admissions": {key: {**{field: row.get(field) for field in
                        ("state", "role", "native_binding", "runtime", "worktree", "request_uuid", "run_id", "task_id", "boundary")},
-                       # A report consumed between the read and the recheck ends a hold (R185).
-                       "report_owed": report_owed(row)}
+                       # A report consumed, or an accepted placement changed, between the read and the recheck
+                       # changes a hold (R185).
+                       "report_owed": report_owed(row), "placement": _placement(row)}
                        for key, row in rows.items()}})
 
 
@@ -1908,13 +1920,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     if (placement.get("path") == listing._location(binding.get("worktreeId"))
                             and "branch" in placement and binding.get("dispatchId")):
                         placements_by_dispatch[binding["dispatchId"]] = (binding, placement)
-                placements = [_placement(row) for row in rows.values()]
-                paths = [place.get("path"), *(listing._location((row.get("native_binding") or {}).get("worktreeId"))
-                          or listing._location(row.get("worktree")) or placement.get("path")
-                          for row, placement in zip(rows.values(), placements))]
-                record_scopes[record] = {**scope, "worktrees": sorted({path for path in paths if path}),
-                                        "branches": [place.get("branch"), *(p.get("branch") for p in placements)],
-                                        "locations_complete": bool(paths) and all(paths)}
+                record_scopes[record] = {**scope, **_record_locations(place, rows)}
                 journal, journal_id = _journal(directory / "governor.json")
                 current_id = _claim_identity(raw, rows)
                 effect_id = _effect_identity(journal, open_objective=phase == "open")
@@ -2063,6 +2069,50 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             except (OSError, PodError, ValueError, RuntimeError):
                 return False
 
+        foreign_reads = {}
+
+        def foreign_holds(dispatch, run, path):
+            """A Dispatch settled in this repository whose Run another repository's objective records: that record
+            still holds the Dispatch's placement here while the admission owes its report (R185). Only the records
+            owning that Run are read, once per query, and each is rechecked with every other consulted source."""
+            for directory, generation in run_sources.get(run, []):
+                if directory.name in record_scopes:
+                    continue  # this repository's own record: its admissions were judged in the record pass
+                if directory.name not in foreign_reads:
+                    foreign_raw, current = _primary(directory / "context.json")
+                    consulted.append((directory, generation))
+                    if current != generation:
+                        foreign_reads[directory.name] = PodError("record_changed", "The record changed while it was read")
+                    else:
+                        try:
+                            foreign_reads[directory.name] = (foreign_raw, _admissions(foreign_raw, directory))
+                        except PodError as exc:
+                            foreign_reads[directory.name] = exc
+                read = foreign_reads[directory.name]
+                if isinstance(read, PodError):
+                    unknown(directory.name, "record_changed" if read.code == "record_changed" else "worker_placement_unknown",
+                            fact_scope={**scope, "worktree": path}, fact="worker_placement", dispatch=dispatch,
+                            cause=read.code)
+                    continue
+                foreign_raw, rows = read
+                if _record_phase(foreign_raw, directory) == "retired":
+                    continue
+                for key, row in rows.items():
+                    binding = row.get("native_binding") or {}
+                    if binding.get("dispatchId") != dispatch or report_owed(row) is None:
+                        continue
+                    placement = _placement(row)
+                    location = (listing._location(binding.get("worktreeId"))
+                                or listing._location(row.get("worktree")) or placement.get("path"))
+                    if placement.get("repo_key") != context["repo_key"] and not (
+                            location and workspace(location, places)[1]):
+                        continue  # placed in another repository: not this query's resource
+                    unfinished.append((dispatch, {"objective": listing._name(foreign_raw), "record": directory.name,
+                        "kind": "writer" if row["role"] == "implement" else "assignment",
+                        "admission": key, "worktree": location, "branch": placement.get("branch"),
+                        "locations_complete": bool(location) and bool(placement.get("branch")),
+                        "liveness": "exited", "boundary": row.get("boundary")}))
+
         def names_here(row):
             """Rule T 4b (3): the admission itself names this repository's workspace or the requested branch."""
             placement = _placement(row)
@@ -2089,7 +2139,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 and row.get("worktree") == ownership.get("worktree") and row.get("live") is True for row in observations)
             ownership["owner_identity_matches"] = matches
             owners[ownership["record"]] = matches
-        workers = {}
+        workers, context_only = {}, {}
         for requested_run, native in native_groups:
             budget.check()
             if native.get("complete") is not True:
@@ -2113,6 +2163,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     # resource. Its terminal's current ownership is inventoried
                     # separately below; no process exit is inferred here.
                     fleet_facts[source.get("dispatchId")] = "settled"
+                    context_only[source.get("dispatchId")] = source
                     continue
                 shown = _worker_fact(source)
                 path = shown["worktree"]
@@ -2284,6 +2335,20 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         # reads the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown,
         # and a native writer claim for the Dispatch already holds it.
         natively_claimed = {row["dispatch"] for row in result["claims"] if "native_terminal" in row and row.get("dispatch")}
+        bound_here = {row["native_binding"]["dispatchId"] for entries in runs.values() for *_, row in entries}
+        for dispatch in fleet_facts:
+            if dispatch in natively_claimed or dispatch in bound_here:
+                continue
+            shown = workers.get(dispatch)
+            if shown is None and dispatch in context_only:
+                try:
+                    shown = _worker_fact(context_only[dispatch])
+                except PodError:
+                    shown = {"run": context_only[dispatch].get("runId"), "worktree": None}
+            if shown is None or shown["run"] not in run_sources or (
+                    shown["worktree"] is not None and not workspace(shown["worktree"], places)[1]):
+                continue
+            foreign_holds(dispatch, shown["run"], shown["worktree"])
         for dispatch, held in unfinished:
             if dispatch in fleet_facts and dispatch not in natively_claimed:
                 claim(held)  # `exited`: this call's own reads settled the worker; its placement is still owed
@@ -2376,9 +2441,17 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             if after_id != identity or after_journal_id != journal_id:
                 after_raw = _primary(directory / "context.json")[0]
                 after_journal = _journal(directory / "governor.json")[0]
-                if (selected or _claim_identity(after_raw, _admissions(after_raw, directory)) != current_id
+                after_rows = _admissions(after_raw, directory)
+                if (selected or _claim_identity(after_raw, after_rows) != current_id
                         or _effect_identity(after_journal, open_objective=_record_phase(after_raw, directory) == "open") != effect_id):
-                    unknown(directory.name, "record_changed")
+                    # The change holds what the record named before and what it names now, so a placement moved to
+                    # the requested worktree or branch is never read as unrelated.
+                    before_scope = record_scopes.get(directory.name, scope)
+                    now = _record_locations(after_raw["checkpoint"].get("worktree") or {}, after_rows)
+                    unknown(directory.name, "record_changed", fact_scope={**before_scope,
+                        "worktrees": sorted({*before_scope.get("worktrees", []), *now["worktrees"]}),
+                        "branches": [*before_scope.get("branches", []), *now["branches"]],
+                        "locations_complete": before_scope.get("locations_complete") is True and now["locations_complete"]})
         after = _shared(("cohort-after", str(root)), lambda: _after_cohort(root, budget))
         before = {entry.name for entry in cohort}
         for added in sorted(set(after) - before):

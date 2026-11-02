@@ -11504,6 +11504,32 @@
         "tests.test_admission_query.TerminalHistoryTests.test_a_retired_record_owing_a_report_is_history"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A877",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_objectives_exited_worker_keeps_its_placement_here_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_objectives_released_worker_keeps_its_placement_here_held",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_foreign_finished_admission_holds_nothing",
+        "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_a_retired_foreign_objective_holds_nothing"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A878",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.PlacementRecheckTests.test_a_changed_placement_branch_is_record_changed",
+        "tests.test_admission_unconsumed_report.PlacementRecheckTests.test_a_changed_placement_worktree_is_record_changed"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

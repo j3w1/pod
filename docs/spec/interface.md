@@ -1191,7 +1191,7 @@ Install a reader supporting these formats before migrating. Preceding binaries d
 - <a id="a666"></a>**A666** — Routine writes queue cleanup without scanning retained history. A fixed queue threshold counts newly placed bytes, excluding identical pages already on disk, and starts a bounded sweep only after the semantic writer lock is released; migration and install/update also attempt cleanup. Status/doctor inventory reads bounded hints, reports queued or unknown bytes per record, and explicit GC preserves both authorities, pinned readers and the corruption-safe retry path. The preceding compaction request entry cannot publish.
 ### R185 — Read relevant admission facts without granting authorization
 
-Type: B,I · Scenarios: [A670](#a670), [A671](#a671), [A672](#a672), [A673](#a673), [A790](#a790), [A843](#a843), [A870](#a870), [A871](#a871), [A872](#a872), [A873](#a873), [A874](#a874)
+Type: B,I · Scenarios: [A670](#a670), [A671](#a671), [A672](#a672), [A673](#a673), [A790](#a790), [A843](#a843), [A870](#a870), [A871](#a871), [A872](#a872), [A873](#a873), [A874](#a874), [A877](#a877), [A878](#a878)
 
 `pod admission --repository PATH [--objective ID --candidate SHA] [--worktree PATH]
 [--branch NAME] [--target REF --target-commit SHA] [--effect GOVERNOR_ID]...
@@ -1266,10 +1266,16 @@ claim an unfinished admission without a native binding makes, with exactly its k
 settled the worker, and `boundary`. No new claim kind, key or unknown code is added; like any current
 writer or assignment claim it is a conflict where it intersects the request. This holds in open, continued and
 closed records, since a closure recorded before R117 can leave a report unconsumed; a `retired` record
-holds nothing (R112, R206). A Dispatch the native inventory lacks stays `native_identity_unverified`, and
+holds nothing (R112, R206). It holds whatever repository the record belongs to: when a Dispatch settled
+in this repository belongs to a Run another repository's objective records, only the records owning that
+Run are read, and an admission there that owes its report and is placed in this repository (its
+placement's repository key, or a location in this repository's worktrees) is held the same way; that
+record is rechecked with the call's other sources, and one that cannot be read or changed is
+`worker_placement_unknown` or `record_changed` for that Dispatch. A Dispatch the native inventory lacks stays `native_identity_unverified`, and
 a native writer claim for the Dispatch adds no second claim. Whether a report is still owed is part of the
-record's claim identity, so a consumption seen between the claims read and the change recheck is
-`record_changed`. Single and batch queries answer alike, and the end fence reads nothing more.
+record's claim identity, and so is each admission's accepted placement, so a consumption or a placement
+change seen between the claims read and the change recheck is `record_changed`, scoped to the worktrees
+and branches the record named before and after the change. Single and batch queries answer alike, and the end fence reads nothing more.
 
 Foreign exclusion requires repository/objective attribution consistent with the
 record key. `--known-repository` paths come from CE's authoritative registry and
@@ -1364,6 +1370,8 @@ CE always parses the factual status and scope; zero is never permission.
 - <a id="a872"></a>**A872** — A closed and a continued record hold their owed report's placement the same way; a `retired` record's admission makes no claim.
 - <a id="a873"></a>**A873** — An implementation with a disposition, a review with a consumed report and abandoned accounting settle with their Dispatch and make no claim; an implementation with a report but no disposition still holds. Finalization and the hold use one rule over the stored admission and the facts reader's projection, which states `report_consumed` and `disposition_recorded` and never a report body.
 - <a id="a874"></a>**A874** — A claims read that meets the report consumed, while the record before and after it holds the report unconsumed, makes the query `record_changed` and incomplete.
+- <a id="a877"></a>**A877** — Another repository's objective whose bound admission owes its report and whose worker was placed in this repository holds that worktree and branch the same way once the worker is shown exited, or exited and released, single and batch alike with a stable fence; a finished admission or a `retired` foreign objective holds nothing.
+- <a id="a878"></a>**A878** — An admission's accepted placement branch or worktree changed between the claims read and the change recheck makes the query `record_changed` and incomplete, also for a query of the new branch only, single and batch alike.
 
 #### Admission storage read contract
 

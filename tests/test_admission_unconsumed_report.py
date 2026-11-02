@@ -1,11 +1,12 @@
 """R185 and R206: a bound admission whose report is still owed keeps its placement held by its record once the native
 side settles its Dispatch (Orca exited, released and exited, rule S, R212), in open, continued and closed records; a
-`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A875)."""
+`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A878)."""
 import json
 from unittest.mock import patch
 
 from pod import admission, listing, process_exit
 from pod.governor import report_owed
+from pod.github import repository_context
 from pod.ledger import objective_root
 from tests import test_admission_batch as batch
 from tests.common import logical_json
@@ -225,6 +226,80 @@ class RecheckTests(UnconsumedReportCase):
             result = admission.query(self.project, **self.query_scope)
         self.assertFalse(result["complete"])
         self.assertIn("record_changed", [row["code"] for row in result["unknowns"]])
+
+
+class ForeignObjectiveTests(UnconsumedReportCase):
+    """A877: another repository's objective whose worker was placed in this repository holds that placement the
+    same way; only the records owning the settled Dispatch's Run are read."""
+
+    def foreign(self, phase="open", **fields):
+        """Record the objective `foreign` of a second repository, owning Run `run`, with admission a1 placed in
+        this repository's worker worktree."""
+        other = self.root / "other-repository"
+        other.mkdir(exist_ok=True)
+        git(other, "init", "-q", "-b", "main")
+        raw = logical_json(self.context_path())
+        raw["checkpoint"]["objective"] = "foreign"
+        raw["checkpoint"]["worktree"] = {**self.place, "path": str(other), "repo_key": repository_context(other)["repo_key"]}
+        raw["checkpoint"]["native_refs"] = [{"runId": "run", "runtime": "runtime"}]
+        raw["admissions"] = {"a1": admission_row(self.worker_path, self.place["repo_key"], **fields)}
+        if phase == "retired":
+            raw["historical_retirement"] = {"fixture": phase}
+        destination = objective_root(other, "foreign") / "context.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(raw))
+        return destination
+
+    def test_a_foreign_objectives_exited_worker_keeps_its_placement_here_held(self):
+        self.foreign()
+        self.assert_held(self.native_worker(verdict="exited"), objective="foreign")
+
+    def test_a_foreign_objectives_released_worker_keeps_its_placement_here_held(self):
+        self.foreign()
+        self.assert_held(self.native_worker(verdict="exited", released=True, terminal_state="released"),
+                         objective="foreign")
+
+    def test_a_foreign_finished_admission_holds_nothing(self):
+        self.foreign(report={"outcome": "succeeded"}, disposition={"kind": "accepted"})
+        self.assert_free(self.native_worker(verdict="exited"))
+
+    def test_a_retired_foreign_objective_holds_nothing(self):
+        self.foreign(phase="retired")
+        self.assert_free(self.native_worker(verdict="exited"))
+
+
+class PlacementRecheckTests(UnconsumedReportCase):
+    """A878: an accepted placement changed between the claims read and the change recheck is a record change."""
+
+    def changed_before_recheck(self, change):
+        path = self.admit()
+        raw = logical_json(path)
+        change(raw["admissions"]["a1"]["recovery"]["placement_binding"])
+        later, real, written = json.dumps(raw).encode(), admission._after_context_read, []
+
+        def recheck(target):
+            if target == path and not written:
+                path.write_bytes(later)  # the recheck meets the changed placement
+                written.append(True)
+            return real(target)
+        self.serve(self.native_worker(verdict="exited"))
+        with patch("pod.admission._after_context_read", side_effect=recheck):
+            single = admission.query(self.project, **self.query_scope)
+        restore = self.admit()
+        written.clear()
+        with patch("pod.admission._after_context_read", side_effect=recheck):
+            answer = self.batch(dict(self.query_scope))
+        self.assertEqual(restore, path)
+        for result in (single, answer["responses"][0]["result"]):
+            self.assertFalse(result["complete"])
+            self.assertIn("record_changed", [row["code"] for row in result["unknowns"]])
+
+    def test_a_changed_placement_branch_is_record_changed(self):
+        self.query_scope = {"branch": "new-branch"}
+        self.changed_before_recheck(lambda placement: placement.update(branch="new-branch"))
+
+    def test_a_changed_placement_worktree_is_record_changed(self):
+        self.changed_before_recheck(lambda placement: placement.update(path=str(self.root / "elsewhere")))
 
 
 class HostExitHoldTests(HostExitCase):
