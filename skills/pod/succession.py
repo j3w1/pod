@@ -221,7 +221,8 @@ def _closure_recorded(project: Path, objective: str, state: dict | None) -> bool
     if closed is None or not closed.get("closure"):
         return False
     try:
-        return validate_closed_snapshot(closed, closed_snapshot_context(project, objective, state)) == ()
+        # Unselected nonqualifying history leaves a recorded closure closed (pod#205).
+        return validate_closed_snapshot(closed, closed_snapshot_context(project, objective, state), selected=True) == ()
     except (PodError, KeyError, TypeError, ValueError, OSError):
         return False
 

@@ -1224,8 +1224,7 @@ def _proof_view(project: Path, objective: str, candidate: str, *, state: dict | 
     at_candidate = gitio.resolve_commit(project, "HEAD") == candidate
     view = kernel_view(project, objective, state=state, candidate=candidate, native=native,
                        sources_at=None if at_candidate else candidate)
-    from .assurance import selected_receipts
-    from .obligations import _persisted_rows, TERMINAL
+    from .obligations import _persisted_rows, selected_unverifiable, TERMINAL
     gaps, unavailable = [], []
     if view["map"] is None:
         gaps.append("map_missing")
@@ -1235,7 +1234,7 @@ def _proof_view(project: Path, objective: str, candidate: str, *, state: dict | 
             persisted = _persisted_rows(view["map"], view["ctx"], unverifiable_receipts=history)
             # Only a row's selected evidence judges the candidate. An unselected receipt whose original scope cannot be
             # verified is nonqualifying history: every receipt was still validated above (pod#203).
-            unavailable = [key for key, receipts in history.items() if selected_receipts(persisted[key]) & set(receipts)]
+            unavailable = selected_unverifiable(persisted, history)
             gaps.extend("evidence_unverified:" + key for key in unavailable)
         except PodError as exc:
             gaps.append(exc.code)

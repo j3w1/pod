@@ -1,6 +1,6 @@
 """R185 (A843): the exact-candidate proof judges each row by its selected evidence. A retained REUSE receipt recorded
 under an older definition, whose original scope cannot be verified, is nonqualifying history: it no longer makes the
-proof unknown unless it is selected, while the handoff hold and evidence closure still see it."""
+proof unknown unless it is selected, while the handoff hold still sees it (closed-snapshot readers: A844)."""
 import json
 from unittest.mock import patch
 
@@ -96,13 +96,13 @@ class UnselectedHistoryTests(History):
         proof, unknowns = self.agree()
         self.assertEqual((proof["status"], proof["gaps"], proof["assurance"]["label"]), ("ready", [], "QUALIFIED"))
         self.assertNotIn("proof_unverified", unknowns)
-        # The shared row validation still names A: the handoff hold and evidence closure read it.
+        # The shared row validation still names A: the handoff hold reads it.
         view = kernel_view(self.project, "objective", state=read(self.project, "objective"), candidate=self.candidate)
         unverifiable = []
         _persisted_rows(view["map"], view["ctx"], unverifiable=unverifiable)
         self.assertEqual(unverifiable, ["A"])
 
-    def test_closed_history_still_holds_handoff_and_evidence_closure(self):
+    def test_closed_history_still_holds_handoff(self):
         self.write(self.stored(), close=True)
         state = read(self.project, "objective")
         context = closed_snapshot_context(self.project, "objective", state)
