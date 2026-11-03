@@ -2,8 +2,10 @@
 from contextlib import contextmanager
 import hashlib
 import json
+from pathlib import Path
 import shutil
 import threading
+import unittest
 from unittest.mock import patch
 
 from pod import admission, history
@@ -17,6 +19,26 @@ from tests.test_admission_batch import BatchCase, NativeDouble, fleet_model, ter
 def sha(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                                      ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+class CanonicalCensusTests(unittest.TestCase):
+    def test_fixed_unicode_nested_false_null_vector_matches_final_seal(self):
+        vector = json.loads((Path(__file__).parent / "fixtures" / "admission-census-golden.json").read_text())
+        witness = vector["witness"]
+        for kind in ("scope", "cohort", "records"):
+            self.assertEqual(admission.digest(vector[kind + "_preimage"]), witness[kind + "_sha256"])
+        self.assertEqual(admission.digest(vector["result"]), vector["result_sha256"])
+        self.assertEqual(admission.digest(vector["binding_preimage"]), witness["binding_sha256"])
+        ascii_hash = hashlib.sha256(json.dumps(vector["binding_preimage"], sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+        # Unicode is in R, so encoding R as ASCII escapes changes its hash and therefore the binding.
+        ascii_result = hashlib.sha256(json.dumps(vector["result"], sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+        self.assertNotEqual(ascii_result, vector["result_sha256"])
+        self.assertEqual(ascii_hash, witness["binding_sha256"])  # this outer preimage itself is ASCII
+        result = {**vector["result"], "record_census": witness}
+        admission._finish_censuses([result], admission.Budget(1))
+        self.assertEqual(result["record_census"], witness)
 
 
 class CensusCase(BatchCase):
@@ -234,6 +256,29 @@ class IncompleteCensusTests(CensusCase):
         self.assertIn("admission_projection_limit", [row["code"] for row in result["unknowns"]])
         self.assert_census(result, False)
 
+    def test_witness_bytes_crossing_the_per_query_cap_clear_completion(self):
+        self.intake(worktree=self.place)
+        before = self.query(branch="main")
+        self.assert_census(before)
+        public = {key: value for key, value in before.items() if key != "record_census"}
+        limit = len(json.dumps(public, ensure_ascii=False).encode()) + 10
+        self.assertGreater(len(json.dumps(before, ensure_ascii=False).encode()), limit)
+        with patch("pod.orca.MAX_OUTPUT", limit):
+            result = self.query(branch="main")
+        self.assertIn("admission_projection_limit", [row["code"] for row in result["unknowns"]])
+        self.assert_census(result, False)
+
+    def test_witness_bytes_crossing_the_whole_batch_cap_refuse_the_response(self):
+        self.intake(worktree=self.place)
+        before = self.batch({"branch": "main"})
+        complete_size = len(json.dumps(before, sort_keys=True, ensure_ascii=False).encode())
+        before["responses"][0]["result"].pop("record_census")
+        public_size = len(json.dumps(before, sort_keys=True, ensure_ascii=False).encode())
+        with patch("pod.admission.MAX_RESPONSE_BYTES", (complete_size + public_size) // 2), \
+             self.assertRaises(PodError) as caught:
+            self.batch({"branch": "main"})
+        self.assertEqual(caught.exception.code, "admission_batch_projection_limit")
+
     def test_missing_discovery_evidence_never_defaults_to_true(self):
         self.intake(worktree=self.place)
         real = admission._cohort
@@ -249,6 +294,17 @@ class IncompleteCensusTests(CensusCase):
 
 
 class ChangedCensusTests(CensusCase):
+    def test_replaced_or_redirected_root_cannot_assert_completion(self):
+        self.intake(worktree=self.place)
+
+        def redirect(root):
+            saved = root.with_name(root.name + "-saved")
+            root.rename(saved)
+            root.symlink_to(saved, target_is_directory=True)
+
+        with self.at_recheck(redirect):
+            self.assert_census(self.query(branch="main"), False)
+
     def test_equivalent_journal_generation_change_is_still_census_incomplete(self):
         self.intake(worktree=self.place)
         base.ReviewCorrectionTests.journal(self)
@@ -365,6 +421,23 @@ class ChangedCensusTests(CensusCase):
 
 
 class CensusDeadlineTests(CensusCase):
+    def test_later_sibling_cutoff_invalidates_earlier_constructed_witness(self):
+        self.intake(worktree=self.place)
+        witness, made = admission._RecordCensus.witness, []
+
+        def observe(census, result, budget, *args):
+            if made:
+                budget.deadline = budget._clock() - 1
+            answer = witness(census, result, budget, *args)
+            made.append(answer["complete"])
+            return answer
+
+        with patch.object(admission._RecordCensus, "witness", observe):
+            answer = self.batch({"branch": "main"}, {"branch": "other"})
+        self.assertEqual(made, [True, False])
+        for row in answer["responses"]:
+            self.assert_census(row["result"], False)
+
     def test_batch_envelope_serialization_spends_original_deadline(self):
         self.intake(worktree=self.place)
         captured, cohort = [], admission._cohort

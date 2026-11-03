@@ -1,0 +1,63 @@
+{
+  "note": "Synthetic canonical-hash interoperability vector; no record or native observation is asserted.",
+  "scope_preimage": {
+    "repo_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "path": "/repo/niño",
+    "state_root": "/state/日本語"
+  },
+  "cohort_preimage": {
+    "root": null,
+    "entries": []
+  },
+  "records_preimage": {
+    "records": [],
+    "effect_policies": {}
+  },
+  "result": {
+    "schema": "pod-admission-query/v1",
+    "scope": {
+      "repo_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "/repo/niño",
+      "selection": {
+        "branch": "café",
+        "effects": [
+          "deploy:日本語",
+          null,
+          false
+        ]
+      }
+    },
+    "complete": false,
+    "repository_complete": false,
+    "native_resources_complete": true,
+    "claims": [],
+    "unknowns": [
+      {
+        "code": "native_liveness_unverified",
+        "scope": {
+          "locations_complete": false,
+          "worktree": null
+        }
+      }
+    ],
+    "snapshot": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "authorization": false
+  },
+  "result_sha256": "118de077b5203fd89d7c251969ecaf6748b8a5ef4c673916b02cc5c6dd0724c4",
+  "binding_preimage": {
+    "schema": "pod-admission-record-census/v1",
+    "complete": true,
+    "scope_sha256": "308adaffc47af8a1d55f08b0a779e532e6212374e58499e7638eafd1482bc092",
+    "cohort_sha256": "fdbcae7e3f51c47140ff2d1e30ad407fda7cc9e99917376752be0d9d56ca49da",
+    "records_sha256": "42ba5243fb09913226d8891d4cc12b85ec4dfba7014283f77f7ab1f187b26e01",
+    "result_sha256": "118de077b5203fd89d7c251969ecaf6748b8a5ef4c673916b02cc5c6dd0724c4"
+  },
+  "witness": {
+    "schema": "pod-admission-record-census/v1",
+    "complete": true,
+    "scope_sha256": "308adaffc47af8a1d55f08b0a779e532e6212374e58499e7638eafd1482bc092",
+    "cohort_sha256": "fdbcae7e3f51c47140ff2d1e30ad407fda7cc9e99917376752be0d9d56ca49da",
+    "records_sha256": "42ba5243fb09913226d8891d4cc12b85ec4dfba7014283f77f7ab1f187b26e01",
+    "binding_sha256": "015203fa778c15143c216bc7a3d944e4d48510e65235d521882de0d942c3d352"
+  }
+}

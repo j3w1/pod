@@ -1618,6 +1618,41 @@ ensure_ascii=False)`, after the existing plain-value conversion. The canonical p
   and R is the **final public per-query result without `record_census`**. This binds scope,
   selectors, snapshot, claims, uncertainties and every other returned field, without recursion.
 
+The literal JSON preimage layouts below are normative. Angle-bracket strings stand for the
+values defined above; they introduce no wrapping object or normalization. Entries/records are
+ordered arrays, optional record dependency fields occur only when consulted, and all six
+filesystem-generation fields are required when the identity is present.
+
+```json
+{"repo_key":"<scope.repo_key>","path":"<scope.path>","state_root":"<state-root path>"}
+```
+
+```json
+{"root":{"device":0,"inode":0,"mode":0,"size":0,"mtime_ns":0,"ctime_ns":0},"entries":[{"name":"<entry name>","identity":{"device":0,"inode":0,"mode":0,"size":0,"mtime_ns":0,"ctime_ns":0}}]}
+```
+
+Here the zeroes stand for the observed integer fields, and `root` is null for proved absence.
+Each successful entry must be a record directory. The included-record layout is:
+
+```json
+{"records":[{"name":"<entry name>","classification":"included","attribution_generation":"<generation digest>","attribution_sha256":"<header digest>","claims_generation":"<generation digest>","claims_sha256":"<claim digest>","consulted_claims_generation":"<optional generation digest>","journal_generation":"<optional generation digest>","phase_closure_sha256":"<optional phase dependency digest>"}],"effect_policies":{"<consulted repository path>":"<revision>"}}
+```
+
+An attribution-only foreign record uses `classification: "foreign"`, omits the two included
+claims fields, and retains any actually consulted optional dependencies. Empty arrays/maps
+remain `[]`/`{}`. The binding preimage is **flat**, exactly these six fields:
+
+```json
+{"schema":"pod-admission-record-census/v1","complete":true,"scope_sha256":"<scope digest>","cohort_sha256":"<cohort digest>","records_sha256":"<records digest>","result_sha256":"<H(R)>"}
+```
+
+The [fixed golden vector](../../tests/fixtures/admission-census-golden.json) supplies concrete
+preimages and expected hashes, including nested arrays, Unicode, false and null. Its binding
+hash is `015203fa778c15143c216bc7a3d944e4d48510e65235d521882de0d942c3d352`.
+It is a hashing interoperability vector, not a record or native observation. Arrays preserve
+their order; consumers hash the received full public result before any projection/redaction,
+and reject unencodable or nonstandard JSON rather than inventing normalization.
+
 Only the last digest is independently recomputable from the public result. The three private
 preimages, including the state-root path, are opaque trusted-producer attestations; equal counts
 or native/list/snapshot fences cannot reconstruct them. A consumer checks the exact schema,
@@ -1625,15 +1660,21 @@ types, affirmative flag, digest shapes, expected enclosing scope/selectors and r
 missing, false, malformed, foreign or mismatched/spliced witnesses supply no proof. These hashes
 provide no authentication or independent wall-clock freshness: a consumer obtains a fresh trusted
 read under its own serialization and keeps its existing list, Git, native, correlation, byte and
-deadline fences. Facts after the observed recheck require another fresh call. Census grants no
+deadline fences. A consumer that already independently knows the exact state-root path from its
+validated list scope can also recompute `scope_sha256` using that expected scope, without opening
+private Pod records. The binding deliberately excludes the batch envelope/native fence; it cannot
+detect an entire old response replay or supply the join to another call's fence. Never cache/reuse
+this witness across calls: require a fresh supported producer invocation under the consumer's
+serialized guards, and validate that invocation's batch fence independently. Facts after the
+observed recheck require another fresh call. Census grants no
 absence, exit, authorization, objective completion or cleanup clearance, including with zero claims.
 
-- <a id="a881"></a>**A881** — Stable included and safely excluded records produce the documented bounded hashes in single and batch results, without private preimages. The full public-result binding detects a witness spliced onto a foreign scope, changed snapshot or changed uncertainty.
+- <a id="a881"></a>**A881** — Stable included and safely excluded records produce the documented bounded hashes in single and batch results, without private preimages. The fixed Unicode/nested false/null vector matches the literal canonical preimages. The full public-result binding detects a witness spliced onto a foreign scope, changed snapshot or changed uncertainty.
 - <a id="a882"></a>**A882** — Unknown worker and terminal liveness coexist with affirmative census, query/repository incompleteness and retained writer conflicts. An unlocated writer remains conservatively relevant; a complete zero-claim census supplies neither exit nor cleanup permission.
 - <a id="a883"></a>**A883** — A valid snapshot and complete stable native fences cannot rescue unreadable, unattributed, missing-context, nonrecord, missing-history or deferred-history record gaps. Missing discovery evidence never defaults to true.
-- <a id="a884"></a>**A884** — Same-count substitution, identical-byte directory replacement, excluded-record addition/removal, omitted end-cohort entries and excluded attribution-generation changes leave census false, including where the old complete/snapshot semantics deliberately remain unchanged.
+- <a id="a884"></a>**A884** — Same-count substitution, identical-byte directory replacement, redirected/replaced root, excluded-record addition/removal, omitted end-cohort entries and excluded attribution-generation changes leave census false, including where the old complete/snapshot semantics deliberately remain unchanged.
 - <a id="a885"></a>**A885** — A generation change between attribution and claims, an equivalent journal rewrite, a changed effect-classification policy or an unreadable phase closure cannot assert census completion.
-- <a id="a886"></a>**A886** — Interrupted discovery/recheck, the shared original cutoff, and expiry during thread teardown all leave census false. A batch end-fence failure or projection omission after constructing a true witness clears it before returning, preserving existing result fields.
+- <a id="a886"></a>**A886** — Interrupted discovery/recheck, a later sibling spending the shared original cutoff, and expiry during thread teardown or batch serialization all leave census false. A batch end-fence failure or projection omission after constructing a true witness clears it before returning, preserving existing result fields. Witness bytes count toward both query and whole-batch limits; crossing them clears or refuses the witness/response.
 - <a id="a887"></a>**A887** — Focused existing admission query/batch regressions retain claim, relevance, snapshot, native transport, byte, concurrency, correlation, Stop, lineage and ceiling behavior; the new census never changes permission or upgrades other completeness fields.
 
 ### R208 — Read one objective's exact-candidate facts without discovery

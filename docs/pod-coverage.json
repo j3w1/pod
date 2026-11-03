@@ -11581,7 +11581,8 @@
         "tests.test_admission_census.AffirmativeCensusTests.test_stable_included_and_excluded_records_bind_single_and_batch",
         "tests.test_admission_census.AffirmativeCensusTests.test_full_result_binding_detects_spliced_scope_snapshot_and_unknowns",
         "tests.test_admission_census.IncompleteCensusTests.test_missing_false_and_malformed_witnesses_are_never_promoted",
-        "tests.test_admission_census.IncompleteCensusTests.test_stale_witness_and_foreign_final_projection_are_rejected"
+        "tests.test_admission_census.IncompleteCensusTests.test_stale_witness_and_foreign_final_projection_are_rejected",
+        "tests.test_admission_census.CanonicalCensusTests.test_fixed_unicode_nested_false_null_vector_matches_final_seal"
       ],
       "status": "NOT_RUN"
     },
@@ -11628,7 +11629,8 @@
         "tests.test_admission_census.ChangedCensusTests.test_removed_excluded_record_keeps_old_query_semantics",
         "tests.test_admission_census.ChangedCensusTests.test_added_excluded_record_still_invalidates_census",
         "tests.test_admission_census.ChangedCensusTests.test_excluded_attribution_generation_is_rechecked",
-        "tests.test_admission_census.ChangedCensusTests.test_excluded_final_cohort_projection_cannot_assert_completion"
+        "tests.test_admission_census.ChangedCensusTests.test_excluded_final_cohort_projection_cannot_assert_completion",
+        "tests.test_admission_census.ChangedCensusTests.test_replaced_or_redirected_root_cannot_assert_completion"
       ],
       "status": "NOT_RUN"
     },
@@ -11660,7 +11662,10 @@
         "tests.test_admission_census.CensusDeadlineTests.test_fence_teardown_cannot_outlive_original_census_deadline",
         "tests.test_admission_census.CensusDeadlineTests.test_failed_native_end_fence_after_construction_clears_census",
         "tests.test_admission_census.IncompleteCensusTests.test_projection_omission_downgrades_witness",
-        "tests.test_admission_census.CensusDeadlineTests.test_batch_envelope_serialization_spends_original_deadline"
+        "tests.test_admission_census.CensusDeadlineTests.test_batch_envelope_serialization_spends_original_deadline",
+        "tests.test_admission_census.CensusDeadlineTests.test_later_sibling_cutoff_invalidates_earlier_constructed_witness",
+        "tests.test_admission_census.IncompleteCensusTests.test_witness_bytes_crossing_the_per_query_cap_clear_completion",
+        "tests.test_admission_census.IncompleteCensusTests.test_witness_bytes_crossing_the_whole_batch_cap_refuse_the_response"
       ],
       "status": "NOT_RUN"
     },
