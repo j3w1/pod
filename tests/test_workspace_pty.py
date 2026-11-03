@@ -505,7 +505,7 @@ class AuditCorrectionPtyTests(PtyCase):
     def test_bulk_scroll_hint_names_the_key_that_scrolls(self):
         session = self.open(cols=80, rows=24)
         session.send("b" + RIGHT + DOWN + RIGHT)
-        session.wait_for("CHANGES (35)")
+        session.wait_for("CHANGES (40)")
         session.wait_for(lambda s: "more (" in s.text() and "lines): Page Down" in s.text())
         self.assertNotIn("Tab, then", session.text())
 

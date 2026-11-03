@@ -210,7 +210,7 @@ class TableTests(unittest.TestCase):
     def test_default_view_and_clear_filters_include_discoveries(self):
         current = ts.initial(state().projection)
         self.assertEqual(current.discovery, "all")
-        self.assertEqual(len(ts.shown_routes(current)), 35)
+        self.assertEqual(len(ts.shown_routes(current)), 40)
         observed = ts.shown_observations(current)
         self.assertTrue(observed)
         self.assertTrue(any(row["discovery"] == "new" for row in observed))
@@ -245,8 +245,8 @@ class TableTests(unittest.TestCase):
     def test_rows_are_exact_routes_sorted_by_index_with_stable_ties(self):
         current = state()
         keys = ts.visible_keys(current)
-        self.assertEqual(len(keys), 35)
-        self.assertEqual(len(set(keys)), 35)
+        self.assertEqual(len(keys), 40)
+        self.assertEqual(len(set(keys)), 40)
         scores = [ts.value(ts.route(current, key), "intelligence") for key in keys]
         known = [score for score in scores if score is not None]
         self.assertEqual(known, sorted(known, reverse=True))
@@ -295,7 +295,7 @@ class TableTests(unittest.TestCase):
         current, _ = press(current, "RIGHT")
         self.assertEqual(current.collapsed, frozenset())
         current, _ = press(current, "ENTER")
-        self.assertEqual(len(ts.items(current)), 35 + 7 - 5)
+        self.assertEqual(len(ts.items(current)), 40 + 8 - 5)
         self.assertIn("[+] Claude Opus 5.5 (5/5 enabled)", text(current))
 
     def test_filters_compose_and_search_matches_display_and_native_identity(self):
@@ -399,7 +399,7 @@ class EditTests(unittest.TestCase):
         self.assertEqual(set(ts.bulk_changes(ranged, ranged.bulk)),
                          {row["key"] for row in ts.routes(current) if row["effort"] in ("xhigh", "max")})
         unset = replace(dialog, bulk=ts.Bulk(scope="not_set", action="disabled"))
-        self.assertEqual(len(ts.bulk_changes(unset, unset.bulk)), 34)
+        self.assertEqual(len(ts.bulk_changes(unset, unset.bulk)), 39)
         cancelled, effects = press(dialog, "ESC")
         self.assertEqual((cancelled.mode, effects), ("browse", []))
 
@@ -412,7 +412,7 @@ class EditTests(unittest.TestCase):
         _, effects = press(dialog, "ENTER")
         payload = effects[0].payload
         self.assertEqual(set(payload), {"routes"}, "reset never clears the pin or preference")
-        self.assertEqual(len(payload["routes"]), 34)
+        self.assertEqual(len(payload["routes"]), 39)
         self.assertTrue(all(target == "enabled" for target in payload["routes"].values()))
 
     def test_bulk_disable_of_pin_requires_clearing_it_in_the_same_save(self):
@@ -786,6 +786,34 @@ class WorkspaceSessionTests(unittest.TestCase):
         reopened.state = replace(reopened.state, focus=key)
         reopened.handle(" ")
         self.assertEqual(ts.route(self.open().state, key)["state"], "disabled")
+
+    def test_terra_upgrade_preserves_preferences_and_toggles_with_unknown_native_access(self):
+        document = config.defaults()
+        document['refresh'] = 'manual'
+        document['routes'] = {key: value for key, value in document['routes'].items()
+                              if not key.startswith('codex/gpt-6.1-terra/')}
+        document['routes']['codex/gpt-6-luna/low'] = 'disabled'
+        document['preferred'] = 'claude/claude-opus-5-5/high'
+        document['pinned'] = 'codex/gpt-6.1-sol/high'
+        self.config.write_text(yaml.safe_dump(document, sort_keys=False))
+        before = self.config.read_bytes()
+        workspace = self.open()
+        terra = [row for row in ts.routes(workspace.state) if row['model'] == 'gpt-6.1-terra']
+        self.assertEqual(len(terra), 5)
+        self.assertTrue(all((row['state'], row['native']['access']) == ('not_set', 'unknown') for row in terra))
+        self.assertEqual(self.config.read_bytes(), before, 'opening the new registry does not expand preferences')
+        key = 'codex/gpt-6.1-terra/high'
+        workspace.state = replace(workspace.state, focus=key)
+        workspace.handle(' ')
+        reopened = self.open()
+        self.assertEqual(ts.route(reopened.state, key)['state'], 'enabled')
+        reopened.state = replace(reopened.state, focus=key)
+        reopened.handle(' ')
+        saved = yaml.safe_load(self.config.read_text())
+        self.assertEqual(saved['routes'][key], 'disabled')
+        self.assertEqual({k: v for k, v in saved['routes'].items() if k != key}, document['routes'])
+        self.assertEqual((saved['preferred'], saved['pinned']), (document['preferred'], document['pinned']))
+        self.assertEqual(self.calls, [], 'preference changes require no provider or network probe')
 
     def test_seven_day_data_is_stale_and_reopen_restraint_holds_after_a_failure(self):
         self.settle(self.open())
@@ -1549,7 +1577,7 @@ class DeltaAuditRenderTests(unittest.TestCase):
             for cols in range(80, 93):
                 frame = text(both, cols, rows)
                 with self.subTest(rows=rows, cols=cols):
-                    self.assertRegex(frame, r"35/35 (enabled|on)")
+                    self.assertRegex(frame, r"40/40 (enabled|on)")
                     self.assertIn("Data cache ", frame.splitlines()[-2])
         # Below 20 rows the placeholder follows the age and the other status items wherever it fits.
         plain = state(prefs(pinned=pin))
@@ -1590,7 +1618,7 @@ class DeltaAuditRenderTests(unittest.TestCase):
         pin, key = "claude/claude-opus-5-5/high", "claude/claude-opus-5-5/max"
         saved = datetime(2026, 10, 1, 6, 30, tzinfo=timezone.utc)
         order = ("Data cache ", "Refresh failed", "Native access unknown", "Saved ")
-        filler = re.compile(r"Preferred none|\b35/35 (enabled|on)\b")
+        filler = re.compile(r"Preferred none|\b40/40 (enabled|on)\b")
         reached = 0
         for chosen in (prefs(pinned=pin), prefs(pinned=pin, preferred=key)):
             base = state(chosen)
