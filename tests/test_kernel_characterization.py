@@ -32,7 +32,7 @@ class StatusProjectionTests(unittest.TestCase):
             "bundle_identity": {"running": {"version": "0.6.4", "bundle_digest": "d"},
                                 "checkpoint": None, "drift": None},
             "preferences": {key: value for key, value in preferences.items() if key != "routes"},
-            "routes": {"routes": 35, "enabled": 1, "disabled": 0, "not_set": 34, "preferred": None,
+            "routes": {"routes": 40, "enabled": 1, "disabled": 0, "not_set": 39, "preferred": None,
                        "pinned": "codex/gpt-6.1-sol/high", "unmapped": 0},
             "constraints": [], "route_decisions": [],
             "route_mismatch": False, "active_constraints": [], "effective_unknown": False,

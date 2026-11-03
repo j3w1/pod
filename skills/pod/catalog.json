@@ -261,6 +261,50 @@
    }
   },
   {
+   "id": "gpt-6.1-terra",
+   "name": "GPT-6.1 Terra",
+   "agent": "codex",
+   "provider": "OpenAI",
+   "efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+   ],
+   "documented_context_tokens": null,
+   "guidance": "OpenAI positions GPT-6.1 Terra for visual reasoning, screen-based workflows, writing from supplied material and scoped code fixes. It advises clear inputs and verifiable outcomes, and comparing Terra with Sol at the same reasoning effort. Start with medium and increase effort when the result improves enough to justify it.",
+   "sources": [
+    {
+     "url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+     "checked": "2026-11-03"
+    },
+    {
+     "url": "https://developers.openai.com/api/docs/guides/model-selection",
+     "checked": "2026-11-03"
+    }
+   ],
+   "guide": {
+    "efforts": "medium; high/xhigh for harder bounded work",
+    "use": "Scoped code fixes, visual reasoning and computer use with clear inputs and verifiable results."
+   },
+   "aliases": {
+    "artificial_analysis": {
+     "GPT-6.1 Terra (low)": "low",
+     "GPT-6.1 Terra (low with fallback)": "low",
+     "GPT-6.1 Terra (medium)": "medium",
+     "GPT-6.1 Terra (medium with fallback)": "medium",
+     "GPT-6.1 Terra (high)": "high",
+     "GPT-6.1 Terra (high with fallback)": "high",
+     "GPT-6.1 Terra (xhigh)": "xhigh",
+     "GPT-6.1 Terra (xhigh with fallback)": "xhigh",
+     "GPT-6.1 Terra (max)": "max",
+     "GPT-6.1 Terra (max with fallback)": "max",
+     "GPT-6.1 Terra (non-reasoning)": "none"
+    }
+   }
+  },
+  {
    "id": "gpt-6-luna",
    "name": "GPT-6 Luna",
    "agent": "codex",

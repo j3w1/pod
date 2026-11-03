@@ -1201,7 +1201,7 @@
         "live_native"
       ],
       "offline_test": [
-        "tests.test_catalog.CatalogTests.test_seven_current_bases_have_verified_exact_efforts",
+        "tests.test_catalog.CatalogTests.test_eight_current_bases_have_verified_exact_efforts",
         "tests.test_catalog.CatalogTests.test_ultra_none_and_replaced_generations_are_not_routes",
         "tests.test_catalog.CatalogTests.test_haiku_profiles_map_only_to_their_verified_exact_routes"
       ],
@@ -1279,7 +1279,8 @@
         "tests.test_catalog.CatalogTests.test_duplicate_keys_and_corrupt_metadata_are_rejected",
         "tests.test_catalog.CatalogTests.test_match_is_exact_and_keeps_qualifiers_informational",
         "tests.test_catalog.CatalogTests.test_adding_a_model_is_a_registry_edit_and_check_reports_it",
-        "tests.test_catalog.CatalogTests.test_a_checked_date_one_day_ahead_of_the_local_date_is_accepted"
+        "tests.test_catalog.CatalogTests.test_a_checked_date_one_day_ahead_of_the_local_date_is_accepted",
+        "tests.test_catalog.CatalogTests.test_terra_source_profiles_match_exact_efforts_without_enabling_none"
       ],
       "status": "NOT_RUN"
     },
@@ -2514,7 +2515,9 @@
         "tests.test_routes.RouteProjectionTests.test_observation_changes_never_widen_the_pool_or_write_preferences",
         "tests.test_routes.RouteProjectionTests.test_route_rows_carry_identity_state_guide_and_unknown_native_access",
         "tests.test_workspace_state.TableTests.test_default_view_and_clear_filters_include_discoveries",
-        "tests.test_workspace_state.WorkspaceSessionTests.test_haiku_refresh_preserves_existing_choices_and_requires_explicit_enable"
+        "tests.test_workspace_state.WorkspaceSessionTests.test_haiku_refresh_preserves_existing_choices_and_requires_explicit_enable",
+        "tests.test_workspace_state.WorkspaceSessionTests.test_terra_upgrade_preserves_preferences_and_toggles_with_unknown_native_access",
+        "tests.test_sparse_toggle_pty.SparseTogglePtyTests.test_terra_toggles_and_restarts_while_native_access_is_unknown"
       ],
       "status": "NOT_RUN"
     },

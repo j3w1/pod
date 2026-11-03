@@ -11,18 +11,18 @@ from pod.errors import PodError
 from tests.common import fixture
 
 BASES = ("claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5",
-         "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna")
+         "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna")
 
 
 class CatalogTests(unittest.TestCase):
-    def test_seven_current_bases_have_verified_exact_efforts(self):
+    def test_eight_current_bases_have_verified_exact_efforts(self):
         document = load()
         self.assertEqual(document['schema'], 'pod-catalog/v3')
         self.assertEqual(tuple(by_id(document)), BASES)
         for model in document['models']:
             self.assertEqual(model['efforts'], list(EFFORTS))
             self.assertEqual(model['agent'], 'claude' if model['id'].startswith('claude-') else 'codex')
-        self.assertEqual(len(routes(document)), 35)
+        self.assertEqual(len(routes(document)), 40)
         self.assertEqual(route_keys(document)[0], 'claude/claude-opus-5-5/low')
         self.assertIn('codex/gpt-6.1-sol/xhigh', route_keys(document))
         # No benchmark measurements live in the registry.
@@ -30,7 +30,8 @@ class CatalogTests(unittest.TestCase):
         self.assertNotIn('usd_per_task', json.dumps(document))
 
     def test_ultra_none_and_replaced_generations_are_not_routes(self):
-        for key in ('codex/gpt-6-astra/ultra', 'codex/gpt-6.1-sol/ultra', 'codex/gpt-6-luna/none',
+        for key in ('codex/gpt-6-astra/ultra', 'codex/gpt-6.1-sol/ultra', 'codex/gpt-6-luna/none', 'codex/gpt-6.1-terra/none',
+                    'codex/gpt-6.1-terra/ultra',
                     'codex/gpt-6-sol/high', 'claude/claude-sonnet-5/high', 'codex/gpt-6.1-sol/native_default',
                     'claude/gpt-6.1-sol/high', 'codex/gpt-daybreak-red-latest/high', 'codex/gpt-6.1-sol'):
             with self.subTest(key=key):
@@ -67,10 +68,21 @@ class CatalogTests(unittest.TestCase):
                              ('openai_models', 'GPT-6.1 Sol (xhigh)'), (aa, None), (None, 'gpt-6-luna')):
             with self.subTest(name=name):
                 self.assertIsNone(match(source, name))
-        # Every route of the seven bases has an explicit AA alias.
+        # Every route of the eight bases has an explicit AA alias.
         mapped = {match(aa, name)['route'] for model in load()['models']
                   for name in model['aliases'][aa]} - {None}
         self.assertEqual(mapped, set(route_keys()))
+
+    def test_terra_source_profiles_match_exact_efforts_without_enabling_none(self):
+        for effort in EFFORTS:
+            with self.subTest(effort=effort):
+                expected = f'codex/gpt-6.1-terra/{effort}'
+                self.assertEqual(match('artificial_analysis', f'GPT-6.1 Terra ({effort})')['route'], expected)
+                self.assertEqual(match('artificial_analysis', f'GPT-6.1 Terra ({effort} with fallback)')['route'], expected)
+        self.assertEqual(match('openai_models', 'gpt-6.1-terra')['model'], 'gpt-6.1-terra')
+        informational = match('artificial_analysis', 'GPT-6.1 Terra (non-reasoning)')
+        self.assertEqual((informational['route'], informational['effort']), (None, 'none'))
+        self.assertIsNone(match('artificial_analysis', 'GPT-6.1 Terra (ultra)'))
 
     def test_formatters_never_hide_subcent_or_missing_values(self):
         self.assertEqual(format_usd(None), 'unknown')
@@ -145,7 +157,7 @@ class CatalogTests(unittest.TestCase):
             self.assertIsNone(supported_route('codex/gpt-6-nova/low'))
         with redirect_stdout(StringIO()) as output:
             self.assertEqual(main(['--check']), 0)
-        self.assertIn('7 supported models, 35 routes', output.getvalue())
+        self.assertIn('8 supported models, 40 routes', output.getvalue())
 
     def test_haiku_profiles_map_only_to_their_verified_exact_routes(self):
         model = by_id()['claude-haiku-5-5']
