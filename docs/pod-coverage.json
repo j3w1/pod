@@ -11569,6 +11569,115 @@
         "tests.test_admission_unconsumed_report.ForeignObjectiveTests.test_an_owner_judgment_fault_is_that_dispatchs_unknown_never_a_failed_query"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A881",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_census.AffirmativeCensusTests.test_stable_included_and_excluded_records_bind_single_and_batch",
+        "tests.test_admission_census.AffirmativeCensusTests.test_full_result_binding_detects_spliced_scope_snapshot_and_unknowns",
+        "tests.test_admission_census.IncompleteCensusTests.test_missing_false_and_malformed_witnesses_are_never_promoted",
+        "tests.test_admission_census.IncompleteCensusTests.test_stale_witness_and_foreign_final_projection_are_rejected"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A882",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_census.AffirmativeCensusTests.test_unknown_worker_and_terminal_facts_keep_claims_and_census",
+        "tests.test_admission_census.AffirmativeCensusTests.test_unlocated_writer_remains_conservatively_relevant",
+        "tests.test_admission_census.AffirmativeCensusTests.test_empty_census_never_supplies_exit_or_cleanup_permission"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A883",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_census.IncompleteCensusTests.test_unreadable_record_despite_complete_snapshot_and_native_fence",
+        "tests.test_admission_census.IncompleteCensusTests.test_unattributed_terminal_history_is_not_census_proof",
+        "tests.test_admission_census.IncompleteCensusTests.test_missing_context_and_nonrecord_entries_are_not_classified",
+        "tests.test_admission_census.IncompleteCensusTests.test_missing_claim_history_cannot_assert_completion",
+        "tests.test_admission_census.IncompleteCensusTests.test_missing_discovery_evidence_never_defaults_to_true"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A884",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_census.ChangedCensusTests.test_same_count_foreign_substitution_is_not_census_complete",
+        "tests.test_admission_census.ChangedCensusTests.test_same_name_replacement_is_detected_even_with_identical_bytes",
+        "tests.test_admission_census.ChangedCensusTests.test_removed_excluded_record_keeps_old_query_semantics",
+        "tests.test_admission_census.ChangedCensusTests.test_added_excluded_record_still_invalidates_census",
+        "tests.test_admission_census.ChangedCensusTests.test_excluded_attribution_generation_is_rechecked",
+        "tests.test_admission_census.ChangedCensusTests.test_excluded_final_cohort_projection_cannot_assert_completion"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A885",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_census.ChangedCensusTests.test_attribution_to_claims_reencoding_keeps_query_semantics_but_not_census",
+        "tests.test_admission_census.ChangedCensusTests.test_equivalent_journal_generation_change_is_still_census_incomplete",
+        "tests.test_admission_census.ChangedCensusTests.test_changed_effect_classification_policy_cannot_assert_completion",
+        "tests.test_admission_census.ChangedCensusTests.test_unreadable_phase_closure_is_not_positive_classification"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A886",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_census.CensusDeadlineTests.test_interrupted_discovery_and_recheck_never_assert_completion",
+        "tests.test_admission_census.CensusDeadlineTests.test_one_shared_cutoff_reaches_every_batch_result",
+        "tests.test_admission_census.CensusDeadlineTests.test_fence_teardown_cannot_outlive_original_census_deadline",
+        "tests.test_admission_census.CensusDeadlineTests.test_failed_native_end_fence_after_construction_clears_census",
+        "tests.test_admission_census.IncompleteCensusTests.test_projection_omission_downgrades_witness",
+        "tests.test_admission_census.CensusDeadlineTests.test_batch_envelope_serialization_spends_original_deadline"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A887",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_census.AffirmativeCensusTests.test_unknown_worker_and_terminal_facts_keep_claims_and_census",
+        "tests.test_admission_batch.FleetFenceTests.test_each_fleet_change_between_discovery_and_the_end_is_unstable",
+        "tests.test_admission_batch.SharedReadTests.test_eight_queries_read_each_source_once_and_two_calls_read_afresh",
+        "tests.test_admission_host_exit_stop.StopTests.test_a_transport_or_contract_fault_starts_no_further_request"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

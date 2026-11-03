@@ -19,6 +19,11 @@ LIVE = {"connected": True, "writable": True, "orphaned": False}
 RUNS = {"runtime": "runtime", "result": {"runs": [], "nextCursor": None}}
 
 
+def without_census(result):
+    """R213 clears only its new witness on an unstable batch fence; all preceding fields still agree."""
+    return {key: value for key, value in result.items() if key != "record_census"}
+
+
 def terminal_page(rows, runtime="runtime", **whole):
     return {"runtime": runtime, "result": {"terminals": rows, "totalCount": len(rows), "truncated": False,
             "hostScope": {"hostIds": ["local"], "omittedHostIds": []}, **whole}}
@@ -147,7 +152,9 @@ class EquivalenceTests(BatchCase):
         answer = admission.batch(self.project, admission.batch_request(json.dumps(request).encode()))
         self.assertEqual([row["id"] for row in answer["responses"]], ["z", "a", "m.1:x-y"])
         single = self.query(branch="main", known_repositories=[str(repository)])
-        self.assertEqual(answer["responses"][0]["result"], single)
+        self.assertEqual(without_census(answer["responses"][0]["result"]), without_census(single))
+        self.assertFalse(answer["responses"][0]["result"]["record_census"]["complete"])
+        self.assertTrue(single["record_census"]["complete"])
         self.assertTrue(other.is_dir())
 
 
@@ -547,7 +554,11 @@ class FencedCase(BatchCase):
     def assert_unstable(self, answer, stable):
         self.assertFalse(answer["native_fence"]["stable"])
         self.assertEqual((answer["status"], answer["complete"]), ("unknown", False))
-        self.assertEqual(answer["responses"], stable["responses"])  # the results themselves are unchanged
+        preceding = lambda response: [{**row, "result": without_census(row["result"])}
+                                      for row in response["responses"]]
+        self.assertEqual(preceding(answer), preceding(stable))
+        self.assertTrue(all(row["result"]["record_census"] == admission._no_census()
+                            for row in answer["responses"]))
 
 
 def identity(row):
@@ -914,7 +925,8 @@ class PreexistingFaultTests(BatchCase):
         with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": [unlocated]}):
             single = self.query()
             answer = self.batch({}, {"worktree": str(self.project), "branch": "main"})
-        self.assertEqual(answer["responses"][0]["result"], single)
+        self.assertEqual(without_census(answer["responses"][0]["result"]), without_census(single))
+        self.assertFalse(answer["responses"][0]["result"]["record_census"]["complete"])
         for result in (single, answer["responses"][1]["result"]):
             codes = [row["code"] for row in result["unknowns"]] + list(result["unrelated_unknowns"]["by_code"])
             self.assertIn("native_location_unavailable", codes)
@@ -1083,7 +1095,8 @@ class RunCoordinatorFenceTests(BatchCase):
         answer = self.batch(shape, {"branch": "main"})
         result = answer["responses"][0]["result"]
         self.settled(result)
-        self.assertEqual(result, single)
+        self.assertEqual(without_census(result), without_census(single))
+        self.assertFalse(result["record_census"]["complete"])
         self.assertEqual(result["unknowns"], single["unknowns"])  # the same blocking unknowns
         self.assertEqual(len(self.run_reads), 1)  # one walk per call, shared by every query
         self.assertEqual(self.refused, [])  # no native read was refused after the fence
