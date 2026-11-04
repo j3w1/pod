@@ -40,6 +40,168 @@ def digest(value):
         raise PodError("invalid_record", "Admission facts cannot be encoded canonically") from None
 
 
+RECORD_CENSUS = "pod-admission-record-census/v1"
+
+
+def _no_census() -> dict:
+    return {"schema": RECORD_CENSUS, "complete": False, "scope_sha256": None,
+            "cohort_sha256": None, "records_sha256": None, "binding_sha256": None}
+
+
+def _finish_censuses(results, budget, *, stable=True) -> None:
+    """Only retain a positive witness over the final projection, after every call-level phase.
+
+    A changed projection invalidates its earlier proof; recomputing a hash cannot repair missing work.
+    """
+    try:
+        budget.check()
+        for result in results:
+            budget.check()
+            witness = result.get("record_census")
+            valid = (stable and isinstance(witness, dict) and set(witness) == set(_no_census())
+                     and witness.get("schema") == RECORD_CENSUS and witness.get("complete") is True
+                     and all(isinstance(witness[key], str) and history.HEX.fullmatch(witness[key])
+                             for key in ("scope_sha256", "cohort_sha256", "records_sha256", "binding_sha256")))
+            if valid:
+                public = {key: value for key, value in result.items() if key != "record_census"}
+                valid = witness["binding_sha256"] == digest({
+                    **{key: value for key, value in witness.items() if key != "binding_sha256"},
+                    "result_sha256": digest(public)})
+            if not valid:
+                result["record_census"] = _no_census()
+        budget.check()
+    except PodError:
+        for result in results:
+            result["record_census"] = _no_census()
+
+
+def _census_stat(path: Path) -> dict | None:
+    """No-follow filesystem generation, including replacement and in-place changes; never a new query fault."""
+    try:
+        value = path.lstat()
+        return {"device": value.st_dev, "inode": value.st_ino, "mode": value.st_mode,
+                "size": value.st_size, "mtime_ns": value.st_mtime_ns, "ctime_ns": value.st_ctime_ns}
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return {"unavailable": True}
+
+
+def _census_entry(entry) -> dict:
+    identity = _census_stat(Path(entry.path))
+    try:
+        if identity is None or identity.get("inode") != entry.inode():
+            identity = {"unavailable": True}
+    except OSError:
+        identity = {"unavailable": True}
+    return {"name": entry.name, "identity": identity}
+
+
+def _phase_closure(directory: Path):
+    from .evidence_closure import FILE, block
+    identity = _census_stat(directory / FILE)
+    closure = block(directory)
+    _shared(("census-closure", str(directory)), lambda: {"identity": identity, "value": closure})
+    return closure
+
+
+class _RecordCensus:
+    """Positive record work, independent of uncertain native owner/process facts and of snapshot relevance.
+
+    Private rows never leave the call. Every visible entry must acquire a proved classification; every
+    consulted generation, including safe foreign exclusions, must survive the shared end recheck exactly.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.records = {}
+        self.classified = set()
+        self.cohort = None
+        self.finished = False
+        self.sound = True
+
+    def attribution(self, directory, raw, generation):
+        try:
+            self.records[directory.name] = {"attribution_generation": generation,
+                                            "attribution_sha256": digest(_attributed(raw))}
+        except PodError:
+            self.sound = False
+
+    def classify(self, directory, raw, kind, rows=None):
+        try:
+            record = self.records[directory.name]
+            record["classification"] = kind
+            if rows is not None:
+                generation = digest(raw["_facts_generation"]) if "_facts_generation" in raw else record["attribution_generation"]
+                self.sound &= generation == record["attribution_generation"]
+                record.update(claims_generation=generation, claims_sha256=_claim_identity(raw, rows))
+            self.classified.add(directory.name)
+        except (PodError, KeyError):
+            self.sound = False
+
+    def witness(self, result, budget, journals, consulted, policies) -> dict:
+        discovery = _SHARED.get()
+        if not self.finished or not self.sound or discovery is None:
+            return _no_census()
+        try:
+            budget.check()
+            first = discovery.done(("census-cohort", str(self.root)))
+            final = _shared(("census-cohort", str(self.root)), lambda: None)
+            root_before = discovery.done(("census-root", str(self.root)))
+            root_after = _shared(("census-root", str(self.root)), lambda: {"unavailable": True})
+            if (first is None or final is None or first != final or root_before != root_after
+                    or root_before is not None and ("unavailable" in root_before
+                                                    or not stat.S_ISDIR(root_before["mode"]))
+                    or self.cohort != {row["name"] for row in first}
+                    or self.classified != self.cohort):
+                return _no_census()
+            rows = []
+            for entry in first:
+                budget.check()
+                name, identity = entry["name"], entry["identity"]
+                if identity is None or "unavailable" in identity or not stat.S_ISDIR(identity["mode"]):
+                    return _no_census()
+                directory = self.root / name
+                record = dict(self.records[name])
+                if _after_context(directory / "context.json") != record["attribution_generation"]:
+                    return _no_census()
+                # A foreign record can be excluded by attribution alone, then consulted for a native placement.
+                # Bind and check that claims read too, without opening otherwise irrelevant foreign history.
+                if directory in consulted:
+                    facts = discovery.done(("facts", str(directory / "context.json"), True))
+                    if not isinstance(facts, dict) or facts.get("complete") is not True:
+                        return _no_census()
+                    generation = digest(_generation(facts.get("generation")))
+                    if generation != record["attribution_generation"]:
+                        return _no_census()
+                    record["consulted_claims_generation"] = generation
+                if name in journals:
+                    record["journal_generation"] = journals[name]
+                    if _after_journal(directory / "governor.json") != journals[name]:
+                        return _no_census()
+                closure = discovery.done(("census-closure", str(directory)))
+                if closure is not None:
+                    if (closure["identity"] is not None and ("unavailable" in closure["identity"]
+                            or not stat.S_ISREG(closure["identity"]["mode"]))
+                            or isinstance(closure["value"], dict) and closure["value"].get("status") != "recorded"):
+                        return _no_census()
+                    _shared(("evidence-closure", str(directory)), lambda: _phase_closure(directory))
+                    if _shared(("census-closure", str(directory)), lambda: None) != closure:
+                        return _no_census()
+                    record["phase_closure_sha256"] = digest(closure)
+                rows.append({"name": name, **record})
+            witness = {"schema": RECORD_CENSUS, "complete": True,
+                       "scope_sha256": digest({"repo_key": result["scope"]["repo_key"],
+                                               "path": result["scope"]["path"], "state_root": str(self.root)}),
+                       "cohort_sha256": digest({"root": root_before, "entries": first}),
+                       "records_sha256": digest({"records": rows, "effect_policies": policies})}
+            witness["binding_sha256"] = digest({**witness, "result_sha256": digest(result)})
+            budget.check()
+            return witness
+        except (PodError, OSError, ValueError, TypeError, KeyError):
+            return _no_census()
+
+
 # --------------------------------------------------------------------------- shared discovery
 
 _SHARED: contextvars.ContextVar = contextvars.ContextVar("pod_admission_discovery", default=None)
@@ -721,8 +883,7 @@ def _record_phase(raw: dict, directory: Path | None) -> str:
     phase = _phase(raw)
     if phase != "open" or directory is None:
         return phase
-    from .evidence_closure import block
-    closure = _shared(("evidence-closure", str(directory)), lambda: block(directory))
+    closure = _shared(("evidence-closure", str(directory)), lambda: _phase_closure(directory))
     return "closed" if isinstance(closure, dict) and closure.get("status") == "recorded" else phase
 
 
@@ -1707,6 +1868,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     known = [context, *(_context(_resolved(path)) for path in known_repositories or [])]
     root = _shared(("state-root", str(project)), lambda: state_root(project))  # One repository's root, once a call.
     yield "prepared", root, project
+    census = _RecordCensus(root)
     scope = {"repository": context["repository"], "repo_key": context["repo_key"], "path": str(project),
              "inventory": "pod_objectives_and_recorded_runs"}
     result = {"schema": "pod-admission-query/v1", "status": "observed", "scope": scope,
@@ -1835,10 +1997,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 "global_effects": shared, "repository_effects": relative,
                 "target": action_target, "outcome": row["outcome"]})
             if identities is None:
+                census.sound = False
                 unknown(directory.name, "effects_unknown", objective=name, fact="external_effect_identity",
                         fact_scope=fact_scope, reconciliation={"action": "reconcile_governor",
                         "record": row["record_id"], "condition": "Read back the admitted action and establish its actual downstream effects"})
             elif relative and not (source or {}).get("repo_key"):
+                census.sound = False
                 unknown(directory.name, "effect_attribution_unknown", objective=name, fact="effect_repository",
                         fact_scope=fact_scope, reconciliation={"action": "establish_effect_repository",
                         "record": row["record_id"], "condition": "Establish the repository namespace of this admitted intrinsic effect"})
@@ -1870,6 +2034,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         unavailable(record, "unattributed")
                     continue
                 raw, identity = _primary(directory / "context.json")
+                census.attribution(directory, raw, identity)
                 reading = False  # The record reads; any later fault is about its own facts.
                 try:
                     name = _membership(project, context, record, raw, known)
@@ -1905,6 +2070,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         journal, journal_id = _journal(directory / "governor.json")
                         effect_claims(directory, raw, journal, source)
                         effect_sources.append((directory, journal_id, _effect_identity(journal, open_objective=False)))
+                    census.classify(directory, raw, "foreign")
                     continue
                 own_records.add(record)
                 phase = _record_phase(raw, directory)
@@ -2006,6 +2172,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         "codes": [("assignment_unbound", {"objective": name, "admission": key}, held)
                                   for key, _, held in unbound]})
                 effect_claims(directory, raw, journal, source or context)
+                census.classify(directory, raw, "included", rows)
             except PodError as exc:
                 # Only a record that cannot be read at all is named apart; a read deadline is no record's fault.
                 (unavailable if reading and exc.code != "discovery_budget" else unknown)(record, exc.code)
@@ -2134,6 +2301,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     consulted.append((directory, generation))  # rechecked with every other consulted source
                     owners_consulted.add(directory.name)
                 if isinstance(outcome, PodError):
+                    census.sound = False
                     unknown(directory.name, "record_changed" if outcome.code == "record_changed" else "worker_placement_unknown",
                             fact_scope={**scope, "worktree": path}, fact="worker_placement", dispatch=dispatch,
                             cause=outcome.code)
@@ -2250,6 +2418,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         try:
                             candidate_rows = _admissions(candidate_raw, directory)
                         except PodError as exc:
+                            census.sound = False
                             # Its own fact, distinct from the record's own inventory gap (D2): this live or unverified
                             # worker's placement cannot be read from the record that owns its Run.
                             unknown(directory.name, "worker_placement_unknown", fact_scope={**scope, "worktree": path},
@@ -2464,6 +2633,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         for source_project, policy in policies.items():
             from .config import effective
             if _shared(("effective", source_project), lambda: effective(Path(source_project)))["revision"] != policy["revision"]:
+                census.sound = False
                 unknown(None, "effect_policy_changed", fact="effect_mapping")
         for directory, generation in consulted:
             budget.check()
@@ -2503,6 +2673,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         known = {row[0].name for row in sources}
         if (before - set(after)) & known:
             unknown(None, "inventory_changed")
+        census.cohort = before
+        census.finished = before == set(after) and not attribution_gaps and not terminal_gaps
     except PodError as exc:
         unknown(None, exc.code)
     except OSError:
@@ -2581,7 +2753,12 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         result["host_exits"] = _host_exit_rows(host_slot, host_used)  # this query's own candidates only (R212)
     result["status"] = "unknown" if not result["complete"] else "blocked" if (result["conflicts"] or
         result["proof"] is not None and result["proof"]["status"] != "ready") else "observed"
-    return public_decisions(result)
+    result = public_decisions(result)
+    journals = {directory.name: journal_id for directory, journal_id, _ in effect_sources}
+    journals.update({directory.name: journal_id for directory, _, journal_id, *_ in sources})
+    result["record_census"] = census.witness(result, budget, journals, {directory for directory, _ in consulted},
+                                             {path: policy["revision"] for path, policy in policies.items()})
+    return result
 
 
 def _empty_scan():
@@ -2594,6 +2771,7 @@ def _context(path: Path) -> dict:
 
 
 def _cohort(root: Path, budget) -> list:
+    _shared(("census-root", str(root)), lambda: _census_stat(root))
     try:
         with os.scandir(root) as entries:
             cohort = []
@@ -2601,18 +2779,30 @@ def _cohort(root: Path, budget) -> list:
                 budget.check()
                 if not entry.name.startswith("."):
                     cohort.append(entry)
+            identities = []
+            for entry in sorted(cohort, key=lambda row: row.name):
+                budget.check()
+                identities.append(_census_entry(entry))
+            _shared(("census-cohort", str(root)), lambda: identities)
             return cohort
     except FileNotFoundError:
+        _shared(("census-cohort", str(root)), lambda: [])
         return []
 
 
 def _after_cohort(root: Path, budget) -> dict:
+    _shared(("census-root", str(root)), lambda: _census_stat(root))
     with os.scandir(root) if root.exists() else _empty_scan() as entries:
         after = {}
         for entry in entries:
             budget.check()
             if not entry.name.startswith("."):
                 after[entry.name] = entry
+        identities = []
+        for entry in sorted(after.values(), key=lambda row: row.name):
+            budget.check()
+            identities.append(_census_entry(entry))
+        _shared(("census-cohort", str(root)), lambda: identities)
         return after
 
 
@@ -2643,6 +2833,7 @@ def _unknown_result(project: Path, kwargs: dict, code: str) -> dict:
     return {"schema": "pod-admission-query/v1", "status": "unknown", "scope": scope,
             "complete": False, "claims": [], "conflicts": [],
             "repository_complete": False, "native_resources_complete": False,
+            "record_census": _no_census(),
             "unavailable_records": [],
             "unrelated_unknowns": {"count": 0, "by_code": {}, "references": {
                 "records": [], "runs": [], "dispatches": [], "terminals": []}},
@@ -2660,6 +2851,7 @@ def _bounded(result: dict, kwargs: dict) -> dict:
         omitted = {"claims": len(result["claims"]), "conflicts": len(result["conflicts"]),
                    "unknowns": len(result["unknowns"])}
         result.update(status="unknown", complete=False, claims=[], conflicts=[], snapshot=None,
+                      record_census=_no_census(),
                       proof={"status": "unknown", "reason": "admission_projection_limit"} if kwargs.get("objective") else None,
                       unknowns=[row for row in result["unknowns"] if row["record"] is not None
                                 and not row["record"].startswith("run:") and "admission" not in row][:4096])
@@ -2814,6 +3006,7 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
         discovery.close()
     answer["discovery"]["orca_reads"] = discovery.orca_reads
     answer["discovery"]["elapsed_s"] = round(time.monotonic() - started, 3)
+    _finish_censuses(answer["results"], budget, stable=answer.get("native_fence", {}).get("stable", True))
     return answer
 
 
@@ -2949,6 +3142,7 @@ def batch(project: Path, request: dict, *, timeout=10.0) -> dict:
                 "native_fence": fence, "discovery": answer["discovery"]}
     if len(json.dumps(response, sort_keys=True, ensure_ascii=False).encode("utf-8")) > MAX_RESPONSE_BYTES:
         raise PodError("admission_batch_projection_limit", "The batch response would exceed 8 MiB; split the batch")
+    _finish_censuses(results, budget, stable=fence["stable"])
     return response
 
 

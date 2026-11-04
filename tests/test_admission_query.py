@@ -534,7 +534,7 @@ class AttributionReadTests(AdmissionQueryCase):
              patch("pod.governor._read_journal", wraps=governor._read_journal) as journals:
             result = self.query()
         self.assertTrue(result["complete"], result["unknowns"])
-        self.assertEqual(files.call_count, 4)  # two attribution reads, relevant claims and recheck
+        self.assertEqual(files.call_count, 5)  # two attributions, relevant claims, and both records' census rechecks
         self.assertGreater(len(chunks), 0)
         self.assertEqual(native_reads.call_count, 2)
         self.assertEqual(journals.call_count, 0)  # Current effects use their projection, not a full journal.

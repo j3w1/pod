@@ -15,10 +15,15 @@ SPARSE = ("schema: pod/v2 # keep this comment\n"
 
 class SparseTogglePtyTests(PtyCase):
     def test_terra_toggles_and_restarts_while_native_access_is_unknown(self):
+        def terra_ready(session):
+            screen = session.text()
+            return all(text in screen for text in ("Search gpt-6.1-terra/high", "1 rows",
+                                                   "GPT-6.1 Terra", "Native access unknown"))
+
         self.config.write_text(SPARSE)
         first = self.open(cols=100, rows=30)
         first.send("/gpt-6.1-terra/high\r")
-        first.wait_for("GPT-6.1 Terra")
+        first.wait_for(terra_ready)
         self.assertIn("Native access unknown", first.text())
         self.assertNotIn('codex/gpt-6.1-terra/high', load(personal=self.config)['routes'])
         first.send(" ")
@@ -26,7 +31,7 @@ class SparseTogglePtyTests(PtyCase):
         first.close()
         second = self.open(cols=100, rows=30)
         second.send("/gpt-6.1-terra/high\r")
-        second.wait_for("GPT-6.1 Terra")
+        second.wait_for(terra_ready)
         self.assertIn("Native access unknown", second.text())
         second.send(" ")
         second.wait_for(lambda _s: load(personal=self.config)['routes'].get('codex/gpt-6.1-terra/high') == 'disabled')
