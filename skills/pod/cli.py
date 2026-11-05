@@ -91,7 +91,8 @@ def parser() -> argparse.ArgumentParser:
                        help="a repository to sweep (repeatable; default: here)")
     sweep.add_argument("--objective", metavar="NAME", action="append", help="only this objective (repeatable)")
     sweep.add_argument("--json", action="store_true")
-    wake = sub.add_parser("wake", help="recheck mail, then arm one native wait for this Run's coordinator")
+    wake = sub.add_parser("wake", help="recheck mail, then arm one native wait for this Run's coordinator "
+                          "(on Orchestration V3: drain once, hold no wait)")
     wake.add_argument("--run", required=True, help="the Run this terminal coordinates")
     wake.add_argument("--ack", metavar="DELIVERY", help="acknowledge the batch you finished processing")
     wake.add_argument("--timeout-ms", type=int, help="wait limit; default one hour, at most six")

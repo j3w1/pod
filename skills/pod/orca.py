@@ -24,6 +24,14 @@ DISPLAY_WORKTREE_LIMIT = 1000
 EXIT_KINDS = ("operator_close", "signaled", "exited")
 CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
                    "launch_preferences_v1": "orchestration.worker-launch-preferences.v1"}
+# R214: Orchestration V3 (Orca 1.4.248) advertises these six together. The contract version is the same on both
+# runtimes, so it never tells them apart; a runtime that advertises all six is V3, anything less is pre-V3.
+V3_CAPABILITY_KEYS = {"worker_auto_release": "orchestration.worker-auto-release.v1",
+                      "worker_keep_open": "orchestration.worker-keep-open.v1",
+                      "worker_start_implicit_run": "orchestration.worker-start-implicit-run.v1",
+                      "retained_run_bindings": "orchestration.retained-run-bindings.v1",
+                      "worker_turn_stop_reports": "orchestration.worker-turn-stop-reports.v1",
+                      "ask_returns_at_once": "orchestration.ask-returns-at-once.v1"}
 AGENTS = ("codex", "claude")
 # R111: Orca advertises no send conditional on a Run's coordinator, and no sender identity for an
 # administrator without a terminal. Pod reports the form unavailable and names the Orca request.
@@ -382,6 +390,8 @@ def _worker_start_shape(tail: list[str]) -> bool:
             or tail[-1:] != ["--json"] or (retry is not None and not _argument(retry))):
         return False
     route = tail[6:-1]
+    if route[-1:] == ["--keep-open"]:
+        route = route[:-1]  # R214: only Pod's recorded keep-open intent, on a runtime that advertises it, adds it.
     if len(route) == 2 and route[0] == "--terminal":
         return retry_parent is None and _argument(route[1])
     if len(route) == 4 and route[0] == "--agent" and route[2] == "--model":
@@ -503,7 +513,42 @@ def contract() -> dict:
     snapshot["status"] = "observed"
     snapshot["capabilities"] = {key: value in advertised for key, value in CAPABILITY_KEYS.items()}
     snapshot["runtime_state"] = runtime.get("state")
+    snapshot["orchestration_features"] = orchestration_features(runtime.get("capabilities"))
     return snapshot
+
+
+def orchestration_features(advertised: object) -> dict:
+    """R214: which Orchestration V3 behaviours the runtime advertises, from its capability list alone."""
+    if not isinstance(advertised, list):
+        return features_unread("capabilities_unreadable")
+    capabilities = {key: value in advertised for key, value in V3_CAPABILITY_KEYS.items()}
+    return {"mode": "v3" if all(capabilities.values()) else "pre_v3", "basis": "advertised",
+            "capabilities": capabilities}
+
+
+def features_unread(reason: str) -> dict:
+    """An unread or unreadable capability list: Pod behaves as on a pre-V3 runtime and says why."""
+    return {"mode": "pre_v3", "basis": "unread", "reason": reason,
+            "capabilities": {key: False for key in V3_CAPABILITY_KEYS}}
+
+
+def read_orchestration_features() -> dict:
+    """One bounded `status --json` read of the advertised capabilities; any failure reads as pre-V3."""
+    try:
+        status = _read(["status", "--json"])
+    except PodError as exc:
+        return features_unread(exc.code)
+    runtime = status["result"].get("runtime")
+    return orchestration_features(runtime.get("capabilities") if isinstance(runtime, dict) else None)
+
+
+def features_of(snapshot: dict) -> dict:
+    """The features a `contract()` snapshot carries, or pre-V3 with the reason they are missing."""
+    features = snapshot.get("orchestration_features") if isinstance(snapshot, dict) else None
+    if isinstance(features, dict) and isinstance(features.get("capabilities"), dict):
+        return features
+    reason = snapshot.get("reason") if isinstance(snapshot, dict) else None
+    return features_unread(reason if isinstance(reason, str) and reason else "capabilities_unread")
 
 
 def message_route(snapshot: dict) -> dict:
@@ -780,7 +825,10 @@ def mailbox_check(run: str, *, ack: str | None = None, wait_ms: int | None = Non
     if messages and not _argument(delivery):
         raise PodError("orca_contract", "Orca mailbox batch carries no delivery identity")
     return {"runtime": runtime, "delivery": delivery if messages else None, "messages": messages,
-            "replayed": result.get("replayed") is True, "timed_out": result.get("timedOut") is True,
+            "replayed": result.get("replayed") is True,
+            # R214: Orchestration V3 acknowledges a batch when it hands it over; such a delivery never replays.
+            "delivery_acknowledged": bool(messages) and result.get("deliveryAcknowledged") is True,
+            "timed_out": result.get("timedOut") is True,
             "cancelled": result.get("cancelled") is True,
             "connection_lost": result.get("connectionLost") is True}
 
