@@ -1051,8 +1051,17 @@ class _HostExitSlot:
     Candidates and decisions are the query's own: a verdict asked for because of another query never changes this
     query's result."""
 
-    def __init__(self, project: Path, request: dict, runs: set, gaps: set, abandoned: set):
-        self.project, self.request, self.runs, self.gaps, self.abandoned = project, request, runs, gaps, abandoned
+    def __init__(self, project: Path, request: dict, runs: set, own_runs: set, gaps: set, abandoned: set, *,
+                 scope: dict, owed: dict, owners, unreadable):
+        # `runs`: every Run a record names (rule S scope); `own_runs`: those named by this repository's records whose
+        # admissions the query reads, the only Runs on which its projection claims a row outside the repository.
+        self.project, self.request, self.runs, self.own_runs = project, request, runs, own_runs
+        self.gaps, self.abandoned = gaps, abandoned
+        # What the records say about a row: the query's scope, this repository's owed-report holds by Dispatch, and
+        # the shared readers of a Run's foreign owners and of whether a record naming a Run reads whole.
+        self.scope, self.owed, self.owners, self.unreadable = scope, owed, owners, unreadable
+        # Every record the record clauses read for this query, by name: its recheck dependencies (R207).
+        self.dependencies: dict = {}  # record name -> (directory, generation)
         self.candidates: dict = {}  # Dispatch -> {"host", "terminal", "run", "worktree"}
         self.decisions: dict = {}  # Dispatch -> {"counted", "code", "entry", "verdict"}
 
@@ -1081,18 +1090,87 @@ def _host_exit_scope(slot: _HostExitSlot, shown: dict, places) -> bool:
 
 
 def _host_exit_relevant(slot: _HostExitSlot, shown: dict, places) -> bool:
-    """The conservative relevance superset S(r, q): it contains `_relevant` for the writer claim and the
-    process-liveness unknown such a row produces, and may admit extra rows."""
+    """The relevance superset S(r, q): it contains every row the projection holds for this query, and every row whose
+    counting can expose a record-side hold relevant to it. The native judgment comes first; only a row it leaves out
+    is judged by the records, whose every read becomes this query's recheck dependency."""
+    return _host_exit_native(slot, shown, places) or _host_exit_record_held(slot, shown, places)
+
+
+def _host_exit_native(slot: _HostExitSlot, shown: dict, places) -> bool:
+    """S's judgment from the row's native location alone, before any record is read for it.
+
+    A record can give an unregistered row a branch and a repository key, which only narrow `_relevant` or match a
+    requested branch; it never makes a path overlap. So a worktree-only request decides any located row by its path,
+    and a row in this repository's registered worktree has a complete location that is judged exactly."""
     request = slot.request
     if not any(request.values()) or shown["dispatch"] in slot.gaps:
         return True
     path = shown["worktree"]
-    registered = _workspace(slot.project, path, places)[0] if path else None
-    branch = places.get(registered) if registered is not None else None
-    if path is None or branch is None:
-        return True  # An incomplete location: the projection may only know less, never more.
+    if path is None:
+        return True  # Unlocated: `_relevant` keeps it for every request.
+    registered, inside = _workspace(slot.project, path, places)
+    if not inside and shown["run"] not in slot.own_runs:
+        return False  # The projection makes no claim and no process-liveness unknown for it.
+    if request["worktree"] and not request["branch"]:
+        return _overlap(request["worktree"], path)
+    if registered is None:
+        return True  # A branch, target or effects request facing a branch only a record may know.
     return bool(request["worktree"] and _overlap(request["worktree"], path)
-                or request["branch"] and branch == request["branch"])
+                or request["branch"] and places.get(registered) == request["branch"])
+
+
+def _host_exit_record_held(slot: _HostExitSlot, shown: dict, places) -> bool:
+    """A row the native judgment leaves out that a record can still hold: counting it can expose an owed-report hold
+    or an unreadable owner (`_host_exit_recorded`), or, outside the repository on another Run, a record naming its Run
+    cannot be read whole (`_host_exit_unread`). Counting a row lets an owed-report hold of its admission stand in for
+    its native writer, so such a row is judged by the placement its record names."""
+    if _host_exit_recorded(slot, shown):
+        return True
+    path = shown["worktree"]
+    if path is None:
+        return False
+    _, inside = _workspace(slot.project, path, places)
+    return not inside and shown["run"] not in slot.own_runs and _host_exit_unread(slot, shown)
+
+
+def _host_exit_placement_relevant(slot: _HostExitSlot, path) -> bool:
+    """Whether the projection's `worker_placement_unknown` for a row at `path` is relevant to this query."""
+    return _relevant({**slot.scope, "worktree": path}, slot.request, slot.scope["repo_key"], _overlap,
+                     "worker_placement")
+
+
+def _host_exit_recorded(slot: _HostExitSlot, shown: dict) -> bool:
+    """Whether counting the row can expose a relevant record-side hold (R185): an admission binding its Dispatch that
+    still owes its report, in this repository's records or in its Run's records of another repository, judged by the
+    placement that admission recorded; or such an owner record that cannot be read, judged as the projection's unknown
+    for it. Anything that cannot be judged keeps the row."""
+    request, key = slot.request, slot.scope["repo_key"]
+    try:
+        if any(_relevant(held, request, key, _overlap) for held in slot.owed.get(shown["dispatch"], ())):
+            return True  # this repository's records, which the query's own change recheck already covers
+        owners = slot.owners(shown["dispatch"], shown["run"])
+        for directory, generation, _ in owners:
+            if generation is not None:
+                slot.dependencies.setdefault(directory.name, (directory, generation))
+        for _, _, outcome in owners:
+            if (isinstance(outcome, PodError) and _host_exit_placement_relevant(slot, shown["worktree"])
+                    or isinstance(outcome, tuple) and _relevant(outcome[0], request, key, _overlap)):
+                return True
+        return False
+    except (PodError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        return True
+
+
+def _host_exit_unread(slot: _HostExitSlot, shown: dict) -> bool:
+    """A row outside the repository on another Run: a candidate only when a record naming its Run cannot be read whole
+    and the projection's unknown for the row is relevant. Every record read is a recheck dependency."""
+    try:
+        unreadable, reads = slot.unreadable(shown["run"])
+        for directory, generation in reads:
+            slot.dependencies.setdefault(directory.name, (directory, generation))
+        return unreadable and _host_exit_placement_relevant(slot, shown["worktree"])
+    except (PodError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        return True
 
 
 def _host_exit_requests(ids, hosts: dict) -> list:
@@ -1123,6 +1201,7 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
         return
     runtime = fleet["runtime"]
     handles = {row.get("handle") for row in terminals["terminals"] if isinstance(row, dict)}
+    eligible = []  # every query's rows R212 may ask about, before any relevance judgment
     for slot in slots:
         try:
             places = _shared(("places", str(slot.project)), lambda slot=slot: _places(slot.project))
@@ -1134,17 +1213,11 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
             try:
                 shown = _worker_fact(source)
                 host = _host_exit_host(source, shown, handles, slot.abandoned)
-                if (host is None or not _host_exit_scope(slot, shown, places)
-                        or not _host_exit_relevant(slot, shown, places)
-                        or _shared(("settled-gone", shown["dispatch"]), lambda: _settled_gone(
-                            source, shown, fleet["workers"], terminals, lambda run: _coordinator(run, terminals, budget)))):
-                    continue
+                if host is not None and _host_exit_scope(slot, shown, places):
+                    eligible.append((slot, places, source, shown, host))
             except (PodError, OSError, ValueError):
                 continue  # The projection meets the same fact and keeps its hold.
-            slot.candidates[shown["dispatch"]] = {"host": host, "terminal": shown["terminal"], "run": shown["run"],
-                                                  "worktree": shown["worktree"]}
-    asking = [slot for slot in slots if slot.candidates]
-    if not asking:
+    if not eligible:
         return
     try:
         from .config import effective
@@ -1158,8 +1231,19 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
     else:
         command = preferences.get("authorization_verifier")
     if command is None:
-        for slot in asking:
-            slot.candidates.clear()  # Unconfigured: today's behaviour, with no disclosure.
+        return  # Unconfigured: today's behaviour; no candidate is judged, no record read, nothing disclosed or asked.
+    for slot, places, source, shown, host in eligible:
+        try:
+            if (not _host_exit_relevant(slot, shown, places)
+                    or _shared(("settled-gone", shown["dispatch"]), lambda: _settled_gone(
+                        source, shown, fleet["workers"], terminals, lambda run: _coordinator(run, terminals, budget)))):
+                continue
+        except (PodError, OSError, ValueError):
+            continue  # The projection meets the same fact and keeps its hold.
+        slot.candidates[shown["dispatch"]] = {"host": host, "terminal": shown["terminal"], "run": shown["run"],
+                                              "worktree": shown["worktree"]}
+    asking = [slot for slot in slots if slot.candidates]
+    if not asking:
         return
     hosts = {dispatch: facts["host"] for slot in asking for dispatch, facts in slot.candidates.items()}
     union = set(hosts)
@@ -2015,6 +2099,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         "record": row["record_id"], "condition": "Establish the repository namespace of this admitted intrinsic effect"})
 
     consulted, proof_outcome = [], None
+    selection_reads = []  # R212: records this query's candidate judgment read, beyond those it consulted
     try:
         budget.check()
         if root.is_symlink() or any(parent.is_symlink() for parent in root.parents):
@@ -2192,65 +2277,6 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 proof_outcome = (_proof(project, objective, candidate), None)
             except PodError as exc:
                 proof_outcome = ({"status": "unknown", "candidate": candidate, "reason": exc.code}, exc.code)
-        # The Dispatches that rule T must find settled: those bound by a deferred terminal record's admissions.
-        gap_dispatches = {(row.get("native_binding") or {}).get("dispatchId") for gap in terminal_gaps
-                          for row in gap["rows"].values() if row.get("native_binding")}
-        discovery = _SHARED.get()
-        if discovery is not None:
-            # The call reads these native facts once, for every query, before the end fence starts.
-            discovery.abandoned |= abandoned_dispatches
-            # Started while the other queries read their records, or as soon as the terminal inventory is known.
-            discovery.name_owners({ref["runId"] for ownership in owner_claims() for ref in ownership["recorded_native_refs"]})
-            # R212: this query's own candidate scope, which the call asks the host about before the end fence.
-            host_slot = _HostExitSlot(project, {"worktree": physical(worktree) if worktree else None,
-                                                "branch": branch, "target": target, "effects": effects or []},
-                                      {*runs, *run_sources}, gap_dispatches, set(abandoned_dispatches))
-            discovery.host_exit_slots.append(host_slot)
-        yield "native"  # Every query's record pass runs while the native inventory is read.
-        # Prefer the installed all-Run inventory for CE's unbound caller.
-        # A bound caller retains exact-Run reads and the same outer deadline.
-        fleet = _shared(("fleet",), _fleet)
-        terminals = _shared(("terminals",), _terminals)
-        if terminals.get("complete") is not True:
-            raise PodError("native_resources_incomplete", "Current native resource coverage is incomplete")
-        if fleet is not None and terminals["runtime"] != fleet["runtime"]:
-            raise PodError("orca_runtime_changed", "Worker and terminal inventory runtimes differ")
-        result["native_resources_complete"] = terminals.get("complete") is True
-        native_groups = []
-        if fleet is None:
-            unknown(None, "native_inventory_scope", fact="all_run_coverage", reconciliation={
-                "action": "use_ce_unbound_read_backend",
-                "condition": "Read from CE's unbound backend while retaining the original caller in CE authority checks; do not mutate the native Run binding"})
-        else:
-            native_groups = [(None, fleet)]
-        places = _shared(("places", str(project)), lambda: _places(project))
-
-        def coordinator(run):
-            return _coordinator(run, terminals, budget)
-
-        def elsewhere(path):
-            """Rule T 4b: `path` is proven a registered worktree of another repository. It is an existing directory
-            reached without a symlink, outside this repository's worktrees, whose Git common directory differs from
-            this repository's and whose own worktree registry lists it. Anything unproved is not elsewhere. Judged
-            once per call for each repository and path."""
-            return _shared(("elsewhere", str(project), str(path)), lambda: _elsewhere(path))
-
-        def _elsewhere(path):
-            if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
-                return False
-            try:
-                if not stat.S_ISDIR(os.lstat(path).st_mode) or str(Path(path).resolve(strict=True)) != path:
-                    return False
-                if workspace(path, places)[1]:
-                    return False
-                other = _context(Path(path))
-                if other.get("repo_key") is None or other["repo_key"] == context["repo_key"]:
-                    return False
-                # The registry the identity read listed: one `git worktree list` of that repository, from that path.
-                return any(physical(root) == path for root in other.get("linked_worktrees") or [])
-            except (OSError, PodError, ValueError, RuntimeError):
-                return False
-
         def read_owner(directory):
             """One owning record's attribution read, generation and admissions; or the PodError that holds its
             Dispatch. Only its admissions' placements decide a hold, so its own coordinator place may be
@@ -2298,12 +2324,100 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                                                       "Accepted placement facts cannot be read")))
             return tuple(found)
 
+        def owners_of(dispatch, run):
+            """The shared foreign-owner judgment of `dispatch` on `run`, read once per call (R185; R212 reads it too)."""
+            return _shared(("foreign-owners", str(project), dispatch, run), lambda: foreign_owners(dispatch, run))
+
+        def run_unreadable(run):
+            """Whether a record naming `run` cannot be read whole as the worker loop's placement lookup reads it (its
+            context changed since the record pass, or its admission inventory or a placement cannot be read), and the
+            `(directory, generation)` of every record read. That lookup names a row outside the worktree registry as
+            `worker_placement_unknown`. Judged once per call."""
+            def judge():
+                reads = []
+                for directory, generation in run_sources.get(run, []):
+                    try:
+                        candidate_raw, current_generation = _primary(directory / "context.json")
+                    except (PodError, OSError):
+                        return True, tuple(reads)
+                    reads.append((directory, generation))
+                    if current_generation != generation:
+                        return True, tuple(reads)
+                    try:
+                        _admissions(candidate_raw, directory)
+                    except PodError:
+                        return True, tuple(reads)
+                return False, tuple(reads)
+            return _shared(("run-unreadable", str(project), run), judge)
+
+        # The Dispatches that rule T must find settled: those bound by a deferred terminal record's admissions.
+        gap_dispatches = {(row.get("native_binding") or {}).get("dispatchId") for gap in terminal_gaps
+                          for row in gap["rows"].values() if row.get("native_binding")}
+        discovery = _SHARED.get()
+        if discovery is not None:
+            # The call reads these native facts once, for every query, before the end fence starts.
+            discovery.abandoned |= abandoned_dispatches
+            # Started while the other queries read their records, or as soon as the terminal inventory is known.
+            discovery.name_owners({ref["runId"] for ownership in owner_claims() for ref in ownership["recorded_native_refs"]})
+            # R212: this query's own candidate scope, which the call asks the host about before the end fence.
+            owed = {}  # this repository's owed-report holds by Dispatch, as their records place them
+            for dispatch, held, _ in unfinished:
+                owed.setdefault(dispatch, []).append(held)
+            host_slot = _HostExitSlot(project, {"worktree": physical(worktree) if worktree else None,
+                                                "branch": branch, "target": target, "effects": effects or []},
+                                      {*runs, *run_sources}, set(runs), gap_dispatches, set(abandoned_dispatches),
+                                      scope=scope, owed=owed, owners=owners_of, unreadable=run_unreadable)
+            discovery.host_exit_slots.append(host_slot)
+        yield "native"  # Every query's record pass runs while the native inventory is read.
+        # Prefer the installed all-Run inventory for CE's unbound caller.
+        # A bound caller retains exact-Run reads and the same outer deadline.
+        fleet = _shared(("fleet",), _fleet)
+        terminals = _shared(("terminals",), _terminals)
+        if terminals.get("complete") is not True:
+            raise PodError("native_resources_incomplete", "Current native resource coverage is incomplete")
+        if fleet is not None and terminals["runtime"] != fleet["runtime"]:
+            raise PodError("orca_runtime_changed", "Worker and terminal inventory runtimes differ")
+        result["native_resources_complete"] = terminals.get("complete") is True
+        native_groups = []
+        if fleet is None:
+            unknown(None, "native_inventory_scope", fact="all_run_coverage", reconciliation={
+                "action": "use_ce_unbound_read_backend",
+                "condition": "Read from CE's unbound backend while retaining the original caller in CE authority checks; do not mutate the native Run binding"})
+        else:
+            native_groups = [(None, fleet)]
+        places = _shared(("places", str(project)), lambda: _places(project))
+
+        def coordinator(run):
+            return _coordinator(run, terminals, budget)
+
+        def elsewhere(path):
+            """Rule T 4b: `path` is proven a registered worktree of another repository. It is an existing directory
+            reached without a symlink, outside this repository's worktrees, whose Git common directory differs from
+            this repository's and whose own worktree registry lists it. Anything unproved is not elsewhere. Judged
+            once per call for each repository and path."""
+            return _shared(("elsewhere", str(project), str(path)), lambda: _elsewhere(path))
+
+        def _elsewhere(path):
+            if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+                return False
+            try:
+                if not stat.S_ISDIR(os.lstat(path).st_mode) or str(Path(path).resolve(strict=True)) != path:
+                    return False
+                if workspace(path, places)[1]:
+                    return False
+                other = _context(Path(path))
+                if other.get("repo_key") is None or other["repo_key"] == context["repo_key"]:
+                    return False
+                # The registry the identity read listed: one `git worktree list` of that repository, from that path.
+                return any(physical(root) == path for root in other.get("linked_worktrees") or [])
+            except (OSError, PodError, ValueError, RuntimeError):
+                return False
+
         owners_consulted = set()
 
         def foreign_holds(dispatch, run, path):
             """Apply the shared judgment to this query: holds, unknowns, and every read record rechecked (R185)."""
-            for directory, generation, outcome in _shared(("foreign-owners", str(project), dispatch, run),
-                                                          lambda: foreign_owners(dispatch, run)):
+            for directory, generation, outcome in owners_of(dispatch, run):
                 if generation is not None and directory.name not in owners_consulted:
                     consulted.append((directory, generation))  # rechecked with every other consulted source
                     owners_consulted.add(directory.name)
@@ -2642,7 +2756,11 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             if _shared(("effective", source_project), lambda: effective(Path(source_project)))["revision"] != policy["revision"]:
                 census.sound = False
                 unknown(None, "effect_policy_changed", fact="effect_mapping")
-        for directory, generation in consulted:
+        # R212: every record this query's candidate judgment read is rechecked with its consulted sources, so a change
+        # after that read is this query's `record_changed`, never a hold its judgment silently dropped.
+        selection_reads = [entry for entry in (host_slot.dependencies.values() if host_slot is not None else ())
+                           if entry not in consulted]
+        for directory, generation in [*consulted, *selection_reads]:
             budget.check()
             if _after_context(directory / "context.json") != generation:
                 unknown(directory.name, "record_changed")
@@ -2763,7 +2881,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     result = public_decisions(result)
     journals = {directory.name: journal_id for directory, journal_id, _ in effect_sources}
     journals.update({directory.name: journal_id for directory, _, journal_id, *_ in sources})
-    result["record_census"] = census.witness(result, budget, journals, {directory for directory, _ in consulted},
+    # The census qualifies those reads as strictly as consulted ones (R213): a claims read from a later generation than
+    # the attribution read, or an incomplete one, leaves it false even where the query is complete under R207.
+    result["record_census"] = census.witness(result, budget, journals,
+                                             {directory for directory, _ in [*consulted, *selection_reads]},
                                              {path: policy["revision"] for path, policy in policies.items()})
     return result
 

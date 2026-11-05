@@ -11365,7 +11365,22 @@
       "offline_test": [
         "tests.test_admission_host_exit.RelevanceTests.test_the_unfiltered_query_asks_for_a_located_candidate",
         "tests.test_admission_host_exit.RelevanceTests.test_each_request_shape_asks_its_superset",
-        "tests.test_admission_host_exit.RelevanceTests.test_the_superset_contains_relevant_and_admits_its_documented_extras"
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_empty_and_registered_worktree_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_unregistered_worktree_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_branch_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_both_target_and_effects_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTableTests.test_the_projection_table_runs_every_shape_once",
+        "tests.test_admission_host_exit_scope.FactTests.test_every_hold_is_kept_for_requests_naming_a_worktree",
+        "tests.test_admission_host_exit_scope.FactTests.test_every_hold_is_kept_for_the_other_requests",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_a_foreign_owners_owed_report_in_a_removed_worktree_holds_its_branch",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_unreadable_foreign_owner_keeps_the_dispatch_a_candidate",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_a_worktree_detached_after_admission_holds_its_recorded_branch",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_owner_changed_and_restored_after_the_judgment_read_it_is_record_changed",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_owner_left_changed_is_read_as_its_newer_bytes",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_unchanged_owner_the_judgment_read_is_bound_in_a_true_census",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_only_a_query_whose_judgment_read_the_owner_depends_on_it",
+        "tests.test_admission_host_exit_scope.DependencyTests.test_every_record_read_is_a_dependency_whatever_it_decides",
+        "tests.test_admission_host_exit_scope.DependencyTests.test_a_row_the_native_judgment_keeps_reads_no_record"
       ],
       "status": "NOT_RUN"
     },
@@ -11645,7 +11660,8 @@
         "tests.test_admission_census.ChangedCensusTests.test_attribution_to_claims_reencoding_keeps_query_semantics_but_not_census",
         "tests.test_admission_census.ChangedCensusTests.test_equivalent_journal_generation_change_is_still_census_incomplete",
         "tests.test_admission_census.ChangedCensusTests.test_changed_effect_classification_policy_cannot_assert_completion",
-        "tests.test_admission_census.ChangedCensusTests.test_unreadable_phase_closure_is_not_positive_classification"
+        "tests.test_admission_census.ChangedCensusTests.test_unreadable_phase_closure_is_not_positive_classification",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_owner_left_changed_is_read_as_its_newer_bytes"
       ],
       "status": "NOT_RUN"
     },
@@ -11797,6 +11813,18 @@
         "live_native"
       ],
       "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A898",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_scope.OrphanTests.test_each_removed_worktree_query_asks_only_its_own_row_and_counts_it",
+        "tests.test_admission_host_exit_scope.OrphanTests.test_a_branch_query_never_takes_another_repositorys_rows"
+      ],
       "status": "NOT_RUN"
     },
     {
