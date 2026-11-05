@@ -18,7 +18,7 @@ ANSWERED = {"unverified": "host_exit_unverified", "foreign_host": "host_exit_for
             "foreign_runtime": "host_exit_foreign_runtime", "stale": "host_exit_stale"}
 UNCOVERED, FAILED, TIMEOUT, DEADLINE = (process_exit.UNCOVERED, process_exit.FAILED, process_exit.TIMEOUT,
                                         process_exit.DEADLINE)
-TWELVE = tuple("abcdefghijkl")  # with one id per request, seven rounds: a | b c | d e | f g | h i | j k | l
+FOURTEEN = tuple("abcdefghijklmn")  # with one id per request, eight rounds: a | b c | d e | f g | h i | j k | l m | n
 
 
 def first_then_rest(requests):
@@ -219,7 +219,8 @@ class InFlight:
 
 
 class FleetCase(VerifierMixin, Rows, batch.FencedCase):
-    """Four queries with 24 candidates each on a fake fleet: the whole 96-id bound, twelve requests of eight ids."""
+    """Four queries with 24 candidates each on a fake fleet: 96 ids fill the fourteen-request bound, thirteen requests of
+    seven ids and one of five."""
 
     def setUp(self):
         super().setUp()
@@ -248,24 +249,25 @@ class FleetCase(VerifierMixin, Rows, batch.FencedCase):
 
 
 class CountTests(FleetCase):
-    """A867: a failing verifier receives one request of the twelve the bound allows."""
+    """A867: a failing verifier receives one request of the fourteen the bound allows."""
 
-    def test_a_failing_verifier_receives_one_request_and_a_correct_one_twelve(self):
+    def test_a_failing_verifier_receives_one_request_and_a_correct_one_fourteen(self):
         failing, correct = FakeVerifier("fail"), FakeVerifier()
         self.assertEqual(self.batch_with(failing)["discovery"]["host_exit"], {
-            "requests": 1, "asked": 8, "counted": 0, "not_asked_after": "host_exit_failed", "not_asked": 88})
-        self.assertEqual(failing.requests, [[f"a{index:02d}" for index in range(8)]])
-        self.assertEqual(self.batch_with(correct)["discovery"]["host_exit"], {"requests": 12, "asked": 96, "counted": 96})
-        self.assertEqual(sorted(map(len, correct.requests)), [8] * 12)
+            "requests": 1, "asked": 7, "counted": 0, "not_asked_after": "host_exit_failed", "not_asked": 89})
+        self.assertEqual(failing.requests, [[f"a{index:02d}" for index in range(7)]])
+        self.assertEqual(self.batch_with(correct)["discovery"]["host_exit"], {"requests": 14, "asked": 96, "counted": 96})
+        self.assertEqual(sorted(map(len, correct.requests)), [5] + [7] * 13)
 
 
 class RoundTests(FleetCase):
-    """A899: twelve requests run as 1 + 2 + 2 + 2 + 2 + 2 + 1, and each query still equals its single query."""
+    """A899: fourteen requests run as 1 + 2 x 6 + 1, and each query still equals its single query."""
 
-    ROUNDS = (("a00",), ("a08", "a16"), ("b00", "b08"), ("b16", "c00"), ("c08", "c16"), ("d00", "d08"), ("d16",))
+    ROUNDS = (("a00",), ("a07", "a14"), ("a21", "b04"), ("b11", "b18"), ("c01", "c08"), ("c15", "c22"), ("d05", "d12"),
+              ("d19",))
 
-    def test_twelve_requests_run_one_then_rounds_of_at_most_two(self):
-        self.assertEqual((process_exit.K, process_exit.R, process_exit.IN_FLIGHT), (8, 12, 2))
+    def test_fourteen_requests_run_one_then_rounds_of_at_most_two(self):
+        self.assertEqual((process_exit.K, process_exit.R, process_exit.IN_FLIGHT), (7, 14, 2))
         flight = InFlight(self.ROUNDS)
         with patch.object(process_exit, "ask", side_effect=flight.ask(process_exit.ask)):
             answer = self.batch_with(FakeVerifier(before=flight.before))
@@ -275,10 +277,10 @@ class RoundTests(FleetCase):
                     for _ in members]
         self.assertEqual([(kind, round_of[first]) for kind, first in flight.events], expected)
         self.assertEqual(flight.most, 2)
-        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 12, "asked": 96, "counted": 96})
+        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 14, "asked": 96, "counted": 96})
 
     def test_a_correct_verifier_answers_each_query_as_its_single_query(self):
-        singles = self.assert_equal_to_singles(None, 12)
+        singles = self.assert_equal_to_singles(None, 14)
         self.assertTrue(all(row["counted"] for single in singles for row in single["host_exits"]))
 
     def test_a_failing_verifier_answers_each_query_as_its_single_query(self):
@@ -286,7 +288,7 @@ class RoundTests(FleetCase):
         self.assertEqual({code for single in singles for code in exit_codes(single).values()}, {FAILED})
 
     def test_an_unverified_verifier_answers_each_query_as_its_single_query(self):
-        singles = self.assert_equal_to_singles("unverified", 12)
+        singles = self.assert_equal_to_singles("unverified", 14)
         self.assertEqual({code for single in singles for code in exit_codes(single).values()}, {"host_exit_unverified"})
 
 
@@ -294,7 +296,7 @@ class RoundFaultTests(FakeCase):
     """A901: a transport or contract fault in a later round starts no further round; an answer under the contract never
     stops one."""
 
-    NAMES = TWELVE
+    NAMES = FOURTEEN
 
     def test_a_fault_in_a_later_round_starts_no_further_round(self):
         for mode, code in STOPPING.items():
@@ -303,7 +305,7 @@ class RoundFaultTests(FakeCase):
                 result = self.read(self.rows)
                 self.assertEqual(sorted(fake.side_effect.requests), [[name] for name in "abcde"])
                 self.assertEqual(exit_codes(result), {**dict.fromkeys("abce", UNCOVERED),
-                                                      **dict.fromkeys("dfghijkl", code)})
+                                                      **dict.fromkeys("dfghijklmn", code)})
 
     def test_two_faults_in_one_round_stop_with_the_first_in_plan_order(self):
         """`e` answers before `d`, so the stopping code is the first by plan order, never by arrival."""
@@ -322,15 +324,15 @@ class RoundFaultTests(FakeCase):
             result = self.read(self.rows)
         self.assertTrue(answered.is_set())
         self.assertEqual(exit_codes(result), {**dict.fromkeys("abc", UNCOVERED), "d": TIMEOUT, "e": FAILED,
-                                              **dict.fromkeys("fghijkl", TIMEOUT)})
+                                              **dict.fromkeys("fghijklmn", TIMEOUT)})
 
     def test_an_answer_under_the_contract_in_a_later_round_never_stops(self):
         for mode, code in ANSWERED.items():
             with self.subTest(mode), \
                     patch.object(process_exit, "_output", side_effect=FakeVerifier(modes={"d": mode})) as fake:
                 result = self.read(self.rows)
-                self.assertEqual(len(fake.side_effect.requests), 12)
-                self.assertEqual(exit_codes(result), {**dict.fromkeys("abcefghijkl", UNCOVERED), "d": code})
+                self.assertEqual(len(fake.side_effect.requests), 14)
+                self.assertEqual(exit_codes(result), {**dict.fromkeys("abcefghijklmn", UNCOVERED), "d": code})
 
 
 class RoundBatchTests(VerifierMixin, Rows, batch.FencedCase):
@@ -362,26 +364,26 @@ class RoundBatchTests(VerifierMixin, Rows, batch.FencedCase):
 
 
 class RoundDeadlineTests(FakeCase):
-    """A900: the deadline test runs before each of the seven rounds (FakeCase.call)."""
+    """A900: the deadline test runs before each of the eight rounds (FakeCase.call)."""
 
-    NAMES = TWELVE
+    NAMES = FOURTEEN
 
     def spending(self, seconds):
         """A verifier whose every round spends `seconds` on the call clock, moved by one request of the round."""
         def spend(ids):
-            if ids[0] in ("a", "b", "d", "f", "h", "j", "l"):
+            if ids[0] in ("a", "b", "d", "f", "h", "j", "l", "n"):
                 verifier.clock.now += seconds
         verifier = FakeVerifier(before=spend)
         return verifier
 
     def test_a_thirty_second_call_reaches_every_round(self):
-        # The last round starts at 4.2 + 6 * seconds, which leaves at least 7.875 s up to about 2.98 s per round.
-        for seconds in (0.9, 2.2):  # the verifier's median for 8 ids, and its own deadline
+        # The last round starts at 4.2 + 7 * seconds, which leaves at least 7.875 s up to about 2.56 s per round.
+        for seconds in (0.9, 2.2):  # the verifier's median, and its own deadline
             with self.subTest(seconds=seconds):
                 verifier = self.spending(seconds)
                 result = self.call(30.0, verifier)["results"][0]
-                self.assertEqual(len(verifier.requests), 12)
-                self.assertEqual(len(result["host_exits"]), 12)
+                self.assertEqual(len(verifier.requests), 14)
+                self.assertEqual(len(result["host_exits"]), 14)
                 self.assertTrue(all(row["counted"] for row in result["host_exits"]))
 
     def test_a_short_deadline_stops_the_later_rounds(self):
@@ -389,4 +391,5 @@ class RoundDeadlineTests(FakeCase):
         verifier = self.spending(1.0)
         result = self.call(15.0, verifier)["results"][0]
         self.assertEqual(sorted(verifier.requests), [[name] for name in "abcde"])
-        self.assertEqual(exit_codes(result), {**dict.fromkeys("abcde", UNCOVERED), **dict.fromkeys("fghijkl", DEADLINE)})
+        self.assertEqual(exit_codes(result), {**dict.fromkeys("abcde", UNCOVERED),
+                                              **dict.fromkeys("fghijklmn", DEADLINE)})

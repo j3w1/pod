@@ -358,7 +358,7 @@ class BatchEquivalenceTests(VerifierMixin, Rows, batch.FencedCase):
         singles, answer = self.calls(self.a, self.b)
         self.assert_equal_to_singles(singles, answer)
         self.assertEqual(sum(row["counted"] for row in answer["responses"][0]["result"]["host_exits"]), 32)
-        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 5, "asked": 33, "counted": 33})  # 8 ids each
+        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 5, "asked": 33, "counted": 33})  # 7 ids each
         self.assertTrue(answer["native_fence"]["stable"])
         self.assertEqual(answer["native_fence"]["host_exit_dispatches"], sorted(row["dispatchId"] for row in self.rows[123:]))
 

@@ -11413,7 +11413,7 @@
         "tests.test_admission_host_exit_stop.SequenceTests.test_the_rest_start_together_only_after_the_first_returned",
         "tests.test_admission_host_exit_stop.SequenceTests.test_the_rest_hold_the_deadline_when_the_first_request_spent_it",
         "tests.test_admission_host_exit_stop.SequenceTests.test_a_quick_first_answer_leaves_the_rest_their_own_bound",
-        "tests.test_admission_host_exit_stop.CountTests.test_a_failing_verifier_receives_one_request_and_a_correct_one_twelve"
+        "tests.test_admission_host_exit_stop.CountTests.test_a_failing_verifier_receives_one_request_and_a_correct_one_fourteen"
       ],
       "status": "NOT_RUN"
     },
@@ -11806,7 +11806,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_admission_host_exit_stop.RoundTests.test_twelve_requests_run_one_then_rounds_of_at_most_two",
+        "tests.test_admission_host_exit_stop.RoundTests.test_fourteen_requests_run_one_then_rounds_of_at_most_two",
         "tests.test_admission_host_exit_stop.RoundTests.test_a_correct_verifier_answers_each_query_as_its_single_query",
         "tests.test_admission_host_exit_stop.RoundTests.test_a_failing_verifier_answers_each_query_as_its_single_query",
         "tests.test_admission_host_exit_stop.RoundTests.test_an_unverified_verifier_answers_each_query_as_its_single_query"

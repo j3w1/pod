@@ -20,18 +20,20 @@ from .errors import PodError
 from .util import normalize_timestamp
 
 ACTION = "process_exit"
-# Ids per request, from the host verifier's measured bound. Its per-reference lookups share one window per request, so
-# the trailing sorted references of a request can be cut and answer `known: false`, always fail-closed: live, requests
-# of 16 and 24 ids lost their last 9 and 13, while one of 8 at most rarely loses its last. The largest valid verdict
-# for 8 ids, every string at its bound and every count at 2^31-1, is 2,769 bytes compact and 4,293 bytes indented by
-# four; the wire contract's 24 ids (7,393 and 11,845 bytes) also fit the 16 KiB transport bound.
-K = 8
-R = 12  # requests per admission call, so at most R * K = 96 ids
+# Ids per request, from the host verifier's own lookup bound. It resolves a request of n references with n + 1 native
+# reads, 4 at a time, inside one window shared by the request, so the trailing sorted references of a larger request
+# can be cut and answer `known: false`, always fail-closed. 7 references take exactly two waves of reads, the largest
+# size with a whole wave of margin; 8 need a third wave, and live a request of 8 sometimes lost its last reference
+# (requests of 16 and 24 lost their last 9 and 13). The largest valid verdict for 7 ids, every string at its bound and
+# every count at 2^31-1, is 2,480 bytes compact and 3,821 bytes indented by four; the wire contract's 24 ids (7,393
+# and 11,845 bytes) also fit the 16 KiB transport bound.
+K = 7
+R = 14  # requests per admission call, so at most R * K = 98 ids
 # The verifier's concurrent-request allowance: after the first request, which runs alone, at most this many requests
 # are in flight at once, in rounds that each start only when every request of the previous round has answered.
 # Concurrent requests slow each other's bounded lookups, and the only live sample of three at once answered
-# unverified. Raise it to 3 only after an installed observation of three 8-id requests at once that all verified, and
-# never above 3.
+# unverified. Raise it to 3 only after an installed observation of three full-size requests at once that all
+# verified, and never above 3.
 IN_FLIGHT = 2
 TIMEOUT_S = 3.0  # one request's whole invocation; the other verifier actions keep relay.TIMEOUT_S
 # The work left after the requests (projection, recheck and a batch's end fence) measured 3.6 s for a single query and

@@ -177,7 +177,7 @@ class SizeTests(VerifierMixin, KernelCase):
     """A858: the largest valid verdict for K ids, and for the wire contract's 24, fits the unchanged 16 KiB transport
     bound."""
 
-    SIZES = {8: 4293, 24: 11845}  # ids: the largest verdict's bytes indented by four, with its newline
+    SIZES = {7: 3821, 24: 11845}  # ids: the largest verdict's bytes indented by four, with its newline
 
     def setUp(self):
         super().setUp()
@@ -193,7 +193,7 @@ class SizeTests(VerifierMixin, KernelCase):
         return ids
 
     def test_the_largest_valid_verdicts_indented_by_four_are_accepted(self):
-        self.assertEqual(process_exit.K, 8)
+        self.assertEqual(process_exit.K, 7)
         for count, size in self.SIZES.items():
             with self.subTest(ids=count):
                 ids = self.largest(count)
