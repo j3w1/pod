@@ -355,6 +355,28 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         positions = [text.index(step) for step in steps]
         self.assertEqual(positions, sorted(positions))
 
+    def test_review_collect_mode_has_one_owner(self):
+        root = self.root / "skills/pod"
+        texts = {str(path.relative_to(root)): " ".join(path.read_text().split())
+                 for path in [root / "SKILL.md", *(root / "references").glob("*.md")]}
+        clauses = ("Commission every review in collect mode, stated in its packet",
+                   "no source or test edit, no rerun toward green, no fix and no new child",
+                   "It does not stop at its first finding",
+                   "reports every finding in one report, with outcome `failed` when any finding is required",
+                   "file and line, the concrete failing scenario, the defect class and a proposed fix",
+                   "Invocation or harness errors go in `failures` or `uncertainty` as such, never as findings",
+                   "Only a safety event stops it at once",
+                   "run one fix round for everything found",
+                   "affected-scope delta review of the same scope by the same reviewer")
+        for clause in clauses:
+            with self.subTest(clause=clause):
+                self.assertEqual({name: text.count(clause) for name, text in texts.items() if clause in text},
+                                 {"references/verification.md": 1})
+        text = texts["references/verification.md"]
+        # Collect mode precedes the correction cycle it feeds.
+        self.assertLess(text.index(clauses[-1]), text.index("1. Consume the fixer's report."))
+        self.assertIn("review packets state collect mode from the proof guidance", texts["references/planning.md"])
+
     def test_skill_states_its_boundaries(self):
         root = self.root / "skills" / "pod"
         texts = {"SKILL.md": " ".join((root / "SKILL.md").read_text().lower().split())}

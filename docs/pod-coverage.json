@@ -9162,6 +9162,15 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A905",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_inventory.ExecutionSpecDocumentationTests.test_review_collect_mode_has_one_owner",
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A609",
       "required_evidence": [
         "unit",
