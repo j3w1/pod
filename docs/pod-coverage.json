@@ -11714,7 +11714,8 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_orca_v3.WakeDrainTests.test_a_retained_run_the_caller_coordinates_is_accepted_on_v3_and_refused_on_pre_v3"
+        "tests.test_orca_v3.WakeDrainTests.test_a_retained_run_the_caller_coordinates_is_accepted_on_v3_and_refused_on_pre_v3",
+        "tests.test_orca_v3.WakeDrainTests.test_a_partial_capability_set_never_accepts_a_retained_run"
       ],
       "status": "NOT_RUN"
     },
@@ -11762,7 +11763,8 @@
         "tests.test_orca_v3.AdmissionKeepOpenTests.test_keep_open_is_requested_and_recorded_only_when_intended_on_v3",
         "tests.test_orca_v3.AdmissionKeepOpenTests.test_keep_open_on_pre_v3_adds_no_flag_and_records_that_orca_does_not_advertise_it",
         "tests.test_orca_v3.TabKeepOpenTests.test_keep_open_is_relayed_only_for_intended_retention_before_automatic_release",
-        "tests.test_orca_v3.SettledDispatchTests.test_a_v3_completion_names_keep_open_and_forbids_send_to_the_settled_dispatch"
+        "tests.test_orca_v3.SettledDispatchTests.test_a_v3_completion_names_keep_open_and_forbids_send_to_the_settled_dispatch",
+        "tests.test_orca_v3.AdmissionKeepOpenTests.test_keep_open_replay_follows_the_current_capability_snapshot"
       ],
       "status": "NOT_RUN"
     },
@@ -11773,7 +11775,8 @@
       ],
       "offline_test": [
         "tests.test_orca_v3.AdmissionKeepOpenTests.test_reuse_of_is_refused_early_after_release_and_accepted_while_kept_open",
-        "tests.test_orca_v3.AdmissionKeepOpenTests.test_a_released_prior_on_pre_v3_keeps_todays_reuse_path"
+        "tests.test_orca_v3.AdmissionKeepOpenTests.test_a_released_prior_on_pre_v3_keeps_todays_reuse_path",
+        "tests.test_orca_v3.AdmissionKeepOpenTests.test_pending_reuse_replay_is_refused_once_the_prior_worker_is_released"
       ],
       "status": "NOT_RUN"
     },

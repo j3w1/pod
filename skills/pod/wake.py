@@ -209,7 +209,8 @@ def _caller_coordinates(run: str, bound: object, features: dict, show_fn) -> boo
     """Whether this terminal coordinates RUN: its current Run, or on V3 a retained binding Orca still names it for."""
     if isinstance(bound, dict) and bound.get("id") == run:
         return True
-    if (features.get("capabilities") or {}).get("retained_run_bindings") is not True:
+    # Only a runtime classified V3 drains; a partial or unread capability set keeps the current-Run-only rule.
+    if features.get("mode") != "v3" or (features.get("capabilities") or {}).get("retained_run_bindings") is not True:
         return False
     caller = bound.get("coordinator_handle") if isinstance(bound, dict) else os.environ.get("ORCA_TERMINAL_HANDLE")
     if not isinstance(caller, str) or not caller:

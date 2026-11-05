@@ -2774,6 +2774,23 @@ def _released(placement: object) -> bool:
             or placement.get("native_terminal_state") == "released")
 
 
+def refuse_released_reuse(placement: object, reuse_of: str, *, request_uuid: str | None = None) -> None:
+    """R214: Orca released the finished worker (automatically after worker_done unless it was kept open), so its
+    terminal can no longer be reused: refuse before any native start, on a fresh reservation and on request replay.
+    A pending request keeps its identity and recorded uncertainty; nothing here starts a fresh retry."""
+    if not _released(placement):
+        return
+    detail = {"reuse_of": reuse_of, "next_action": "admit the follow-up without reuse_of"}
+    if request_uuid is not None:
+        detail.update(request_uuid=request_uuid,
+                      next_action="inspect the pending request with `orca orchestration request-show --request "
+                                  + request_uuid + " --json`; it is not replayed onto the released terminal")
+    raise PodError("reuse_released", "The prior worker's terminal was released, so it cannot be reused. "
+                   "Next: admit the follow-up without reuse_of on a fresh terminal; to reuse a worker later, "
+                   "admit it with keep_open or keep it open with `orca orchestration worker-keep-open` "
+                   "before its automatic release", detail)
+
+
 def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dict,
                    requested: dict, task_id: str, moment: datetime, projection: dict,
                    failures: list, reuse_of: str | None, native: dict, *, auto_release: bool = False) -> dict:
@@ -2828,14 +2845,8 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
         matches = [a for a in native["assignments"] if a.get("admission_id") == reuse_of]
         if len(matches) != 1 or matches[0].get("settled") is not True:
             raise PodError("reuse_unavailable", "Prior attempt has not settled natively. Next: read the exact Dispatch settlement before terminal reuse")
-        if auto_release and _released(matches[0].get("placement")):
-            # R214: Orca released the finished worker (automatically after worker_done unless it was kept open), so
-            # its terminal can no longer be reused; refuse before any route or native start.
-            raise PodError("reuse_released", "The prior worker's terminal was released, so it cannot be reused. "
-                           "Next: admit the follow-up without reuse_of on a fresh terminal; to reuse a worker later, "
-                           "admit it with keep_open or keep it open with `orca orchestration worker-keep-open` "
-                           "before its automatic release",
-                           {"reuse_of": reuse_of, "next_action": "admit the follow-up without reuse_of"})
+        if auto_release:
+            refuse_released_reuse(matches[0].get("placement"), reuse_of)
         effective_route = prior["route_decision"].get("effective", {})
         if any(effective_route.get(key) in (None, "unknown")
                or requested[key] != effective_route[key] for key in ("agent", "model", "effort")):

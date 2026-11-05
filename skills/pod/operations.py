@@ -1249,12 +1249,26 @@ def _recover_pending(project: Path, objective: str, owner: str, admission_id: st
         terminal = previous["native_binding"]["terminalHandle"] if previous else None
         if not isinstance(terminal, str) or not terminal:
             raise PodError("reuse_unavailable", "Pending terminal reuse lost its binding")
+    from .orca import features_of
+    advertised = features_of(capability)["capabilities"]
+    if admission["reuse_of"] and advertised.get("worker_auto_release") is True:
+        # R214: the prior worker may have been released since the first start; read it fresh before any replay.
+        from .ledger import refuse_released_reuse
+        prior = _assignment_evidence(native_port.show_worker(previous["native_binding"]["dispatchId"]), previous)
+        refuse_released_reuse(prior["placement"], admission["reuse_of"], request_uuid=request_uuid)
+    keep_open = _keep_open_flag(admission)
+    if keep_open and advertised.get("worker_keep_open") is not True:
+        # R214: the recorded intent is not current support; replay with the unchanged argv and record that.
+        keep_open = {}
+        admission = update_admission(project, objective, owner=owner, admission_id=admission_id,
+                                     update=lambda row: row.update(keep_open="not_advertised"),
+                                     expected_runtime=admission["runtime"])
     receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
                                        run=admission["run_id"], task=admission["task_id"],
                                        owner=owner, route=admission["request"], worktree=worktree,
                                        retry_request=request_uuid, terminal=terminal,
                                        **({"retry_of": parent} if parent is not None else {}),
-                                       **_keep_open_flag(admission))
+                                       **keep_open)
     row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
                                    receipt=receipt, request_uuid=request_uuid)
     if row is None:

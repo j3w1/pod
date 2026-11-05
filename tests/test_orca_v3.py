@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 from pod import orca, wake
 from pod.errors import PodError
-from pod.ledger import read
+from pod.ledger import read, update_admission
+from pod.operations import recover_admission
 from pod.operations import OrcaPort
 from pod.orca import V3_CAPABILITY_KEYS, mailbox_check, mutate_command, orchestration_features
 from pod.worker_tabs import project as tab_project
@@ -136,6 +137,21 @@ class WakeDrainTests(unittest.TestCase):
             self.arm(run_fn=bound("run_newer"), show_fn=other)
         self.assertEqual(caught.exception.code, "wake_run_not_bound")
         self.assertEqual(len(self.mail.calls), 1)
+
+    def test_a_partial_capability_set_never_accepts_a_retained_run(self):
+        show = lambda run: {"run": run, "coordinator_handle": "term_c", "consumer_generation": 2}
+        for advertised in ([V3_CAPABILITY_KEYS["retained_run_bindings"]], V3_ADVERTISED[:-1]):
+            partial = orchestration_features(advertised)
+            self.assertEqual(partial["mode"], "pre_v3")
+            self.assertTrue(partial["capabilities"]["retained_run_bindings"])
+            for pending in (True, False):
+                with self.subTest(advertised=len(advertised), pending=pending):
+                    if pending:
+                        self.mail.send()
+                    with self.assertRaises(PodError) as caught:
+                        self.arm(features=partial, run_fn=bound("run_newer"), show_fn=show, timeout_ms=5)
+                    self.assertEqual(caught.exception.code, "wake_run_not_bound")
+        self.assertEqual(self.mail.calls, [])
 
 
 class PreV3ArgvTests(unittest.TestCase):
@@ -403,6 +419,50 @@ class AdmissionKeepOpenTests(unittest.TestCase):
         reused = self.admit(task="task2", reuse_of=prior["admission_id"])
         self.assertEqual(reused["status"], "bound")
         self.assertEqual(self.port.starts[-1]["terminal"], prior["native_binding"]["terminalHandle"])
+
+    def pending(self, admission):
+        """The start's native effect is unknown and Orca reports its request pending, so recovery replays it."""
+        update_admission(self.project, "objective", owner="owner", admission_id=admission["admission_id"],
+                         update=lambda row: row.update(state="unresolved", native_binding=None))
+        self.port.state = "pending"
+        return lambda: recover_admission(self.project, "objective", owner="owner",
+                                         admission_id=admission["admission_id"], worktree="current", port=self.port)
+
+    def test_pending_reuse_replay_is_refused_once_the_prior_worker_is_released(self):
+        self.use(V3)
+        prior = self.settled_prior({"state": "owned", "releaseState": "unreleased",
+                                    "autoReleaseAt": "2026-11-05T00:02:00Z"})
+        child = self.admit(task="task2", reuse_of=prior["admission_id"])["admission"]
+        recover = self.pending(child)
+        self.port.workers["dispatch-1"]["facts"] = {"resource": {"state": "released", "releaseState": "released"}}
+        before, starts = read(self.project, "objective"), list(self.port.starts)
+        with self.assertRaises(PodError) as caught:
+            recover()
+        self.assertEqual(caught.exception.code, "reuse_released")
+        self.assertEqual(caught.exception.detail["request_uuid"], before["admissions"][child["admission_id"]]["request_uuid"])
+        self.assertIn("request-show", caught.exception.detail["next_action"])
+        self.assertEqual((self.port.starts, read(self.project, "objective")), (starts, before))
+        # Still kept open: the same pending request replays onto its terminal.
+        self.port.workers["dispatch-1"]["facts"] = {"resource": {"state": "retained", "releaseState": "retained"}}
+        self.assertEqual(recover()["status"], "bound")
+        self.assertEqual(self.port.starts[-1]["terminal"], prior["native_binding"]["terminalHandle"])
+
+    def test_keep_open_replay_follows_the_current_capability_snapshot(self):
+        self.use(V3)
+        admission = self.admit(keep_open=True)["admission"]
+        recover = self.pending(admission)
+        self.port.features = PRE_V3
+        result = recover()
+        self.assertEqual(result["status"], "bound")
+        self.assertEqual((self.port.starts[-1]["keep_open"], self.port.starts[-1]["retry_request"] is not None),
+                         (False, True))
+        self.assertEqual(read(self.project, "objective")["admissions"][admission["admission_id"]]["keep_open"],
+                         "not_advertised")
+        # With keep-open still advertised the replay keeps the flag.
+        self.port.features = V3
+        again = self.admit(task="task2", keep_open=True)["admission"]
+        self.pending(again)()
+        self.assertTrue(self.port.starts[-1]["keep_open"])
 
     def test_a_released_prior_on_pre_v3_keeps_todays_reuse_path(self):
         self.use(PRE_V3)
