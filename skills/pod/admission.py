@@ -1104,6 +1104,12 @@ def _host_exit_requests(ids, hosts: dict) -> list:
             for index in range(0, len(group), process_exit.K)]
 
 
+def _host_exit_rounds(plan: list) -> list:
+    """The first request alone (pod#219), then the rest in plan order, at most IN_FLIGHT per round (pod#227)."""
+    return [plan[:1], *(plan[index:index + process_exit.IN_FLIGHT]
+                        for index in range(1, len(plan), process_exit.IN_FLIGHT))] if plan else []
+
+
 def _host_exit_prefetch(discovery, budget, project: Path) -> None:
     """R212: ask the host verifier, before the end fence, about each query's own candidates; decide per query.
 
@@ -1167,7 +1173,7 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
                 asked |= wanted
     plan = _host_exit_requests(asked, hosts) if command else []
     answers = {}
-    stopped = None  # the first request's transport or contract fault, which every candidate not asked holds with
+    stopped = None  # the stopping round's first transport or contract fault, which every candidate not asked holds with
     if not command:
         answers = {dispatch: (process_exit.UNAVAILABLE, None, None) for dispatch in asked}
     elif plan:
@@ -1180,13 +1186,12 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
         stamps = [discovery.finished_at.get(name) for name in ("fleet", "terminals")]
         native = (max(stamps) - discovery.started) if None not in stamps and discovery.started is not None else 0.0
         reserve = max(process_exit.RESERVE_S, process_exit.RESERVE_SCALE * native)
-        sent = []
-        # The first request in plan order runs alone; the rest start together only after it answered without a
-        # transport or contract fault, and only under the same deadline test (pod#219).
-        for start, end in ((0, 1), (1, len(plan))):
-            group = plan[start:end]
-            if not group:
-                break
+        sent, start = [], 0
+        # The first request in plan order runs alone; the rest follow in rounds of at most IN_FLIGHT, each starting
+        # only after every request of the previous round answered, under the same deadline test, and only while no
+        # request has met a transport or contract fault (pod#219, pod#227). A fault ends the call's requests after its
+        # own round, whose other requests were already in flight and keep their own outcomes.
+        for group in _host_exit_rounds(plan):
             if budget.remaining() < process_exit.TIMEOUT_S + reserve:
                 answers.update({dispatch: (process_exit.DEADLINE, None, None) for _, ids in plan[start:] for dispatch in ids})
                 break
@@ -1204,16 +1209,18 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
                 facts = ({key: verdict[key] for key in process_exit.FACT_FIELDS} if code is None else None)
                 for dispatch in ids:
                     answers[dispatch] = (code, entries.get(dispatch), facts)
-                if start == 0 and code in process_exit.STOPPING:
-                    stopped = code
+                if stopped is None and code in process_exit.STOPPING:
+                    stopped = code  # the first in plan order
+            start += len(group)
             if stopped is not None:
                 break
         discovery.host_exit_summary.update(requests=len(sent), asked=sum(len(ids) for _, ids in sent))
     counted, not_asked = set(), set()
     for slot in asking:
         covered = all(dispatch in answers and answers[dispatch][0] is None for dispatch in slot.candidates)
-        # After a stop, a candidate not asked holds with the first fault, as its single query meets that fault on its
-        # own first request; only a set too large to be asked alone keeps `host_exit_call_limit`, as its single query.
+        # After a stop, in any round, a candidate not asked holds with the stopping fault, as its single query meets a
+        # fault that does not depend on the ids on its own first request; only a set too large to be asked alone keeps
+        # `host_exit_call_limit`, as its single query.
         unasked = (stopped if stopped is not None
                    and len(_host_exit_requests(slot.candidates, hosts)) <= process_exit.R else process_exit.CALL_LIMIT)
         for dispatch, facts in slot.candidates.items():

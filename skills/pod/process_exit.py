@@ -20,10 +20,19 @@ from .errors import PodError
 from .util import normalize_timestamp
 
 ACTION = "process_exit"
-# Ids per request. The largest valid verdict for 24 ids, every string at its bound and every count at 2^31-1, is
-# 7,393 bytes compact and 11,845 bytes indented by four, inside the 16 KiB transport bound.
-K = 24
-R = 4  # requests per admission call, so at most R * K ids
+# Ids per request, from the host verifier's measured bound. Its per-reference lookups share one window per request, so
+# the trailing sorted references of a request can be cut and answer `known: false`, always fail-closed: live, requests
+# of 16 and 24 ids lost their last 9 and 13, while one of 8 at most rarely loses its last. The largest valid verdict
+# for 8 ids, every string at its bound and every count at 2^31-1, is 2,769 bytes compact and 4,293 bytes indented by
+# four; the wire contract's 24 ids (7,393 and 11,845 bytes) also fit the 16 KiB transport bound.
+K = 8
+R = 12  # requests per admission call, so at most R * K = 96 ids
+# The verifier's concurrent-request allowance: after the first request, which runs alone, at most this many requests
+# are in flight at once, in rounds that each start only when every request of the previous round has answered.
+# Concurrent requests slow each other's bounded lookups, and the only live sample of three at once answered
+# unverified. Raise it to 3 only after an installed observation of three 8-id requests at once that all verified, and
+# never above 3.
+IN_FLIGHT = 2
 TIMEOUT_S = 3.0  # one request's whole invocation; the other verifier actions keep relay.TIMEOUT_S
 # The work left after the requests (projection, recheck and a batch's end fence) measured 3.6 s for a single query and
 # 3.9 s for a batch over 2,939 Dispatches. The call's own discovery read time scales the reserve as the fleet grows.
@@ -47,8 +56,8 @@ FAILED, TIMEOUT, MALFORMED = "host_exit_failed", "host_exit_timeout", "host_exit
 MISMATCH, UNVERIFIED = "host_exit_mismatch", "host_exit_unverified"
 FOREIGN_HOST, FOREIGN_RUNTIME, STALE = "host_exit_foreign_host", "host_exit_foreign_runtime", "host_exit_stale"
 # Transport and contract faults: the verifier did not answer this action at all, whatever ids it was given, so the
-# call starts no further request (pod#219). The other request-level codes are answers under the contract that depend
-# on the group's host or the request's own time, and never stop a call.
+# call starts no further round (pod#219, pod#227). The other request-level codes are answers under the contract that
+# depend on the group's host or the request's own time, and never stop a call.
 STOPPING = frozenset({FAILED, TIMEOUT, MALFORMED, MISMATCH})
 # Entry-level codes: only that id holds.
 HOST_UNKNOWN, IDENTITY_MISMATCH = "host_exit_host_unknown", "host_exit_identity_mismatch"

@@ -939,12 +939,12 @@ transport as `local_append`: the personal `authorization_verifier` argv (never p
 16 KiB of stdout, process-group kill, stderr discarded, duplicate keys rejected and raw output never in diagnostics.
 Its whole invocation is bounded by 3 seconds, a constant of this action only; every other action keeps 5 seconds.
 It is a read of the host's own process table, not consent: there is no receipt and no write. No verifier configured
-means nothing is asked. Within one call the first request runs alone and the others start together after it; a
-transport or contract fault on the first starts no further request (R212).
+means nothing is asked. Within one call the first request runs alone and the others follow in rounds of at most two
+in flight; a transport or contract fault starts no further round (R212).
 
 The request has exactly `schema` (`pod-relay-verification/v1`), `action` (`process_exit`) and `references`: 1 to 24
-unique, sorted Dispatch ids, each matching `[A-Za-z0-9._:-]{1,64}`. Pod sends no runtime, host, terminal, Run or
-expectation, so the host has nothing to echo.
+unique, sorted Dispatch ids, each matching `[A-Za-z0-9._:-]{1,64}`; admission sends at most 8 (R212). Pod sends no
+runtime, host, terminal, Run or expectation, so the host has nothing to echo.
 
 The verdict has exactly these fields, with no wrapper:
 
@@ -972,8 +972,8 @@ With `known: false` these four are `null`. `absent` requires `carriers` 0, `pres
 
 The verifier is a trusted, read-only lookup. It resolves each Dispatch from its own records, never from Pod, and
 checks at least the agent terminal handle in process environments. With every string at its bound and every count at
-2^31−1, a 24-entry verdict is 7,393 bytes compact and 11,845 bytes indented by four; real values are a fraction of
-that. R212 defines the checks, the hold codes and how admission uses a verdict.
+2^31−1, a 24-entry verdict is 7,393 bytes compact and 11,845 bytes indented by four, and an 8-entry one 2,769 and
+4,293; real values are a fraction of that. R212 defines the checks, the hold codes and how admission uses a verdict.
 
 ### Recorded-question status contract
 
