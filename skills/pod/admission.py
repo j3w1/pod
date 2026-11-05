@@ -2660,8 +2660,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         # never hidden behind a claim the result leaves out (pod#237).
         selection = {"worktree": physical(worktree) if worktree else None,
                      "branch": branch, "target": target, "effects": effects or []}
-        natively_claimed = {row["dispatch"] for row in result["claims"] if "native_terminal" in row and row.get("dispatch")
-                            and relevant(row, selection, context["repo_key"])}
+        native_writers = [row for row in result["claims"] if "native_terminal" in row and row.get("dispatch")]
+        natively_shown = {row["dispatch"] for row in native_writers}
+        natively_claimed = {row["dispatch"] for row in native_writers if relevant(row, selection, context["repo_key"])}
         for dispatch in fleet_facts:
             # Each owning record accounts for its own admission: another record's consumed binding of the same
             # Dispatch never discharges it. The owners are read whatever the Dispatch's path holds today; which
@@ -2686,6 +2687,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             return bool(location and workspace(location, places)[1]) or not (location and elsewhere(location))
         for dispatch, held, repo_key in unfinished:
             if dispatch in fleet_facts and dispatch not in natively_claimed and held_here(repo_key, held["worktree"]):
+                if dispatch in natively_shown and not relevant(held, selection, context["repo_key"]):
+                    continue  # its native writer, left out as well, already counts it among the unrelated claims
                 claim(held)  # `exited`: the record holds the placement it still owes, whatever process state remains
         from .retirement import _exited
         for terminal in terminals["terminals"]:

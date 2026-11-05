@@ -620,21 +620,24 @@ class CountingTests(CountingCase):
 class RepresentationTests(CountingCase):
     """A904: one representation per query. Over each placement shape, with every verifier mode, a native writer claim
     in a query's own result stands for the Dispatch and the owed hold is not repeated; one that relevance leaves out,
-    or a row with no claim, leaves the hold to stand. The unfiltered query shows exactly one of the two, and a query
-    naming the recorded worktree or branch is never read free."""
+    or a row with no claim, leaves the hold to stand. The unfiltered query shows exactly one of the two, a query
+    naming the recorded worktree or branch is never read free, and a query of another branch counts the Dispatch
+    once among its unrelated claims, as the unfiltered query shows it once."""
 
     def represented(self, shape):
         shape()
         for mode in self.MODES:
             with self.subTest(mode):
-                queries = [{}, {"branch": BRANCH}, {"worktree": str(self.worker_path)}]
-                unfiltered, *named = self.read(mode, queries, singles=False)
-                for result in (unfiltered, *named):
+                queries = [{}, {"branch": BRANCH}, {"worktree": str(self.worker_path)}, {"branch": "other"}]
+                unfiltered, *named, other = self.read(mode, queries, singles=False)
+                for result in (unfiltered, *named, other):
                     self.assertFalse(self.native_claims(result) and self.holds(result), result["claims"])
                 self.assertEqual(len(self.native_claims(unfiltered)) + len(self.holds(unfiltered)), 1,
                                  unfiltered["claims"])
                 for result in named:
                     self.assertNotEqual(result["status"], "observed", result["scope"]["selection"])
+                # Another branch's query leaves every claim out, the Dispatch's once, as the unfiltered query shows it.
+                self.assertEqual((other["claims"], other["unrelated_claims"]), ([], len(unfiltered["claims"])))
 
     def test_a_worktree_on_its_recorded_branch(self):
         self.represented(self.on_its_branch)
