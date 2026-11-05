@@ -11351,7 +11351,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_process_exit.SizeTests.test_the_largest_valid_verdict_indented_by_four_is_accepted",
+        "tests.test_process_exit.SizeTests.test_the_largest_valid_verdicts_indented_by_four_are_accepted",
         "tests.test_process_exit.SizeTests.test_a_verdict_over_the_bound_fails_closed"
       ],
       "status": "NOT_RUN"
@@ -11413,7 +11413,7 @@
         "tests.test_admission_host_exit_stop.SequenceTests.test_the_rest_start_together_only_after_the_first_returned",
         "tests.test_admission_host_exit_stop.SequenceTests.test_the_rest_hold_the_deadline_when_the_first_request_spent_it",
         "tests.test_admission_host_exit_stop.SequenceTests.test_a_quick_first_answer_leaves_the_rest_their_own_bound",
-        "tests.test_admission_host_exit_stop.CountTests.test_a_failing_verifier_receives_one_request_and_a_correct_one_four"
+        "tests.test_admission_host_exit_stop.CountTests.test_a_failing_verifier_receives_one_request_and_a_correct_one_fourteen"
       ],
       "status": "NOT_RUN"
     },
@@ -11797,6 +11797,46 @@
         "live_native"
       ],
       "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A899",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.RoundTests.test_fourteen_requests_run_one_then_rounds_of_at_most_two",
+        "tests.test_admission_host_exit_stop.RoundTests.test_a_correct_verifier_answers_each_query_as_its_single_query",
+        "tests.test_admission_host_exit_stop.RoundTests.test_a_failing_verifier_answers_each_query_as_its_single_query",
+        "tests.test_admission_host_exit_stop.RoundTests.test_an_unverified_verifier_answers_each_query_as_its_single_query"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A900",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.RoundDeadlineTests.test_a_thirty_second_call_reaches_every_round",
+        "tests.test_admission_host_exit_stop.RoundDeadlineTests.test_a_short_deadline_stops_the_later_rounds"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A901",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.RoundFaultTests.test_a_fault_in_a_later_round_starts_no_further_round",
+        "tests.test_admission_host_exit_stop.RoundFaultTests.test_two_faults_in_one_round_stop_with_the_first_in_plan_order",
+        "tests.test_admission_host_exit_stop.RoundFaultTests.test_an_answer_under_the_contract_in_a_later_round_never_stops",
+        "tests.test_admission_host_exit_stop.RoundBatchTests.test_a_fault_in_the_fifth_round_leaves_the_query_answered_before_it_counted"
+      ],
       "status": "NOT_RUN"
     }
   ],

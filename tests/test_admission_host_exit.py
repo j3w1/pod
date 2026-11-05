@@ -1,6 +1,6 @@
 """R212: admission asks the host verifier, at read time and before the end fence, about settled local Dispatches Orca
-cannot observe, and counts one exited only on that call's own verdict (A847-A859; the stop after a first fault, A865-A867,
-is in test_admission_host_exit_stop)."""
+cannot observe, and counts one exited only on that call's own verdict (A847-A859; the rounds and the stop after a fault,
+A865-A867 and A899-A901, are in test_admission_host_exit_stop)."""
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -358,7 +358,7 @@ class BatchEquivalenceTests(VerifierMixin, Rows, batch.FencedCase):
         singles, answer = self.calls(self.a, self.b)
         self.assert_equal_to_singles(singles, answer)
         self.assertEqual(sum(row["counted"] for row in answer["responses"][0]["result"]["host_exits"]), 32)
-        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 2, "asked": 33, "counted": 33})
+        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 5, "asked": 33, "counted": 33})  # 7 ids each
         self.assertTrue(answer["native_fence"]["stable"])
         self.assertEqual(answer["native_fence"]["host_exit_dispatches"], sorted(row["dispatchId"] for row in self.rows[123:]))
 

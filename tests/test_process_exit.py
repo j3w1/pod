@@ -174,27 +174,39 @@ class TransportTests(VerifierMixin, KernelCase):
 
 
 class SizeTests(VerifierMixin, KernelCase):
-    """A858: K is sized so the largest valid verdict fits the unchanged 16 KiB transport bound."""
+    """A858: the largest valid verdict for K ids, and for the wire contract's 24, fits the unchanged 16 KiB transport
+    bound."""
+
+    SIZES = {7: 3821, 24: 11845}  # ids: the largest verdict's bytes indented by four, with its newline
 
     def setUp(self):
         super().setUp()
         self.setup_verifier(configure=False)
-        self.ids = sorted("d" * 60 + f"{index:04d}" for index in range(process_exit.K))
-        self.answer(entries={reference: {"state": "present", "carriers": 2 ** 31 - 1, "terminal_handle": "h" * 64,
-                                         "checked": list(process_exit.CHECKED)} for reference in self.ids},
-                    host="o" * 64, runtime="r" * 64, method="m" * 128, processes=2 ** 31 - 1, indent=4,
-                    observed_at=datetime.now(timezone.utc).isoformat())
 
-    def test_the_largest_valid_verdict_indented_by_four_is_accepted(self):
-        answer = process_exit.ask(self.command, self.ids)
-        self.assertIsNone(answer["code"])
-        largest = dict(verdict(*(entry(reference, "present", carriers=2 ** 31 - 1, terminal_handle="h" * 64,
-                                       checked=list(process_exit.CHECKED)) for reference in self.ids),
-                               host="o" * 64, runtime="r" * 64, method="m" * 128, processes=2 ** 31 - 1,
-                               observed_at="2026-11-02T09:00:00.000000+00:00"))
-        self.assertLessEqual(len((json.dumps(largest, indent=4) + "\n").encode()), 11845)
+    def largest(self, count, indent=4):
+        """The largest valid answer for `count` ids, every string at its bound and every count at 2^31-1."""
+        ids = sorted("d" * 60 + f"{index:04d}" for index in range(count))
+        self.answer(entries={reference: {"state": "present", "carriers": 2 ** 31 - 1, "terminal_handle": "h" * 64,
+                                         "checked": list(process_exit.CHECKED)} for reference in ids},
+                    host="o" * 64, runtime="r" * 64, method="m" * 128, processes=2 ** 31 - 1, indent=indent,
+                    observed_at=datetime.now(timezone.utc).isoformat())
+        return ids
+
+    def test_the_largest_valid_verdicts_indented_by_four_are_accepted(self):
+        self.assertEqual(process_exit.K, 7)
+        for count, size in self.SIZES.items():
+            with self.subTest(ids=count):
+                ids = self.largest(count)
+                self.assertIsNone(process_exit.ask(self.command, ids)["code"])
+                largest = dict(verdict(*(entry(reference, "present", carriers=2 ** 31 - 1, terminal_handle="h" * 64,
+                                               checked=list(process_exit.CHECKED)) for reference in ids),
+                                       host="o" * 64, runtime="r" * 64, method="m" * 128, processes=2 ** 31 - 1,
+                                       observed_at="2026-11-02T09:00:00.000000+00:00"))
+                self.assertEqual(len((json.dumps(largest, indent=4) + "\n").encode()), size)
+                self.assertLessEqual(size, relay.MAX_VERDICT)
 
     def test_a_verdict_over_the_bound_fails_closed(self):
-        control = json.loads(self.control.read_text())
-        self.answer(**{**control, "indent": 64})
-        self.assertEqual(process_exit.ask(self.command, self.ids)["code"], "host_exit_malformed")
+        for count in self.SIZES:
+            with self.subTest(ids=count):
+                ids = self.largest(count, indent=64)
+                self.assertEqual(process_exit.ask(self.command, ids)["code"], "host_exit_malformed")
