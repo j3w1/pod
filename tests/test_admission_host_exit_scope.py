@@ -514,12 +514,34 @@ class OwedHoldTests(VerifierMixin, unconsumed.UnconsumedReportCase):
                       [(row["code"], row["record"]) for row in result["unknowns"]])
 
     def test_an_owner_left_changed_is_read_as_its_newer_bytes(self):
-        """The control: claims-only bytes that stay are the record's current claims (R207), so nothing changed."""
+        """The control: claims-only bytes that stay are the record's current claims (R207), so the query is complete;
+        but a claims read of a later generation than its attribution read never qualifies a census (R213, A885)."""
         _, schedule = self.changed_during_the_judgment(restore=False)
         with schedule:
             result = self.read()
         self.assertEqual((result["status"], result["complete"], result["claims"], result["unknowns"]),
                          ("observed", True, [], []))
+        self.assertFalse(result["record_census"]["complete"])
+
+    def test_an_unchanged_owner_the_judgment_read_is_bound_in_a_true_census(self):
+        """A same-generation, complete owner read that leaves the row out qualifies: the census stays true and binds
+        that read as the projection's own consulted reads are bound."""
+        self.foreign(terminal="d1-terminal", placement={"path": str(self.worker_path), "branch": "other",
+                                                        "repo_key": self.place["repo_key"]})
+        path, raw = self.raw()
+        raw["checkpoint"]["native_refs"] = []
+        self.save(path, raw)
+        git("-C", str(self.project), "worktree", "remove", "--force", str(self.worker_path))
+        git("init", "-q", "-b", "reused", str(self.worker_path))
+        bound, real = [], admission._RecordCensus.witness
+        def witness(census, result, budget, journals, consulted, policies):
+            bound.append(set(consulted))
+            return real(census, result, budget, journals, consulted, policies)
+        with patch.object(admission._RecordCensus, "witness", witness):
+            result = self.read()
+        self.assertEqual((result["status"], result["complete"], result.get("host_exits")), ("observed", True, None))
+        self.assertTrue(result["record_census"]["complete"])
+        self.assertIn(base.objective_root(self.root / "foreign-repository", "foreign"), bound[0])
 
     def test_only_a_query_whose_judgment_read_the_owner_depends_on_it(self):
         """In one batch, the branch query's judgment read the owner; the unfiltered query takes every row natively

@@ -2099,6 +2099,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         "record": row["record_id"], "condition": "Establish the repository namespace of this admitted intrinsic effect"})
 
     consulted, proof_outcome = [], None
+    selection_reads = []  # R212: records this query's candidate judgment read, beyond those it consulted
     try:
         budget.check()
         if root.is_symlink() or any(parent.is_symlink() for parent in root.parents):
@@ -2757,9 +2758,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 unknown(None, "effect_policy_changed", fact="effect_mapping")
         # R212: every record this query's candidate judgment read is rechecked with its consulted sources, so a change
         # after that read is this query's `record_changed`, never a hold its judgment silently dropped.
-        judged = [entry for entry in (host_slot.dependencies.values() if host_slot is not None else ())
-                  if entry not in consulted]
-        for directory, generation in [*consulted, *judged]:
+        selection_reads = [entry for entry in (host_slot.dependencies.values() if host_slot is not None else ())
+                           if entry not in consulted]
+        for directory, generation in [*consulted, *selection_reads]:
             budget.check()
             if _after_context(directory / "context.json") != generation:
                 unknown(directory.name, "record_changed")
@@ -2880,7 +2881,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     result = public_decisions(result)
     journals = {directory.name: journal_id for directory, journal_id, _ in effect_sources}
     journals.update({directory.name: journal_id for directory, _, journal_id, *_ in sources})
-    result["record_census"] = census.witness(result, budget, journals, {directory for directory, _ in consulted},
+    # The census qualifies those reads as strictly as consulted ones (R213): a claims read from a later generation than
+    # the attribution read, or an incomplete one, leaves it false even where the query is complete under R207.
+    result["record_census"] = census.witness(result, budget, journals,
+                                             {directory for directory, _ in [*consulted, *selection_reads]},
                                              {path: policy["revision"] for path, policy in policies.items()})
     return result
 
