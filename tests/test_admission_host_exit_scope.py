@@ -484,12 +484,21 @@ class OwedHoldTests(VerifierMixin, unconsumed.UnconsumedReportCase):
 
     # R3 of the pod#227 review: every record the judgment reads is a recheck dependency of that query (R207, A869).
 
-    def changed_during_the_judgment(self, restore=True):
+    def changed_during_the_judgment(self, restore=True, moved=False):
         """Another repository's owed admission placed here on BRANCH; the worker's old path is now another
-        repository's worktree, so no placement lookup reads that owner. While the host-exit judgment runs, the owner
-        holds claims-only bytes B placing it on another branch; `restore` puts its exact bytes A back afterwards."""
-        self.foreign_owned_removed()
-        git("init", "-q", "-b", "reused", str(self.worker_path))
+        repository's worktree, so no placement lookup reads that owner (the foreign-owner pass still does, as for
+        every settled row it skips, pod#237). With `moved`, the worktree is instead still registered here, on another
+        branch. While the host-exit judgment runs, the owner holds claims-only bytes B placing it on another branch;
+        `restore` puts its exact bytes A back afterwards."""
+        if moved:
+            self.foreign(terminal="d1-terminal")
+            context, raw = self.raw()
+            raw["checkpoint"]["native_refs"] = []
+            self.save(context, raw)
+            git("-C", str(self.worker_path), "checkout", "-q", "-b", "moved")
+        else:
+            self.foreign_owned_removed()
+            git("init", "-q", "-b", "reused", str(self.worker_path))
         path = base.objective_root(self.root / "foreign-repository", "foreign") / "context.json"
         original = path.read_bytes()
         changed = json.loads(original)
@@ -544,9 +553,11 @@ class OwedHoldTests(VerifierMixin, unconsumed.UnconsumedReportCase):
         self.assertIn(base.objective_root(self.root / "foreign-repository", "foreign"), bound[0])
 
     def test_only_a_query_whose_judgment_read_the_owner_depends_on_it(self):
-        """In one batch, the branch query's judgment read the owner; the unfiltered query takes every row natively
-        and read nothing. With nothing counted, only the branch query rechecks the owner."""
-        path, schedule = self.changed_during_the_judgment()
+        """In one batch, the branch query's judgment read the owner, and so did its foreign-owner pass, since its
+        result leaves out the native writer on the other branch (pod#237); the unfiltered query takes every row
+        natively, its result keeps that native writer, and it read nothing. With nothing counted, only the branch
+        query rechecks the owner."""
+        path, schedule = self.changed_during_the_judgment(moved=True)
         self.fake.mode = "fail"
         worker = stuck(self, "d1", path=self.worker_path, run="run", handle="d1-terminal")
         with schedule, patch("pod.admission._fleet",

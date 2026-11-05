@@ -119,6 +119,9 @@ class _RecordCensus:
         self.cohort = None
         self.finished = False
         self.sound = True
+        # Records whose evidence closure this query's own phase judgments consulted, directly or through a shared
+        # foreign-owner judgment it used. The call reads each closure once, but only these bind this query's witness.
+        self.phases = set()
 
     def attribution(self, directory, raw, generation):
         try:
@@ -179,7 +182,8 @@ class _RecordCensus:
                     record["journal_generation"] = journals[name]
                     if _after_journal(directory / "governor.json") != journals[name]:
                         return _no_census()
-                closure = discovery.done(("census-closure", str(directory)))
+                # Only a closure this query's own judgments consulted; another query's read in the call is not its.
+                closure = discovery.done(("census-closure", str(directory))) if name in self.phases else None
                 if closure is not None:
                     if (closure["identity"] is not None and ("unavailable" in closure["identity"]
                             or not stat.S_ISREG(closure["identity"]["mode"]))
@@ -877,12 +881,15 @@ TERMINAL_PHASES = ("closed", "retired", "continued")
 _SETTLED_WORKERS = (("succeeded", "completed"), ("failed", "failed"))
 
 
-def _record_phase(raw: dict, directory: Path | None) -> str:
+def _record_phase(raw: dict, directory: Path | None, consulted: set | None = None) -> str:
     """The phase `status --list` reads (R108): a readable R145 evidence closure closes an otherwise open record.
-    An unreadable evidence closure leaves the record open here, so admission stays fail-closed."""
+    An unreadable evidence closure leaves the record open here, so admission stays fail-closed. A record whose
+    closure is consulted is added to `consulted`, the asking query's census dependencies (R213)."""
     phase = _phase(raw)
     if phase != "open" or directory is None:
         return phase
+    if consulted is not None:
+        consulted.add(directory.name)
     closure = _shared(("evidence-closure", str(directory)), lambda: _phase_closure(directory))
     return "closed" if isinstance(closure, dict) and closure.get("status") == "recorded" else phase
 
@@ -1045,6 +1052,17 @@ def _coordinator(run: str, terminals: dict, budget) -> dict:
     return {"terminal": handle, "state": "live" if live else "unverified"}
 
 
+class _Owners(tuple):
+    """A shared foreign-owner judgment's `(directory, generation, outcome)` entries, and `closures`: the names of the
+    owner records whose evidence closure its phase reads consulted. Every query that uses the judgment, whichever
+    query first made it, takes those closures as its own census dependencies (R213)."""
+
+    def __new__(cls, entries, closures=()):
+        value = super().__new__(cls, entries)
+        value.closures = frozenset(closures)
+        return value
+
+
 class _HostExitSlot:
     """One query's R212 scope, registered at its record-pass yield, and what the call decided for its own candidates.
 
@@ -1060,8 +1078,10 @@ class _HostExitSlot:
         # What the records say about a row: the query's scope, this repository's owed-report holds by Dispatch, and
         # the shared readers of a Run's foreign owners and of whether a record naming a Run reads whole.
         self.scope, self.owed, self.owners, self.unreadable = scope, owed, owners, unreadable
-        # Every record the record clauses read for this query, by name: its recheck dependencies (R207).
+        # Every record the record clauses read for this query, by name: its recheck dependencies (R207), and the
+        # records whose evidence closure a foreign-owner judgment they used consulted: its census dependencies (R213).
         self.dependencies: dict = {}  # record name -> (directory, generation)
+        self.phases: set = set()
         self.candidates: dict = {}  # Dispatch -> {"host", "terminal", "run", "worktree"}
         self.decisions: dict = {}  # Dispatch -> {"counted", "code", "entry", "verdict"}
 
@@ -1149,6 +1169,7 @@ def _host_exit_recorded(slot: _HostExitSlot, shown: dict) -> bool:
         if any(_relevant(held, request, key, _overlap) for held in slot.owed.get(shown["dispatch"], ())):
             return True  # this repository's records, which the query's own change recheck already covers
         owners = slot.owners(shown["dispatch"], shown["run"])
+        slot.phases.update(getattr(owners, "closures", ()))
         for directory, generation, _ in owners:
             if generation is not None:
                 slot.dependencies.setdefault(directory.name, (directory, generation))
@@ -2131,7 +2152,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 try:
                     name = _membership(project, context, record, raw, known)
                 except PodError as exc:
-                    phase = _record_phase(raw, directory)
+                    phase = _record_phase(raw, directory, census.phases)
                     if (exc.code == "record_attribution_unknown" and phase in TERMINAL_PHASES
                             and listing._name(raw) != objective):
                         try:
@@ -2165,7 +2186,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     census.classify(directory, raw, "foreign")
                     continue
                 own_records.add(record)
-                phase = _record_phase(raw, directory)
+                phase = _record_phase(raw, directory, census.phases)
                 try:
                     rows = _admissions(raw, directory)
                 except PodError as exc:
@@ -2297,8 +2318,10 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             saw without a claim: `(directory, generation, outcome)` per record read, where `outcome` is a hold, a
             PodError, or None. Each owing admission accounts for itself, whatever another record says of the same
             Dispatch. Which repository its placement belongs to is the record's to say, never the directory now at
-            its path, so the owners are read whatever that path holds today. Judged once per call."""
-            found = []
+            its path, so the owners are read whatever that path holds today. Judged once per call, as `_Owners`,
+            which also names the owner records whose evidence closure this judgment consulted: a query that uses the
+            judgment depends on those closures (R213)."""
+            found, closures = [], set()
             for directory, generation in run_sources.get(run, []):
                 if directory.name in own_records:
                     continue  # this repository's own record: the record pass and rule T judge its admissions
@@ -2310,7 +2333,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     continue
                 owner_raw, rows = read
                 found.append((directory, generation, None))
-                if _record_phase(owner_raw, directory) == "retired":
+                if _record_phase(owner_raw, directory, closures) == "retired":
                     continue
                 for key, row in rows.items():
                     binding = row.get("native_binding") or {}
@@ -2322,7 +2345,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         # An owing admission whose placement cannot be read holds its Dispatch as an unknown.
                         found.append((directory, generation, PodError("admission_placement_invalid",
                                                                       "Accepted placement facts cannot be read")))
-            return tuple(found)
+            return _Owners(found, closures)
 
         def owners_of(dispatch, run):
             """The shared foreign-owner judgment of `dispatch` on `run`, read once per call (R185; R212 reads it too)."""
@@ -2417,7 +2440,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
 
         def foreign_holds(dispatch, run, path):
             """Apply the shared judgment to this query: holds, unknowns, and every read record rechecked (R185)."""
-            for directory, generation, outcome in owners_of(dispatch, run):
+            judged = owners_of(dispatch, run)
+            census.phases.update(getattr(judged, "closures", ()))  # the owner phases this query now depends on
+            for directory, generation, outcome in judged:
                 if generation is not None and directory.name not in owners_consulted:
                     consulted.append((directory, generation))  # rechecked with every other consulted source
                     owners_consulted.add(directory.name)
@@ -2455,7 +2480,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 and row.get("worktree") == ownership.get("worktree") and row.get("live") is True for row in observations)
             ownership["owner_identity_matches"] = matches
             owners[ownership["record"]] = matches
-        workers, context_only = {}, {}
+        workers, context_only, skipped = {}, {}, {}
         for requested_run, native in native_groups:
             budget.check()
             if native.get("complete") is not True:
@@ -2598,6 +2623,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                 fact_scope={"repo_keys": sorted(key for key in run_repo_keys if key), "run": run},
                                 reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
                                                 "condition": "Resolve the native resource's repository and worktree ownership"})
+                    # No claim here, live or not, but another repository's owed admission may have placed it here:
+                    # its owners are still read, so the record holds that placement (pod#237).
+                    skipped[shown["dispatch"]] = shown
                     continue
                 workers[shown["dispatch"]] = shown
                 if shown["liveness"] == "exited" and not native_effects:
@@ -2648,17 +2676,23 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             or shown["terminal"] != binding["terminalHandle"]):
                         unknown(record, "native_identity_unverified", objective=name, admission=key)
         # A bound admission whose report is still owed keeps its placement held by its record once the native side
-        # settles or skips its Dispatch (exited, rule S, R212 or a settled context-only row): consuming the report
-        # reads the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown,
-        # and a native writer claim for the Dispatch already holds it.
-        natively_claimed = {row["dispatch"] for row in result["claims"] if "native_terminal" in row and row.get("dispatch")}
+        # settles, skips or leaves out its Dispatch (exited, rule S, R212, a settled context-only row, a row skipped
+        # outside the repository, or a native writer this query's relevance filters out): consuming the report reads
+        # the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown. Only a
+        # native writer claim in this query's own result already holds it, so the hold is never shown twice and
+        # never hidden behind a claim the result leaves out (pod#237).
+        selection = {"worktree": physical(worktree) if worktree else None,
+                     "branch": branch, "target": target, "effects": effects or []}
+        native_writers = [row for row in result["claims"] if "native_terminal" in row and row.get("dispatch")]
+        natively_shown = {row["dispatch"] for row in native_writers}
+        natively_claimed = {row["dispatch"] for row in native_writers if relevant(row, selection, context["repo_key"])}
         for dispatch in fleet_facts:
             # Each owning record accounts for its own admission: another record's consumed binding of the same
-            # Dispatch never discharges it. Only a Dispatch placed provably in another repository's registered
-            # worktree is left unread; a missing, removed or unproved location reads its Run's recorded owners.
+            # Dispatch never discharges it. The owners are read whatever the Dispatch's path holds today; which
+            # repository an owed placement belongs to is the record's to say (`held_here`).
             if dispatch in natively_claimed:
                 continue
-            shown = workers.get(dispatch)
+            shown = workers.get(dispatch, skipped.get(dispatch))
             if shown is None and dispatch in context_only:
                 try:
                     shown = _worker_fact(context_only[dispatch])
@@ -2676,7 +2710,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             return bool(location and workspace(location, places)[1]) or not (location and elsewhere(location))
         for dispatch, held, repo_key in unfinished:
             if dispatch in fleet_facts and dispatch not in natively_claimed and held_here(repo_key, held["worktree"]):
-                claim(held)  # `exited`: this call's own reads settled the worker; its placement is still owed
+                if dispatch in natively_shown and not relevant(held, selection, context["repo_key"]):
+                    continue  # its native writer, left out as well, already counts it among the unrelated claims
+                claim(held)  # `exited`: the record holds the placement it still owes, whatever process state remains
         from .retirement import _exited
         for terminal in terminals["terminals"]:
             path = terminal.get("worktreePath") or listing._location(terminal.get("worktreeId"))
@@ -2760,6 +2796,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         # after that read is this query's `record_changed`, never a hold its judgment silently dropped.
         selection_reads = [entry for entry in (host_slot.dependencies.values() if host_slot is not None else ())
                            if entry not in consulted]
+        if host_slot is not None:
+            census.phases |= host_slot.phases
         for directory, generation in [*consulted, *selection_reads]:
             budget.check()
             if _after_context(directory / "context.json") != generation:
@@ -2773,7 +2811,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 after_journal = _journal(directory / "governor.json")[0]
                 after_rows = _admissions(after_raw, directory)
                 if (selected or _claim_identity(after_raw, after_rows) != current_id
-                        or _effect_identity(after_journal, open_objective=_record_phase(after_raw, directory) == "open") != effect_id):
+                        or _effect_identity(after_journal, open_objective=_record_phase(
+                            after_raw, directory, census.phases) == "open") != effect_id):
                     # The change holds what the record named before and what it names now, so a placement moved to
                     # the requested worktree or branch is never read as unrelated.
                     before_scope = record_scopes.get(directory.name, scope)
