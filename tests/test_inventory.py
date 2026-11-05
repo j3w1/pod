@@ -362,10 +362,14 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         clauses = ("Commission every review in collect mode, stated in its packet",
                    "no source or test edit, no rerun toward green, no fix and no new child",
                    "It does not stop at its first finding",
+                   "It covers its whole assigned scope, then",
                    "reports every finding in one report, with outcome `failed` when any finding is required",
+                   "Each finding gives its severity (`blocker` for a required P1, `major` for a required P2, "
+                   "`minor` for a minor finding, `info` for a nit), file and line",
                    "file and line, the concrete failing scenario, the defect class and a proposed fix",
                    "Invocation or harness errors go in `failures` or `uncertainty` as such, never as findings",
-                   "Only a safety event stops it at once",
+                   "Only a safety event stops it at once: a guard hit, an unexpected live or native effect, "
+                   "or any risk of changing the host.",
                    "run one fix round for everything found",
                    "affected-scope delta review of the same scope by the same reviewer")
         for clause in clauses:
