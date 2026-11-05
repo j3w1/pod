@@ -255,7 +255,9 @@ def _placement_evidence(result: dict, binding: dict, *, closed: bool = False) ->
     observation = observation if isinstance(observation, dict) and result.get("terminal") is None else {}
     # Only presentation facts: terminal previews and unrelated archive/endpoint data are not status.
     facts.update(
-        native_release={key: release[key] for key in ("state", "releaseState", "terminalState", "ownerDispatchId", "id")
+        # `autoReleaseAt` exists only on a runtime that releases finished workers itself (R214).
+        native_release={key: release[key] for key in ("state", "releaseState", "terminalState", "ownerDispatchId", "id",
+                                                      "autoReleaseAt")
                         if key in release} or None,
         native_stage=projection.get("stage") if isinstance(projection.get("stage"), dict) else None,
         native_liveness=projection.get("liveness") if isinstance(projection.get("liveness"), dict) else None,
@@ -300,7 +302,8 @@ class NativePort(Protocol):
                     assignments: tuple[dict, ...] = ()) -> dict: ...
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
                      worktree: str, retry_request: str | None = None,
-                     terminal: str | None = None, retry_of: str | None = None) -> dict: ...
+                     terminal: str | None = None, retry_of: str | None = None,
+                     keep_open: bool = False) -> dict: ...
     def request_show(self, request_uuid: str) -> dict: ...
     def find_worker(self, *, run: str, task: str) -> list[dict]: ...
     def show_worker(self, dispatch: str) -> dict: ...
@@ -382,7 +385,8 @@ class OrcaPort:
 
     def start_worker(self, *, run: str, task: str, owner: str, route: dict,
                      worktree: str = "current", retry_request: str | None = None,
-                     terminal: str | None = None, retry_of: str | None = None) -> dict:
+                     terminal: str | None = None, retry_of: str | None = None,
+                     keep_open: bool = False) -> dict:
         if retry_of is not None and terminal is not None:
             raise PodError("retry_reuse_conflict", "A native retry requires a fresh terminal")
         selector = worktree_selector(worktree)
@@ -396,6 +400,8 @@ class OrcaPort:
             argv += ["--agent", route["agent"], "--model", route["model"]]
             if route["effort"] != "native_default":
                 argv += ["--effort", route["effort"]]
+        if keep_open:
+            argv += ["--keep-open"]  # R214: only an admission that recorded keep-open as requested passes this.
         if retry_of is not None:
             argv += ["--retry-of", retry_of]
         if retry_request is not None:
@@ -1247,7 +1253,8 @@ def _recover_pending(project: Path, objective: str, owner: str, admission_id: st
                                        run=admission["run_id"], task=admission["task_id"],
                                        owner=owner, route=admission["request"], worktree=worktree,
                                        retry_request=request_uuid, terminal=terminal,
-                                       **({"retry_of": parent} if parent is not None else {}))
+                                       **({"retry_of": parent} if parent is not None else {}),
+                                       **_keep_open_flag(admission))
     row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
                                    receipt=receipt, request_uuid=request_uuid)
     if row is None:
@@ -1353,6 +1360,11 @@ def recover_admission(project: Path, objective: str, *, owner: str, admission_id
     return {"status": row["state"], "admission": row, "action": "inspect_after_absent"}
 
 
+def _keep_open_flag(admission: dict) -> dict:
+    """R214: the start flag only an admission that recorded keep-open as requested carries, on first start and replay."""
+    return {"keep_open": True} if admission.get("keep_open") == "requested" else {}
+
+
 def _launch_reserved(project: Path, objective: str, owner: str, admission_id: str,
                      admission: dict, native_port: NativePort, run: str, task: str,
                      proposed: dict, worktree: str, reuse_of: str | None) -> dict:
@@ -1371,7 +1383,8 @@ def _launch_reserved(project: Path, objective: str, owner: str, admission_id: st
         receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
                                            run=run, task=task, owner=owner, route=proposed,
                                            worktree=worktree, terminal=terminal,
-                                           **({"retry_of": parent} if parent is not None else {}))
+                                           **({"retry_of": parent} if parent is not None else {}),
+                                           **_keep_open_flag(read(project, objective)["admissions"][admission_id]))
         row = _request_conflict_result(project, objective, owner=owner, admission_id=admission_id,
                                        receipt=receipt, request_uuid=None)
         if row is None:
@@ -1399,15 +1412,21 @@ def guarded_start(project: Path, objective: str, *, owner: str, run: str, task: 
                   reuse_of: str | None = None, port: NativePort | None = None,
                   issue_port=None, accompanying: dict | None = None,
                   retry_of: str | None = None, retry_after: str | None = None,
-                  abandoned_reason: str | None = None) -> dict:
+                  abandoned_reason: str | None = None, keep_open: bool = False) -> dict:
     """One admission, then the delivery step: one safe automatic retry or the receiver's diagnosis (R2)."""
+    if type(keep_open) is not bool:
+        raise PodError("invalid_keep_open", "keep_open must be true or false")
     native_port = port or OrcaPort(project)
     arguments = dict(project=project, objective=objective, owner=owner, run=run, task=task,
                      plan_revision=plan_revision, frozen_packet=frozen_packet, worktree=worktree,
-                     port=native_port, issue_port=issue_port)
+                     port=native_port, issue_port=issue_port,
+                     **({"keep_open": True} if keep_open is True else {}))
     result = _guarded_start(**arguments, reuse_of=reuse_of, accompanying=accompanying, retry_of=retry_of,
                             retry_after=retry_after, abandoned_reason=abandoned_reason)
     row = result.get("admission")
+    if keep_open and isinstance(row, dict):
+        # R214: what Pod recorded for the keep-open intent; a repeated admission keeps its first record.
+        result = {**result, "keep_open": row.get("keep_open") or "not_recorded"}
     if abandoned_reason is not None or not isinstance(row, dict) or row.get("state") != "bound":
         return result
     from .delivery import follow_up
@@ -1421,7 +1440,7 @@ def _guarded_start(project: Path, objective: str, *, owner: str, run: str, task:
                    reuse_of: str | None = None, port: NativePort | None = None,
                    issue_port=None, accompanying: dict | None = None,
                    retry_of: str | None = None, retry_after: str | None = None,
-                   abandoned_reason: str | None = None) -> dict:
+                   abandoned_reason: str | None = None, keep_open: bool = False) -> dict:
     """Packet, recovery, issue, placement, serialized boundary, then one native start."""
     from .issue_revision import refuse_alternate
     refuse_alternate(accompanying)
@@ -1495,6 +1514,11 @@ def _guarded_start(project: Path, objective: str, *, owner: str, run: str, task:
     capability = native_port.capability()
     if placement is not None and placement["runtime"] != capability.get("runtime"):
         raise PodError("orca_runtime_changed", "Placement and launch capability belong to different runtimes")
+    from .orca import features_of
+    advertised = features_of(capability)["capabilities"]
+    # R214: a keep-open intent is recorded with what Orca could do with it; only `requested` adds the start flag.
+    keep_open_record = (("requested" if advertised.get("worker_keep_open") is True else "not_advertised")
+                        if keep_open else None)
     proposed = {key: value for key, value in body["route"].items() if key != "preference_revision"}
     admission = reserve(project, objective, owner=owner, admission_id=admission_id,
                         requested=proposed,
@@ -1507,6 +1531,8 @@ def _guarded_start(project: Path, objective: str, *, owner: str, run: str, task:
                         placement_binding=placement_binding, reuse_of=reuse_of, retry_of=retry_of,
                         retry_after=retry_after,
                         accompanying=accompanying, continuity_port=native_port,
+                        **({"keep_open": keep_open_record} if keep_open_record else {}),
+                        **({"auto_release": True} if advertised.get("worker_auto_release") is True else {}),
                         placement_naming=None if placement is None else
                         {"mode": placement.get("display_name_mode"), "main": placement.get("main")})
     if admission["existing"]:

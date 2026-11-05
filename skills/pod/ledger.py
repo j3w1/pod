@@ -119,13 +119,15 @@ def bound_assignments(state: dict | None, *, include_closed: bool = False) -> tu
                  and binding_valid(row.get("native_binding")))
 
 
+# R214: an admission that asked to keep its worker open records whether Orca advertised keep-open for it.
+KEEP_OPEN_RECORDS = ("requested", "not_advertised")
 _ADMISSION_FIELDS = {"schema", "state", "admission_id", "objective", "owner", "request",
                      "route_decision", "effective_evidence", "runtime", "request_uuid",
                      "run_id", "task_id", "plan_revision", "packet_id", "worktree", "reuse_of",
                      "native_binding", "recovery", "error", "failures", "created_at", "updated_at",
                      "serves", "role", "boundary", "map_revision", "candidate", "result",
                      "changed_paths", "boundary_exceeded", "disposition", "report", "binding",
-                     "admitted_seq", "display", "retry_of", "retry_after", "abandoned_accounting"}
+                     "admitted_seq", "display", "retry_of", "retry_after", "abandoned_accounting", "keep_open"}
 
 
 def _consumed_report(row: dict, runtimes: set[str], *, detail=True) -> dict | None:
@@ -164,7 +166,9 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
     if isinstance(row, dict) and row.get("schema") != ADMISSION_SCHEMA:
         raise PodError("state_unsupported",
                        f"Admission uses superseded schema {str(row.get('schema'))[:64]}; it is not converted")
-    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq", "display", "retry_of", "retry_after", "abandoned_accounting"}, name="admission")
+    value = exact(row, _ADMISSION_FIELDS, _ADMISSION_FIELDS - {"admitted_seq", "display", "retry_of", "retry_after", "abandoned_accounting", "keep_open"}, name="admission")
+    if "keep_open" in value and value["keep_open"] not in KEEP_OPEN_RECORDS:
+        raise PodError("state_unsupported", "Admission keep-open record is unsupported")
     if value["admission_id"] != key:
         raise PodError("state_unsupported", "Admission identity or schema is unsupported")
     if "admitted_seq" in value and (type(value["admitted_seq"]) is not int or value["admitted_seq"] < 1):
@@ -2759,9 +2763,20 @@ def _routing_context(project, state, body, task, native, moment):
                   "routing_role": role, "settlement": settlement}
 
 
+def _released(placement: object) -> bool:
+    """Whether the exact worker-show read already joined to this assignment shows its terminal released."""
+    if not isinstance(placement, dict):
+        return False
+    release = placement.get("native_release") or {}
+    ownership = placement.get("terminal_ownership") or {}
+    return ("released" in (release.get("state"), release.get("releaseState"), release.get("terminalState"),
+                           ownership.get("ownershipState"), ownership.get("releaseState"))
+            or placement.get("native_terminal_state") == "released")
+
+
 def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dict,
                    requested: dict, task_id: str, moment: datetime, projection: dict,
-                   failures: list, reuse_of: str | None, native: dict) -> dict:
+                   failures: list, reuse_of: str | None, native: dict, *, auto_release: bool = False) -> dict:
     from .config import load
     from .selection import validate_choice, worker_ceiling
     # The personal file is read after every other check under the objective lock.
@@ -2813,6 +2828,14 @@ def _reserve_route(project: Path, checkpoint_value: dict, body: dict, state: dic
         matches = [a for a in native["assignments"] if a.get("admission_id") == reuse_of]
         if len(matches) != 1 or matches[0].get("settled") is not True:
             raise PodError("reuse_unavailable", "Prior attempt has not settled natively. Next: read the exact Dispatch settlement before terminal reuse")
+        if auto_release and _released(matches[0].get("placement")):
+            # R214: Orca released the finished worker (automatically after worker_done unless it was kept open), so
+            # its terminal can no longer be reused; refuse before any route or native start.
+            raise PodError("reuse_released", "The prior worker's terminal was released, so it cannot be reused. "
+                           "Next: admit the follow-up without reuse_of on a fresh terminal; to reuse a worker later, "
+                           "admit it with keep_open or keep it open with `orca orchestration worker-keep-open` "
+                           "before its automatic release",
+                           {"reuse_of": reuse_of, "next_action": "admit the follow-up without reuse_of"})
         effective_route = prior["route_decision"].get("effective", {})
         if any(effective_route.get(key) in (None, "unknown")
                or requested[key] != effective_route[key] for key in ("agent", "model", "effort")):
@@ -2831,7 +2854,7 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
                     run_id: str, task_id: str, plan_revision: str, packet_id: str,
                     worktree: str, reuse_of: str | None, accompanying: dict | None,
                     placement_naming: dict | None = None, retry_of: str | None = None,
-                    retry_after: str | None = None) -> tuple[dict, dict]:
+                    retry_after: str | None = None, keep_open: str | None = None) -> tuple[dict, dict]:
     from . import __version__
     from .catalog import route_key
     from .obligations import admit, reserved_admission_shape
@@ -2881,6 +2904,8 @@ def _reserve_record(project: Path, objective: str, owner: str, admission_id: str
         row["recovery"]["retry_of_dispatch_id"] = state["admissions"][retry_of]["native_binding"]["dispatchId"]
     if retry_after is not None:
         row["retry_after"] = retry_after
+    if keep_open is not None:
+        row["keep_open"] = keep_open
     return row, new_map
 
 
@@ -2891,7 +2916,8 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
             reuse_of: str | None = None, accompanying: dict | None = None,
             now: datetime | None = None, continuity_port=None,
             placement_naming: dict | None = None, retry_of: str | None = None,
-            retry_after: str | None = None) -> dict:
+            retry_after: str | None = None, keep_open: str | None = None,
+            auto_release: bool = False) -> dict:
     """Final serialized admission: preference read is last, before writing the row.
 
     The served obligations become active in the same locked write that persists the
@@ -3052,12 +3078,13 @@ def reserve(project: Path, objective: str, *, owner: str, admission_id: str,
                                "differ from, or cannot be shown equal to, the retry parent's. Next: " + action, {"next_action": action})
         require_governance_current(project, map_state)
         snapshot = _reserve_route(project, checkpoint_value, body, state, requested, task_id,
-                                  moment, projection, failures, reuse_of, native)
+                                  moment, projection, failures, reuse_of, native, auto_release=auto_release)
         row, new_map = _reserve_record(
             project, objective, owner, admission_id, requested, snapshot, state, body,
             checkpoint_value, map_state,
             ctx, placement_binding, moment, native, run_id, task_id, plan_revision, packet_id,
-            worktree, reuse_of, accompanying, placement_naming, retry_of=retry_of, retry_after=retry_after)
+            worktree, reuse_of, accompanying, placement_naming, retry_of=retry_of, retry_after=retry_after,
+            keep_open=keep_open)
         state["owner"] = owner
         state["admissions"][admission_id] = row
         state["checkpoint"] = {**checkpoint_value, **new_map}

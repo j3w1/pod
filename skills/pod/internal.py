@@ -627,7 +627,8 @@ def _op_admission(request: dict) -> dict:
                          reuse_of=request.get("reuse_of"), retry_of=request.get("retry_of"),
                          retry_after=request.get("retry_after"),
                          abandoned_reason=request.get("abandoned_reason"),
-                         accompanying=request.get("map"))
+                         accompanying=request.get("map"),
+                         **({"keep_open": request["keep_open"]} if "keep_open" in request else {}))
     from .display import admission_output
     row = result["admission"]
     current = read(Path(request["project"]), request["objective"])

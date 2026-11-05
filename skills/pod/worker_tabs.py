@@ -39,6 +39,11 @@ def read_command(dispatch: str) -> list[str]:
     return ["orca", "orchestration", "worker-show", "--dispatch", dispatch, "--json"]
 
 
+def keep_open_command(dispatch: str) -> list[str]:
+    """R214: Orca's own keep-open step, relayed for the coordinator; Pod runs no lifecycle operation."""
+    return ["orca", "orchestration", "worker-keep-open", "--dispatch", dispatch, "--json"]
+
+
 def _keep(state: dict, objective: str, dispatch: str, handle: str) -> dict | None:
     instruction = None
     for row in state.get("constraints", []):
@@ -203,11 +208,19 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         decision = "After an accepted report choose exactly one: immediate supported reuse, permitted retention, or release."
         wording += cycle + " " + decision
         fields = {"blocks_closure": not bool(keep), "retention_reason": reason}
+        release_at = release.get("autoReleaseAt")
+        keep_now = ""
+        if (reason or keep) and isinstance(release_at, str) and release_at and row["release_state"] != "retained":
+            # R214: Orca will release this finished worker at that time unless it is kept open; retention is intended.
+            fields["keep_open_command"] = keep_open_command(dispatch)
+            keep_now = (f"Keep it open now: Orca releases this finished worker automatically at {release_at}; run "
+                        f"{shlex.join(fields['keep_open_command'])}. ")
+        wording = keep_now + wording
         if acknowledgement:
             fields["closure_wording"] = wording
             option = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
                       if keep else f"Orca's release option: {next_step}.")
-            wording = decision + " " + option + cycle
+            wording = keep_now + decision + " " + option + cycle
         if reason:
             fields["retained_title"] = rename(worker_title(state, admission), handle)
         return finish("owner_kept_owned" if keep else "retained_owned" if row["release_state"] == "retained" else "owned",

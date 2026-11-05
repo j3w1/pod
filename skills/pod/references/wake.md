@@ -2,9 +2,13 @@
 
 Read this before you stop to wait with a live worker, an unconsumed report or an awaited reply, and when a wait returns or you resume after compaction or a restart.
 
+## Which runtime you are on
+
+`pod wake` reads Orca's advertised orchestration capabilities on every call. Orchestration V3 (Orca 1.4.248 and later) advertises all six of `worker-auto-release.v1`, `worker-keep-open.v1`, `worker-start-implicit-run.v1`, `retained-run-bindings.v1`, `worker-turn-stop-reports.v1` and `ask-returns-at-once.v1`; the contract version is the same on both runtimes and tells you nothing. A result with `orchestration.mode` `v3` follows [On Orchestration V3](#on-orchestration-v3). Every other result follows the rest of this page, a pre-V3 runtime. When Orca's capability list could not be read the result says `orchestration.basis` `unread` and the helper behaves as pre-V3.
+
 ## Before parking
 
-Parking means ending your turn while you own work. Never park without an outstanding wait: a finished worker's `worker_done`, a relayed decision and a failure notice reach your Run's mailbox, and an idle agent does not see them on its own.
+Parking means ending your turn while you own work. Call `pod wake --run RUN` first; on V3 it drains and you end your turn ([On Orchestration V3](#on-orchestration-v3)). On a pre-V3 runtime never park without an outstanding wait: a finished worker's `worker_done`, a relayed decision and a failure notice reach your Run's mailbox, and an idle agent does not see them on its own.
 
 Keep exactly one outstanding wait, armed with the helper. How you hold it depends on your runtime, because Orca ends the wait and cannot resume an agent:
 
@@ -37,7 +41,18 @@ When you are done with the events, call the helper again with `--ack DELIVERY` i
 
 ## Compaction, restart and generation changes
 
-If you lost your place, call `pod wake --run RUN` with no `--ack`. An unacknowledged batch replays with the same `delivery` and `replayed: true`; check each event against your recorded state before acting, since you may already have handled it, then acknowledge. A new coordinator generation fences the old consumer (`fenced`); the recorded recovery routes, not the helper, move the binding.
+If you lost your place, call `pod wake --run RUN` with no `--ack`. On a pre-V3 runtime an unacknowledged batch replays with the same `delivery` and `replayed: true`; check each event against your recorded state before acting, since you may already have handled it, then acknowledge. A result with `delivery_final: true` is different on any runtime: Orca acknowledged that delivery when it handed it over (`deliveryAcknowledged`), so it never replays and you never acknowledge it again; recover it as on V3. A new coordinator generation fences the old consumer (`fenced`); the recorded recovery routes, not the helper, move the binding.
+
+## On Orchestration V3
+
+Orca wakes a parked coordinator itself: mail for a Run starts a new turn in the pane of the coordinator it is bound to. A held wait would hide that wake and take the mail, so on V3 the helper never waits.
+
+- Drain, act, end the turn. `pod wake --run RUN` makes one plain consuming check, with no `--wait` and no `--ack`, and returns at once. `events`: process every event and record what you act on through Pod, then end your turn. `drained`: nothing is pending; end your turn. Never run the helper in the background, never hold `orchestration check --wait`, and never poll. `--timeout-ms` is accepted and unused.
+- Every batch is final. Orca acknowledges a batch when it hands it over (`delivery_final: true`), so there is nothing to acknowledge and nothing replays; an `--ack` you pass is recorded as `already_final` and never sent.
+- Retained Runs. A coordinator keeps its bindings to every Run it created or used; the helper accepts any Run whose recorded coordinator is this terminal, not only the newest.
+- Recovery after compaction, a restart or a lost context: the mail you already took will not come back. Read the Run's history with `orca orchestration check --run RUN --all --json`, or `orca orchestration inbox --terminal run:RUN --limit 50`, and check each message against your recorded Pod state (admissions, reports, decisions) before acting on it; act only on what your records do not already show handled.
+- `worker_stopped`: Orca reported that a worker's turn ended without `worker_done` (`stop_reason` is `finished`, `errored`, `needs-input` or `exited`). Its Dispatch is still open and no reply settles it. Read the worker with `orca orchestration worker-show --dispatch D --json`, then decide from Pod's records: consume a report it left through the recorded admission, record a failed or uncertain result, or re-dispatch through a new admission. Never answer it as a question.
+- A finished worker closes about two minutes after `worker_done` unless it is kept open. A `completion` or `failure` event names `orca orchestration worker-keep-open --dispatch D --json`; run it at once when you will retain or reuse that worker (the worker-tab guidance), and admit planned reuse with `keep_open`. Never send to a settled Dispatch: on V3 that starts a follow-up Task Pod never admitted. Route every follow-up through a new admission.
 
 ## Status
 
@@ -45,7 +60,7 @@ If you lost your place, call `pod wake --run RUN` with no `--ack`. An unacknowle
 
 ## What the runtime does and does not do
 
-Orca delivers mail and ends a wait; it cannot resume an agent, and its wake or nudge is best-effort. Whether the exit of a background command resumes your turn depends on the agent runtime.
+On a pre-V3 runtime Orca delivers mail and ends a wait; it cannot resume an agent, and its wake or nudge is best-effort. On V3 its native wake is what resumes a parked coordinator, and it is not yet observed on this host. Whether the exit of a background command resumes your turn depends on the agent runtime.
 
 - Claude Code: the session is notified when a background command exits. An idle Claude Code coordinator was resumed when a wait armed on an empty mailbox returned on a message sent while it was idle (observed on Claude Code with Orca 1.4.230; the message reached the turn in under a second).
 - Codex: a returning wait does not resume an idle Codex coordinator. In a disposable trial (Orca 1.4.230, GPT-6.1 Sol medium) the coordinator armed `pod wake` as a background command and ended its turn; an array-payload message sent to its Run ended the wait (the prompt's background-terminal indicator cleared in the same second), and the coordinator stayed idle at its prompt for 7 minutes without processing it. A Codex coordinator that holds a wait inside an active turn does receive and process messages, so hold the wait in the active turn, and otherwise tell the lead: an idle Codex coordinator needs the lead's nudge.

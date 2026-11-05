@@ -142,6 +142,24 @@ Release is the coordinator's explicit Orca step. Preserve the report and follow
 Orca's Delivery acknowledgment order. Never reuse a terminal Orca reports
 user-owned or external.
 
+On Orchestration V3 (see the wake guidance for how a result names the runtime)
+Orca releases a finished worker about two minutes after its `worker_done`
+unless it is kept open, so decide retention and reuse before that:
+
+- When you already know at admission that you will retain or reuse the worker,
+  add `"keep_open": true` to the admission input. Pod passes `--keep-open` to
+  `worker-start` and records `keep_open: requested` on the admission; on a
+  runtime that does not advertise keep-open it records `not_advertised` and
+  starts exactly as before.
+- At report time a row whose retention is intended (a correction cycle or an
+  owner keep) and whose terminal Orca will release at `autoReleaseAt` carries
+  `keep_open_command`, `orca orchestration worker-keep-open --dispatch D --json`;
+  run it at once. A worker that is not retained is left to Orca's release.
+- `reuse_of` naming a worker Orca has already released is refused with
+  `reuse_released` before any start: admit the follow-up without `reuse_of`.
+- Never send to a settled Dispatch to give it more work: on V3 that starts a
+  follow-up Task Pod never admitted. Every follow-up is a new admission.
+
 Use the report acknowledgement's `worker_tab`, and the objective's `worker_tabs`
 in `pod status --objective ID`, to decide the next step. An empty `reclaimable`
 list does not prove finished tabs are closed: `worker_tabs` is the objective's

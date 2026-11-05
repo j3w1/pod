@@ -13,6 +13,9 @@ from pod.errors import PodError
 from pod.orca import mailbox_check
 
 RUN = "run_fixture"
+# The capability list of a pre-V3 runtime as Orca advertises it; never a live read (R214).
+PRE_V3_FEATURES = lambda: {"mode": "pre_v3", "basis": "advertised",
+                           "capabilities": {key: False for key in wake.orca.V3_CAPABILITY_KEYS}}
 
 
 class FakeMailbox:
@@ -72,7 +75,7 @@ class WakeTests(unittest.TestCase):
         self.mail = FakeMailbox()
 
     def arm(self, **options):
-        return wake.arm(RUN, check_fn=self.mail.check, run_fn=bound(), **options)
+        return wake.arm(RUN, check_fn=self.mail.check, run_fn=bound(), features_fn=PRE_V3_FEATURES, **options)
 
     def waits(self):
         return [call for call in self.mail.calls if call["wait_ms"] is not None]
@@ -157,7 +160,7 @@ class WakeTests(unittest.TestCase):
         with self.assertRaises(PodError):
             self.arm()
         with self.assertRaises(PodError) as caught:
-            wake.arm(RUN, check_fn=self.mail.check, run_fn=bound("other"))
+            wake.arm(RUN, check_fn=self.mail.check, run_fn=bound("other"), features_fn=PRE_V3_FEATURES)
         self.assertEqual(caught.exception.code, "wake_run_not_bound")
         with self.assertRaises(PodError) as caught:
             self.arm(timeout_ms=wake.MAX_WAIT_MS + 1)
