@@ -11374,7 +11374,12 @@
         "tests.test_admission_host_exit_scope.FactTests.test_every_hold_is_kept_for_the_other_requests",
         "tests.test_admission_host_exit_scope.OwedHoldTests.test_a_foreign_owners_owed_report_in_a_removed_worktree_holds_its_branch",
         "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_unreadable_foreign_owner_keeps_the_dispatch_a_candidate",
-        "tests.test_admission_host_exit_scope.OwedHoldTests.test_a_worktree_detached_after_admission_holds_its_recorded_branch"
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_a_worktree_detached_after_admission_holds_its_recorded_branch",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_owner_changed_and_restored_after_the_judgment_read_it_is_record_changed",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_owner_left_changed_is_read_as_its_newer_bytes",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_only_a_query_whose_judgment_read_the_owner_depends_on_it",
+        "tests.test_admission_host_exit_scope.DependencyTests.test_every_record_read_is_a_dependency_whatever_it_decides",
+        "tests.test_admission_host_exit_scope.DependencyTests.test_a_row_the_native_judgment_keeps_reads_no_record"
       ],
       "status": "NOT_RUN"
     },

@@ -371,7 +371,7 @@ class FactTests(unittest.TestCase):
                     slot = admission._HostExitSlot(
                         self.project, full, {"own-run", "other-run"}, {"own-run"}, set(), set(), scope=scope,
                         owed={label: owed["row"]} if owed else {}, owners=lambda dispatch, run, owners=owners: owners,
-                        unreadable=lambda run, unreadable=unreadable: unreadable)
+                        unreadable=lambda run, unreadable=unreadable: (unreadable, ()))
                     if self.held(slot, path, run, places, situation):
                         checked += 1
                         if not admission._host_exit_relevant(slot, {"dispatch": label, "run": run, "worktree": path},
@@ -379,7 +379,7 @@ class FactTests(unittest.TestCase):
                             failures.append((request, label, situation[0]))
             # A gap Dispatch is a candidate on any Run, for rule T, whether or not the projection claims it.
             slot = admission._HostExitSlot(self.project, full, {"own-run"}, {"own-run"}, {"gap"}, set(), scope=scope,
-                                           owed={}, owners=lambda dispatch, run: (), unreadable=lambda run: False)
+                                           owed={}, owners=lambda dispatch, run: (), unreadable=lambda run: (False, ()))
             self.assertTrue(admission._host_exit_relevant(
                 slot, {"dispatch": "gap", "run": "old-run", "worktree": str(root / "gap")}, places))
         self.assertEqual(failures[:20], [])
@@ -481,3 +481,91 @@ class OwedHoldTests(VerifierMixin, unconsumed.UnconsumedReportCase):
         self.admit(terminal="d1-terminal")
         git("-C", str(self.worker_path), "checkout", "--detach", "-q")
         self.assert_counted_and_held(self.read(), "objective")
+
+    # R3 of the pod#227 review: every record the judgment reads is a recheck dependency of that query (R207, A869).
+
+    def changed_during_the_judgment(self, restore=True):
+        """Another repository's owed admission placed here on BRANCH; the worker's old path is now another
+        repository's worktree, so no placement lookup reads that owner. While the host-exit judgment runs, the owner
+        holds claims-only bytes B placing it on another branch; `restore` puts its exact bytes A back afterwards."""
+        self.foreign_owned_removed()
+        git("init", "-q", "-b", "reused", str(self.worker_path))
+        path = base.objective_root(self.root / "foreign-repository", "foreign") / "context.json"
+        original = path.read_bytes()
+        changed = json.loads(original)
+        changed["admissions"]["a1"]["recovery"]["placement_binding"]["branch"] = "other"
+        real = admission._host_exit_prefetch
+        def prefetch(*args, **kwargs):
+            path.write_text(json.dumps(changed))
+            try:
+                return real(*args, **kwargs)
+            finally:
+                if restore:
+                    path.write_bytes(original)
+        self.addCleanup(path.write_bytes, original)
+        return path, patch("pod.admission._host_exit_prefetch", side_effect=prefetch)
+
+    def test_an_owner_changed_and_restored_after_the_judgment_read_it_is_record_changed(self):
+        path, schedule = self.changed_during_the_judgment()
+        with schedule:
+            result = self.read()
+        self.assertFalse(result["complete"])
+        self.assertIn(("record_changed", path.parent.name),
+                      [(row["code"], row["record"]) for row in result["unknowns"]])
+
+    def test_an_owner_left_changed_is_read_as_its_newer_bytes(self):
+        """The control: claims-only bytes that stay are the record's current claims (R207), so nothing changed."""
+        _, schedule = self.changed_during_the_judgment(restore=False)
+        with schedule:
+            result = self.read()
+        self.assertEqual((result["status"], result["complete"], result["claims"], result["unknowns"]),
+                         ("observed", True, [], []))
+
+    def test_only_a_query_whose_judgment_read_the_owner_depends_on_it(self):
+        """In one batch, the branch query's judgment read the owner; the unfiltered query takes every row natively
+        and read nothing. With nothing counted, only the branch query rechecks the owner."""
+        path, schedule = self.changed_during_the_judgment()
+        self.fake.mode = "fail"
+        worker = stuck(self, "d1", path=self.worker_path, run="run", handle="d1-terminal")
+        with schedule, patch("pod.admission._fleet",
+                             return_value={"runtime": "runtime", "complete": True, "workers": [worker]}):
+            results = admission._call(self.project, [{"branch": unconsumed.BRANCH}, {}], Budget(10.0))["results"]
+        changed = [[row["record"] for row in result["unknowns"] if row["code"] == "record_changed"]
+                   for result in results]
+        self.assertEqual(changed, [[path.parent.name], []])
+
+
+class DependencyTests(unittest.TestCase):
+    """R3: the record clauses run only for a row the native judgment leaves out, and every record they read, whatever
+    they decide, is that query's recheck dependency; a read that never reached a generation is none."""
+
+    def slot(self, request, owners, unreadable):
+        scope = {"repository": None, "repo_key": "a" * 64, "path": "/project", "inventory": "x"}
+        return admission._HostExitSlot(Path("/project"), {"worktree": None, "branch": None, "target": None,
+                                                          "effects": [], **request},
+                                       {"own-run", "other-run"}, {"own-run"}, set(), set(), scope=scope, owed={},
+                                       owners=owners, unreadable=unreadable)
+
+    def test_every_record_read_is_a_dependency_whatever_it_decides(self):
+        a, b, c, d = (Path("/state") / name for name in "abcd")
+        hold = admission._owed_hold("o", "r", "k", {"role": "implement", "worktree": None, "boundary": None,
+                                                    "native_binding": {"worktreeId": "/elsewhere"},
+                                                    "placement_binding": {"path": "/elsewhere", "branch": "other",
+                                                                          "repo_key": "a" * 64}})
+        owners = ((a, "ga", None), (b, None, PodError("unreadable", "fixture")), (c, "gc", hold))
+        slot = self.slot({"worktree": "/project/w"}, lambda dispatch, run: owners, lambda run: (False, ((d, "gd"),)))
+        with patch("pod.admission._SHARED") as shared:
+            shared.get.return_value = Memo()
+            kept = admission._host_exit_relevant(slot, {"dispatch": "x", "run": "other-run", "worktree": "/gone"}, {})
+        self.assertFalse(kept)
+        self.assertEqual(slot.dependencies, {"a": (a, "ga"), "c": (c, "gc"), "d": (d, "gd")})
+
+    def test_a_row_the_native_judgment_keeps_reads_no_record(self):
+        def unread(*args):
+            raise AssertionError("no record read for a row the native judgment keeps")
+        slot = self.slot({"worktree": "/gone"}, unread, unread)  # overlapping, on one of the query's own Runs
+        with patch("pod.admission._SHARED") as shared:
+            shared.get.return_value = Memo()
+            self.assertTrue(admission._host_exit_relevant(slot, {"dispatch": "x", "run": "own-run",
+                                                                 "worktree": "/gone"}, {}))
+        self.assertEqual(slot.dependencies, {})
