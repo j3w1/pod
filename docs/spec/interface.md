@@ -80,11 +80,11 @@ From another repository, or a directory with no GitHub repository identity (not 
 
 ### R64 — Bind issue identity, canonical locator, body
 
-Type: B,H · Scenarios: [A102](#a102), [A103](#a103), [A203](#a203), [A253](#a253), [A395](#a395), [A396](#a396)
+Type: B,H · Scenarios: [A102](#a102), [A103](#a103), [A203](#a203), [A253](#a253), [A395](#a395), [A396](#a396), [A908](coordination.md#a908)
 
 Bind issue identity, canonical locator, body digest and relevant amendment references into checkpoints, packets and final verification without copying the issue body into state. Recheck at intake, continuation, affected admission and final verification. Body change requires reconciliation; metadata alone does not, except that a title gaining an EEL/SEAL marker stops execution like the body marker, and every caller surfaces the role refusal itself. Forward Governor decisions/execution recheck the checkpoint source before native continuity or remote effects; role changes, body/amendment drift and inaccessible reads hold forward work. Cancellation, outcome recording and provider readback retain their supported paths. Closure alone does not block already authorized Governor work: reconcile closed-issue intent at intake, and rebind reconciled body/amendment changes through the existing checkpoint. Amendments are not checked for markers. Preserve unaffected proof and never replace an admitted uncertain native request with a revised packet. R131 adds the sole automatic body rebind: a tick's matching intended readback and receipt atomically update the checkpoint digest without a map transition or evidence invalidation. Other body edits still reconcile through a checkpoint, whose line-fact refresh is best effort. R157 permits proven ticks on a source CLOSED as COMPLETED without reopening; other CLOSED sources retain their hold. Every issue_reconciliation_required includes the recheck reason. Reserved or unresolved admissions keep their original packet and defer a tick with pod_tick_admission_pending until settlement; an in-flight tick intent defers new admission with pod_tick_pending.
 
-R149 adds verified issue-derived criteria reconciliation to the same checkpoint path; source observation alone still grants no revision authority.
+R149 adds verified issue-derived criteria reconciliation to the same checkpoint path; source observation alone still grants no revision authority. A body or amendment change that leaves every owned PoD block unchanged rebinds through this ordinary checkpoint, with unchanged criteria and no revision authority, including on an objective that owns only some of the issue's PoDs.
 
 ### R69 — Keep the public product independent of
 
@@ -752,7 +752,10 @@ issue-intake reference gives the one supported checkpoint procedure. Report and
 admission maps refuse `issue_revision_refused` with `checkpoint_only` before their
 preparation or mutations. Other shape, mapping, policy and scope holds use
 `issue_revision_refused` with a named reason; native/source/sequence failures may
-retain their existing refusal codes.
+retain their existing refusal codes. `unrelated_checkpoint_change` adds `differing` and
+`omitted`, sorted core key names without values, and a `note`; the `checkpoint`
+contract's `issue_revision_core` lists `may_change` and `unchanged`. A refusal where the
+ordinary R64 rebind may apply names it in `next_action` (R149).
 
 Optional checkpoint-only `issue_revision_data` contains exactly
 `historical_bodies`, a list of at most 64 unique `{body_sha256, body}` records.

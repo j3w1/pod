@@ -306,6 +306,14 @@ TABLE["issue revision authority"] = definition({"operation": choice(("issue_revi
     ("operation", "provenance", "instruction", "channel"),
     required_by_channel={"agent_session": ["operation", "provenance", "instruction", "channel"],
                          "relayed": ["operation", "provenance", "instruction", "channel", "relay"]})
+# The checkpoint core an issue revision may change; every other core field restates the stored one exactly.
+ISSUE_REVISION_REVISABLE = ("criteria", "next_safe_action", "objective_source", "plan_revision")
+TABLE["checkpoint"]["issue_revision_core"] = {
+    "may_change": list(ISSUE_REVISION_REVISABLE),
+    "unchanged": sorted(set(TABLE["checkpoint"]["fields"]) - set(TABLE["map"]["fields"])
+                        - set(ISSUE_REVISION_REVISABLE) - {"issue_revision_data", "objective"}),
+    "form": "restate each unchanged field exactly as stored; an omitted field that the checkpoint does not carry forward compares as changed",
+}
 STANDING_SCOPES = ("publish", "merge", "release", "install", "cleanup", "deploy")
 STANDING_EXCLUSIONS = ("deploy", "paid_resources", "secrets", "unique_deletion", "scope_growth")
 TABLE["standing decision"] = definition({

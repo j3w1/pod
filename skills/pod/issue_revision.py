@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 from .errors import PodError
-from .contracts import bound, fields, input_record
+from .contracts import ISSUE_REVISION_REVISABLE, bound, fields, input_record
 from .util import MAX_RECORD, bounded_text, digest, exact
 
 OPERATION = "issue_revision"
@@ -25,9 +25,35 @@ def refuse_alternate(value: object) -> None:
         raise refuse("checkpoint_only")
 
 
+REVISABLE = frozenset(ISSUE_REVISION_REVISABLE)
+_STAMPED = frozenset({"objective", "pod_version", "bundle_digest", "continuity"})
+NEXT_ACTION = ("use a checkpoint with exact source-derived criteria and a host-verified issue_revision reference; "
+               "otherwise obtain a coordinator-session revision")
+ORDINARY = ("write an ordinary checkpoint instead: the fresh objective_source from internal issue-intake, unchanged "
+            "criteria, no revision_authority and the full core")
+REBIND = "if no PoD block this objective owns changed, " + ORDINARY
+# Unmapped lines cannot tell intentionally unowned PoDs from newly observed ones awaiting reconciliation.
+UNMAPPED = ("the bound source has PoDs these criteria do not map. If this objective should own every live PoD, supply "
+            "the complete criteria in source order with this issue_revision. If those PoDs are intentionally not this "
+            "objective's and no owned PoD block changed, " + ORDINARY + "; if an owned PoD block changed on such an "
+            "objective, hold that work and report it to the project lead")
+NEXT_ACTIONS = {
+    "unrelated_checkpoint_change": "restate every stored checkpoint core field unchanged; only objective_source, criteria, "
+                                   "plan_revision and next_safe_action may change in an issue revision",
+    "native_continuity_requires_separate_checkpoint": "write the native continuity rebind in its own ordinary checkpoint "
+                                                      "first, then retry the issue revision with the next seq",
+}
+
+
 def refuse(reason: str, **detail) -> PodError:
     return PodError("issue_revision_refused", "Issue revision refused: " + reason,
-                    {"reason": reason, "next_action": "use a checkpoint with exact source-derived criteria and a host-verified issue_revision reference; otherwise obtain a coordinator-session revision", **detail})
+                    {"reason": reason, "next_action": NEXT_ACTIONS.get(reason, NEXT_ACTION), **detail})
+
+
+def unrelated_core(core: dict, prior: dict, map_fields) -> list[str]:
+    """Core keys that differ from the stored checkpoint, by name only; an omitted key not carried forward differs."""
+    exempt = set(map_fields) | REVISABLE | _STAMPED
+    return sorted(key for key in set(core) | set(prior) if key not in exempt and core.get(key) != prior.get(key))
 
 
 @input_record("issue revision authority")
@@ -461,9 +487,12 @@ class Revision:
         self.input = input_authority(proposed.get("revision_authority"))
         if set(proposed) - {"seq", "obligations", "revision_authority", "update"}:
             raise refuse("combined_operation")
-        if any(core.get(key) != prior.get(key) for key in set(core) | set(prior)
-               if key not in obligations.MAP_STORED | {"criteria", "objective_source", "plan_revision", "next_safe_action", "objective", "pod_version", "bundle_digest", "continuity"}):
-            raise refuse("unrelated_checkpoint_change")
+        differing = unrelated_core(core, prior, obligations.MAP_STORED)
+        if differing:
+            # Names only, never values; an omitted key reads as absent, so it differs from a stored value.
+            raise refuse("unrelated_checkpoint_change", differing=differing,
+                         omitted=[key for key in differing if key not in core],
+                         note="an omitted core field that the checkpoint does not carry forward compares as changed")
         if core["policy_revision"] != prior["policy_revision"]:
             raise refuse("policy_changed")
         if "obligations" in proposed:
@@ -473,7 +502,15 @@ class Revision:
             raise obligations.refuse("map_stale", "map_stale", "issue revision needs the next sequence", expected=prior["seq"] + 1)
         self.lines = _lines(project, self.source)
         if core["criteria"] != list(self.lines):
-            raise refuse("criteria_not_exact_source")
+            from .pod_ticks import intake as bound_lines
+            # Unmapped bound-source PoDs name both routes: R149 for an objective that should own them, the ordinary
+            # source rebind (R64) for a PoD-subset objective. An unread binding keeps the general next action.
+            try:
+                observed = bound_lines(state)
+            except PodError:
+                observed = {"status": "unavailable"}
+            unmapped = observed["status"] == "read" and bool(observed["unmapped"])
+            raise refuse("criteria_not_exact_source", **({"next_action": UNMAPPED} if unmapped else {}))
         rows = expanded.get("obligations", prior["obligations"])
         if not isinstance(rows, list):
             raise refuse("malformed_obligations")
@@ -557,7 +594,10 @@ class Revision:
         material = (set(previous_criteria) != set(current)
                     or any(not unchanged_scope(row) for row in previous_criteria.values()))
         if set(current) != set(self.lines) or not material:
-            raise refuse("material_complete_reconciliation_required")
+            # Complete but unchanged criteria need no issue revision: the ordinary source rebind (R64) applies.
+            raise refuse("material_complete_reconciliation_required",
+                         **({"next_action": "no criterion changed, so issue_revision does not apply; " + REBIND}
+                            if set(current) == set(self.lines) else {}))
         by_id = {row["id"]: row for row in rows}
         for row in rows:
             if row["id"] in previous_rows or row.get("kind") == "criterion":
