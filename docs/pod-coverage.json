@@ -11956,6 +11956,8 @@
       "offline_test": [
         "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_subset_objective_refusal_names_the_ordinary_rebind_which_is_accepted",
         "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_unchanged_criteria_revision_names_the_ordinary_rebind",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_full_objective_observing_an_added_pod_keeps_the_revision_route",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_subset_objective_with_unread_line_facts_keeps_the_general_next_action",
         "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_full_objective_keeps_its_existing_next_action",
         "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_incomplete_mapping_keeps_its_existing_next_action",
         "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_route_wording_changes_only_detail_and_next_action",

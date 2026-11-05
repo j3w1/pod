@@ -754,8 +754,8 @@ preparation or mutations. Other shape, mapping, policy and scope holds use
 `issue_revision_refused` with a named reason; native/source/sequence failures may
 retain their existing refusal codes. `unrelated_checkpoint_change` adds `differing` and
 `omitted`, sorted core key names without values, and a `note`; the `checkpoint`
-contract's `issue_revision_core` lists `may_change` and `unchanged`. A refusal whose
-ordinary R64 rebind applies names it in `next_action` (R149).
+contract's `issue_revision_core` lists `may_change` and `unchanged`. A refusal where the
+ordinary R64 rebind may apply names it in `next_action` (R149).
 
 Optional checkpoint-only `issue_revision_data` contains exactly
 `historical_bodies`, a list of at most 64 unique `{body_sha256, body}` records.

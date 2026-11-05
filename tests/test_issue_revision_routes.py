@@ -1,7 +1,9 @@
 """Issue-source change refusals name the route that applies; outcomes stay unchanged (pod#244)."""
 
 from copy import deepcopy
+from unittest.mock import patch
 
+from pod.errors import PodError
 from pod.github import issue_intake
 from pod.ledger import read
 from tests.test_issue_revision import IssueRevisionCase
@@ -35,6 +37,13 @@ class IssueRevisionRouteTests(IssueRevisionCase):
                    criteria=["PoD#2"], objective_source=source, governance={"base_ref": "target"})
         return self.amended(self.issue.body + "\n\nAmendment: split the delivery into two pull requests.")
 
+    def assert_both_routes(self, action):
+        """Unmapped lines alone never say issue_revision is unavailable; both routes are named."""
+        self.assertIn("complete criteria in source order with this issue_revision", action)
+        self.assertIn("ordinary checkpoint", action)
+        self.assertIn("project lead", action)
+        self.assertNotIn("does not apply", action)
+
     def test_omitted_core_update_names_differing_keys_without_values(self):
         self.begin()
         self.write(blocker="waiting for the hosted run", remaining_gates=["hosted CI"])
@@ -65,13 +74,35 @@ class IssueRevisionRouteTests(IssueRevisionCase):
             with self.subTest(criteria=criteria):
                 detail = self.refused({"seq": seq, "update": {}, "objective_source": source, "criteria": criteria,
                                        "revision_authority": AUTHORITY}, "criteria_not_exact_source")
-                self.assertIn("owns only some of the issue's PoDs", detail["next_action"])
-                self.assertIn("ordinary checkpoint", detail["next_action"])
-                self.assertIn("project lead", detail["next_action"])
+                self.assert_both_routes(detail["next_action"])
         # The named route: fresh source, unchanged criteria, no revision_authority.
         self.write(criteria=["PoD#2"], objective_source=source)
         checkpoint = read(self.project, "objective")["checkpoint"]
         self.assertEqual((checkpoint["criteria"], checkpoint["objective_source"]), (["PoD#2"], source))
+
+    def test_subset_objective_with_unread_line_facts_keeps_the_general_next_action(self):
+        source = self.subset()
+        seq = read(self.project, "objective")["checkpoint"]["seq"] + 1
+        for unread in ({"status": "not_read", "reason": None}, PodError("state_unsupported", "unreadable facts")):
+            with self.subTest(unread=type(unread).__name__), \
+                    patch("pod.pod_ticks.intake", **({"side_effect": unread} if isinstance(unread, Exception)
+                                                     else {"return_value": unread})):
+                detail = self.refused({"seq": seq, "update": {}, "objective_source": source, "criteria": ["PoD#2"],
+                                       "revision_authority": AUTHORITY}, "criteria_not_exact_source")
+                self.assertEqual(detail["next_action"], GENERIC)
+
+    def test_full_objective_observing_an_added_pod_keeps_the_revision_route(self):
+        """A full objective's ordinary observation leaves PoD#2 unmapped; R149 remains the route it names."""
+        self.begin(); proposal = self.proposal()
+        self.write(objective_source=proposal["objective_source"])
+        state = read(self.project, "objective")
+        from pod.pod_ticks import intake
+        self.assertEqual((intake(state)["status"], intake(state)["unmapped"]), ("read", [2]))
+        proposal["seq"] = state["checkpoint"]["seq"] + 1
+        self.assert_both_routes(self.refused({**proposal, "criteria": ["PoD#2", "PoD#1"]},
+                                             "criteria_not_exact_source")["next_action"])
+        self.revise(proposal)
+        self.assertEqual(read(self.project, "objective")["checkpoint"]["criteria"], ["PoD#1", "PoD#2"])
 
     def test_full_objective_keeps_its_existing_next_action(self):
         self.begin(); proposal = self.proposal()

@@ -29,8 +29,14 @@ REVISABLE = frozenset(ISSUE_REVISION_REVISABLE)
 _STAMPED = frozenset({"objective", "pod_version", "bundle_digest", "continuity"})
 NEXT_ACTION = ("use a checkpoint with exact source-derived criteria and a host-verified issue_revision reference; "
                "otherwise obtain a coordinator-session revision")
-REBIND = ("if no PoD block this objective owns changed, write an ordinary checkpoint instead: the fresh objective_source "
-          "from internal issue-intake, unchanged criteria, no revision_authority and the full core")
+ORDINARY = ("write an ordinary checkpoint instead: the fresh objective_source from internal issue-intake, unchanged "
+            "criteria, no revision_authority and the full core")
+REBIND = "if no PoD block this objective owns changed, " + ORDINARY
+# Unmapped lines cannot tell intentionally unowned PoDs from newly observed ones awaiting reconciliation.
+UNMAPPED = ("the bound source has PoDs these criteria do not map. If this objective should own every live PoD, supply "
+            "the complete criteria in source order with this issue_revision. If those PoDs are intentionally not this "
+            "objective's and no owned PoD block changed, " + ORDINARY + "; if an owned PoD block changed on such an "
+            "objective, hold that work and report it to the project lead")
 NEXT_ACTIONS = {
     "unrelated_checkpoint_change": "restate every stored checkpoint core field unchanged; only objective_source, criteria, "
                                    "plan_revision and next_safe_action may change in an issue revision",
@@ -497,16 +503,14 @@ class Revision:
         self.lines = _lines(project, self.source)
         if core["criteria"] != list(self.lines):
             from .pod_ticks import intake as bound_lines
-            # The bound source already had PoDs this objective does not own: a PoD-subset objective has no R149
-            # route, so name the ordinary source rebind (R64). An unread binding keeps the general next action.
+            # Unmapped bound-source PoDs name both routes: R149 for an objective that should own them, the ordinary
+            # source rebind (R64) for a PoD-subset objective. An unread binding keeps the general next action.
             try:
                 observed = bound_lines(state)
             except PodError:
                 observed = {"status": "unavailable"}
-            subset = observed["status"] == "read" and bool(observed["unmapped"])
-            raise refuse("criteria_not_exact_source", **({"next_action": "this objective owns only some of the issue's "
-                         "PoDs, so issue_revision does not apply; " + REBIND + "; if an owned PoD block changed, "
-                         "hold that work and report it to the project lead"} if subset else {}))
+            unmapped = observed["status"] == "read" and bool(observed["unmapped"])
+            raise refuse("criteria_not_exact_source", **({"next_action": UNMAPPED} if unmapped else {}))
         rows = expanded.get("obligations", prior["obligations"])
         if not isinstance(rows, list):
             raise refuse("malformed_obligations")
