@@ -11365,10 +11365,16 @@
       "offline_test": [
         "tests.test_admission_host_exit.RelevanceTests.test_the_unfiltered_query_asks_for_a_located_candidate",
         "tests.test_admission_host_exit.RelevanceTests.test_each_request_shape_asks_its_superset",
-        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_empty_and_worktree_only_requests",
-        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_branch_and_both_requests",
-        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_target_and_effects_requests",
-        "tests.test_admission_host_exit_scope.FactTests.test_the_superset_contains_relevant_for_every_fact_a_record_may_give"
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_empty_and_registered_worktree_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_unregistered_worktree_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_branch_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_both_target_and_effects_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTableTests.test_the_projection_table_runs_every_shape_once",
+        "tests.test_admission_host_exit_scope.FactTests.test_every_hold_is_kept_for_requests_naming_a_worktree",
+        "tests.test_admission_host_exit_scope.FactTests.test_every_hold_is_kept_for_the_other_requests",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_a_foreign_owners_owed_report_in_a_removed_worktree_holds_its_branch",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_an_unreadable_foreign_owner_keeps_the_dispatch_a_candidate",
+        "tests.test_admission_host_exit_scope.OwedHoldTests.test_a_worktree_detached_after_admission_holds_its_recorded_branch"
       ],
       "status": "NOT_RUN"
     },
