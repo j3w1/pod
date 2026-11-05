@@ -11932,6 +11932,36 @@
         "tests.test_admission_unconsumed_report.RepresentationTests.test_a_foreign_owners_removed_worktree"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A907",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_omitted_core_update_names_differing_keys_without_values",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_route_wording_changes_only_detail_and_next_action",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_unrelated_core_predicate_matches_the_previous_gate",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_checkpoint_contract_lists_the_issue_revision_core"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A908",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_subset_objective_refusal_names_the_ordinary_rebind_which_is_accepted",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_unchanged_criteria_revision_names_the_ordinary_rebind",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_full_objective_keeps_its_existing_next_action",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_incomplete_mapping_keeps_its_existing_next_action",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_route_wording_changes_only_detail_and_next_action",
+        "tests.test_issue_revision_routes.IssueRevisionRouteTests.test_refusal_helper_keeps_code_and_reason_and_routes_only_next_action"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
