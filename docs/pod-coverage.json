@@ -11875,6 +11875,46 @@
         "tests.test_admission_host_exit_stop.RoundBatchTests.test_a_fault_in_the_fifth_round_leaves_the_query_answered_before_it_counted"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A902",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.CountingTests.test_a_worktree_detached_after_admission_holds_its_recorded_branch_in_every_mode",
+        "tests.test_admission_unconsumed_report.RepresentationTests.test_a_worktree_detached_after_admission"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A903",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.CountingTests.test_a_foreign_owners_removed_worktree_holds_its_recorded_branch_in_every_mode",
+        "tests.test_admission_unconsumed_report.CountingTests.test_a_live_row_outside_the_repository_reads_as_before",
+        "tests.test_admission_unconsumed_report.RepresentationTests.test_a_foreign_owners_removed_worktree"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A904",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.RepresentationTests.test_a_worktree_on_its_recorded_branch",
+        "tests.test_admission_unconsumed_report.RepresentationTests.test_a_worktree_detached_after_admission",
+        "tests.test_admission_unconsumed_report.RepresentationTests.test_a_worktree_moved_to_another_branch",
+        "tests.test_admission_unconsumed_report.RepresentationTests.test_a_foreign_owners_worktree_in_place",
+        "tests.test_admission_unconsumed_report.RepresentationTests.test_a_foreign_owners_removed_worktree"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

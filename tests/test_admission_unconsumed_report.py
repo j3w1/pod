@@ -1,6 +1,8 @@
 """R185 and R206: a bound admission whose report is still owed keeps its placement held by its record once the native
 side settles its Dispatch (Orca exited, released and exited, rule S, R212), in open, continued and closed records; a
-`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A880)."""
+`retired` record holds nothing. The R108 list counts such admissions per objective (A870-A880). The hold stands
+whether or not the Dispatch is counted exited, and a native writer stands in for it only inside a query's own result
+(A902-A904)."""
 import json
 from unittest.mock import patch
 
@@ -11,7 +13,7 @@ from pod.ledger import objective_root
 from tests import test_admission_batch as batch
 from tests.common import logical_json
 from tests.kernel_support import git
-from tests.process_exit_support import FakeVerifier, stuck
+from tests.process_exit_support import FakeVerifier, VerifierMixin, stuck
 from tests.test_admission_host_exit import HostExitCase
 
 BRANCH = "pod/worker"
@@ -480,6 +482,174 @@ class HostExitHoldTests(HostExitCase):
         self.assertEqual([(claim["kind"], claim["worktree"], claim["branch"], claim["liveness"]) for claim in held],
                          [("writer", str(worker), BRANCH, "exited")])
         self.assertEqual(set(held[0]), UnconsumedReportCase.HELD_KEYS)
+
+
+class CountingCase(VerifierMixin, UnconsumedReportCase):
+    """pod#237: an owed report holds its recorded placement whether or not its Dispatch is counted exited. Stored
+    records are read through the production facts reader; only the native inventories and the verifier's transport
+    are doubled. Each read runs with no verifier configured, with a verifier that does not count the settled,
+    unobservable Dispatch (it answers `verified: false`, as a host verifier sometimes does) and with one that counts
+    it exited."""
+
+    MODES = ("no verifier", "uncounted", "counted")
+    foreign = ForeignObjectiveTests.foreign
+
+    def setUp(self):
+        super().setUp()
+        self.setup_verifier()
+        self.fake = FakeVerifier()
+        # No Run coordinator is known, so rule S never settles the Dispatch: only R212 can count it exited.
+        for target, replacement in (("pod.admission._run_coordinators", lambda runtime, check=None: {}),
+                                    ("pod.process_exit._output", self.fake)):
+            double = patch(target, side_effect=replacement)
+            double.start(); self.addCleanup(double.stop)
+
+    def on_its_branch(self):
+        """This repository's admission a1 owes its report; its worktree is still on the recorded branch."""
+        self.admit(terminal="d1-terminal")
+
+    def detached(self):
+        """Shape 1: the same, with the worktree detached at the same commit after admission."""
+        self.admit(terminal="d1-terminal")
+        git(self.worker_path, "checkout", "--detach", "-q")
+
+    def on_another_branch(self):
+        """The same, with the worktree switched to another branch after admission."""
+        self.admit(terminal="d1-terminal")
+        git(self.worker_path, "checkout", "-q", "-b", "moved")
+
+    def foreign_in_place(self):
+        """Another repository's objective owns Run `run` and owes the report of its worker placed in this
+        repository's worktree; this repository's records do not name `run`."""
+        self.foreign(terminal="d1-terminal")
+        path, raw = self.raw()
+        raw["checkpoint"]["native_refs"] = []
+        self.save(path, raw)
+
+    def foreign_removed(self):
+        """Shape 2: the same, with that worktree removed."""
+        self.foreign_in_place()
+        git(self.project, "worktree", "remove", "--force", str(self.worker_path))
+
+    def read(self, mode, queries, *, verdict="unverifiable", state=("succeeded", "completed"), singles=True):
+        """Every query under `mode` in one batch with a real end fence and, with `singles`, alone too; the batch
+        answers as the single queries do. The settled Dispatch d1's agent terminal is gone."""
+        self.configure(None if mode == "no verifier" else self.command)
+        self.fake.mode = "unverified" if mode == "uncounted" else None
+        self.serve(stuck(self, "d1", path=self.worker_path, run="run", handle="d1-terminal", verdict=verdict,
+                         state=state))
+        answer = self.batch(*queries)
+        self.assertTrue(answer["native_fence"]["stable"])
+        results = [row["result"] for row in answer["responses"]]
+        if singles:
+            self.assertEqual(results, [admission.query(self.project, **query) for query in queries])
+        return results
+
+    @staticmethod
+    def native_claims(result):
+        return [row for row in result["claims"] if row.get("dispatch") == "d1"]
+
+    @staticmethod
+    def facts(result):
+        """What a result holds, whatever the host disclosed about its candidates."""
+        return {key: result[key] for key in ("status", "complete", "claims", "conflicts", "unknowns")}
+
+
+class CountingTests(CountingCase):
+    """A902 and A903: each shape the pod#227 review found reads `blocked` on the recorded branch, with the same owed
+    hold, with no verifier, an uncounted verifier and a counted one; counted, it holds as before (A871). One batch
+    also asks the unfiltered query, whose own result decides how the Dispatch is represented."""
+
+    HOST_EXITS = {"no verifier": None, "uncounted": [("d1", False, process_exit.UNVERIFIED)],
+                  "counted": [("d1", True, None)]}
+
+    def assert_held_in_every_mode(self, objective):
+        branch_results, unfiltered = {}, {}
+        for mode in self.MODES:
+            with self.subTest(mode):
+                branch_results[mode], unfiltered[mode] = self.read(mode, [{"branch": BRANCH}, {}])
+                result = branch_results[mode]
+                self.assertEqual((result["status"], result["complete"], result["unknowns"]), ("blocked", True, []))
+                held = self.holds(result)
+                self.assertEqual(len(held), 1, result["claims"])
+                self.assertEqual(set(held[0]), self.HELD_KEYS)
+                self.assertEqual({key: held[0][key] for key in self.HELD_KEYS - {"record"}},
+                                 {"objective": objective, "kind": "writer", "admission": "a1",
+                                  "worktree": str(self.worker_path), "branch": BRANCH, "locations_complete": True,
+                                  "liveness": "exited", "boundary": None})
+                self.assertEqual((self.native_claims(result), [row["dimensions"] for row in result["conflicts"]]),
+                                 ([], [["branch"]]))
+                host_exits = result.get("host_exits")
+                self.assertEqual(host_exits and [(row["dispatch"], row["counted"], row["code"]) for row in host_exits],
+                                 self.HOST_EXITS[mode])
+                # The unfiltered query shows its native writer or the hold, never both.
+                self.assertEqual(len(self.native_claims(unfiltered[mode])) + len(self.holds(unfiltered[mode])), 1)
+        self.assertEqual(self.facts(branch_results["no verifier"]), self.facts(branch_results["counted"]))
+        self.assertEqual(self.facts(branch_results["uncounted"]), self.facts(branch_results["counted"]))
+        return unfiltered
+
+    def test_a_worktree_detached_after_admission_holds_its_recorded_branch_in_every_mode(self):
+        """A902. The native writer has a complete location without a branch, so the branch query's relevance leaves it
+        out, and with it its process-liveness unknown; it no longer hides the hold. The unfiltered result keeps that
+        native writer while nothing counts it, and shows the hold instead once it is counted exited."""
+        self.detached()
+        unfiltered = self.assert_held_in_every_mode("objective")
+        self.assertEqual([(len(self.native_claims(unfiltered[mode])), len(self.holds(unfiltered[mode])))
+                          for mode in self.MODES], [(1, 0), (1, 0), (0, 1)])
+
+    def test_a_foreign_owners_removed_worktree_holds_its_recorded_branch_in_every_mode(self):
+        """A903. The row is outside this repository, on a Run its records do not name, so it gets no claim; its
+        owners are still read, as when it is counted exited, and every query holds the owed placement."""
+        self.foreign_removed()
+        unfiltered = self.assert_held_in_every_mode("foreign")
+        self.assertEqual([(len(self.native_claims(unfiltered[mode])), len(self.holds(unfiltered[mode])))
+                          for mode in self.MODES], [(0, 1)] * 3)
+
+    def test_a_live_row_outside_the_repository_reads_as_before(self):
+        """A903. A row Orca shows live is a writer where Orca shows it, outside this repository and on another
+        repository's Run; it is no host-exit candidate and holds nothing here, as before."""
+        self.foreign_removed()
+        for mode in self.MODES:
+            with self.subTest(mode):
+                result, = self.read(mode, [{"branch": BRANCH}], verdict="live", state=("running", "running"),
+                                    singles=False)
+                self.assertEqual((result["status"], result["complete"], result["claims"], result["unknowns"],
+                                  result.get("host_exits")), ("observed", True, [], [], None))
+
+
+class RepresentationTests(CountingCase):
+    """A904: one representation per query. Over each placement shape, with every verifier mode, a native writer claim
+    in a query's own result stands for the Dispatch and the owed hold is not repeated; one that relevance leaves out,
+    or a row with no claim, leaves the hold to stand. The unfiltered query shows exactly one of the two, and a query
+    naming the recorded worktree or branch is never read free."""
+
+    def represented(self, shape):
+        shape()
+        for mode in self.MODES:
+            with self.subTest(mode):
+                queries = [{}, {"branch": BRANCH}, {"worktree": str(self.worker_path)}]
+                unfiltered, *named = self.read(mode, queries, singles=False)
+                for result in (unfiltered, *named):
+                    self.assertFalse(self.native_claims(result) and self.holds(result), result["claims"])
+                self.assertEqual(len(self.native_claims(unfiltered)) + len(self.holds(unfiltered)), 1,
+                                 unfiltered["claims"])
+                for result in named:
+                    self.assertNotEqual(result["status"], "observed", result["scope"]["selection"])
+
+    def test_a_worktree_on_its_recorded_branch(self):
+        self.represented(self.on_its_branch)
+
+    def test_a_worktree_detached_after_admission(self):
+        self.represented(self.detached)
+
+    def test_a_worktree_moved_to_another_branch(self):
+        self.represented(self.on_another_branch)
+
+    def test_a_foreign_owners_worktree_in_place(self):
+        self.represented(self.foreign_in_place)
+
+    def test_a_foreign_owners_removed_worktree(self):
+        self.represented(self.foreign_removed)
 
 
 class ListTests(UnconsumedReportCase):

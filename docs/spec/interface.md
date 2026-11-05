@@ -1191,7 +1191,7 @@ Install a reader supporting these formats before migrating. Preceding binaries d
 - <a id="a666"></a>**A666** — Routine writes queue cleanup without scanning retained history. A fixed queue threshold counts newly placed bytes, excluding identical pages already on disk, and starts a bounded sweep only after the semantic writer lock is released; migration and install/update also attempt cleanup. Status/doctor inventory reads bounded hints, reports queued or unknown bytes per record, and explicit GC preserves both authorities, pinned readers and the corruption-safe retry path. The preceding compaction request entry cannot publish.
 ### R185 — Read relevant admission facts without granting authorization
 
-Type: B,I · Scenarios: [A670](#a670), [A671](#a671), [A672](#a672), [A673](#a673), [A790](#a790), [A843](#a843), [A870](#a870), [A871](#a871), [A872](#a872), [A873](#a873), [A874](#a874), [A877](#a877), [A878](#a878), [A879](#a879), [A880](#a880)
+Type: B,I · Scenarios: [A670](#a670), [A671](#a671), [A672](#a672), [A673](#a673), [A790](#a790), [A843](#a843), [A870](#a870), [A871](#a871), [A872](#a872), [A873](#a873), [A874](#a874), [A877](#a877), [A878](#a878), [A879](#a879), [A880](#a880), [A902](#a902), [A903](#a903), [A904](#a904)
 
 `pod admission --repository PATH [--objective ID --candidate SHA] [--worktree PATH]
 [--branch NAME] [--target REF --target-commit SHA] [--effect GOVERNOR_ID]...
@@ -1254,16 +1254,20 @@ reconciliation without replaying unrelated prior Runs. Worker identity, host cov
 pagination, runtime changes and explicit completeness remain checked.
 
 A bound admission that still owes its report keeps its placement held by its own record once the native
-side settles or skips its Dispatch: shown exited, released and exited, settled by rule S or a settled
-context-only row, or counted exited by R212. It owes its report under R117's finalization rule, one
+side settles, skips or leaves out its Dispatch: shown exited, released and exited, settled by rule S or a
+settled context-only row, counted exited by R212, skipped outside this repository's worktrees on a Run its
+records do not name, or shown by a native writer claim that the query's relevance leaves out of its result.
+So the hold never depends on whether R212 asked the host, or on what it answered (pod#237). It owes its
+report under R117's finalization rule, one
 function for both: no consumed report, or an implementation without a recorded disposition; a closed or
 deferred admission and abandoned accounting owe nothing. Consuming the report reads the worker's result
 where it was placed, so a settled worker never frees that placement before then. The record adds the
 claim an unfinished admission without a native binding makes, with exactly its keys: `objective`,
 `record`, `kind` (`writer` for an implementation, otherwise `assignment`), `admission`, the `worktree` and
 `branch` of its placement (the bound worktree, else the recorded or accepted placement path),
-`locations_complete` (true only when both are recorded), `liveness: exited`, since this call's own reads
-settled the worker, and `boundary`. No new claim kind, key or unknown code is added; like any current
+`locations_complete` (true only when both are recorded), `liveness: exited`, the same whether this call's
+own reads settled the worker or the query's result leaves its native writer out, and `boundary`. No new
+claim kind, key or unknown code is added; like any current
 writer or assignment claim it is a conflict where it intersects the request. This holds in open, continued and
 closed records, since a closure recorded before R117 can leave a report unconsumed; a `retired` record
 holds nothing (R112, R206). It holds whatever repository the record belongs to, and each admission
@@ -1272,11 +1276,18 @@ owing admission of a Dispatch holds. Which repository an owed placement belongs 
 identity its admission recorded, never by the directory now at its path: its placement's repository key
 decides, whatever path nests it; without a key, a location in this repository holds, and so does any
 location not proved another repository's registered worktree (rule T 4b's proof). When a Dispatch the
-native side saw without a claim belongs to a Run another repository's objective records, the records owning
-that Run are read, whatever its path holds today, and nothing else of theirs; the judgment is shared once
-per call. That record is rechecked with the call's other sources, and one that cannot be read or changed
+native side saw without a claim in the query's result belongs to a Run another repository's objective records,
+the records owning that Run are read, whatever its path holds today, and nothing else of theirs; the judgment
+is shared once per call. A row skipped outside the repository is read the same way, as it would be once
+counted exited, unless Orca shows it live: a live worker writes where Orca shows it, so its owners are not
+read for this repository. That record is rechecked with the call's other sources, and one that cannot be
+read or changed
 is `worker_placement_unknown` or `record_changed` for that Dispatch. A Dispatch the native inventory lacks stays `native_identity_unverified`, and
-a native writer claim for the Dispatch adds no second claim. Whether a report is still owed is part of the
+a native writer claim for the Dispatch in the query's result adds no second claim. Each query decides from its
+own result: when the native writer is in it the hold is not repeated, and when relevance leaves the native
+writer out the hold is judged by its own placement, never hidden behind a claim the result omits. An
+unfiltered query keeps every native writer, so it shows each owing admission's Dispatch once, by its native
+writer or by the hold, never both. Whether a report is still owed is part of the
 record's claim identity, and so is each admission's accepted placement, so a consumption or a placement
 change seen between the claims read and the change recheck is `record_changed`, scoped to the worktrees
 and branches the record named before and after the change; a branch missing on either side keeps it
@@ -1381,6 +1392,9 @@ CE always parses the factual status and scope; zero is never permission.
 - <a id="a878"></a>**A878** — An admission's accepted placement branch or worktree changed between the claims read and the change recheck makes the query `record_changed` and incomplete, also for a query of the new branch only, single and batch alike.
 - <a id="a879"></a>**A879** — A foreign objective's owing admission keeps its branch held after its worktree is removed (Orca exited or rule S), with no native location, and with a branch-only placement; a consumed local binding of the same Dispatch does not discharge it; every owing admission of one Dispatch across records holds, and only a non-`retired` owner holds; a placement attributed to another repository holds nothing, and an owning admission that cannot be read is `worker_placement_unknown` for the Dispatch. A placement branch that becomes unrecorded before the recheck is `record_changed` for another branch's query. Single and batch answer alike with a stable fence.
 - <a id="a880"></a>**A880** — The recorded identity decides, not the current path: another repository registering a worktree where the worker's was never frees the owed branch the record names here; a foreign linked worktree nested under this repository's root, whose placement records the foreign repository's key, never holds this repository's equally named branch; this repository's own admission whose placement records another repository's key holds nothing here; a placement in another repository's registered worktree holds nothing, with or without its key; an earlier admission without a role holds as an assignment; and an owning admission whose hold cannot be judged is `worker_placement_unknown` for its Dispatch, never a failed query. Single and batch answer alike with a stable fence.
+- <a id="a902"></a>**A902** — An owed implementation report whose registered worktree was detached at the same commit after admission, its settled Dispatch unobservable with no agent terminal, makes a query of the recorded branch `blocked` and complete, with the one record-side writer claim of A870 and no unknown, with no verifier configured, with a verifier answering `verified: false` and with one that counts the Dispatch exited; the three results' claims, conflicts and unknowns are equal, and the counted one is the result 0.21.47 gave counted. The native writer, a complete location with no branch, and its process-liveness unknown stay out of that query's result. Single and batch answer alike with a stable fence, and in the same batch the unfiltered query shows that native writer while nothing counts it, and the hold once it is counted.
+- <a id="a903"></a>**A903** — Another repository's objective whose owed admission placed its worker in this repository's worktree, since removed, on a Run this repository's records do not name, makes a query of the recorded branch `blocked` and complete with that objective's writer claim, in the same three verifier modes, with equal claims, conflicts and unknowns, the counted one as 0.21.47 gave it; the unfiltered query of the same batch shows the hold in every mode. The same row shown live reads as before: `observed`, with no claim and no host-exit candidate.
+- <a id="a904"></a>**A904** — Over a worktree still on its recorded branch, detached, moved to another branch, another repository's placement in place and the same removed, in each verifier mode, no result shows both the native writer claim of the Dispatch and its admission's owed hold; the unfiltered query shows exactly one; and a query of the recorded worktree or of the recorded branch is never `observed`.
 
 #### Admission storage read contract
 

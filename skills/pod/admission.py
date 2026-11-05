@@ -2455,7 +2455,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 and row.get("worktree") == ownership.get("worktree") and row.get("live") is True for row in observations)
             ownership["owner_identity_matches"] = matches
             owners[ownership["record"]] = matches
-        workers, context_only = {}, {}
+        workers, context_only, skipped = {}, {}, {}
         for requested_run, native in native_groups:
             budget.check()
             if native.get("complete") is not True:
@@ -2598,6 +2598,11 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                 fact_scope={"repo_keys": sorted(key for key in run_repo_keys if key), "run": run},
                                 reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
                                                 "condition": "Resolve the native resource's repository and worktree ownership"})
+                    if shown["liveness"] != "live":
+                        # No claim here, but another repository's owed admission may have placed it here: its owners
+                        # are still read, as when it is counted exited (pod#237). A live worker writes where Orca
+                        # shows it.
+                        skipped[shown["dispatch"]] = shown
                     continue
                 workers[shown["dispatch"]] = shown
                 if shown["liveness"] == "exited" and not native_effects:
@@ -2648,17 +2653,22 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             or shown["terminal"] != binding["terminalHandle"]):
                         unknown(record, "native_identity_unverified", objective=name, admission=key)
         # A bound admission whose report is still owed keeps its placement held by its record once the native side
-        # settles or skips its Dispatch (exited, rule S, R212 or a settled context-only row): consuming the report
-        # reads the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown,
-        # and a native writer claim for the Dispatch already holds it.
-        natively_claimed = {row["dispatch"] for row in result["claims"] if "native_terminal" in row and row.get("dispatch")}
+        # settles, skips or leaves out its Dispatch (exited, rule S, R212, a settled context-only row, a row skipped
+        # outside the repository, or a native writer this query's relevance filters out): consuming the report reads
+        # the worker's result where it was placed. A Dispatch the native inventory lacks is already unknown. Only a
+        # native writer claim in this query's own result already holds it, so the hold is never shown twice and
+        # never hidden behind a claim the result leaves out (pod#237).
+        selection = {"worktree": physical(worktree) if worktree else None,
+                     "branch": branch, "target": target, "effects": effects or []}
+        natively_claimed = {row["dispatch"] for row in result["claims"] if "native_terminal" in row and row.get("dispatch")
+                            and relevant(row, selection, context["repo_key"])}
         for dispatch in fleet_facts:
             # Each owning record accounts for its own admission: another record's consumed binding of the same
-            # Dispatch never discharges it. Only a Dispatch placed provably in another repository's registered
-            # worktree is left unread; a missing, removed or unproved location reads its Run's recorded owners.
+            # Dispatch never discharges it. The owners are read whatever the Dispatch's path holds today; which
+            # repository an owed placement belongs to is the record's to say (`held_here`).
             if dispatch in natively_claimed:
                 continue
-            shown = workers.get(dispatch)
+            shown = workers.get(dispatch, skipped.get(dispatch))
             if shown is None and dispatch in context_only:
                 try:
                     shown = _worker_fact(context_only[dispatch])
@@ -2676,7 +2686,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             return bool(location and workspace(location, places)[1]) or not (location and elsewhere(location))
         for dispatch, held, repo_key in unfinished:
             if dispatch in fleet_facts and dispatch not in natively_claimed and held_here(repo_key, held["worktree"]):
-                claim(held)  # `exited`: this call's own reads settled the worker; its placement is still owed
+                claim(held)  # `exited`: the record holds the placement it still owes, whatever process state remains
         from .retirement import _exited
         for terminal in terminals["terminals"]:
             path = terminal.get("worktreePath") or listing._location(terminal.get("worktreeId"))
