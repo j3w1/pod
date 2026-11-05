@@ -1256,13 +1256,9 @@ def _recover_pending(project: Path, objective: str, owner: str, admission_id: st
         from .ledger import refuse_released_reuse
         prior = _assignment_evidence(native_port.show_worker(previous["native_binding"]["dispatchId"]), previous)
         refuse_released_reuse(prior["placement"], admission["reuse_of"], request_uuid=request_uuid)
-    keep_open = _keep_open_flag(admission)
-    if keep_open and advertised.get("worker_keep_open") is not True:
-        # R214: the recorded intent is not current support; replay with the unchanged argv and record that.
-        keep_open = {}
-        admission = update_admission(project, objective, owner=owner, admission_id=admission_id,
-                                     update=lambda row: row.update(keep_open="not_advertised"),
-                                     expected_runtime=admission["runtime"])
+    # R214: the recorded intent stays as it was; each replay derives the flag from this call's fresh snapshot, and
+    # the attempt's own start observation keeps the argv it sent.
+    keep_open = _keep_open_flag(admission) if advertised.get("worker_keep_open") is True else {}
     receipt = _start_observed(project, objective, admission_id=admission_id, port=native_port,
                                        run=admission["run_id"], task=admission["task_id"],
                                        owner=owner, route=admission["request"], worktree=worktree,

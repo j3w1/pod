@@ -11764,7 +11764,8 @@
         "tests.test_orca_v3.AdmissionKeepOpenTests.test_keep_open_on_pre_v3_adds_no_flag_and_records_that_orca_does_not_advertise_it",
         "tests.test_orca_v3.TabKeepOpenTests.test_keep_open_is_relayed_only_for_intended_retention_before_automatic_release",
         "tests.test_orca_v3.SettledDispatchTests.test_a_v3_completion_names_keep_open_and_forbids_send_to_the_settled_dispatch",
-        "tests.test_orca_v3.AdmissionKeepOpenTests.test_keep_open_replay_follows_the_current_capability_snapshot"
+        "tests.test_orca_v3.AdmissionKeepOpenTests.test_keep_open_replay_follows_the_current_capability_snapshot",
+        "tests.test_orca_v3.AdmissionKeepOpenTests.test_a_failed_replay_without_keep_open_keeps_the_intent_for_the_next_replay"
       ],
       "status": "NOT_RUN"
     },

@@ -456,13 +456,33 @@ class AdmissionKeepOpenTests(unittest.TestCase):
         self.assertEqual(result["status"], "bound")
         self.assertEqual((self.port.starts[-1]["keep_open"], self.port.starts[-1]["retry_request"] is not None),
                          (False, True))
+        # The recorded intent is not rewritten; only this attempt went without the flag.
         self.assertEqual(read(self.project, "objective")["admissions"][admission["admission_id"]]["keep_open"],
-                         "not_advertised")
+                         "requested")
         # With keep-open still advertised the replay keeps the flag.
         self.port.features = V3
         again = self.admit(task="task2", keep_open=True)["admission"]
         self.pending(again)()
         self.assertTrue(self.port.starts[-1]["keep_open"])
+
+    def test_a_failed_replay_without_keep_open_keeps_the_intent_for_the_next_replay(self):
+        self.use(V3)
+        admission = self.admit(keep_open=True)["admission"]
+        recover = self.pending(admission)
+        request = read(self.project, "objective")["admissions"][admission["admission_id"]]["request_uuid"]
+        self.port.features = PRE_V3
+        with patch.object(self.port, "start_worker", side_effect=PodError("orca_unavailable", "outcome unknown")) as start:
+            with self.assertRaises(PodError):
+                recover()
+        self.assertNotIn("keep_open", start.call_args.kwargs)
+        stored = read(self.project, "objective")["admissions"][admission["admission_id"]]
+        self.assertEqual((stored["keep_open"], stored["request_uuid"]), ("requested", request))
+        self.port.features = V3
+        self.port.state = "pending"
+        self.assertEqual(recover()["status"], "bound")
+        self.assertEqual((self.port.starts[-1]["keep_open"], self.port.starts[-1]["retry_request"]), (True, request))
+        self.assertEqual(read(self.project, "objective")["admissions"][admission["admission_id"]]["keep_open"],
+                         "requested")
 
     def test_a_released_prior_on_pre_v3_keeps_todays_reuse_path(self):
         self.use(PRE_V3)
