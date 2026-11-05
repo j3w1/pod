@@ -8,7 +8,7 @@ Fix governance paths at intake: canonical project policy, `.pod/config.yaml`, tr
 
 Optimize time to a verified result. At transitions dispatch ready distinct work that shortens that path; waiting is valid, spare capacity creates no duty, lean is no one-worker rule.
 
-Packets name outcome, done-when (verification to perform/fix), served obligations, boundary/actions, candidate, route, digested sources and report format. Investigations name decision and stop condition. Include no secrets or whole issue/conversation; future outputs belong in scope, not sources. Preserve discarded results/branches; disposition satisfies nothing.
+Packets name outcome, done-when (verification to perform/fix), served obligations, boundary/actions, candidate, route, digested sources and report format. Investigations name decision and stop condition; review packets state collect mode from the proof guidance. Include no secrets or whole issue/conversation; future outputs belong in scope, not sources. Preserve discarded results/branches; disposition satisfies nothing.
 
 Corrections use direct/delegation judgment and current pool/pin. Retain findings; briefs identify failed rule, alternate entrypoints, supported records and status/wait consumers. Diagnose repeats with example, hypothesis and discriminating check. For recurring delta-review defects, state one predicate and cover sibling states in one table test.
 
