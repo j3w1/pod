@@ -11365,7 +11365,10 @@
       "offline_test": [
         "tests.test_admission_host_exit.RelevanceTests.test_the_unfiltered_query_asks_for_a_located_candidate",
         "tests.test_admission_host_exit.RelevanceTests.test_each_request_shape_asks_its_superset",
-        "tests.test_admission_host_exit.RelevanceTests.test_the_superset_contains_relevant_and_admits_its_documented_extras"
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_empty_and_worktree_only_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_branch_and_both_requests",
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_target_and_effects_requests",
+        "tests.test_admission_host_exit_scope.FactTests.test_the_superset_contains_relevant_for_every_fact_a_record_may_give"
       ],
       "status": "NOT_RUN"
     },
@@ -11797,6 +11800,18 @@
         "live_native"
       ],
       "offline_test": null,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A898",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_scope.OrphanTests.test_each_removed_worktree_query_asks_only_its_own_row_and_counts_it",
+        "tests.test_admission_host_exit_scope.OrphanTests.test_a_branch_query_never_takes_another_repositorys_rows"
+      ],
       "status": "NOT_RUN"
     },
     {

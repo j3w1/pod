@@ -235,7 +235,8 @@ class EligibilityTests(HostExitCase):
 
 
 class RelevanceTests(HostExitCase):
-    """A859: the candidate rule is the conservative superset S(r, q) of `_relevant`, including the empty request."""
+    """A859: the candidate rule is the relevance superset S(r, q) of `_relevant`, including the empty request; the
+    enumerated proof that it contains every row the projection holds is in test_admission_host_exit_scope."""
 
     def test_the_unfiltered_query_asks_for_a_located_candidate(self):
         result = self.read([stuck(self)], repository=str(self.project))
@@ -253,36 +254,6 @@ class RelevanceTests(HostExitCase):
                 self.log.unlink(missing_ok=True)
                 self.read(rows, **query)
                 self.assertEqual(sorted(self.asked()), asked)
-
-    def test_the_superset_contains_relevant_and_admits_its_documented_extras(self):
-        """Every row `_relevant` keeps is a candidate; a known non-overlapping path with an unknown branch and a gap
-        Dispatch outside the selection are the permitted extras."""
-        project = str(self.project)
-        places = {project: "main"}
-        loose = str(self.root / "loose")  # outside every registered worktree: its branch is unknown
-        rows = {"in-a": (str(self.project / "wa"), "main"), "in-b": (str(self.project / "wb"), "main"),
-                "unlocated": (None, None), "unknown-branch": (loose, None)}
-        requests = [{}, {"worktree": str(self.project / "wa")}, {"branch": "main"}, {"branch": "other"},
-                    {"target": "main"}, {"effects": ["deploy:target"]},
-                    {"worktree": str(self.project / "wa"), "branch": "other"}]
-        with patch("pod.admission._SHARED") as shared:
-            shared.get.return_value = None
-            for request in requests:
-                full = {"worktree": None, "branch": None, "target": None, "effects": [], **request}
-                slot = admission._HostExitSlot(self.project, full, {"lead-run"}, {"gap"}, set())
-                for dispatch, (path, branch) in rows.items():
-                    shown = {"dispatch": dispatch, "run": "lead-run", "worktree": path}
-                    facts = {"repo_key": "key", "worktree": path, "branch": branch,
-                             "locations_complete": bool(path) and branch is not None}
-                    relevant = admission._relevant(facts, full, "key", admission._overlap, "process_liveness")
-                    with self.subTest(request=request, row=dispatch):
-                        if relevant:
-                            self.assertTrue(admission._host_exit_relevant(slot, shown, places))
-                self.assertTrue(admission._host_exit_relevant(slot, {"dispatch": "gap", "run": "x",
-                                                                     "worktree": str(self.project / "wb")}, places))
-                if request.get("worktree") and not request.get("branch"):
-                    shown = {"dispatch": "unknown-branch", "run": "lead-run", "worktree": loose}
-                    self.assertTrue(admission._host_exit_relevant(slot, shown, places))  # an extra, never unsafe
 
 
 class DeadlineTests(HostExitCase):

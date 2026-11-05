@@ -1051,8 +1051,11 @@ class _HostExitSlot:
     Candidates and decisions are the query's own: a verdict asked for because of another query never changes this
     query's result."""
 
-    def __init__(self, project: Path, request: dict, runs: set, gaps: set, abandoned: set):
-        self.project, self.request, self.runs, self.gaps, self.abandoned = project, request, runs, gaps, abandoned
+    def __init__(self, project: Path, request: dict, runs: set, own_runs: set, gaps: set, abandoned: set):
+        # `runs`: every Run a record names (rule S scope); `own_runs`: those named by this repository's records whose
+        # admissions the query reads, the only Runs on which its projection claims a row outside the repository.
+        self.project, self.request, self.runs, self.own_runs = project, request, runs, own_runs
+        self.gaps, self.abandoned = gaps, abandoned
         self.candidates: dict = {}  # Dispatch -> {"host", "terminal", "run", "worktree"}
         self.decisions: dict = {}  # Dispatch -> {"counted", "code", "entry", "verdict"}
 
@@ -1081,18 +1084,27 @@ def _host_exit_scope(slot: _HostExitSlot, shown: dict, places) -> bool:
 
 
 def _host_exit_relevant(slot: _HostExitSlot, shown: dict, places) -> bool:
-    """The conservative relevance superset S(r, q): it contains `_relevant` for the writer claim and the
-    process-liveness unknown such a row produces, and may admit extra rows."""
+    """The relevance superset S(r, q): it contains `_relevant` for the writer claim and the process-liveness unknown
+    such a row produces, judged from what the query knows before its projection reads a record for the row.
+
+    A record can give an unregistered row a branch and a repository key, which only narrow `_relevant` or match a
+    requested branch; it never makes a path overlap. So a worktree-only request decides any located row by its path,
+    and a row in this repository's registered worktree has a complete location that is judged exactly."""
     request = slot.request
     if not any(request.values()) or shown["dispatch"] in slot.gaps:
         return True
     path = shown["worktree"]
-    registered = _workspace(slot.project, path, places)[0] if path else None
-    branch = places.get(registered) if registered is not None else None
-    if path is None or branch is None:
-        return True  # An incomplete location: the projection may only know less, never more.
+    if path is None:
+        return True  # Unlocated: `_relevant` keeps it for every request.
+    registered, inside = _workspace(slot.project, path, places)
+    if not inside and shown["run"] not in slot.own_runs:
+        return False  # Not on one of the query's own Runs: the projection makes no claim and no unknown for it.
+    if request["worktree"] and not request["branch"]:
+        return _overlap(request["worktree"], path)
+    if registered is None:
+        return True  # A branch, target or effects request facing a branch only a record may know.
     return bool(request["worktree"] and _overlap(request["worktree"], path)
-                or request["branch"] and branch == request["branch"])
+                or request["branch"] and places.get(registered) == request["branch"])
 
 
 def _host_exit_requests(ids, hosts: dict) -> list:
@@ -2204,7 +2216,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             # R212: this query's own candidate scope, which the call asks the host about before the end fence.
             host_slot = _HostExitSlot(project, {"worktree": physical(worktree) if worktree else None,
                                                 "branch": branch, "target": target, "effects": effects or []},
-                                      {*runs, *run_sources}, gap_dispatches, set(abandoned_dispatches))
+                                      {*runs, *run_sources}, set(runs), gap_dispatches, set(abandoned_dispatches))
             discovery.host_exit_slots.append(host_slot)
         yield "native"  # Every query's record pass runs while the native inventory is read.
         # Prefer the installed all-Run inventory for CE's unbound caller.
