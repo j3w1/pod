@@ -1,12 +1,12 @@
 """R185 and R206: a bound admission whose report is still owed keeps its placement held by its record once the native
 side settles its Dispatch (Orca exited, released and exited, rule S, R212), in open, continued and closed records; a
 `retired` record holds nothing. The R108 list counts such admissions per objective (A870-A880). The hold stands
-whether or not the Dispatch is counted exited, and a native writer stands in for it only inside a query's own result
-(A902-A904)."""
+whether or not the Dispatch is counted exited or shown live, and a native writer stands in for it only inside a
+query's own result (A902-A904). A query's census binds only the evidence closures its own judgments read (A906)."""
 import json
 from unittest.mock import patch
 
-from pod import admission, listing, process_exit
+from pod import admission, evidence_closure, listing, process_exit
 from pod.governor import report_owed
 from pod.github import repository_context
 from pod.ledger import objective_root
@@ -605,16 +605,134 @@ class CountingTests(CountingCase):
         self.assertEqual([(len(self.native_claims(unfiltered[mode])), len(self.holds(unfiltered[mode])))
                           for mode in self.MODES], [(0, 1)] * 3)
 
-    def test_a_live_row_outside_the_repository_reads_as_before(self):
-        """A903. A row Orca shows live is a writer where Orca shows it, outside this repository and on another
-        repository's Run; it is no host-exit candidate and holds nothing here, as before."""
+
+OWING_FORMS = {"bound writer": ({}, "writer"), "bound assignment": ({"role": "review"}, "assignment"),
+               "unresolved writer": ({"state": "unresolved"}, "writer"),
+               "unresolved assignment": ({"state": "unresolved", "role": "investigate"}, "assignment"),
+               "report without disposition": ({"report": {"outcome": "succeeded"}}, "writer")}
+LIVE_STATES = {"running": ("running", "running"), "settled": ("succeeded", "completed")}
+
+
+class LiveRowTests(CountingCase):
+    """A903: a row Orca shows live, outside this repository on a Run its records do not name, has no native
+    representation here, so its owners are read and the owed placement holds, as for any other row. That covers a
+    running worker and a settled one whose projection still reads live; a removed worktree, a path another repository
+    reused and a row without a native location; and every owing form. R212 never counts a live row, so no verifier
+    can change this. The review of PR 240 found the 40 removed-worktree results (5 forms x 2 live states x 4
+    queries) free; each is asserted here."""
+
+    def owing(self, fields):
+        """The foreign owner's admission a1, as first recorded, in the given owing form."""
+        path = objective_root(self.root / "foreign-repository", "foreign") / "context.json"
+        if not hasattr(self, "recorded"):
+            self.recorded = logical_json(path)
+        raw = json.loads(json.dumps(self.recorded))
+        raw["admissions"]["a1"].update(fields)
+        path.write_text(json.dumps(raw))
+
+    def held(self, state, forms, *, located=True, verifier=False):
+        """Each owing form, its worker shown live in `state`: every query of the recorded worktree, branch or both,
+        and the unfiltered query, holds the placement by the record alone."""
+        self.configure(self.command if verifier else None)
+        self.fake.mode = None
+        path = str(self.worker_path)
+        queries = [{}, {"worktree": path}, {"branch": BRANCH}, {"worktree": path, "branch": BRANCH}]
+        for form in forms:
+            fields, kind = OWING_FORMS[form]
+            with self.subTest(form=form, state=state):
+                self.owing(fields)
+                worker = stuck(self, "d1", path=self.worker_path, run="run", handle="d1-terminal", verdict="live",
+                               state=LIVE_STATES[state])
+                if not located:
+                    worker["resource"]["worktreeId"], worker["projection"]["workspace"] = None, {}
+                self.serve(worker)
+                answer = self.batch(*queries)
+                self.assertTrue(answer["native_fence"]["stable"])
+                for query, row in zip(queries, answer["responses"]):
+                    result = row["result"]
+                    self.assertEqual(self.native_claims(result), [])
+                    self.assertEqual([(held["objective"], held["kind"], held["worktree"], held["branch"])
+                                      for held in self.holds(result)], [("foreign", kind, path, BRANCH)], query)
+                    self.assertNotIn("host_exits", result)  # a live row is never a candidate
+                    if query:
+                        self.assertEqual((result["status"], result["complete"]), ("blocked", True), result["unknowns"])
+
+    def test_a_running_live_row_of_a_removed_worktree_holds_every_owing_form(self):
         self.foreign_removed()
-        for mode in self.MODES:
-            with self.subTest(mode):
-                result, = self.read(mode, [{"branch": BRANCH}], verdict="live", state=("running", "running"),
-                                    singles=False)
-                self.assertEqual((result["status"], result["complete"], result["claims"], result["unknowns"],
-                                  result.get("host_exits")), ("observed", True, [], [], None))
+        self.held("running", OWING_FORMS)
+
+    def test_a_settled_row_shown_live_in_a_removed_worktree_holds_every_owing_form(self):
+        self.foreign_removed()
+        self.held("settled", OWING_FORMS, verifier=True)
+
+    def test_a_live_row_at_a_path_another_repository_reused_holds(self):
+        self.foreign_removed()
+        git(self.project, "init", "-q", "-b", "reused", str(self.worker_path))
+        for state in LIVE_STATES:
+            self.held(state, ("bound writer", "bound assignment"))
+
+    def test_a_live_row_without_a_native_location_holds(self):
+        """The unfiltered query also names the row `native_location_unavailable`, scoped to the Run's repository."""
+        self.foreign_removed()
+        for state in LIVE_STATES:
+            self.held(state, ("bound writer", "bound assignment"), located=False)
+
+
+class CensusIsolationTests(CountingCase):
+    """A906 (R213): a query's census binds only the evidence-closure reads its own judgments used. Another
+    repository's objective owes a report for a worker registered here on Run `run`, and nothing is counted (no
+    verifier). One query keeps that native writer and reads no owner; a query whose result leaves the writer out reads
+    the owner's phase through its foreign-owner pass. In one batch, in either order, each returns exactly its single
+    result, census included: the pod#237 review's 24 schedules plus the recorded branch, over the worktree on its
+    recorded branch, detached or moved."""
+
+    def others(self):
+        return {"another branch": {"branch": "other"}, "another worktree": {"worktree": str(self.root / "unrelated")},
+                "target": {"target": "target"}, "effects": {"effects": ["synthetic-effect"]},
+                "the recorded branch": {"branch": BRANCH}}
+
+    def isolated(self, placement):
+        self.foreign_in_place()
+        if placement == "detached":
+            git(self.worker_path, "checkout", "--detach", "-q")
+        elif placement == "moved":
+            git(self.worker_path, "checkout", "-q", "-b", "moved")
+        self.configure(None)
+        self.serve(stuck(self, "d1", path=self.worker_path, run="run", handle="d1-terminal"))
+        alone = {json.dumps(query): admission.query(self.project, **query) for query in [{}, *self.others().values()]}
+        self.assertTrue(alone["{}"]["record_census"]["complete"])
+        for name, query in self.others().items():
+            for pair in ([query, {}], [{}, query]):
+                with self.subTest(placement=placement, other=name, first=json.dumps(pair[0])):
+                    answer = self.batch(*pair)
+                    self.assertTrue(answer["native_fence"]["stable"])
+                    self.assertEqual([row["result"] for row in answer["responses"]],
+                                     [alone[json.dumps(each)] for each in pair])
+
+    def test_a_worktree_on_its_recorded_branch(self):
+        self.isolated("recorded")
+
+    def test_a_worktree_detached_after_admission(self):
+        self.isolated("detached")
+
+    def test_a_worktree_moved_to_another_branch(self):
+        self.isolated("moved")
+
+    def test_an_unreadable_owner_closure_binds_only_the_query_that_read_it(self):
+        """The owner's evidence closure cannot be read: the query of another branch, which judged the owner, has a
+        false census alone and in the batch; the unfiltered query, which never read it, keeps its true one."""
+        self.foreign_in_place()
+        (objective_root(self.root / "foreign-repository", "foreign") / evidence_closure.FILE).write_text("{}")
+        self.configure(None)
+        self.serve(stuck(self, "d1", path=self.worker_path, run="run", handle="d1-terminal"))
+        queries = [{}, {"branch": "other"}]
+        alone = [admission.query(self.project, **query) for query in queries]
+        self.assertEqual([result["record_census"]["complete"] for result in alone], [True, False])
+        for pair in (queries, queries[::-1]):
+            answer = self.batch(*pair)
+            self.assertTrue(answer["native_fence"]["stable"])
+            self.assertEqual([row["result"] for row in answer["responses"]],
+                             alone if pair == queries else alone[::-1])
 
 
 class RepresentationTests(CountingCase):

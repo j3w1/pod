@@ -11710,6 +11710,20 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A906",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_unconsumed_report.CensusIsolationTests.test_a_worktree_on_its_recorded_branch",
+        "tests.test_admission_unconsumed_report.CensusIsolationTests.test_a_worktree_detached_after_admission",
+        "tests.test_admission_unconsumed_report.CensusIsolationTests.test_a_worktree_moved_to_another_branch",
+        "tests.test_admission_unconsumed_report.CensusIsolationTests.test_an_unreadable_owner_closure_binds_only_the_query_that_read_it"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A888",
       "required_evidence": [
         "unit"
@@ -11896,7 +11910,10 @@
       ],
       "offline_test": [
         "tests.test_admission_unconsumed_report.CountingTests.test_a_foreign_owners_removed_worktree_holds_its_recorded_branch_in_every_mode",
-        "tests.test_admission_unconsumed_report.CountingTests.test_a_live_row_outside_the_repository_reads_as_before",
+        "tests.test_admission_unconsumed_report.LiveRowTests.test_a_running_live_row_of_a_removed_worktree_holds_every_owing_form",
+        "tests.test_admission_unconsumed_report.LiveRowTests.test_a_settled_row_shown_live_in_a_removed_worktree_holds_every_owing_form",
+        "tests.test_admission_unconsumed_report.LiveRowTests.test_a_live_row_at_a_path_another_repository_reused_holds",
+        "tests.test_admission_unconsumed_report.LiveRowTests.test_a_live_row_without_a_native_location_holds",
         "tests.test_admission_unconsumed_report.RepresentationTests.test_a_foreign_owners_removed_worktree"
       ],
       "status": "NOT_RUN"

@@ -1278,9 +1278,9 @@ decides, whatever path nests it; without a key, a location in this repository ho
 location not proved another repository's registered worktree (rule T 4b's proof). When a Dispatch the
 native side saw without a claim in the query's result belongs to a Run another repository's objective records,
 the records owning that Run are read, whatever its path holds today, and nothing else of theirs; the judgment
-is shared once per call. A row skipped outside the repository is read the same way, as it would be once
-counted exited, unless Orca shows it live: a live worker writes where Orca shows it, so its owners are not
-read for this repository. That record is rechecked with the call's other sources, and one that cannot be
+is shared once per call. A row skipped outside the repository is read the same way, live or not: R212 never
+counts a live row, and a live projection proves nothing about the report its owner still owes. That record is
+rechecked with the call's other sources, and one that cannot be
 read or changed
 is `worker_placement_unknown` or `record_changed` for that Dispatch. A Dispatch the native inventory lacks stays `native_identity_unverified`, and
 a native writer claim for the Dispatch in the query's result adds no second claim. Each query decides from its
@@ -1394,7 +1394,7 @@ CE always parses the factual status and scope; zero is never permission.
 - <a id="a879"></a>**A879** — A foreign objective's owing admission keeps its branch held after its worktree is removed (Orca exited or rule S), with no native location, and with a branch-only placement; a consumed local binding of the same Dispatch does not discharge it; every owing admission of one Dispatch across records holds, and only a non-`retired` owner holds; a placement attributed to another repository holds nothing, and an owning admission that cannot be read is `worker_placement_unknown` for the Dispatch. A placement branch that becomes unrecorded before the recheck is `record_changed` for another branch's query. Single and batch answer alike with a stable fence.
 - <a id="a880"></a>**A880** — The recorded identity decides, not the current path: another repository registering a worktree where the worker's was never frees the owed branch the record names here; a foreign linked worktree nested under this repository's root, whose placement records the foreign repository's key, never holds this repository's equally named branch; this repository's own admission whose placement records another repository's key holds nothing here; a placement in another repository's registered worktree holds nothing, with or without its key; an earlier admission without a role holds as an assignment; and an owning admission whose hold cannot be judged is `worker_placement_unknown` for its Dispatch, never a failed query. Single and batch answer alike with a stable fence.
 - <a id="a902"></a>**A902** — An owed implementation report whose registered worktree was detached at the same commit after admission, its settled Dispatch unobservable with no agent terminal, makes a query of the recorded branch `blocked` and complete, with the one record-side writer claim of A870 and no unknown, with no verifier configured, with a verifier answering `verified: false` and with one that counts the Dispatch exited; the three results' claims, conflicts and unknowns are equal, and the counted one is the result 0.21.47 gave counted. The native writer, a complete location with no branch, and its process-liveness unknown stay out of that query's result. Single and batch answer alike with a stable fence, and in the same batch the unfiltered query shows that native writer while nothing counts it, and the hold once it is counted.
-- <a id="a903"></a>**A903** — Another repository's objective whose owed admission placed its worker in this repository's worktree, since removed, on a Run this repository's records do not name, makes a query of the recorded branch `blocked` and complete with that objective's writer claim, in the same three verifier modes, with equal claims, conflicts and unknowns, the counted one as 0.21.47 gave it; the unfiltered query of the same batch shows the hold in every mode. The same row shown live reads as before: `observed`, with no claim and no host-exit candidate.
+- <a id="a903"></a>**A903** — Another repository's objective whose owed admission placed its worker in this repository's worktree, since removed, on a Run this repository's records do not name, makes a query of the recorded branch `blocked` and complete with that objective's writer claim, in the same three verifier modes, with equal claims, conflicts and unknowns, the counted one as 0.21.47 gave it; the unfiltered query of the same batch shows the hold in every mode. The same row shown live, running or settled with a stale live projection, holds the same way, with no host-exit candidate and whatever verifier is configured: for a bound or unresolved writer or assignment and an implementation whose report awaits its disposition, the recorded worktree, branch and both queries read `blocked` and the unfiltered one shows the hold (the 40 results the review of PR 240 found free), and so do a path another repository reused and a row without a native location.
 - <a id="a904"></a>**A904** — Over a worktree still on its recorded branch, detached, moved to another branch, another repository's placement in place and the same removed, in each verifier mode, no result shows both the native writer claim of the Dispatch and its admission's owed hold; the unfiltered query shows exactly one; a query of the recorded worktree or of the recorded branch is never `observed`; and a query of another branch, which leaves every claim out, counts as many `unrelated_claims` as the unfiltered query shows claims.
 
 #### Admission storage read contract
@@ -1580,7 +1580,7 @@ overlapped with the projections and the recheck.
 
 ### R213 — Attest admission record census separately from owner facts
 
-Type: B,I · Scenarios: [A881](#a881), [A882](#a882), [A883](#a883), [A884](#a884), [A885](#a885), [A886](#a886), [A887](#a887)
+Type: B,I · Scenarios: [A881](#a881), [A882](#a882), [A883](#a883), [A884](#a884), [A885](#a885), [A886](#a886), [A887](#a887), [A906](#a906)
 
 Each R185 query and R207 per-query result carries `record_census`, with exactly `schema`
 (`pod-admission-record-census/v1`), boolean `complete`, and `scope_sha256`, `cohort_sha256`,
@@ -1626,6 +1626,10 @@ ensure_ascii=False)`, after the existing plain-value conversion. The canonical p
   foreign claims read adds `consulted_claims_generation`; a consulted journal adds
   `journal_generation`; a consulted phase-closure read adds `phase_closure_sha256`, H of
   `{identity, value}` for its filesystem generation and validated projection (or absent nulls).
+  A closure is consulted by a query when its own phase judgments read it: its own records', and
+  those of the owner records whose shared foreign-owner judgment it uses (R185, R212), whichever
+  query of the call read the closure first. A closure only another query of the call consulted is
+  never bound or qualified, so each result's census equals its single query's (pod#237).
   Every claims generation must equal its attribution generation, and each context/journal is
   rechecked exactly. `effect_policies` maps each consulted repository path to its unchanged
   effect-policy revision. No unrelated retained payload is hydrated to produce these inputs.
@@ -1691,6 +1695,7 @@ absence, exit, authorization, objective completion or cleanup clearance, includi
 - <a id="a885"></a>**A885** — A generation change between attribution and claims, an equivalent journal rewrite, a changed effect-classification policy or an unreadable phase closure cannot assert census completion.
 - <a id="a886"></a>**A886** — Interrupted discovery/recheck, a later sibling spending the shared original cutoff, and expiry during thread teardown or batch serialization all leave census false. A batch end-fence failure or projection omission after constructing a true witness clears it before returning, preserving existing result fields. Witness bytes count toward both query and whole-batch limits; crossing them clears or refuses the witness/response.
 - <a id="a887"></a>**A887** — Focused existing admission query/batch regressions retain claim, relevance, snapshot, native transport, byte, concurrency, correlation, Stop, lineage and ceiling behavior; the new census never changes permission or upgrades other completeness fields.
+- <a id="a906"></a>**A906** — With no verifier, another repository's objective owes a report for a worker registered in this repository, its worktree on the recorded branch, detached or moved. A query that keeps that native writer reads no owner record, while a query of another branch, another worktree, a target, effects or the recorded branch that leaves the writer out reads the owner's phase through its foreign-owner judgment. In one batch, in either order, each returns exactly its single result, census included. With the owner's evidence closure unreadable, the query that read it has a false census alone and in the batch, and the unfiltered query keeps its true one.
 
 ### R208 — Read one objective's exact-candidate facts without discovery
 
