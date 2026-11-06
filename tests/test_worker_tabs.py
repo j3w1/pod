@@ -23,6 +23,17 @@ from tests.issue41_support import ProductionCase
 from tests.kernel_support import REQUEST, assurance_review, assurance_satisfied, assurance_waiting
 
 
+def offers_tab_input(value):
+    """True when an output offers a worker tab a terminal rename or other input (pod#119)."""
+    if isinstance(value, list):
+        return value[:3] in (["orca", "terminal", "rename"], ["orca", "terminal", "send"]) or any(
+            offers_tab_input(item) for item in value)
+    if isinstance(value, dict):
+        return bool({"rename_command", "rename_reason"} & set(value)) or any(
+            offers_tab_input(item) for item in value.values())
+    return isinstance(value, str) and value.startswith("/rename")
+
+
 class TabCase(ProductionCase):
     def setUp(self):
         super().setUp()
@@ -200,8 +211,9 @@ class TitleTests(TabCase):
         from pod.display import job
         expected_tab = role_title + " · " + job(fields, role_title.lower())
         self.assertEqual(acknowledged["title"], expected_tab)
-        self.assertEqual(acknowledged["rename_command"],
-            ["orca", "terminal", "rename", "--terminal", handle, "--title", expected_tab, "--json"] if handle else None)
+        from pod.display import TITLE_NOTE
+        self.assertEqual(acknowledged["title_note"], TITLE_NOTE)
+        self.assertFalse(offers_tab_input(acknowledged), handle)
         return frozen, result["admission"]
 
     def test_implementer_omits_identifier_path_credential_status_and_route_shapes(self):
@@ -215,7 +227,7 @@ class TitleTests(TabCase):
     def test_reviewer_and_finer_role(self):
         self.title_admission("review", "Challenger: Check parser", role_label="Challenger", purpose="Check parser")
 
-    def test_headless_start_and_empty_safe_title_have_reason_without_command(self):
+    def test_headless_start_and_empty_safe_title_offer_no_command(self):
         self.port.headless = True
         self.tab_case = "not_materialized"
         frozen, admission = self.title_admission("implement", "Implementer: Assigned work", responsibility="/private/fixture ctx_fixture")
@@ -234,7 +246,8 @@ class TitleTests(TabCase):
         fresh = self.packet(["S"], role="investigate", resolves="new question", stop_condition="answer", purpose="Trace tokenizer")
         result = self.start("follow-up", fresh, reuse_of=admission["admission_id"])
         self.assertEqual(result["title"], "Investigator · Trace tokenizer (continued)")
-        self.assertEqual(result["rename_command"][4], admission["native_binding"]["terminalHandle"])
+        self.assertEqual(result["admission"]["native_binding"]["terminalHandle"], admission["native_binding"]["terminalHandle"])
+        self.assertFalse(offers_tab_input(result))
         self.assertNotEqual(result["title"], frozen["title"])
         self.tab_cases[admission["native_binding"]["dispatchId"]] = "reused_later"
         self.settle(result["admission"])
@@ -303,14 +316,15 @@ class TitleTests(TabCase):
         self.assertEqual(caught.exception.code, "unsupported_orca_mutation")
         self.assertEqual(self.calls, [])
 
-    def test_deferred_start_returns_title_without_rename(self):
+    def test_deferred_start_returns_title_and_note_without_rename(self):
         self.intake(self.sub("S"))
         self.port.receipt = {"runtime": "runtime", "exit": 1, "request_uuid": REQUEST,
                              "error": {"code": "task_not_startable", "message": "refused"}}
         result = self.start("worker", self.packet(["S"], purpose="Repair parser"))
         self.assertEqual(result["title"], "Implementer · Repair parser")
-        self.assertIsNone(result["rename_command"])
-        self.assertEqual(result["rename_reason"], "worker not started")
+        from pod.display import TITLE_NOTE
+        self.assertEqual(result["title_note"], TITLE_NOTE)
+        self.assertFalse(offers_tab_input(result))
 
     def test_optional_title_fields_obey_their_bounds(self):
         self.intake(self.sub("S"))
@@ -324,8 +338,7 @@ class TitleTests(TabCase):
                              "error": {"code": "runtime_error", "message": "uncertain"}}
         result = self.start("worker", self.packet(["S"], purpose="Repair parser"))
         self.assertEqual(result["title"], "Implementer · Repair parser")
-        self.assertIsNone(result["rename_command"])
-        self.assertEqual(result["rename_reason"], "worker start is not verified")
+        self.assertFalse(offers_tab_input(result))
 
 
 class TableTests(TabCase):
@@ -998,6 +1011,10 @@ class RetentionTests(TabCase):
             "finding": "defect", "severity": "major", "triage": "required_correction", "blocks": "outcome",
             "summary": "parser defect", "correction": "K"}])
         self.assertEqual(raw["worker_tab"]["retained_title"]["title"], "Reviewer · Check parser")
+        from pod.display import TITLE_NOTE
+        self.assertEqual(raw["worker_tab"]["retained_title"]["title_note"], TITLE_NOTE)
+        self.assertFalse(offers_tab_input(raw["worker_tab"]))
+        self.assertFalse(offers_tab_input(self.status()["worker_tabs"]))
         self.assertEqual(self.status()["worker_tabs"][0]["retention_reason"], "corrections")
         before = self.saved()
         for report_route in (False, True):

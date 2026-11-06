@@ -4759,11 +4759,13 @@
       ],
       "offline_test": [
         "tests.test_worker_tabs.TitleTests.test_implementer_omits_identifier_path_credential_status_and_route_shapes",
-        "tests.test_worker_tabs.TitleTests.test_headless_start_and_empty_safe_title_have_reason_without_command",
-        "tests.test_worker_tabs.TitleTests.test_deferred_start_returns_title_without_rename",
+        "tests.test_worker_tabs.TitleTests.test_headless_start_and_empty_safe_title_offer_no_command",
+        "tests.test_worker_tabs.TitleTests.test_deferred_start_returns_title_and_note_without_rename",
         "tests.test_worker_tabs.TitleTests.test_reuse_gets_a_new_title_and_exact_same_handle",
         "tests.test_worker_tabs.TitleTests.test_adapter_refuses_terminal_rename",
-        "tests.test_worker_tabs.TitleTests.test_unresolved_start_returns_title_and_honest_uncertainty"
+        "tests.test_worker_tabs.TitleTests.test_unresolved_start_returns_title_and_honest_uncertainty",
+        "tests.test_worker_tabs.RetentionTests.test_required_correction_delta_review_then_release",
+        "tests.test_display.DisplayOpTests.test_worker_layers_readback_status_and_session_steps"
       ],
       "status": "NOT_RUN"
     },
@@ -6406,7 +6408,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+        "tests.test_display.DisplayAckTests.test_admission_title_note_worker_reason_and_own_worktree_first_then_later",
         "tests.test_display.DisplayOwnershipTests.test_host_named_and_main_worker_placements_are_host_owned",
         "tests.test_display.DisplayAckTests.test_host_named_production_placement_gets_no_worktree_command"
       ],
@@ -6437,7 +6439,7 @@
         "unit"
       ],
       "offline_test": [
-        "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later",
+        "tests.test_display.DisplayAckTests.test_admission_title_note_worker_reason_and_own_worktree_first_then_later",
         "tests.test_display.DisplayAckTests.test_report_ack_marks_the_worktree_when_the_tab_is_gone",
         "tests.test_display.DisplayFailedReadTests.test_failed_worker_read_marks_no_worktree"
       ],
@@ -6534,7 +6536,8 @@
         "tests.test_display.DisplayOpTests.test_missing_or_incomplete_host_and_truncation_metadata_is_unreadable",
         "tests.test_display.DisplayOpTests.test_duplicate_or_unplaceable_worktree_rows_are_not_filtered_away",
         "tests.test_orca_adapter.OrcaAdapterTests.test_display_worktree_limit_is_one_exact_read_shape",
-        "tests.test_orca_adapter.OrcaAdapterTests.test_display_bounded_read_keeps_timeout_output_and_environment"
+        "tests.test_orca_adapter.OrcaAdapterTests.test_display_bounded_read_keeps_timeout_output_and_environment",
+        "tests.test_display.DisplayOpTests.test_worker_layers_readback_status_and_session_steps"
       ],
       "status": "NOT_RUN"
     },

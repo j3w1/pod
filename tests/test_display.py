@@ -8,7 +8,7 @@ from unittest.mock import patch
 from pod import display, internal
 from pod.errors import PodError
 from pod.ledger import read
-from tests.test_worker_tabs import TabCase
+from tests.test_worker_tabs import TabCase, offers_tab_input
 
 
 def state_fixture():
@@ -489,11 +489,25 @@ class DisplayOpTests(TabCase):
         self.assertEqual(output["rows"][2]["verdict"], "matches")
         terms["result"]["terminals"][1]["title"] = "Auto prompt"
         output = display.projection(state, terms, trees, {"version": "1.4.230"})
-        self.assertEqual(output["rows"][3]["verdict"], "differs")
-        self.assertIsNone(output["rows"][3]["session_rename"])
-        self.assertEqual(output["rows"][3]["session_reason"], display.WORKER_REASON)
+        # pod#119: a differing worker tab title is data only, never a rename, re-read or drift.
+        worker_tab = output["rows"][3]
+        self.assertEqual(worker_tab["verdict"], "differs")
+        self.assertEqual(worker_tab["expected"], {"title": "Implementer"})
+        self.assertIsNone(worker_tab["command"])
+        self.assertEqual(worker_tab["reason"], display.TITLE_NOTE)
+        self.assertEqual(output["verdict"], "backend_matches")
+        self.assertIsNone(worker_tab["session_rename"])
+        self.assertEqual(worker_tab["session_reason"], display.WORKER_REASON)
         self.assertFalse(sends_input([row for row in output["rows"] if row["layer"].startswith("worker")]))
-        self.assertFalse(any("session_rename" in action for action in output["next_action"]))
+        self.assertFalse(offers_tab_input([row for row in output["rows"] if row["layer"].startswith("worker")]))
+        self.assertFalse(offers_tab_input(output["next_action"]))
+        terms["result"]["terminals"][1].pop("title")
+        output = display.projection(state, terms, trees, {"version": "1.4.230"})
+        self.assertEqual(output["rows"][3]["verdict"], "unreadable")
+        self.assertNotIn("read_command", output["rows"][3])
+        self.assertEqual(output["rows"][3]["reason"], display.TITLE_NOTE)
+        self.assertEqual((output["verdict"], output["next_action"]), ("backend_matches", []))
+        terms["result"]["terminals"][1]["title"] = "Auto prompt"
         terms["result"]["terminals"][1]["connected"] = False
         self.assertEqual(len(display.projection(state, terms, trees, {"version": "1.4.230"})["rows"]), 3)
 
@@ -543,7 +557,7 @@ class DisplayAckTests(TabCase):
         self.assertEqual(self.ack("checkpoint", {}, raw)["checkpoint"]["display"], replacement)
         self.assertEqual(internal.run("contract", {"record": "display"})["records"]["display"]["fields"]["task"]["max_length"], 48)
 
-    def test_admission_title_rename_worker_reason_and_own_worktree_first_then_later(self):
+    def test_admission_title_note_worker_reason_and_own_worktree_first_then_later(self):
         objective = self.binding()
         self.intake(self.sub("S"), worktree=objective,
                     display={"task": "Parser repair", "continued": [], "host_tab": False})
@@ -555,7 +569,8 @@ class DisplayAckTests(TabCase):
         result = self.start("first", frozen, worktree="path:" + child["path"])
         row = result["admission"]; handle = row["native_binding"]["terminalHandle"]
         self.assertEqual(result["title"], "Investigator")
-        self.assertEqual(result["rename_command"], display.rename("Investigator", handle))
+        self.assertEqual(result["title_note"], display.TITLE_NOTE)
+        self.assertFalse(offers_tab_input(result), handle)
         self.assertIsNone(result["session_rename"])
         self.assertEqual(result["session_reason"], display.WORKER_REASON)
         self.assertEqual(result["worktree_command"], ["orca", "worktree", "set", "--worktree", "path:" + child["path"],
@@ -660,7 +675,8 @@ class DisplayAckTests(TabCase):
         fresh, _ = self.claude_placement("Other analysis", resolves="next question")
         reused = self.start("follow-up", fresh, worktree="path:" + child["path"], reuse_of=admission["admission_id"])
         self.assertEqual(reused["admission"]["state"], "bound")
-        self.assertEqual(reused["rename_command"][4], admission["native_binding"]["terminalHandle"])
+        self.assertEqual(reused["admission"]["native_binding"]["terminalHandle"], admission["native_binding"]["terminalHandle"])
+        self.assertFalse(offers_tab_input(reused))
         self.assertTrue(reused["title"].endswith(" (continued)"))
         self.assertFalse(sends_input(reused))
 
