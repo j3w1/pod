@@ -573,6 +573,67 @@ class TableTests(TabCase):
                 self.assertEqual(current["worker_tabs"][0]["state"], "releasable")
 
 
+
+class ReleaseGuidanceTests(TabCase):
+    def guidance_fixture(self):
+        from pod.worker_tabs import project
+        frozen, admission = self.worker()
+        self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        state = read(self.project, "objective")
+        admission = state["admissions"][admission["admission_id"]]
+        admission["keep_open"] = "requested"
+        self.tab_case = "retained"
+        from pod.operations import _placement_evidence
+        # Use the same production worker-show fact parser as status/report.
+        facts = _placement_evidence(self.shown(admission["native_binding"]["dispatchId"])["result"], admission["native_binding"])
+        facts["native_next_action"] = {"kind": "none", "argv": []}
+        return project, state, admission, facts
+
+    def test_consumed_keep_open_guidance_preserves_native_action(self):
+        project, state, admission, facts = self.guidance_fixture()
+        before = deepcopy((state, admission, facts, self.calls))
+        for ack in (False, True):
+            row = project(state, admission, facts, settled=True, acknowledgement=ack)
+            expected = ["orchestration", "worker-release", "--dispatch",
+                        admission["native_binding"]["dispatchId"], "--json", "--full"]
+            self.assertEqual(row["next_action"], {"kind": "worker_release", "source": "pod_guidance", "argv": expected})
+            self.assertEqual(row["native_next_action"], {"kind": "none", "argv": []})
+            self.assertEqual(row["command"], ["orca", *expected])
+            self.assertIn("Pod guidance: orca orchestration worker-release", row["wording"])
+            self.assertNotIn("Orca's release option", row["wording"])
+        self.assertEqual((state, admission, facts, self.calls), before)
+
+    def test_guidance_exclusions(self):
+        project, baseline, original, native = self.guidance_fixture()
+        for case in ("running", "unconsumed", "user_owned", "external", "pending", "unknown",
+                     "unreadable", "reserved", "unresolved", "not_requested", "not_advertised", "native_action", "owner_keep", "corrections", "delta_review"):
+            with self.subTest(case=case):
+                state, admission, facts = deepcopy((baseline, original, native))
+                settled = case != "running"
+                if case == "unconsumed": admission["report"] = None
+                elif case in ("user_owned", "external"): facts["terminal_ownership"]["ownershipState"] = case
+                elif case in ("pending", "unknown"): facts["terminal_ownership"]["releaseState"] = "release_" + case
+                elif case == "unreadable": facts["terminal_readback"].pop("connected")
+                elif case in ("reserved", "unresolved"):
+                    state["admissions"]["later"] = {"reuse_of": admission["admission_id"], "state": case}
+                elif case in ("not_requested", "not_advertised"): admission["keep_open"] = case
+                elif case == "native_action": facts["native_next_action"] = {"kind": "release", "argv": self.release_argv}
+                elif case == "owner_keep":
+                    state["constraints"] = [{"kind": "keep_worker_tab", "provenance": "user_direct", "id": "keep",
+                        "value": {"objective": state["checkpoint"]["objective"],
+                                  "dispatch": admission["native_binding"]["dispatchId"],
+                                  "terminal": admission["native_binding"]["terminalHandle"], "keep": True}}]
+                elif case in ("corrections", "delta_review"):
+                    state["checkpoint"]["obligations"].extend([
+                        {"id": "review", "kind": "assurance", "state": "waiting"},
+                        {"id": "fix", "kind": "correction", "parent": "review",
+                         "state": "active" if case == "corrections" else "satisfied",
+                         "finding": {"attempt": admission["admission_id"]}}])
+                row = project(state, admission, facts, settled=settled)
+                self.assertEqual(row["next_action"], facts["native_next_action"])
+                self.assertNotIn("Pod guidance", row["wording"])
+
+
 class ClosureTests(TabCase):
     def closing(self, cases, *, report_route):
         frozen, admission = self.worker()

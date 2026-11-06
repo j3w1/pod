@@ -12126,6 +12126,24 @@
         "tests.test_window_continuation.DiscoveryTests.test_run_shared_names_open_peers_and_unproven_closures_apart"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1004",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_worker_tabs.ReleaseGuidanceTests.test_consumed_keep_open_guidance_preserves_native_action",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1005",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_worker_tabs.ReleaseGuidanceTests.test_guidance_exclusions",
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
