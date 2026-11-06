@@ -10696,7 +10696,7 @@
         "tests.test_admission_batch.CorrectionRoundTests.test_a_malformed_row_keeps_the_sequential_order_and_its_claims",
         "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it",
         "tests.test_admission_batch.FleetReadTests.test_a_bound_first_page_answers_none_with_one_read",
-        "tests.test_admission_batch.FleetReadTests.test_the_end_fence_reads_every_unreleased_partition_and_refuses_any_race",
+        "tests.test_admission_batch.FleetReadTests.test_the_end_fence_reads_the_walk_again_from_its_own_cursors_and_refuses_any_race",
         "tests.test_admission_batch.FleetReadTests.test_the_allowlist_accepts_exactly_the_walk_and_partition_reads",
         "tests.test_admission_batch.CorrectionRoundTests.test_a_balanced_replacement_during_the_call_is_never_a_complete_stable_answer_without_it",
         "tests.test_admission_batch.CorrectionRoundTests.test_an_active_replacement_makes_the_fence_unstable",
