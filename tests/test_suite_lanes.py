@@ -309,9 +309,10 @@ class GateTests(unittest.TestCase):
                                                              ("tests.m.C.test_new", "UNRECORDED SLOW"),
                                                              ("tests.m.C.test_drift_5", "DRIFT")])
 
-    def test_past_the_cap_new_slow_tests_fail_and_drift_warns(self):
+    def test_past_the_cap_only_a_ceiling_breach_fails_unconfirmed(self):
         value = manifest(durations={f"tests.m.C.test_drift_{index}": 10.0 for index in range(3)})
-        candidates = ([(f"tests.m.C.test_new_{index}", "UNRECORDED SLOW", 4.0 - index / 10) for index in range(6)]
+        candidates = ([("tests.m.C.test_huge", "CEILING", 95.0)]
+                      + [(f"tests.m.C.test_new_{index}", "UNRECORDED SLOW", 4.0 - index / 10) for index in range(6)]
                       + [(f"tests.m.C.test_drift_{index}", "DRIFT", 40.0) for index in range(3)])
         timed = []
 
@@ -320,13 +321,45 @@ class GateTests(unittest.TestCase):
             return 0.5
 
         problems, warnings = sl.judge(candidates, value, True, alone)
-        self.assertEqual(timed, [f"tests.m.C.test_new_{index}" for index in range(sl.SOLO_LIMIT)])
-        self.assertEqual(problems, [sl.gate_message("UNRECORDED SLOW", "tests.m.C.test_new_5", 3.5, None, value)
-                                    + " [not timed alone]"])
-        self.assertEqual(sum("[not timed alone]" in item for item in warnings), 3)
+        self.assertEqual(len(timed), sl.SOLO_LIMIT)
+        self.assertEqual(problems, [])  # The ceiling breach ranks first and is timed alone: within limits alone.
+        self.assertEqual(sum("[not timed alone]" in item for item in warnings), 5)
         self.assertEqual(sum("runner contention" in item for item in warnings), sl.SOLO_LIMIT)
         relaxed, _ = sl.judge(candidates, value, False, alone)
         self.assertEqual(relaxed, [])
+
+    def test_slowness_fails_only_when_every_alone_re_timing_confirms_it(self):
+        value = manifest(durations={})
+        # (kind, test, measured, alone re-timings available, expected failures, alone runs taken, note)
+        table = (("UNRECORDED SLOW", "tests.m.C.test_new", 5.0, [3.0, 3.0], 1, 2, None),
+                 ("UNRECORDED SLOW", "tests.m.C.test_new", 5.0, [3.0, 0.5], 0, 2, "slow alone once"),
+                 ("UNRECORDED SLOW", "tests.m.C.test_new", 5.0, [0.5], 0, 1, "runner contention"),
+                 ("CEILING", "tests.m.C.test_huge", 95.0, [90.0, 80.0], 1, 2, None),
+                 ("CEILING", "tests.m.C.test_huge", 95.0, [90.0, 0.5], 0, 2, "slow alone once"),
+                 ("CEILING", "tests.m.C.test_huge", 95.0, [0.5], 0, 1, "runner contention"))
+        for kind, test_id, measured, sequence, failures, runs, note in table:
+            with self.subTest(kind=kind, alone=sequence):
+                calls, taken = iter(sequence), []
+                problems, warnings = sl.judge([(test_id, kind, measured)], value, True,
+                                              lambda *_: taken.append(1) or next(calls))
+                self.assertEqual((len(problems), len(warnings), len(taken)), (failures, 1 - failures, runs))
+                if note:
+                    self.assertIn(note, warnings[0])
+
+    def test_a_slow_lane_warns_and_only_a_hang_class_wall_time_fails(self):
+        target = 180.0
+        self.assertEqual(sl.lane_findings(179.0, target, True, attributed=False), ([], []))
+        for wall in (181.0, 364.0, 4 * target):  # PR 146 took 364 s against a 360 s limit.
+            with self.subTest(wall=wall):
+                problems, warnings = sl.lane_findings(wall, target, True, attributed=False)
+                self.assertEqual(problems, [])
+                self.assertIn(f"LANE share took {wall:.0f} s, over its 180 s target", warnings[0])
+                self.assertIn("runner timing noise", warnings[0])
+        problems, warnings = sl.lane_findings(4 * target + 1, target, True, attributed=False)
+        self.assertEqual((len(problems), warnings), (1, []))
+        self.assertIn("past 4 times the target", problems[0])
+        self.assertEqual(sl.lane_findings(4 * target + 1, target, False, attributed=False)[0], [])
+        self.assertIn("slow tests above failed it", sl.lane_findings(200.0, target, True, attributed=True)[1][0])
 
 
 def timing_body(lane, shard, of, seconds, *, part=1, parts=1, plan="p", fast=(10, 2.0)):
@@ -747,8 +780,9 @@ def synthetic_tree(root: Path, files: dict[str, str], value: dict) -> None:
     (root / "tests" / "suite_lanes.json").write_text(sl.dump_manifest(value))
 
 
-def cli(root: Path, *args: str) -> subprocess.CompletedProcess:
+def cli(root: Path, *args: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
     env = {key: item for key, item in os.environ.items() if not key.startswith(("GITHUB_", "PYTHONPATH"))}
+    env.update(env_extra or {})
     return subprocess.run([sys.executable, str(ROOT / "tools" / "suite_lanes.py"), "--root", str(root), *args],
                           cwd=root, env=env, capture_output=True, text=True, timeout=120)
 
@@ -830,6 +864,21 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("without a clean finish after its last test", late.stdout)
         self.assertEqual(mismatch.returncode, 2)
         self.assertIn("SHARDS --of 2", mismatch.stderr)
+
+    def test_a_passing_share_over_its_target_warns_and_stays_green(self):
+        clean = "import unittest\nclass Fine(unittest.TestCase):\n    def test_one(self): pass\n"
+        tight = manifest(lanes={lane: dict(entry, target_seconds=0.001) for lane, entry in ONE_SHARD["lanes"].items()},
+                         budgets=ONE_SHARD["budgets"])
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            synthetic_tree(root, {"tests/test_demo.py": clean}, tight)
+            # Without --strict, so the share's wall time cannot reach the hang-class failure that --strict adds.
+            completed = cli(root, "run", "--lane", "parallel", "--shard", "1", "--of", "1", "--forbid-skips",
+                            env_extra={"GITHUB_ACTIONS": "true"})
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("warning: LANE share took", completed.stdout)
+        self.assertIn("::warning title=Suite timing::LANE share took", completed.stdout)
+        self.assertIn("runner timing noise", completed.stdout)
 
     def test_an_interrupted_run_leaves_no_worker_behind(self):
         slow = "import time, unittest\nclass Slow(unittest.TestCase):\n    def test_wait(self): time.sleep(60)\n"
