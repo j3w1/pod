@@ -10667,7 +10667,7 @@
         "tests.test_admission_batch.FleetFenceTests.test_an_unproved_end_or_a_bound_caller_is_incomplete",
         "tests.test_admission_batch.FleetFenceTests.test_end_reads_start_only_after_every_native_read_a_result_uses",
         "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it",
-        "tests.test_admission_batch.FleetFenceTests.test_a_released_circuit_broken_correction_outside_the_newest_page_makes_the_fence_unstable"
+        "tests.test_admission_batch.FleetFenceTests.test_a_released_circuit_broken_correction_outside_the_newest_page_is_compared_only_where_read"
       ],
       "status": "NOT_RUN"
     },
@@ -12107,6 +12107,65 @@
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_open_and_unproven_peers_are_named_apart",
         "tests.test_handoff_scope.UnprovenReasonTests.test_reasons_never_carry_exception_text",
         "tests.test_window_continuation.DiscoveryTests.test_run_shared_names_open_peers_and_unproven_closures_apart"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A997",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.ReleasedBasisTests.test_a997_the_end_reads_only_the_dependent_rows_runs_and_digests_them",
+        "tests.test_admission_batch.FleetReadTests.test_the_allowlist_accepts_exactly_the_walk_and_partition_reads"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A998",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.ReleasedBasisTests.test_a998_a_change_no_answer_reads_on_an_exempt_row_keeps_the_fence_stable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A999",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.ReleasedBasisTests.test_a999_a_dependent_released_row_or_its_run_read_still_fences"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1000",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.ReleasedBasisTests.test_a1000_candidate_proof_compares_every_released_row",
+        "tests.test_admission_batch.ReleasedBasisTests.test_a1000_a_rule_s_later_owner_scan_upgrades_the_end_to_every_released_row",
+        "tests.test_admission_batch.ReleasedBasisTests.test_a1000_an_end_read_that_contradicts_a_released_fact_compares_every_released_row",
+        "tests.test_admission_batch.ReleasedBasisTests.test_a1000_dependent_rows_in_more_runs_than_the_bound_compare_every_released_row"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1001",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.ReleasedBasisTests.test_a1001_a_spent_budget_is_its_own_reason"
       ],
       "status": "NOT_RUN"
     }

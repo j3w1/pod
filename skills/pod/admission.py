@@ -233,6 +233,9 @@ class _Discovery:
         self.terminal_start = None
         self.fence_started = False  # After this, only the fence's own end reads may read Orca.
         self.abandoned: set = set()  # Dispatches the queries' records account as abandoned.
+        # Why the end fence must compare every released row this call (R207); empty keeps the dependent basis.
+        self.released_strict: set = set()
+        self.projected = threading.Event()  # Every query's projection is done; the fence fixes its basis after it.
         self.owner_runs: set = set()  # Runs whose current owner some query observes; changed under `_lock`.
         # R212: each query's candidate scope, registered at its record-pass yield; the Dispatches some query counts
         # exited, fixed before the end fence starts; and the call's own clock for the verifier's reserve.
@@ -356,6 +359,7 @@ class _Discovery:
     def close(self):
         with self._lock:
             self.closed = True
+        self.projected.set()  # A fence still waiting for the projections ends with the call.
         self._git.shutdown(wait=True, cancel_futures=True)
         self._pool.shutdown(wait=True, cancel_futures=True)
         with self._lock:
@@ -511,10 +515,11 @@ def _counts(value) -> dict:
     return value
 
 
-def _fleet_partition(state: str, discovery) -> dict:
+def _fleet_partition(state: str, discovery, run: str | None = None) -> dict:
     """The end fence's read of one terminal-state partition, every page, with the sequential walk's
-    cursor, runtime, scope and identity checks; any refusal makes that fence side incomplete."""
-    prefix = [*WORKER_LIST, "--limit", "100", "--terminal-state", state]
+    cursor, runtime, scope and identity checks; any refusal makes that fence side incomplete. With `run`,
+    the partition of that one Run (the dependent released rows' end read), whose scope must name that Run."""
+    prefix = [*WORKER_LIST, "--limit", "100", "--terminal-state", state, *(["--run", run] if run else [])]
     cursor, seen, workers, runtime, total = None, set(), {}, None, None
     while True:
         if discovery.closed:
@@ -522,10 +527,11 @@ def _fleet_partition(state: str, discovery) -> dict:
         response = discovery.read(prefix + (["--cursor", cursor] if cursor else []))
         result = response["result"]
         scope = result.get("scope")
-        if isinstance(scope, dict) and scope.get("source") == "bound" and cursor is None:
+        if run is None and isinstance(scope, dict) and scope.get("source") == "bound" and cursor is None:
             return {"state": state, "bound": True}
-        if not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None:
-            raise _rejected("A partition page does not prove all-Run coverage")
+        if not isinstance(scope, dict) or (scope.get("source"), scope.get("run")) != (("flag", run) if run else ("all", None)):
+            raise _rejected("A partition page does not prove its Run's coverage" if run
+                            else "A partition page does not prove all-Run coverage")
         if runtime is not None and runtime != response["runtime"]:
             raise _rejected("Native runtime changed between partition pages")
         runtime = response["runtime"]
@@ -541,7 +547,7 @@ def _fleet_partition(state: str, discovery) -> dict:
             key = row.get("dispatchId") if isinstance(row, dict) else None
             if not isinstance(key, str) or not key or key in workers:
                 raise _rejected("A partition repeats or omits a Dispatch identity")
-            if row.get("terminalState") != state:
+            if row.get("terminalState") != state or run is not None and row.get("runId") != run:
                 raise _rejected("A Dispatch moved out of the partition it was listed in")
             try:
                 _worker_fact(row)
@@ -644,13 +650,14 @@ def _claim_fact(dispatch: str, claim) -> dict:
     return {"dispatch": dispatch, "process": claim.get("process"), "effects": claim.get("effects")}
 
 
-def _fleet_side(observed, claims, counted=()) -> dict:
+def _fleet_side(observed, claims, counted=(), released=None) -> dict:
     """One side of the fleet identity fence over one complete all-Run read, or the code that refused it.
 
     `observed` is {"page": the unfiltered newest-first page, "rows": every row read} or the fault;
     `claims` maps each abandoned Dispatch whose claim discovery read to its claim, or to the fault;
     `counted` names the Dispatches some query counted exited on the host's verdict (R212), whose extended identity
-    this side digests too."""
+    this side digests too; `released` is None to digest every released row (basis `all`), or the dependent
+    released Dispatches to digest alone (basis `dependent`), a missing one as {dispatchId, missing: true}."""
     runtime = None
     try:
         if isinstance(observed, BaseException):
@@ -671,8 +678,17 @@ def _fleet_side(observed, claims, counted=()) -> dict:
             raise PodError("orca_contract", "The fleet read has no runtime")
         unreleased = sorted((_identity_row(row) for row in observed["rows"] if row.get("terminalState") != "released"),
                             key=lambda row: str(row["dispatchId"]))
-        released = sorted((_identity_row(row) for row in observed["rows"] if row.get("terminalState") == "released"),
-                          key=lambda row: str(row["dispatchId"]))
+        if released is None:
+            basis, released_count = "all", None
+            released = sorted((_identity_row(row) for row in observed["rows"] if row.get("terminalState") == "released"),
+                              key=lambda row: str(row["dispatchId"]))
+        else:
+            # Basis `dependent`: the released count is the fresh page's, as every side's `counts` holds it.
+            basis, released_count = "dependent", counts.get("released", 0)
+            listed = {row.get("dispatchId"): row for row in observed["rows"]
+                      if isinstance(row, dict) and row.get("terminalState") == "released"}
+            released = [_identity_row(listed[dispatch]) if dispatch in listed
+                        else {"dispatchId": dispatch, "missing": True} for dispatch in sorted(released)]
         newest = sorted((_identity_row(row) for row in rows), key=lambda row: str(row["dispatchId"]))
         facts = []
         for dispatch in sorted(claims):
@@ -684,7 +700,9 @@ def _fleet_side(observed, claims, counted=()) -> dict:
                  else {"dispatchId": dispatch, "missing": True} for dispatch in counted]
         side = {"runtime": runtime, "complete": True, "total": page["total"], "counts": dict(counts),
                 "unreleased": len(unreleased), "unreleased_sha256": _rows_digest(runtime, unreleased),
-                "released": len(released), "released_sha256": _rows_digest(runtime, released),
+                "released": len(released) if released_count is None else released_count,
+                "released_sha256": _rows_digest(runtime, released),
+                "released_basis": basis, "released_compared": len(released),
                 "newest": len(newest), "newest_sha256": _rows_digest(runtime, newest),
                 "claims_read": len(facts), "claims_sha256": _rows_digest(runtime, facts),
                 "host_exit": len(exits), "host_exit_sha256": _rows_digest(runtime, exits)}
@@ -699,16 +717,50 @@ def _fleet_side(observed, claims, counted=()) -> dict:
     return side
 
 
-def _fleet_end(discovery) -> dict:
-    """A fresh complete fleet read for the fence: the newest page and every terminal-state partition."""
+# Worker states Orca's lifecycle never moves to `abandoned` (R207's dependent basis; verified on Orca 1.4.251).
+FINAL_WORKERS = ("succeeded", "failed", "stopped")
+MAX_DEPENDENT_RUNS = 8  # Beyond this many Runs the dependent rows' end reads cost more than the whole partition.
+BUDGET_CODES = (DEADLINE_SPENT, "admission_timeout")
+
+
+def _need_all_released(reason: str) -> None:
+    """This call read released rows beyond "settled, holds nothing": its end fence compares every released row."""
+    discovery = _SHARED.get()
+    if discovery is not None:
+        with discovery._lock:
+            discovery.released_strict.add(reason)
+
+
+def _verdict(row) -> object:
+    projection = row.get("projection") if isinstance(row, dict) else None
+    liveness = projection.get("liveness") if isinstance(projection, dict) else None
+    return liveness.get("verdict") if isinstance(liveness, dict) else None
+
+
+def _released_dependent(rows, abandoned) -> dict:
+    """The start walk's released rows an answer may read beyond "settled, holds nothing" (R207), each with its Run:
+    a worker that is not succeeded, failed or stopped, a liveness other than `exited`, or a Dispatch some query's
+    records account as abandoned. Every other released row is exempt from the end read."""
+    return {row["dispatchId"]: row.get("runId") for row in rows
+            if isinstance(row, dict) and row.get("terminalState") == "released"
+            and (row.get("workerState") not in FINAL_WORKERS or _verdict(row) != "exited"
+                 or row.get("dispatchId") in abandoned)}
+
+
+def _fleet_end(discovery, runs=None) -> dict:
+    """A fresh complete fleet read for the fence: the newest page and every terminal-state partition. With `runs`
+    (the dependent basis) the all-Run released partition is replaced by each named Run's released partition."""
     page = discovery.submit(("page",), lambda: discovery.read([*WORKER_LIST, "--limit", "100"]), stage="fence")
+    states = TERMINAL_STATES if runs is None else tuple(state for state in TERMINAL_STATES if state != "released")
     partitions = [discovery.submit(("partition", state), lambda state=state: _fleet_partition(state, discovery),
-                                   stage="fence") for state in TERMINAL_STATES]
+                                   stage="fence") for state in states]
+    partitions += [discovery.submit(("partition", "released", run), lambda run=run: _fleet_partition(
+                       "released", discovery, run), stage="fence") for run in sorted(runs or ())]
     first = page.result()
     rows, runtimes = [], {first["runtime"]}
     for future in partitions:
         part = future.result()
-        if part["bound"]:
+        if part.get("bound"):
             raise PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
         runtimes.add(part["runtime"])
         rows.extend(part["workers"])
@@ -717,10 +769,56 @@ def _fleet_end(discovery) -> dict:
     return {"page": first, "rows": rows}
 
 
+def _all_released(discovery, observed) -> dict:
+    """Upgrade a dependent end read to basis `all` once a projection read released rows (R207): the all-Run released
+    partition replaces the per-Run released rows. A failure makes the end incomplete."""
+    part = discovery.submit(("partition", "released"), lambda: _fleet_partition("released", discovery),
+                            stage="fence").result()
+    if part.get("bound"):
+        raise PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
+    if part["runtime"] != observed["page"].get("runtime"):
+        raise PodError("orca_runtime_changed", "Native runtime changed between fence reads")
+    return {"page": observed["page"], "rows": [*(row for row in observed["rows"] if row.get("terminalState") != "released"),
+                                               *part["workers"]]}
+
+
+def _fact_unheld(observed, start_rows, dependent) -> bool:
+    """Whether a released row the end read anyway shows a fact the dependent basis rests on broken: a row exempt at
+    the start, still released, whose worker is no longer succeeded, failed or stopped or whose liveness is not
+    `exited`. The call then compares every released row; the basis never trusts what a read contradicts."""
+    exempt = {row["dispatchId"] for row in start_rows if isinstance(row, dict)
+              and row.get("terminalState") == "released" and row.get("dispatchId") not in dependent}
+    result = observed["page"].get("result") if isinstance(observed["page"], dict) else None
+    newest = result.get("workers") if isinstance(result, dict) and isinstance(result.get("workers"), list) else []
+    return any(isinstance(row, dict) and row.get("dispatchId") in exempt and row.get("terminalState") == "released"
+               and (row.get("workerState") not in FINAL_WORKERS or _verdict(row) != "exited")
+               for row in [*observed["rows"], *newest])
+
+
+def _fence_reason(fence) -> str | None:
+    """Why the fence is unstable, budget exhaustion first: null when it is stable."""
+    if fence["stable"]:
+        return None
+    sides = [fence[name] for name in ("start", "end", "fleet_start", "fleet_end")]
+    codes = [side.get("code") for side in sides if not side["complete"]]
+    if any(code in BUDGET_CODES for code in codes):
+        return "discovery_budget"
+    if codes:
+        return "incomplete"
+    if len({side["runtime"] for side in sides}) != 1:
+        return "runtime_changed"
+    if fence["start"]["sha256"] != fence["end"]["sha256"]:
+        return "terminals_changed"
+    return "fleet_changed"
+
+
 def _native_fence(discovery) -> dict:
     """The batch fence: discovery's terminal and fleet reads against fresh end reads. The call starts it
     once every native read any result uses is done, so its reads are the call's last native reads, and
-    runs the remaining projection and the shared recheck beside it. Never cached."""
+    runs the remaining projection and the shared recheck beside it. Never cached.
+
+    The released rows are compared on the dependent basis unless this call read them for more than
+    "settled, holds nothing" (R207); the basis is fixed once every projection is done."""
     # Every claim read discovery started is part of what it read; wait for each before fencing.
     claimed = {}
     for key, future in list(discovery._memo.items()):
@@ -741,8 +839,18 @@ def _native_fence(discovery) -> dict:
     runtime = fleet["runtime"] if isinstance(fleet, dict) else None
     sources = {row.get("dispatchId"): row for row in (fleet or {}).get("workers", []) if isinstance(row, dict)}
     start_claims = {dispatch: value for (dispatch, observed), value in claimed.items() if observed == runtime}
+    start_rows = fleet_start.get("rows", []) if isinstance(fleet_start, dict) else []
+    dependent = _released_dependent(start_rows, set(discovery.abandoned))
+    runs = set(dependent.values())
+    if not all(isinstance(run, str) and run and _passable(run) for run in runs):
+        _need_all_released("dependent_run_unlocated")
+    elif len(runs) > MAX_DEPENDENT_RUNS:
+        _need_all_released("dependent_runs")
+    with discovery._lock:
+        strict = bool(discovery.released_strict)
     reads = {"end": discovery.submit(("terminals",), lambda: complete_list("terminal", discovery.read), stage="fence"),
-             "fleet": discovery.submit(("fleet",), lambda: _fleet_end(discovery), stage="fence")}
+             "fleet": discovery.submit(("fleet",), lambda: _fleet_end(discovery, None if strict else runs),
+                                       stage="fence")}
     claim_reads = {dispatch: discovery.submit(("claim", dispatch, runtime), lambda dispatch=dispatch: _native_claim(
                        sources[dispatch], runtime), stage="fence") for dispatch in start_claims if dispatch in sources}
     observed = {}
@@ -753,18 +861,35 @@ def _native_fence(discovery) -> dict:
             observed[name] = exc
     end_claims = {dispatch: observed.get("claim:" + dispatch, PodError("native_identity_unverified", "No source row"))
                   for dispatch in start_claims}
+    # Rule S runs beside the fence and may read released rows: the basis is fixed only after every projection.
+    discovery.projected.wait()
+    if not strict and isinstance(observed["fleet"], dict):
+        if set(_released_dependent(start_rows, set(discovery.abandoned))) - set(dependent):
+            _need_all_released("dependent_changed")  # A record accounted another released row abandoned.
+        if _fact_unheld(observed["fleet"], start_rows, dependent):
+            _need_all_released("released_fact_unheld")
+    with discovery._lock:
+        reasons = sorted(discovery.released_strict)
+    if reasons and not strict and isinstance(observed["fleet"], dict):
+        try:
+            observed["fleet"] = _all_released(discovery, observed["fleet"])
+        except (PodError, OSError) as exc:
+            observed["fleet"] = exc
+    released = None if reasons else tuple(dependent)
     counted = discovery.host_exit_counted  # fixed before the end fence started
     fence = {"start": _fence_side(start, rows=False), "end": _fence_side(observed["end"], rows=True),
-             "fleet_start": _fleet_side(fleet_start, start_claims, counted),
-             "fleet_end": _fleet_side(observed["fleet"], end_claims, counted)}
+             "fleet_start": _fleet_side(fleet_start, start_claims, counted, released),
+             "fleet_end": _fleet_side(observed["fleet"], end_claims, counted, released)}
     sides = list(fence.values())
     compared = ("total", "counts", "unreleased", "unreleased_sha256", "released", "released_sha256",
-                "newest", "newest_sha256", "claims_read",
+                "released_basis", "released_compared", "newest", "newest_sha256", "claims_read",
                 "claims_sha256", "host_exit", "host_exit_sha256")
     fence["stable"] = bool(all(side["complete"] for side in sides)
                            and len({side["runtime"] for side in sides}) == 1
                            and fence["start"]["sha256"] == fence["end"]["sha256"]
                            and all(fence["fleet_start"][key] == fence["fleet_end"][key] for key in compared))
+    fence["reason"] = _fence_reason(fence)
+    fence["released_all_reasons"] = reasons
     fence["host_exit_dispatches"] = list(counted)
     return fence
 
@@ -986,7 +1111,9 @@ def _settled_gone(source: dict, shown: dict, rows: list, terminals: dict, owner)
 
 def _released_by_later(source: dict, dispatch: str, handle: str, rows: list) -> bool:
     """Rule S, 2: exactly one other ended Dispatch owns the terminal resource this Dispatch originated, on the same
-    handle, and released it; this Dispatch holds no unreleased resource of its own; nothing else holds the handle."""
+    handle, and released it; this Dispatch holds no unreleased resource of its own; nothing else holds the handle.
+    It reads other rows' handles, pairs and resources, released rows included, so a batch then compares them all."""
+    _need_all_released("rule_s_later_owner")
     def resource(row):
         value = row.get("resource")
         return value if isinstance(value, dict) else None
@@ -2320,6 +2447,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 (unavailable if reading else unknown)(record, "unreadable")
         if objective:
             # The proof is read before the change recheck and the end fence, so a change during its read is found.
+            _need_all_released("candidate_proof")  # Its own native reads judge settlement pairs (R207).
             try:
                 budget.check()
                 proof_outcome = (_proof(project, objective, candidate), None)
@@ -3183,6 +3311,7 @@ def _call(project: Path, queries: list[dict], budget, *, fence: bool = False) ->
                         if exc.code in INPUT_FAULTS:
                             raise _InputFault(index, exc) from None
                         results[index] = _unknown_result(project, queries[index], exc.code)
+            discovery.projected.set()  # The fence now knows every released row a result read (R207).
             results = [_bounded(result, kwargs) for result, kwargs in zip(results, queries)]
             fleet = discovery.done(("fleet",))
             answer = {"results": results, "discovery": {
