@@ -77,7 +77,11 @@ NEXT_ACTIONS = {
     "diagnosis_required": "record a discriminating diagnosis for the unit's repeated failure",
     "local_preflight_missing": "run the configured local preflight and record each result for this candidate",
     "blocking_findings": "fix the failing local check, then prepare a new candidate",
-    "verification_gaps": "close the checkpoint's verification gaps",
+    "verification_gaps": ("close each verification gap on this candidate: a gap is in verifying the merge unit itself, "
+                          "such as a check not run on the candidate, and it holds the merge. An item that can only "
+                          "happen after the merge or needs the owner's own acceptance is not a gap: move it to an "
+                          "obligation, blocked_external or waiting, which does not hold the merge, and leave the "
+                          "criterion that needs it open after the merge"),
     "assurance_unbound": "complete the required project-policy audit for this candidate or record a scoped authorized waiver",
     "failure_unclassified": "classify the previous failure with the governor-classify helper",
     "unchanged_rerun": "fix the defect locally and prepare a new candidate; nothing new would be learned from the same one",
@@ -1206,7 +1210,9 @@ def _check_readiness(checkpoint: dict, unit: dict | None, candidate_id: str | No
                     (1, "; the stored value is not a list of gaps, rewrite it as one item per gap"))
     if count:
         if purpose == "release":
-            _reason(reasons, "correctness", "verification_gaps", f"{count} verification gap(s) remain{shape}")
+            _reason(reasons, "correctness", "verification_gaps",
+                    f"{count} verification gap(s) remain{shape}; each holds the merge, so a post-merge or "
+                    "owner-acceptance item belongs in an obligation instead")
         else:
             _warn(warnings, "verification_gaps", f"{count} verification gap(s) remain in the checkpoint{shape}")
 
