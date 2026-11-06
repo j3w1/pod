@@ -8,7 +8,6 @@ read whole (A859, A898). A fake verifier replaces Pod's transport, so no process
 Orca."""
 
 import json
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -717,14 +716,26 @@ class RemovedPlacementTests(VerifierMixin, unconsumed.UnconsumedReportCase):
         relevant hold through it."""
         self.removed()
         own = self.context_path().parent.name
-        for index in range(64):  # records are read in name order: the other one must come after, to replace it
-            destination = self.foreign(name=f"foreign{index}", terminal="another-terminal", **self.FINISHED,
-                                       placement={"path": str(self.worker_path), "branch": "other",
-                                                  "repo_key": self.place["repo_key"]})
-            if destination.parent.name > own:
-                break
-            shutil.rmtree(destination.parent)
-        self.assertGreater(destination.parent.name, own)
+        destination = self.foreign(name="foreign", terminal="another-terminal", **self.FINISHED,
+                                   placement={"path": str(self.worker_path), "branch": "other",
+                                              "repo_key": self.place["repo_key"]})
+        # Records are read in name order: the other one must come after its own, to replace it. A record directory name
+        # is a hash, so the foreign record takes the name `own + "0"`, which sorts after its own by construction, never
+        # by chance, and attribution is told that this is the name of that foreign repository's record.
+        later = destination.parent.with_name(own + "0")
+        destination.parent.rename(later)
+        self.assertGreater(later.name, own)
+        real_name, real_rows = admission.record_name, admission._admissions
+        read = []
+        def named(project, context, objective):
+            if objective == "foreign" and context.get("repo_key") != self.place["repo_key"]:
+                return later.name
+            return real_name(project, context, objective)
+        def rows(raw, directory, **kwargs):
+            read.append(Path(directory).name)
+            return real_rows(raw, directory, **kwargs)
+        for double in (patch("pod.admission.record_name", named), patch("pod.admission._admissions", rows)):
+            double.start(); self.addCleanup(double.stop)
         first = stuck(self, "first", path=self.root / "first-removed", run="run")
         self.fake.mode = "fail"
         results = [self.read([first, *self.workers()], target="main"),
@@ -734,6 +745,8 @@ class RemovedPlacementTests(VerifierMixin, unconsumed.UnconsumedReportCase):
             self.assertNotIn("d1", held(result))
             self.assertLessEqual(held(result), candidates(result))
         self.assertEqual(results[0], results[1])
+        self.assertIn(later.name, read)  # the foreign record's admission reached the placement lookup, after its own
+        self.assertLess(read.index(own), read.index(later.name))
 
 
 class DependencyTests(unittest.TestCase):
