@@ -82,8 +82,8 @@ A validation row (workflow dispatch or validation rerun) that `governor-reconcil
 keeps holding because GitHub no longer lists its run may settle by
 `governor-outcome` with `outcome: UNKNOWN` and `settlement: provider_unretained`,
 with no provider receipt or detail. Pod reads GitHub itself: the workflow file and
-the commit must exist, and then a run Pod's own readback bound to the row must
-answer 404; otherwise the workflow's run list on that commit must be empty. "Not retained"
+the commit must exist, the workflow's run list on that commit must be empty, and
+any run id the row holds must answer 404. "Not retained"
 means deleted, expired or never created; it never says a run existed. The row
 stays UNKNOWN with that proof recorded. Any listed or retained run refuses:
 reconcile it instead. Merge, push, pull-request update, diagnostic, cancellation,

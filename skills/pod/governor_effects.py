@@ -996,11 +996,12 @@ def unretained_proof(port: GitHubPort, row: dict, journal: dict, *, now: datetim
 
     Returns `{"marker": ...}` when they prove it, or `{"reason": ...}` naming what they do not show. The proof is
     never an empty run list alone. Exact reads first show that GitHub holds the row's workflow file and commit, so a
-    listing of that workflow on that commit is meaningful. Then a row bound to a run (a rerun's source run, or a
-    dispatch's own run whose binding Pod's own readback proved) needs GitHub's exact 404 for that run; any other row,
-    including one holding a stored run id Pod never proved its own, needs a complete, empty list of the workflow's
-    runs on the commit, of any event at any time (and that id's 404 too). A call that may still be in flight is never read
-    as absent before its absence floor. Provider errors propagate; the caller records nothing for them.
+    listing of that workflow on that commit is meaningful. Every row then needs a complete, empty list of the
+    workflow's runs on the commit, of any event at any time, and a row holding a run id (its stored run, or the
+    failed run a rerun reruns) also needs GitHub's exact 404 for that id. A stored id is never taken as proof that it
+    was the row's own run, whatever event it records: an earlier Pod recorded events without R115's commit and
+    workflow checks. A call that may still be in flight is never read as absent before its absence floor. Provider
+    errors propagate; the caller records nothing for them.
     """
     refusal = unretained_refusal(row)
     if refusal is not None:
@@ -1016,16 +1017,12 @@ def unretained_proof(port: GitHubPort, row: dict, journal: dict, *, now: datetim
         return {"reason": "its call may still be in flight, so its run is not read as absent before "
                 + (absent_after(started).isoformat() if started else "its start is known")}
     if row["action"]["kind"] == "validation_rerun":
-        # A rerun's attempts live in the failed run it reruns, which Pod itself recorded or read back.
+        # A rerun's attempts live in the failed run it reruns.
         run_id = _rerun_source(row, journal)
         if run_id is None:
             return {"reason": "no failed run with a provider identity binds this rerun"}
-        proved = True
     else:
         run_id = _bound_run_id(row)
-        # Only Pod's own readback or execution records a bound run's event (R115); any other stored id is unproved,
-        # so its 404 shows only that run gone, never this row's own run.
-        proved = run_id is not None and row.get("run_event") is not None
     reads = []
     for kind, ident in (("workflow", workflow), ("commit", commit)):
         read = port.presence(kind=kind, ident=ident)
@@ -1039,7 +1036,7 @@ def unretained_proof(port: GitHubPort, row: dict, journal: dict, *, now: datetim
         reads.append(read)
         if read["present"] or any(str(item.get("id")) == str(run_id) for item in runs):
             return {"reason": f"GitHub still retains run {run_id}; governor-reconcile reads it back"}
-    if not proved and (listing["listed"] or listing["truncated"]):
+    if listing["listed"] or listing["truncated"]:
         return {"reason": f"GitHub still lists {listing['listed']}{'+' if listing['truncated'] else ''} "
                           f"{listing['scope']}; one may be this row's run, so governor-reconcile reads them back"}
     return {"marker": {"settlement": UNRETAINED, "at": now.isoformat(), "workflow": workflow, "commit": commit,

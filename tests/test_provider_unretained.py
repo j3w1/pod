@@ -186,26 +186,30 @@ class SettlementRefusedTests(UnretainedCase):
         fresh = self.extra(path, record_id, record_id="f" * 64, receipt=receipt)
         self.assertIn("may still be in flight", str(self.refusal(fresh, "unretained_unproved")))
 
-    def test_a_bound_run_that_reads_404_settles_only_when_its_binding_was_proved(self):
-        """A dispatch whose run Pod's readback bound settles on that run's exact 404; a stored id Pod never proved
-        its own also needs the empty list, so a retained run that may be the row's own holds it."""
+    def test_a_stored_run_id_never_stands_in_for_the_empty_list(self):
+        """A stored run id that reads 404 settles only beside a complete, empty list, whatever event it records: an
+        earlier Pod recorded `run_event` without R115's commit and workflow checks, so a retained run on the commit
+        may still be the row's own."""
         _, record_id, path = self.carried()
         receipt = {**_read_journal(path)["actions"][-1]["receipt"], "provider": {"run_id": "555"}}
-        proved = self.extra(path, record_id, record_id="d" * 64, derived_from=None, receipt=receipt,
-                            run_event="workflow_dispatch")
-        unproved = self.extra(path, record_id, record_id="e" * 64, receipt=receipt)
+        rows = {"dispatch": self.extra(path, record_id, record_id="d" * 64, derived_from=None, receipt=receipt,
+                                       run_event="workflow_dispatch"),
+                "event-bearing": self.extra(path, record_id, record_id="e" * 64, receipt=receipt, run_event="push"),
+                "no event": self.extra(path, record_id, record_id="a" * 64, receipt=receipt)}
         commit = _read_journal(path)["actions"][-1]["commit"]
-        self.remote._start("ci.yml", commit, event="push")  # Not a dispatch's run; maybe the derived row's own.
-        marker = self.unretain(proved)["unretained"]
-        self.assertEqual((marker["run_id"], [(read["kind"], read["status"]) for read in marker["reads"]]),
-                         ("555", [("workflow", 200), ("commit", 200), ("run", 404)]))
+        self.remote._start("ci.yml", commit, event="push")  # A retained run that may be any of these rows' own.
         recorded = path.read_bytes()
-        self.assertIn("still lists 1 runs", str(self.refusal(unproved, "unretained_unproved")))
-        self.assertEqual(path.read_bytes(), recorded)
+        for name, row in rows.items():
+            with self.subTest(row=name):
+                self.assertIn("still lists 1 runs", str(self.refusal(row, "unretained_unproved")))
+                self.assertEqual(path.read_bytes(), recorded)
         self.remote.runs_by.clear()
-        marker = self.unretain(unproved)["unretained"]
-        self.assertEqual((marker["run_id"], marker["listing"]["listed"], marker["reads"][-1]["status"]),
-                         ("555", 0, 404))
+        for name, row in rows.items():
+            with self.subTest(row=name):
+                marker = self.unretain(row)["unretained"]
+                self.assertEqual((marker["run_id"], marker["listing"]["listed"],
+                                  [(read["kind"], read["status"]) for read in marker["reads"]]),
+                                 ("555", 0, [("workflow", 200), ("commit", 200), ("run", 404)]))
 
 
 class StoredShapeTests(unittest.TestCase):
