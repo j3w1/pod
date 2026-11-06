@@ -1,1 +1,1 @@
-{"ok":true,"result":{"runs":[{"id":"run-example-1","objective":"Example objective 1"},{"id":"run-example-2","objective":"Example objective 2"},{"id":"run-example-3","objective":"Example objective 3"}],"nextCursor":null}}
+{"ok":true,"result":{"runs":[{"id":"run-example-1","objective":"Example objective 1"},{"id":"run-example-2","objective":"Example objective 2"},{"id":"run-example-3","objective":"Example objective 3"}],"nextCursor":"cursor-example-1"}}

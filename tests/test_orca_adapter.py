@@ -13,8 +13,10 @@ from pod.orca import (compile_cache, contract, current_run, executable, mutate_c
 from pod.operations import OrcaPort
 from tests.common import envelope, ORCA_VERSION
 
-START=['orchestration','worker-start','--task','task','--run','run','--worktree','current',
-       '--agent','codex','--model','gpt-6-sol','--effort','high','--json','--full']
+FULL_JSON=['--json','--full']
+OPTIONS=['orchestration','worker-start','--task','task','--run','run','--worktree','current',
+         '--agent','codex','--model','gpt-6-sol','--effort','high']
+START=OPTIONS+FULL_JSON
 
 
 class OrcaAdapterTests(unittest.TestCase):
@@ -276,8 +278,10 @@ class OrcaAdapterTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code,code)
                 runner.assert_not_called()
             with patch('pod.orca.subprocess.run') as runner:
+                self.assertTrue(orca_module._mutate_allowed(START))  # Each case differs from it only by `bad`.
                 for argv in (['orchestration','run-use','--id',bad,'--json','--full'],
-                             START[:3]+[bad]+START[4:],START[:-2]+[bad,'--json']):
+                             START[:3]+[bad]+START[4:],OPTIONS[:-1]+[bad]+FULL_JSON):
+                    self.assertEqual(argv[-2:],FULL_JSON)
                     with self.subTest(argv=ascii(argv)),self.assertRaises(PodError) as caught: mutate_command(argv)
                     self.assertEqual(caught.exception.code,'unsupported_orca_mutation')
                 runner.assert_not_called()
@@ -403,11 +407,12 @@ class OrcaAdapterTests(unittest.TestCase):
         self.assertEqual(native.call_args.args[0].count('--retry-request'),1)
 
     def test_mutation_allowlist_blocks_every_other_native_effect(self):
+        self.assertTrue(orca_module._mutate_allowed(START))  # The option cases differ from it by one option.
         with patch('pod.orca.subprocess.run') as runner:
             for argv in (['orchestration','worker-release','--dispatch','d','--json','--full'],
                          ['orchestration','worker-start','--task','t','--json','--full'],
-                         START[:-1]+['--context','max','--json'],
-                         START[:-1]+['--terminal','t','--json'],
+                         OPTIONS+['--context','max']+FULL_JSON,
+                         OPTIONS+['--terminal','t']+FULL_JSON,
                          ['orchestration','worker-start','--task','t','--run','r','--worktree',
                           'new-child','--agent','codex','--model','gpt-6-sol','--json','--full']):
                 with self.subTest(argv=argv),self.assertRaises(PodError) as caught:
