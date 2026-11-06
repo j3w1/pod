@@ -12672,9 +12672,12 @@
       "offline_test": [
         "tests.test_closed_tab_intent.AgentIntentTests.test_agent_keep_on_a_closed_objective_is_kept_by_agent_and_an_agent_may_revoke_it",
         "tests.test_closed_tab_intent.AgentIntentTests.test_an_agent_cannot_revoke_the_persons_keep",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_an_intervening_agent_keep_never_downgrades_the_persons_keep",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_a_person_keep_stays_deciding_over_an_earlier_recorded_agent_row",
         "tests.test_closed_tab_intent.AgentIntentTests.test_an_agent_intent_on_an_open_objective_is_refused",
         "tests.test_closed_tab_intent.AgentIntentTests.test_the_closure_gate_counts_only_the_persons_keeps",
-        "tests.test_closed_tab_intent.AgentIntentTests.test_observed_runtime_is_never_caller_input"
+        "tests.test_closed_tab_intent.AgentIntentTests.test_observed_runtime_is_never_caller_input",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_observed_runtime_is_refused_on_every_other_constraint_kind"
       ],
       "status": "NOT_RUN"
     }

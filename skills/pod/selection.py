@@ -111,6 +111,8 @@ def validate_constraint(value: object, snapshot: dict | None = None, *, new: boo
     if (kind not in CONSTRAINT_KINDS or provenance not in PROVENANCE
             and not model_decision):
         raise PodError("invalid_constraint", "Constraint kind or provenance is unsupported")
+    if "observed_runtime" in value and kind != "keep_worker_tab":
+        raise PodError("invalid_constraint", "Only a worker-tab intent records its observed runtime")
     if provenance == "user_direct" or model_decision:
         value = owner_decision(value, kind="constraint", stored=not (new or snapshot is not None))
     elif (DECISION_FIELDS - {"provenance"}) & set(value):
@@ -142,8 +144,6 @@ def validate_constraint(value: object, snapshot: dict | None = None, *, new: boo
         if "observed_runtime" in value and (new or snapshot is not None or runtime is not None and (
                 not isinstance(runtime, str) or not runtime or len(runtime) > 512)):
             raise PodError("invalid_constraint", "observed_runtime is recorded by Pod, never supplied")
-    elif "observed_runtime" in value:
-        raise PodError("invalid_constraint", "Only a worker-tab intent records its observed runtime")
     elif kind == "allow_disabled":
         if not isinstance(item, str) or (supported_route(item) is None and item not in known()):
             raise PodError("invalid_constraint", "Disabled exception needs an exact supported route")

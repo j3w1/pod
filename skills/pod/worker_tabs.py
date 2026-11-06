@@ -49,8 +49,12 @@ def intent_actor(row: dict) -> str:
 
 
 def deciding_intent(state: dict, objective: str, dispatch: str, handle: str) -> dict | None:
-    """The last active tab intent, keep or revocation, for this exact objective, Dispatch and terminal."""
-    decided = None
+    """The tab intent that decides this exact objective, Dispatch and terminal, keep or revocation.
+
+    The last active intent decides, except that the person's keep stays deciding until the person
+    revokes it: a later agent keep or let-go never downgrades or ends it (R127).
+    """
+    decided = person = None
     for row in state.get("constraints", []):
         value = row.get("value")
         if (row.get("kind") == "keep_worker_tab" and row.get("provenance") in TAB_INTENT_PROVENANCE
@@ -58,6 +62,10 @@ def deciding_intent(state: dict, objective: str, dispatch: str, handle: str) -> 
                 and (value.get("objective"), value.get("dispatch"), value.get("terminal"))
                 == (objective, dispatch, handle)):
             decided = row
+            if intent_actor(row) == "person":
+                person = row
+    if person is not None and person["value"].get("keep") is True:
+        return person
     return decided
 
 
@@ -77,9 +85,11 @@ def intent_refusal(state: dict, row: dict) -> str | None:
         return "An agent's worker-tab intent is accepted only on a closed objective; record the person's instruction"
     value = row["value"]
     current = deciding_intent(state, value["objective"], value["dispatch"], value["terminal"])
-    if (value["keep"] is False and current is not None and current["value"].get("keep") is True
-            and intent_actor(current) == "person" and intent_actor(row) != "person"):
-        return "Revoking a keep the person asked for needs the person's direct decision"
+    if (intent_actor(row) != "person" and current is not None and current["value"].get("keep") is True
+            and intent_actor(current) == "person"):
+        # The person's keep stands until the person revokes it; an agent intent cannot replace it.
+        return ("Revoking a keep the person asked for needs the person's direct decision" if value["keep"] is False
+                else "The person's keep already decides this tab until the person revokes it")
     return None
 
 

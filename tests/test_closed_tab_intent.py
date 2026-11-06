@@ -8,6 +8,7 @@ import json
 from pod import internal
 from pod.errors import PodError
 from pod.ledger import read
+from pod.selection import validate_constraint
 from pod.worker_tabs import _keep
 from tests.decision_policy_support import LOCAL
 from tests.test_worker_tabs import TabCase
@@ -129,6 +130,22 @@ class AgentIntentTests(ClosedTabIntentCase):
         self.assertIn("needs the person's direct decision", str(error))
         self.intent(admission, False, "person-let-go")
 
+    def test_an_intervening_agent_keep_never_downgrades_the_persons_keep(self):
+        admission = self.closed()
+        error = self.refused("constraint_authority", self.intent, admission, True, "agent-keep", authority=LOCAL)
+        self.assertIn("person's keep already decides", str(error))
+        self.refused("constraint_authority", self.intent, admission, False, "agent-let-go", authority=LOCAL)
+        [row] = self.status()["worker_tabs"]
+        self.assertEqual((row["owner_kept"], row["kept_by"], row["command"]), (True, "person", None))
+
+    def test_a_person_keep_stays_deciding_over_an_earlier_recorded_agent_row(self):
+        state = {"checkpoint": {"objective": "objective", "closure": {"revision": 1}}, "constraints": [
+            {"id": "person", "kind": "keep_worker_tab", "provenance": "user_direct", "instruction": "Keep it",
+             "value": {"objective": "objective", "dispatch": "d", "terminal": "t", "keep": True}},
+            {"id": "agent", "kind": "keep_worker_tab", "provenance": "agent_decision", "actor": {"kind": "agent"},
+             "value": {"objective": "objective", "dispatch": "d", "terminal": "t", "keep": False}}]}
+        self.assertEqual(_keep(state, "objective", "d", "t")["id"], "person")
+
     def test_an_agent_intent_on_an_open_objective_is_refused(self):
         _, admission = self.worker()
         for keep in (True, False):
@@ -152,3 +169,17 @@ class AgentIntentTests(ClosedTabIntentCase):
                       "instruction": "Let this worker tab go", "observed_runtime": "runtime-9",
                       "value": {"objective": "objective", "dispatch": binding["dispatchId"],
                                 "terminal": binding["terminalHandle"], "keep": False}}})
+
+    def test_observed_runtime_is_refused_on_every_other_constraint_kind(self):
+        others = ({"kind": "only_agents", "value": ["codex"]}, {"kind": "max_workers", "value": 1},
+                  {"kind": "allow_delegation", "value": True})
+        for item in others:
+            for provenance in ("repository", "user_direct"):
+                value = {"id": "other", "provenance": provenance, "observed_runtime": "runtime-9", **item,
+                         **({"instruction": "Use this constraint"} if provenance == "user_direct" else {})}
+                for new in (True, False):
+                    with self.subTest(kind=item["kind"], provenance=provenance, new=new):
+                        with self.assertRaises(PodError) as caught:
+                            validate_constraint(value, new=new)
+                        self.assertEqual(caught.exception.code, "invalid_constraint")
+                        self.assertIn("Only a worker-tab intent", str(caught.exception))
