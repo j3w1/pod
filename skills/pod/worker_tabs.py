@@ -192,6 +192,23 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if keep:
         row.update(owner_kept=True, owner_instruction={key: keep[key] for key in
                    ("id", "instruction", "channel", "relay") if key in keep})
+    if (owned and row["release_state"] == "retained" and admission.get("keep_open") == "requested"
+            and admission.get("report") is not None and reason is None
+            and facts.get("retained_reason") in (None, "coordinator_request", "user_requested")
+            and action == {"kind": "none", "argv": []}
+            and not any(other.get("reuse_of") == admission["admission_id"]
+                        and other.get("state") in ("reserved", "unresolved", "bound")
+                        for other in (state.get("admissions") or {}).values())):
+        # R125: guidance for Pod's own ended keep-open intent, never native authority.
+        # Identity, settlement, connection and ownership were checked above; Pod executes nothing.
+        row["next_action"] = {"kind": "worker_release", "source": "pod_guidance",
+                              "argv": ["orchestration", "worker-release", "--dispatch", dispatch, "--json", "--full"]}
+        row["next_action"]["text"] = ("Release is Pod's guidance because Pod asked to keep this worker open "
+                                      "and that reason has ended. If a person asked to keep it, do not release it.")
+        row["command"] = ["orca", *row["next_action"]["argv"]]
+        row["command_source"] = "pod_guidance"
+        next_step = ("Pod guidance: " + shlex.join(row["command"]) + ". "
+                     + row["next_action"]["text"])
     if owned:
         debt = "Release still owed" if recorded_settlement else "Release owed"
         wording = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
@@ -212,7 +229,8 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         if acknowledgement:
             fields["closure_wording"] = wording
             option = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
-                      if keep else f"Orca's release option: {next_step}.")
+                      if keep else f"{next_step}." if (row["next_action"] or {}).get("source") == "pod_guidance"
+                      else f"Orca's release option: {next_step}.")
             wording = keep_now + decision + " " + option + cycle
         if reason:
             fields["retained_title"] = {"title": worker_title(state, admission), "title_note": TITLE_NOTE}
