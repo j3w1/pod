@@ -45,8 +45,24 @@ standing-authorization projection, digest and expect, plus:
 
 Each resource retains `id`, `kind`, `class`, `reasons`, `identity`, `delete_argv`,
 `archive_argv`, `archive_verified`, `archives` and `fingerprint`, and includes
-`stash_observation`. Classes remain `integrated`, `merged_remote_head`, `unique` and
-`protected`; there is no archived/safe/absent class. Known UNIQUE work stays UNIQUE
+`stash_observation`. Classes are `integrated`, `merged_remote_head`, `unique`,
+`protected` and `absent`; there is no archived/safe class. An ordinary plan reads a
+recorded resource `absent` only on positive current absence: a worktree with no row in
+the complete Git inventory, a no-follow `absent` slot with reliable parent identity and
+Orca's `selector_not_found` for its path; a local branch with no checkout whose
+`ref_storage` is stably observed with an absent logical ref, loose slot and log; or a
+remote branch whose successful `ls-remote` lists nothing. A worktree's path and parent
+identity are read before and again after Orca's answer, and its Git registration again
+after both. Its row has no argv or
+reasons, carries `identity.current` with `status: absent` (and for a branch its
+`ref_storage`), keeps its stash observation without applying it, and is in neither
+`covers` nor `asks`. A failed, partial or contradictory read is never absence; a
+checkout Orca still lists is protected with that reason. Every absence is read again
+after the rest of the observation, and a resource that came back or became unreadable
+refuses `cleanup_changed`. A selected observation keeps an absent ordinary row absent
+only while its own current read is absent, rechecks the absence after its own later
+reads, and refuses `cleanup_changed` otherwise. These are bounded reads, not an atomic
+snapshot across Git, the filesystem and Orca. Known UNIQUE work stays UNIQUE
 when an independent hold prevents removal. Top-level `archive_verified` requires
 verified **and covering** evidence; a narrower valid per-archive proof is separate.
 
@@ -332,7 +348,11 @@ Selected ref-storage logs, including the stash retaining log, keep their existin
 2048-entry limit; 2049 holds. Ordinary private resource metadata keeps its existing
 ref/name/root/raw-byte/time limits and its independent 4096-entry per-log ceiling.
 These current readers establish no earlier worktree creator, release or transfer.
-Unknown operation roots such as `REBASE_HEAD` and `AUTO_MERGE` remain unsupported.
+`AUTO_MERGE` left by a completed merge or rebase is a recovery root like `ORIG_HEAD`.
+A merge, rebase, cherry-pick, revert, sequencer or bisect still in progress (`MERGE_HEAD`,
+`MERGE_MODE`, `MERGE_MSG`, `MERGE_AUTOSTASH`, `rebase-merge`, `rebase-apply`, `REBASE_HEAD`,
+`sequencer`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_*`) holds with a reason naming
+its markers; any other unknown administrative entry holds as unsupported.
 
 ## Ordinary branch preservation
 
