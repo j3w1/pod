@@ -8,6 +8,7 @@ read whole (A859, A898). A fake verifier replaces Pod's transport, so no process
 Orca."""
 
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -170,7 +171,10 @@ class ProjectionTests(ScopeCase, GroupedTable):
               "test_the_both_target_and_effects_requests": ["both", "target only", "effects only"]}
 
     ALWAYS = {"unlocated", "unlocated-other", "old-dispatch"}
-    LOOSE = {"removed", "placed-main", "placed-feature", "placed-other-key", "other-repo"}  # branch only a record knows
+    LOOSE = {"removed", "other-repo"}  # outside the registry, a branch only a later record read may know
+    # Outside the registry, on the branch this repository's record places them on (pod#243); never `placed-other-key`,
+    # which that record places under another repository's key.
+    PLACED = {"main": {"placed-main"}, "feature": {"placed-feature"}}
     UNREAD = {"old-run-row"}  # on a Run whose record cannot be read whole: the placement lookup names it
 
     def arrange(self):
@@ -209,8 +213,11 @@ class ProjectionTests(ScopeCase, GroupedTable):
         every = {row["dispatchId"] for row in self.workers}
         located = every - self.ALWAYS
         wider = self.LOOSE | self.UNREAD | self.ALWAYS  # what every branch, target or effects request takes
+        placed = self.PLACED
         # The projection knows recorded placements: a recorded other branch or another repository's key frees a branch
-        # query, and an unknown branch holds it; a located row holds only the worktree-only query that overlaps it.
+        # query, and an unknown branch holds it; a located row holds only the worktree-only query that overlaps it. A
+        # row whose placement this repository's record binds has a complete location: S judges it exactly, so it is
+        # asked about only on its recorded branch and never for a target-only or effects-only request.
         return {
             "empty": ({}, every, None),
             "worktree only, main": ({"worktree": project}, {"main", "main-nested"} | self.ALWAYS, None),
@@ -222,15 +229,18 @@ class ProjectionTests(ScopeCase, GroupedTable):
             # Another repository's owed admission placed it here: counting it would expose that hold.
             "worktree only, foreign owed": ({"worktree": str(root / "foreign-owed")}, {"foreign-owed"} | self.ALWAYS,
                                             None),
-            "branch only, main": ({"branch": "main"}, {"main", "main-nested"} | wider,
+            "branch only, main": ({"branch": "main"}, {"main", "main-nested"} | placed["main"] | wider,
                                   ({"placed-main", "removed", "other-repo"},
                                    {"placed-feature", "placed-other-key", "feature", "detached"})),
-            "branch only, feature": ({"branch": "feature"}, {"feature"} | wider, None),
+            "branch only, feature": ({"branch": "feature"}, {"feature"} | placed["feature"] | wider,
+                                     ({"placed-feature"}, {"placed-main", "placed-other-key"})),
             # Both owed admissions recorded `worker`: one detached after admission, one another repository's.
             "branch only, worker": ({"branch": "worker"}, {"owed-detached", "foreign-owed"} | wider, None),
-            "both": ({"worktree": project, "branch": "feature"}, {"main", "main-nested", "feature"} | wider, None),
-            "target only": ({"target": "main"}, wider, None),
-            "effects only": ({"effects": ["deploy:target"]}, wider, None)}
+            "both": ({"worktree": project, "branch": "feature"},
+                     {"main", "main-nested", "feature"} | placed["feature"] | wider, None),
+            "target only": ({"target": "main"}, wider, (set(), {"placed-main", "placed-feature", "placed-other-key"})),
+            "effects only": ({"effects": ["deploy:target"]}, wider,
+                             (set(), {"placed-main", "placed-feature", "placed-other-key"}))}
 
     def row(self, label):
         request, expected, holds = self.shapes()[label]
@@ -292,6 +302,59 @@ class FactTests(unittest.TestCase):
 
     def test_every_hold_is_kept_for_the_other_requests(self):
         self.enumerate(lambda request: not request.get("worktree"))
+
+    def test_a_recorded_placement_is_judged_exactly(self):
+        """pod#243: a row outside the registry whose exact native identity this repository's record binds has the
+        complete location that admission's placement gives, so for a branch, target or effects request S equals the
+        projection's judgment of it with nothing else recorded; a binding of another identity leaves the row
+        unrecovered and kept. A worktree-only request still decides the row by its path alone."""
+        with tempfile.TemporaryDirectory() as temporary:
+            self.root = Path(temporary).resolve()
+            self.project = self.root / "project"
+            self.project.mkdir()
+            with patch("pod.admission._SHARED") as shared:
+                shared.get.return_value = Memo()
+                self.placement_table()
+
+    def placement_table(self):
+        root, project = self.root, str(self.project)
+        places = {project: "main", str(root / "feature"): "feature"}
+        scope = {"repository": None, "repo_key": self.key, "path": project, "inventory": "pod_objectives_and_recorded_runs"}
+        requests = [{"worktree": str(root / "removed")}, {"worktree": project}, {"branch": "main"},
+                    {"branch": "worker"}, {"worktree": project, "branch": "worker"},
+                    {"worktree": str(root / "removed"), "branch": "main"}, {"target": "main"},
+                    {"effects": ["deploy:target"]}, {"target": "main", "effects": ["deploy:x"]}]
+        locations = {"removed": (str(root / "removed"), "own-run"), "nesting": (str(root), "own-run")}
+        checked, failures = 0, []
+        for request in requests:
+            full = {"worktree": None, "branch": None, "target": None, "effects": [], **request}
+            relevant = lambda facts: admission._relevant(facts, full, self.key, admission._overlap, "process_liveness")
+            for label, (path, run) in locations.items():
+                shown = {"dispatch": label, "run": run, "task": "task", "worker": "worker", "terminal": "t",
+                         "worktree": path}
+                binding = {"runId": run, "taskId": "task", "dispatchId": label, "workerId": "worker",
+                           "worktreeId": path, "terminalHandle": "t"}
+                for key in (None, self.key, OTHER_KEY):
+                    for branch in (None, "main", "worker"):
+                        placement = {"path": path, "branch": branch, "repo_key": key}
+                        for matching in (True, False):
+                            bound = binding if matching else {**binding, "terminalHandle": "another"}
+                            slot = admission._HostExitSlot(
+                                self.project, full, {"own-run"}, {"own-run"}, set(), set(), scope=scope, owed={},
+                                owners=lambda dispatch, run: (), unreadable=lambda run: (False, ()),
+                                placements={label: (bound, placement)})
+                            native = {"repo_key": key, "worktree": path, "branch": branch, "locations_complete": True}
+                            if full["worktree"] and not full["branch"]:
+                                expected = admission._overlap(full["worktree"], path)  # by its path, as before
+                            elif matching:
+                                expected = relevant(native)
+                            else:
+                                expected = True
+                            checked += 1
+                            if admission._host_exit_relevant(slot, shown, places) != expected:
+                                failures.append((request, label, key, branch, matching))
+        self.assertEqual(failures[:20], [])
+        self.assertEqual(checked, 324)
 
     def situations(self, path):
         """What the records may say about a row at `path`: nothing, an owed admission of this repository or of its
@@ -566,6 +629,111 @@ class OwedHoldTests(VerifierMixin, unconsumed.UnconsumedReportCase):
         changed = [[row["record"] for row in result["unknowns"] if row["code"] == "record_changed"]
                    for result in results]
         self.assertEqual(changed, [[path.parent.name], []])
+
+
+class RemovedPlacementTests(VerifierMixin, unconsumed.UnconsumedReportCase):
+    """pod#243: a settled Dispatch whose worktree was removed, bound by an admission of this repository's records whose
+    report was consumed, has the complete location that admission's placement gives. Stored records through the
+    production facts reader; only the native inventories and the verifier's transport are doubled, and no Run
+    coordinator is known, so rule S never settles a row and only R212 can count one exited."""
+
+    foreign = unconsumed.ForeignObjectiveTests.foreign
+    FINISHED = {"report": {"outcome": "succeeded"}, "disposition": {"kind": "accepted"}}
+
+    def setUp(self):
+        super().setUp()
+        self.setup_verifier()
+        self.fake = FakeVerifier()
+        for target, replacement in (("pod.admission._run_coordinators", lambda runtime, check=None: {}),
+                                    ("pod.admission._terminals",
+                                     lambda: {"runtime": "runtime", "complete": True, "terminals": []}),
+                                    ("pod.process_exit._output", self.fake)):
+            double = patch(target, side_effect=replacement)
+            double.start(); self.addCleanup(double.stop)
+
+    def removed(self, **fields):
+        """This repository's admission a1 placed d1 on BRANCH and its report was consumed; then the worktree went."""
+        self.admit(terminal="d1-terminal", **{**self.FINISHED, **fields})
+        git("-C", str(self.project), "worktree", "remove", "--force", str(self.worker_path))
+
+    def workers(self):
+        return [stuck(self, "d1", path=self.worker_path, run="run", handle="d1-terminal")]
+
+    def read(self, workers=None, **request):
+        with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True,
+                                                         "workers": workers or self.workers()}):
+            return admission.query(self.project, **request)
+
+    def unconfigured(self, **request):
+        """The same read with no verifier configured: R212 judges nothing and asks nothing."""
+        with patch("pod.config.effective", return_value={"preferences": {"status": "missing",
+                                                                         "authorization_verifier": None}}):
+            return self.read(**request)
+
+    REQUESTS = {"target only": {"target": "main"}, "effects only": {"effects": ["deploy:target"]},
+                "another branch": {"branch": "main"}}
+
+    def test_a_target_effects_or_other_branch_query_never_asks_about_it(self):
+        self.removed()
+        for label, request in self.REQUESTS.items():
+            with self.subTest(label):
+                self.fake.mode = None  # a correct verifier, which would count it
+                result = self.read(**request)
+                self.assertEqual(candidates(result), set())
+                self.assertNotIn("d1", held(result))
+                self.assertEqual(result, self.unconfigured(**request))
+        self.assertEqual(self.fake.requests, [])
+
+    def test_its_recorded_branch_still_asks_and_holds_until_counted(self):
+        self.removed()
+        self.fake.mode = "fail"
+        uncounted = self.read(branch=unconsumed.BRANCH)
+        self.assertEqual(candidates(uncounted), {"d1"})
+        self.assertEqual(exit_codes(uncounted), {"d1": "host_exit_failed"})
+        self.fake.mode = None
+        counted = self.read(branch=unconsumed.BRANCH)
+        self.assertEqual([(row["dispatch"], row["counted"]) for row in counted["host_exits"]], [("d1", True)])
+        self.assertNotIn("d1", held(counted))
+
+    def test_an_unrecovered_location_stays_a_candidate_and_holds(self):
+        """No recorded branch, or a binding of another terminal: nothing makes the location complete, so a target-only
+        query still asks, and without a count the projection holds it relevantly, as before pod#243."""
+        unbranched = {"recovery": {"placement_binding": {"path": str(self.worker_path), "repo_key": self.place["repo_key"]}}}
+        for label, fields in (("no branch", unbranched), ("another terminal", {"terminal": "another-terminal"})):
+            with self.subTest(label):
+                self.admit(**{**self.FINISHED, "terminal": "d1-terminal", **fields})
+                if self.worker_path.exists():
+                    git("-C", str(self.project), "worktree", "remove", "--force", str(self.worker_path))
+                self.fake.mode = "fail"
+                result = self.read(target="main")
+                self.assertEqual(candidates(result), {"d1"})
+                self.assertIn("d1", held(result))
+                self.assertLessEqual(held(result), candidates(result))
+
+    def test_another_records_binding_read_first_never_replaces_its_placement(self):
+        """Another repository's record on the same Run binds d1 to another terminal on another branch. A row before d1,
+        in a removed worktree no record places, makes the worker loop read that record first; d1 still takes this
+        repository's placement, in either fleet order, so S and the projection agree that a target-only query has no
+        relevant hold through it."""
+        self.removed()
+        own = self.context_path().parent.name
+        for index in range(64):  # records are read in name order: the other one must come after, to replace it
+            destination = self.foreign(name=f"foreign{index}", terminal="another-terminal", **self.FINISHED,
+                                       placement={"path": str(self.worker_path), "branch": "other",
+                                                  "repo_key": self.place["repo_key"]})
+            if destination.parent.name > own:
+                break
+            shutil.rmtree(destination.parent)
+        self.assertGreater(destination.parent.name, own)
+        first = stuck(self, "first", path=self.root / "first-removed", run="run")
+        self.fake.mode = "fail"
+        results = [self.read([first, *self.workers()], target="main"),
+                   self.read([*self.workers(), first], target="main")]
+        for result in results:
+            self.assertEqual(candidates(result), {"first"})
+            self.assertNotIn("d1", held(result))
+            self.assertLessEqual(held(result), candidates(result))
+        self.assertEqual(results[0], results[1])
 
 
 class DependencyTests(unittest.TestCase):
