@@ -2269,6 +2269,11 @@
         "tests.test_input_refusals.OperationFieldRefusalTests.test_non_object_names_only_the_expected_type",
         "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_first_checkpoint_missing_map_fields_refuses_without_writing",
         "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_valid_mapless_and_mapped_checkpoints_keep_working",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_persisted_row_required_fields_refuse_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_unhashable_caller_ids_refuse_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_persisted_unknown_row_field_keeps_loading_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_unhashable_caller_ids_with_prior_map_refuse_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_closed_map_unhashable_caller_ids_keep_objective_closed_first",
         "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths",
         "tests.test_request_contract.DiscoveryTests.test_shape_and_text_refusals_give_whole_constant_contract_without_values"
       ],
@@ -10684,7 +10689,7 @@
       "offline_test": [
         "tests.test_admission_batch.SharedReadTests.test_eight_queries_read_each_source_once_and_two_calls_read_afresh",
         "tests.test_admission_batch.SharedReadTests.test_abandoned_workers_claims_start_from_their_inventory_rows",
-        "tests.test_admission_batch.FleetReadTests.test_abandoned_rows_start_their_claim_reads_during_the_walk"
+        "tests.test_admission_batch.FleetReadTests.test_a_demanded_abandoned_row_starts_its_claim_read_while_discovery_lists_it"
       ],
       "status": "NOT_RUN"
     },
@@ -10696,7 +10701,6 @@
       ],
       "offline_test": [
         "tests.test_admission_batch.CorrectionRoundTests.test_a_malformed_row_keeps_the_sequential_order_and_its_claims",
-        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it",
         "tests.test_admission_batch.FleetReadTests.test_a_bound_first_page_answers_none_with_one_read",
         "tests.test_admission_batch.FleetReadTests.test_the_end_fence_reads_the_walk_again_from_its_own_cursors_and_refuses_any_race",
         "tests.test_admission_batch.FleetReadTests.test_the_allowlist_accepts_exactly_the_walk_and_partition_reads",
@@ -10756,7 +10760,7 @@
         "tests.test_admission_batch.FleetFenceTests.test_a_released_row_outside_the_newest_page_that_changes_makes_the_fence_unstable",
         "tests.test_admission_batch.FleetFenceTests.test_an_unproved_end_or_a_bound_caller_is_incomplete",
         "tests.test_admission_batch.FleetFenceTests.test_end_reads_start_only_after_every_native_read_a_result_uses",
-        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it",
+        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_the_partitions_in_a_bracket_and_starts_the_fence_from_them",
         "tests.test_admission_batch.FleetFenceTests.test_a_released_circuit_broken_correction_outside_the_newest_page_makes_the_fence_unstable"
       ],
       "status": "NOT_RUN"
@@ -12318,6 +12322,7 @@
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_whose_governor_journal_is_unreadable_is_unproven",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_of_another_repository_is_proved_in_a_recorded_checkout_of_it",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_recorded_checkout_of_another_repository_is_never_used",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_removed_checkouts_sorting_first_never_exhaust_the_candidates",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_whose_repository_changes_between_passes_holds_as_changing",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_rebound_to_an_existing_checkout_between_passes_holds_as_changing",
         "tests.test_window_continuation.DiscoveryTests.test_a_closed_peer_whose_worktree_was_removed_no_longer_holds_the_run"
@@ -12445,6 +12450,47 @@
       ],
       "offline_test": [
         "tests.test_admission_batch.WalkReReadTests.test_a1000_a_malformed_run_identity_answers_as_the_single_query_and_never_crashes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1018",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.FleetReadTests.test_a_demanded_abandoned_row_starts_its_claim_read_while_discovery_lists_it",
+        "tests.test_admission_batch.ClaimDemandTests.test_claims_are_read_only_where_an_answer_can_use_them_with_unchanged_results",
+        "tests.test_admission_batch.ClaimDemandTests.test_a_record_accounted_abandoned_row_is_judged_like_a_native_one",
+        "tests.test_admission_batch.ClaimDemandTests.test_a_fault_judging_demand_stays_the_querys_scoped_unknown"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1019",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.FleetReadTests.test_discovery_reads_the_partitions_in_a_bracket_and_starts_the_fence_from_them",
+        "tests.test_admission_batch.FleetReadTests.test_an_unproved_partition_read_falls_back_to_the_sequential_walk",
+        "tests.test_admission_batch.FleetReadTests.test_a_failed_partition_read_raises_as_the_walk_would",
+        "tests.test_admission_batch.FleetReadTests.test_the_end_fence_reads_each_partition_page_again_and_a_move_changes_a_page",
+        "tests.test_admission_batch.FleetReadTests.test_every_partition_settles_and_a_spent_budget_is_reported_first"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1020",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.WorkerFactTests.test_worker_facts_are_derived_once_per_call",
+        "tests.test_admission_batch.WorkerFactTests.test_each_caller_receives_its_own_copy"
       ],
       "status": "NOT_RUN"
     },
