@@ -192,9 +192,37 @@ class IsolateTests(unittest.TestCase):
         hidden = [argv[i + 1] for i, item in enumerate(argv) if item == "--tmpfs"]
         self.assertTrue({"/home", "/tmp"} <= set(hidden), hidden)
         self.assertTrue(self.bound(argv, ROOT))
-        self.assertGreater(argv.index(str(ROOT)), max(i for i, item in enumerate(argv) if item == "--tmpfs"),
+        self.assertGreater(argv.index(str(ROOT)),
+                           max(i for i, item in enumerate(argv) if item == "--tmpfs" and argv[i + 1] in isolate.HIDDEN),
                            "the checkout is put back after /home is hidden")
         self.assertNotIn("--bind", argv)
+
+    def test_home_and_tmpdir_get_one_fresh_mount_that_overmounts_nothing(self):
+        """pod#170: hiding a host /tmp that is itself a tmpfs stacks two mounts on /tmp, so fixtures live on
+        a new mount point inside it, mounted once, after /tmp is hidden and never covered by a bind."""
+        fixture = isolate.FIXTURE
+        inside = Path(fixture) / "outer-fixture"
+        with patch.object(isolate.Path, "exists", return_value=True):
+            argv = self.argv(readable=(str(inside),))
+        self.assertTrue(Path(fixture).parent.as_posix() in isolate.HIDDEN and fixture not in isolate.HIDDEN, fixture)
+        mounted = [i for i, item in enumerate(argv) if item in ("--tmpfs", "--bind", "--ro-bind") and argv[i + 1] == fixture]
+        self.assertEqual(len(mounted), 1, "exactly one mount at the fixture mount point")
+        self.assertEqual(argv[mounted[0]], "--tmpfs")
+        self.assertGreater(mounted[0], argv.index("/tmp"), "the fixture tree is created inside the hidden /tmp")
+        binds = [i for i, item in enumerate(argv) if item in ("--bind", "--ro-bind")][1:]  # after the read-only root
+        self.assertLess(mounted[0], min(binds))
+        self.assertFalse([argv[i + 2] for i in binds if Path(fixture).is_relative_to(argv[i + 2])],
+                         "no bind covers the fixture mount point")
+        self.assertTrue(self.bound(argv, inside), "a nested run's own fixture is still shown on top")
+        self.assertIn(["--dir", f"{fixture}/home"], [argv[i:i + 2] for i in range(len(argv))])
+        values = {argv[i + 1]: argv[i + 2] for i, item in enumerate(argv) if item == "--setenv"}
+        self.assertEqual((values["TMPDIR"], values["HOME"]), (fixture, f"{fixture}/home"))
+
+    def test_a_readable_path_that_would_overmount_the_fixture_tree_is_refused(self):
+        for covering in (isolate.FIXTURE, str(Path(isolate.FIXTURE).parent)):
+            with self.subTest(covering), patch.object(isolate.Path, "exists", return_value=True), \
+                    self.assertRaises(SystemExit):
+                self.argv(readable=(covering,))
 
     def test_nothing_is_inherited_except_an_allowlist(self):
         argv = self.argv()

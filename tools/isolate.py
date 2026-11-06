@@ -15,7 +15,11 @@ The command sees the host file system read-only, with /home, /root, /mnt, /media
 directories its `.git` file points at) and any `--readable` path put back read-only. The environment
 is rebuilt from a short allowlist, for bubblewrap itself as well as for the command, so no token or
 Orca variable crosses (the command's own `/proc/1/environ` is bubblewrap's). A fixture's own files live
-in a fresh `/tmp`. This is protection from accidental contamination of a trusted developer's host,
+in one more fresh memory file system at `/tmp/isolated`, with HOME at `/tmp/isolated/home` and
+TMPDIR at `/tmp/isolated`. Hiding a host `/tmp` that is itself a memory file system stacks a second
+mount on `/tmp`, and Pod's cleanup placement checks rightly refuse a path whose mount point has two
+entries in `/proc/self/mountinfo`; `/tmp/isolated` is created inside the hidden `/tmp`, so it has
+exactly one. This is protection from accidental contamination of a trusted developer's host,
 not a sandbox for hostile code: the network is shared and the host's read-only system tree stays
 visible.
 
@@ -36,6 +40,8 @@ import textwrap
 
 ROOT = Path(__file__).resolve().parents[1]
 HIDDEN = ("/home", "/root", "/mnt", "/media", "/srv", "/tmp", "/var/tmp", "/run/user")
+# The fixture tree: a fresh mount point inside the hidden /tmp, so nothing on the host is under it.
+FIXTURE = "/tmp/isolated"
 PASSED = ("PATH", "LANG", "LANGUAGE", "TERM", "PYTHONPATH", "PYTHONHASHSEED", "PYTHONDONTWRITEBYTECODE", "CI",
           "GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_SHA", "POD_REQUIRE_PTY")
 
@@ -59,8 +65,8 @@ def git_directories(checkout: Path) -> list[Path]:
 
 def environment(env: dict[str, str]) -> dict[str, str]:
     kept = {key: value for key, value in env.items() if key in PASSED or key.startswith("LC_")}
-    kept["HOME"] = "/tmp/home"
-    kept["TMPDIR"] = "/tmp"
+    kept["HOME"] = f"{FIXTURE}/home"
+    kept["TMPDIR"] = FIXTURE
     return kept
 
 
@@ -76,7 +82,11 @@ def arguments(command: list[str], *, checkout: Path = ROOT, readable: tuple[str,
     for hidden in HIDDEN:
         if os.path.isdir(hidden):
             argv += ["--tmpfs", hidden]
+    # One fresh mount for HOME and TMPDIR at a new mount point; --self-check proves it is not stacked.
+    argv += ["--tmpfs", FIXTURE, "--dir", f"{FIXTURE}/home"]
     for path in dict.fromkeys(item.resolve() for item in shown if item.exists()):
+        if Path(FIXTURE).is_relative_to(path):
+            raise SystemExit(f"isolate: showing {path} would overmount the fixture tree {FIXTURE}")
         argv += ["--ro-bind", str(path), str(path)]
     summary = env.get("GITHUB_STEP_SUMMARY")
     if summary and os.path.isfile(summary):
@@ -115,10 +125,30 @@ def run(command: list[str], **options) -> int:
 
 
 PROBE = textwrap.dedent('''
-    import json, os, subprocess, sys
+    import json, os, re, subprocess, sys
     from pathlib import Path
-    import tests
     spec, out = json.loads(sys.argv[1]), {}
+    def unescape(value):
+        return re.sub(r"\\\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
+    mounts = []
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        fields = line.split(" ")
+        mounts.append((Path(unescape(fields[4])), fields[0], fields[fields.index("-", 6) + 1]))
+    def mount(path):
+        point = max((row[0] for row in mounts if path.is_relative_to(row[0])), key=lambda row: len(row.parts))
+        return point, [row for row in mounts if row[0] == point]
+    def on_fixture(when):
+        for name in ("TMPDIR", "HOME"):
+            point, entries = mount(Path(os.path.realpath(os.environ[name])))
+            if str(point) != spec["fixture"]:
+                yield f"{when} {name} is on {point}, not on the fixture mount {spec['fixture']}"
+            elif len(entries) != 1 or entries[0][2] != "tmpfs":
+                yield f"{when} {name}'s mount point {point} is overmounted or not one tmpfs: {entries}"
+    fixture = list(on_fixture("the wrapper's"))
+    if sorted(os.listdir(os.environ["TMPDIR"])) != ["home"] or os.listdir(os.environ["HOME"]):
+        fixture.append("the fixture mount was not fresh")
+    import tests  # the test boundary's own disposable homes must land on the same single mount
+    out["fixture"] = fixture + list(on_fixture("the test boundary's"))
     def attempt(name, action):
         try:
             action(); out[name] = "allowed"
@@ -173,7 +203,8 @@ def self_check() -> int:
         # The stand-in checkout is shown read-only as a real checkout is; the home is simply absent,
         # because only the checkout and what is passed with --readable are put back.
         options = {"readable": (str(stand_in), str(discovery))}
-        spec = {"stand_in": str(stand_in), "credentials": str(home / ".codex/auth.json"), "checkout": str(ROOT)}
+        spec = {"stand_in": str(stand_in), "credentials": str(home / ".codex/auth.json"), "checkout": str(ROOT),
+                "fixture": FIXTURE}
         caller = {**os.environ, "PYTHONPATH": str(ROOT), "POD_CANARY_TOKEN": "canary"}
         probe = launch([sys.executable, "-c", PROBE, json.dumps(spec)], capture=True, env=caller, **options)
         discover = launch([sys.executable, "-m", "unittest", "discover", "-s", str(discovery), "-t", str(discovery)],
@@ -185,6 +216,7 @@ def self_check() -> int:
             seen = json.loads(probe.stdout)
             if seen.pop("environment"):
                 problems.append("the caller's environment reached the sandbox (own or /proc/1/environ)")
+            problems += seen.pop("fixture")
             if seen.pop("control") != 0:
                 problems.append("a fixture could not use Git in its own /tmp repository")
             problems += [f"{name}: {result}" for name, result in seen.items()
