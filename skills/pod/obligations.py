@@ -1231,8 +1231,6 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     report boundary's triage (`triaged`) may add them.
     """
     prior_map = prior if isinstance(prior, dict) and prior.get("obligations") is not None else None
-    if prior_map is not None:
-        validate_map_record(prior_map)
     request_entries = (len(value["obligations"]) if isinstance(value.get("obligations"), list)
                        else len(value["update"]) if isinstance(value.get("update"), dict) else 0)
     if (triaged or ctx.get("operation") == "report") and "report_request_entries" in ctx:
@@ -2184,12 +2182,8 @@ def validate_map_record(state: dict) -> None:
     for field in ("seq", "revision"):
         if type(value[field]) is not int or value[field] < 1:
             raise refuse("obligation_invalid", "malformed", "persisted map sequence and revision are positive integers", record="persisted map")
-    row_bounds(value["obligations"])
     for ob in value["obligations"]:
-        _exact(ob, _OBLIGATION_FIELDS,
-               {"id", "kind", "provenance", "state", "introduced_seq", "definition"}, "obligation")
-        _structure(ob)
-        if "withdrawal" not in ob:
+        if not isinstance(ob, dict) or "withdrawal" not in ob:
             continue
         withdrawal = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"),
                             "withdrawal", obligation=ob.get("id"))

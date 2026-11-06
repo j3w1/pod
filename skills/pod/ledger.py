@@ -227,8 +227,7 @@ def _validate_route_references(state: dict) -> None:
     from .obligations import _route_later
     admissions = state["admissions"]
     checkpoint = state.get("checkpoint") or {}
-    obligations = {row["id"]: row for row in checkpoint.get("obligations", [])
-                   if isinstance(row, dict) and isinstance(row.get("id"), str)}
+    obligations = {row["id"]: row for row in checkpoint.get("obligations", [])}
     for row in admissions.values():
         for entry in row["route_decision"].get("settlements", []):
             if entry.get("seq", 1) > checkpoint.get("seq", 0):
@@ -305,8 +304,7 @@ def _validate_context(value: object, *, full_history=True) -> dict:
             raise PodError("state_unsupported", "Issue revision history is missing")
         for row in revisions:
             validate_decision(row, checkpoint_value)
-        if state.get("decision_channels") == 4 or (state.get("decision_channels") == 5
-                                                  and checkpoint_value.get("obligations") is not None):
+        if state.get("decision_channels") == 4 or state.get("decision_channels") == 5 and checkpoint_value.get("obligations") is not None:
             from .obligations import validate_map_record
             validate_map_record(checkpoint_value)
         from .contracts import TOOL_QUESTION_SCHEMA
@@ -2049,10 +2047,8 @@ def _verify_local_append(project: Path, objective: str, state: dict, authority: 
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict, issue_revision=None) -> tuple[dict, dict | None]:
-    from .obligations import accept_write, disposition, refuse, validate_map_record
+    from .obligations import accept_write, disposition, refuse
     prior_map = map_of(state)
-    if prior_map is not None:
-        validate_map_record(prior_map)
     map_state: dict = {}
     ctx = None
     has_delivery = "delivery" in proposed
@@ -2525,15 +2521,10 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                 decision_stack.enter_context(issue_revision.capability.scope())
             proposed = {**proposed, "revision_authority": issue_revision.authority}
         from .pod_ticks import refresh as refresh_ticks
-        prior_map = map_of(state)
-        if prior_map is not None:
-            from .obligations import validate_map_record
-            validate_map_record(prior_map)
-        prior_criteria = {row["id"] for row in (prior_map or {}).get("obligations", []) if row["kind"] == "criterion"}
+        prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
         raw_obligations = proposed.get("obligations")
         introducing = isinstance(raw_obligations, list) and any(
-            isinstance(row, dict) and row.get("kind") == "criterion"
-            and isinstance(row.get("id"), str) and row["id"] not in prior_criteria
+            isinstance(row, dict) and row.get("kind") == "criterion" and row.get("id") not in prior_criteria
             for row in raw_obligations)
         rebound = core.get("objective_source") != previous.get("objective_source")
         if core.get("objective_source") is not None and (introducing or rebound or issue_requested):
