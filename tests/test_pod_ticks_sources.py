@@ -227,3 +227,79 @@ class ContinuedStateTests(SuccessionCase):
             self.assertEqual(caught.exception.code, "objective_continued")
             self.assertEqual(self.snapshot(), before)
             self.assertEqual(issue.calls, [])
+
+
+class UnreconciledEditTests(TickCase):
+    """pod#75: status after an observed, unreconciled outside edit (R10 D1/D5, R133)."""
+
+    def drifted(self):
+        second = self.criterion("waiting", id="O2", source={"ref": "PoD#2"},
+                                wait={"class": "sequenced", "referent": "O1"})
+        self.bind("- [ ] **PoD#1\n- [ ] **PoD#2\n- [ ] **PoD#3", second, criteria=["PoD#1", "PoD#2"])
+        self.prove(); self.tick(1); self.tick(2)
+        self.issue.body += "\nOutside edit"
+        self.failure("issue_reconciliation_required", self.tick, 1)
+
+    def test_own_tick_is_not_due_after_drift_D5(self):
+        self.drifted()
+        self.assertFalse(self.ticks()["facts_current"])
+        own = self.line(2)
+        self.assertEqual((own["ticked"], own["authorship"], own["proven"]), (True, "own", True))
+        self.assertEqual((own["status"], own["direction"], own["due"]), ("current", None, False))
+        closed = self.write(close=True)
+        self.assertFalse([row for row in closed["pod_ticks"]["lines"] if "blocked_at_closure" in row])
+
+    def test_unmapped_line_stays_blocked_unmapped_after_drift_D1(self):
+        self.drifted()
+        unmapped = self.line(3)
+        self.assertEqual((unmapped["status"], unmapped["blocked"]["code"]), ("blocked", "unmapped"))
+        self.assertEqual(len(self.issue.writes), 2)
+
+    def test_failed_read_ends_a_drift_observation_for_closure_D5(self):
+        self.bind(); self.prove()
+        self.issue.body = "- [x] **PoD#1\nOutside edit"
+        self.failure("issue_reconciliation_required", self.tick)
+        self.assertEqual(self.line()["status"], "current")
+        self.issue.body = "- [ ] **PoD#1"
+        self.issue.unreadable = True
+        self.failure("issue_access_unavailable", self.tick)
+        self.assertEqual((self.line()["direction"], self.line()["blocked"]["row"]), ("tick", "B5"))
+        self.write()
+        self.failure("pod_ticks_due", self.write, close=True)
+
+    def test_read_started_under_an_older_binding_cannot_replace_a_rebind_s_facts_D5(self):
+        self.bind(); self.prove(); self.tick()
+        self.issue.body += "\nOutside edit"
+        original = self.issue.issue
+
+        def racing(**arguments):
+            response = original(**arguments)
+            self.issue.issue = original
+            self.issue.body = "- [ ] **PoD#1\nReconciled body"
+            self.rebind()
+            return response
+        self.issue.issue = racing
+        self.failure("issue_reconciliation_required", self.tick)
+        row = self.line()
+        self.assertTrue(row["facts_current"])
+        self.assertEqual((row["status"], row["direction"]), ("due", "tick"))
+        self.failure("pod_ticks_due", self.write, close=True)
+
+    def test_incomplete_readback_is_no_drift_observation_for_closure_D5(self):
+        self.issue.amendments[99] = "Original"
+        self.bind(amendments=[self.locator + "#issuecomment-99"]); self.prove()
+        self.issue.refuse_next = 403
+        self.issue.other_actor = "- [x] **PoD#1\nOutside edit"
+        original = self.issue.amendment
+
+        def failing(**arguments):
+            if self.issue.writes:
+                raise PodError("issue_access_unavailable", "Simulated inaccessible amendment")
+            return original(**arguments)
+        self.issue.amendment = failing
+        self.failure("issue_access_unavailable", self.tick)
+        self.assertNotEqual(self.line()["status"], "current")
+        self.issue.amendment = original
+        self.issue.body = "- [ ] **PoD#1"
+        self.write()
+        self.failure("pod_ticks_due", self.write, close=True)
