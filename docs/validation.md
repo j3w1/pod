@@ -120,12 +120,22 @@ is marked `verified_plan`; future direct log measurements use `timing_lines`. Ra
 recorded run, including overhead, and do not guarantee future runner speed.
 
 Each hosted lane share proves that every planned test ran exactly once and that each worker
-finished cleanly after its last test, and fails on any skip. Suite-health limits bound hosted
-CI time: a share fails for an unrecorded test over 2 s, any test over the 60 s ceiling, or a
-recorded test at more than twice its recorded duration and 10 s over it, once timing the test
-again alone confirms it (up to five per share, ceiling breaches and new slow tests first; past
-that, those two fail unconfirmed and drift only warns);
-it also fails beyond twice its lane target. These limits govern the suite's own runtime, not product performance. Record a
+finished cleanly after its last test, and fails on any skip. Timing is judged in three tiers.
+Functional correctness (a failed, errored, missing or skipped test, or a worker that does not finish
+cleanly) always fails. A confirmed, attributable slowness fails: an unrecorded test over 2 s, or a
+recorded test at more than twice its recorded duration and 10 s over it, fails only when two
+consecutive re-timings of that test alone are both over the limit, and so does a test over the
+60 s ceiling (up to five tests per share are re-timed, ceiling breaches and new slow tests first;
+past that, only an unconfirmed ceiling breach fails and the rest warn). A re-timing alone that fails,
+skips, exits uncleanly or never finishes is not a timing sample: it fails the share at once and a later fast
+re-timing cannot mask it. Everything else is timing noise and only warns: a test that is over a limit in the share but
+within it alone, or over it once and then within it, and a lane share over its target. A share fails
+on wall time alone only past four times its lane target (720 s at the 180 s target), which is hang
+class; the job's own `timeout-minutes` still ends a true hang. Each warning records the
+measurement: it prints as `warning:`, appears in the job summary, and is a GitHub `::warning`
+annotation. A share that is slow only on the clock was failing before this change at twice the
+target (PR 146 took 364 s against 360 s, with every test passing); it is now a warning.
+These limits govern the suite's own runtime, not product performance. Record a
 necessarily slow test from its pull-request run with `python tools/suite_lanes.py refresh --pr N`
 and commit the manifest; `refresh` reads only that run's log lines. Each timing line records the exact
 interpreter version that ran it, and `refresh` requires the whole run to have used one; earlier logs
@@ -137,7 +147,7 @@ matching `ci.yml` rows, up to `max_parallel_shards` for parallel (10, the owner'
 a hard finding. Below that parallel cap, calibrated share overload is also a hard finding. At the
 parallel cap, calibrated-only overload is a warning naming projected seconds, target and residual;
 it does not suggest another shard. Report actual hosted share times and any residual after the
-bounded remedy. The existing hosted failure beyond twice the target stays unchanged. Budgets, lane targets,
+bounded remedy. Budgets, lane targets, the four-times hang ratio, the two-re-timing confirmation count,
 `max_parallel_shards` and any override that keeps a flagged test out of `serial` change only by
 owner decision.
 

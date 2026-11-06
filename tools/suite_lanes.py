@@ -50,6 +50,11 @@ CLOCKS = frozenset({"monotonic", "perf_counter", "time", "monotonic_ns", "perf_c
 BOUNDS = frozenset({"assertLess", "assertLessEqual"})
 CHUNK = 100
 SOLO_LIMIT = 5
+# Timing noise warns; only a test that stays over its limit in CONFIRMATIONS consecutive alone re-timings, or a
+# lane share past HANG_RATIO times its target, fails. Changing these values is an owner decision (j3w1 approved
+# them on 2026-11-06 for pod#151), like the budgets in the manifest.
+CONFIRMATIONS = 2
+HANG_RATIO = 4
 PASSED = frozenset({"success", "expected_failure"})
 FAILED = frozenset({"failure", "error", "unexpected_success"})
 FIXTURE = re.compile(r"(setUpClass|tearDownClass|setUpModule|tearDownModule) \((.+)\)")
@@ -765,41 +770,77 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
                 outcome["fixture_errors"] += accounted["fixture_errors"]
                 outcome["ran"] += accounted["ran"]
         lane_wall = time.monotonic() - started
-        if target is not None and lane_wall > target:
-            message = f"LANE share took {lane_wall:.0f} s, over its {target:.0f} s target"
-            if lane_wall > 2 * target and strict:
-                outcome["problems"].append(message + ": add a shard (lanes.*.shards and a ci.yml include row) "
-                                           "or split its slowest tests")
-            else:
-                outcome["warnings"].append(message)
+        solo_problems: list[str] = []
+
         def alone(test_id: str, seconds: float) -> float:
+            """Re-time one test alone; any functional problem or missing completion is a failure, never a timing."""
             item = run_pool(root, [("solo", [test_id], min(300.0, 3 * seconds + 30))], directory, 1)[0]
-            stops = [event for event in _read_events(item["events"]) if event.get("event") == "stop"]
+            events = _read_events(item["events"])
             item["events"].unlink(missing_ok=True)
-            return stops[-1]["seconds"] if stops else float("inf")
+            # A skip alone is never a timing sample, whatever the share's own skip option.
+            accounted = account([test_id], events, name="solo", exit_note=item["note"], forbid_skips=True,
+                                exit_code=item["code"])
+            stops = [event for event in events if event.get("event") == "stop"]
+            if accounted["problems"] or not stops:
+                sys.stdout.write(_group(f"solo {test_id}", item["log_file"].read_text(encoding="utf-8",
+                                                                                      errors="replace")))
+                solo_problems.extend(accounted["problems"] or [f"NOT RUN {test_id} alone: no completion recorded"])
+                outcome["clean"] = False  # The share's timing lines must not attest a clean run.
+                return float("inf")
+            return stops[-1]["seconds"]
 
         problems, warnings = judge(ranked_candidates(outcome["results"], manifest), manifest, strict, alone)
-        outcome["problems"] += problems
+        outcome["problems"] += solo_problems + problems
         outcome["warnings"] += warnings
+        if target is not None:
+            lane_problems, lane_warnings = lane_findings(lane_wall, target, strict,
+                                                         attributed=bool(problems or solo_problems))
+            outcome["problems"] += lane_problems
+            outcome["warnings"] += lane_warnings
     outcome["wall"] = time.monotonic() - started
     return outcome
 
 
+def lane_findings(lane_wall: float, target: float, strict: bool, *, attributed: bool) -> tuple[list, list]:
+    """A share over its target warns; only a hang-class wall time fails, since a slow test is judged on its own."""
+    if lane_wall <= target:
+        return [], []
+    message = f"LANE share took {lane_wall:.0f} s, over its {target:.0f} s target"
+    if lane_wall > HANG_RATIO * target and strict:
+        return [message + f", past {HANG_RATIO} times the target: a hang or a regression; add a shard (lanes.*.shards "
+                "and a ci.yml include row) or split its slowest tests"], []
+    return [], [message + (" [slow tests above failed it]" if attributed
+                           else ": no test was confirmed slow alone, so this is runner timing noise, not a failure")]
+
+
 def judge(candidates: list[tuple[str, str, float]], manifest: dict, strict: bool, alone) -> tuple[list, list]:
-    """Turn ranked gate hits into findings and warnings, timing at most SOLO_LIMIT of them alone."""
+    """Turn ranked gate hits into findings and warnings, timing at most SOLO_LIMIT of them alone.
+
+    A ceiling breach, a new slow test or drift fails only when CONFIRMATIONS consecutive alone re-timings are all
+    over the limit. Anything else is a warning that records the measurement."""
     problems, warnings = [], []
     for test_id, kind, seconds in candidates[SOLO_LIMIT:]:
-        # Past the cap, an unconfirmed ceiling breach or new slow test still fails; drift only warns.
+        # Past the cap only an unconfirmed ceiling breach still fails; the rest warn with their measurement.
         message = gate_message(kind, test_id, seconds, None, manifest) + " [not timed alone]"
-        (problems if strict and kind != "DRIFT" else warnings).append(message)
+        (problems if strict and kind == "CEILING" else warnings).append(message)
     for test_id, kind, seconds in candidates[:SOLO_LIMIT]:
-        solo = alone(test_id, seconds)
-        message = gate_message(kind, test_id, seconds, solo, manifest)
-        if violation(manifest, test_id, solo) and strict:
-            problems.append(message)
-        else:
-            warnings.append(message + ("" if violation(manifest, test_id, solo)
-                                       else " [within limits alone: runner contention]"))
+        needed, timings = CONFIRMATIONS, []
+        while len(timings) < needed:
+            timings.append(alone(test_id, seconds))
+            if timings[-1] == math.inf or not violation(manifest, test_id, timings[-1]):
+                break
+        # An alone run that did not finish (timeout, crash, no completion) is a hang or failure, not a timing
+        # sample: it fails at once and cannot be masked by a later fast run.
+        hung = math.inf in timings
+        confirmed = len(timings) == needed and all(violation(manifest, test_id, solo) for solo in timings)
+        note = ""
+        if hung:
+            note = " [alone run did not finish]"
+        elif not confirmed:
+            note = (" [slow alone once, not again]" if any(violation(manifest, test_id, solo) for solo in timings)
+                    else " [within limits alone: runner contention]")
+        message = gate_message(kind, test_id, seconds, timings[-1], manifest) + note
+        (problems if strict and (hung or confirmed) else warnings).append(message)
     return problems, warnings
 
 
@@ -866,6 +907,9 @@ def command_run(root: Path, args) -> int:
             stream.write(report)
     for warning in outcome["warnings"]:
         print("warning: " + warning)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            escaped = warning.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print("::warning title=Suite timing::" + escaped)
     if outcome["problems"]:
         print(f"\n{len(outcome['problems'])} finding(s):")
         print("\n".join(outcome["problems"]))
