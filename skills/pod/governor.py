@@ -68,7 +68,8 @@ NEXT_ACTIONS = {
     "candidate_unbound": "checkpoint a candidate, or prepare one for the delivery unit",
     "superseded_candidate": "re-issue the request against the unit's current candidate generation",
     "candidate_unfrozen": "commit or discard the working-tree changes, then prepare the candidate again",
-    "candidate_unpublished": "push the candidate commit to the unit's branch first",
+    "candidate_unpublished": ("publish the candidate commit to the unit's branch through governor-execute (push or "
+                              "pr_update), never plain git: Pod counts only the pushes it recorded"),
     "effects_unknown": "declare effects: [] for none, or workflow:ci.yml (a bare workflow file name); inspect governor-status trigger_proposal; proposals are never applied",
     "effect_unresolved": "reconcile the unresolved submission with the governor-reconcile helper before submitting again",
     "integration_unsettled": "settle the unit's native work and corrections first",
@@ -105,6 +106,7 @@ class GitHubPort(Protocol):
     def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> dict: ...
     def dispatch(self, *, workflow: str, ref: str, inputs: dict) -> dict: ...
     def runs(self, *, workflow: str, commit: str) -> list[dict]: ...
+    def branch_updates(self, *, branch: str) -> list[dict]: ...
     def run(self, *, run_id: str, attempt: int | None = None) -> dict: ...
     def rerun(self, *, run_id: str, failed_only: bool) -> dict: ...
     def cancel(self, *, run_id: str) -> dict: ...
@@ -1045,6 +1047,26 @@ def pushed_branch(row: dict, unit: dict | None) -> dict | None:
     return None
 
 
+def publication_facts(publication: dict, unit: dict | None) -> dict:
+    """What a publication-derived validation's floor reads of its publication (R115): the branch it pushed, or None,
+    and, only when Pod's own push recorded it, whether that push moved the remote ref."""
+    branch = pushed_branch(publication, unit)
+    facts = {"branch": dict(branch) if branch is not None else None}
+    ref_changed = (publication["receipt"].get("provider") or {}).get("ref_changed")
+    if isinstance(ref_changed, bool):
+        facts["ref_changed"] = ref_changed
+    return facts
+
+
+def valid_publication_facts(value: object) -> bool:
+    """Whether a recorded or carried value has the shape `publication_facts` writes."""
+    if not isinstance(value, dict) or set(value) - {"branch", "ref_changed"} or "branch" not in value:
+        return False
+    branch = value["branch"]
+    return ((branch is None or (isinstance(branch, dict) and isinstance(branch.get("branch"), str)))
+            and ("ref_changed" not in value or isinstance(value["ref_changed"], bool)))
+
+
 def _check_merge_target(action: dict, unit: dict | None, reasons: list[dict]) -> None:
     """A merge names the unit's own target, so its consent and any delivery record bind one branch."""
     if action["kind"] != "merge":
@@ -1095,7 +1117,8 @@ def _check_binding(action: dict, unit: dict | None, binding: dict | None, checkp
         key = unit["branch"]["remote"] + "/" + unit["branch"]["branch"]
         if unit["published"].get(key) != binding["commit"]:
             _reason(reasons, "correctness", "candidate_unpublished",
-                    f"{key} does not carry the candidate commit according to recorded pushes")
+                    f"{key} does not carry the candidate commit according to the pushes Pod recorded; a push "
+                    "made with plain git is not one of them")
 
     return superseded, current, starting
 
@@ -1636,11 +1659,15 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
     The run exists whether or not anyone dispatched it. It shares the logical key a dispatch
     would use, so failure gating and de-duplication see it, but it records its run's read-back
     event and is never proof for a dispatch. The executor supplies the run identities it read
-    back; a manual outcome leaves them for readback.
+    back; a manual outcome leaves them for readback, and a push that moved no ref started none, so its rows bind
+    only by readback under their floor (R115). Each row also records the publication's own facts its readback
+    floor needs (`publication`: the branch pushed and, when known, `ref_changed`), so it keeps that floor where the
+    settled publication row is absent, as in a successor that carried only the validation (R115, R118).
     """
     if row.get("candidate_id") is None:
         return
     triggered = (row["receipt"].get("provider") or {}).get("triggered") or {}
+    facts = publication_facts(row, journal["units"].get(row["action"]["unit"]))
     for effect in row.get("effects") or []:
         if not effect.startswith("workflow:"):
             continue
@@ -1654,7 +1681,9 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
                for other in journal["actions"]):
             continue
         _compact(journal)
-        run = triggered.get(workflow)
+        # A push that moved no ref started no run, so its validation binds one only by readback under its floor.
+        noop = facts.get("ref_changed") is False
+        run = None if noop else triggered.get(workflow)
         journal["actions"].append({
             "record_id": digest({"derived": row["record_id"], "workflow": workflow}),
             "logical_key": key, "attempt": 1, "action": action, "candidate_id": row["candidate_id"],
@@ -1664,8 +1693,11 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
             "cancel_safe": True, "effects": [effect], "run_event": run.get("event") if run else None,
             "receipt": {"started_at": row["receipt"]["started_at"], "finished_at": None,
                         "observed_elapsed_s": None, "provider": _provider_run(run) if run else None,
-                        "evidence": [], "detail": None if run else "started by the publication; run not read back yet"},
-            "classification": None, "classifications": [], "derived_from": row["record_id"]})
+                        "evidence": [], "detail": None if run else (
+                            "the publication moved no ref, so it started no run; one binds by readback under its floor"
+                            if noop else "started by the publication; run not read back yet")},
+            "classification": None, "classifications": [], "derived_from": row["record_id"],
+            "publication": deepcopy(facts)})
 
 
 # A carried marker's chain provenance: which objective the row came from, its record id and the claim time. Every
@@ -1678,7 +1710,9 @@ def readback_identity(row: dict, journal: dict, governance: dict | None) -> tupl
 
     A row carried before keeps its marker's facts on every hop, never the intermediate successor's candidate, base or
     branch. Otherwise a merge takes its admitted candidate and consent tree, the predecessor's admitted base and its
-    unit's branch; a cancellation its run, from its receipt or, when that has none, its marker or eligible target.
+    unit's branch; a cancellation its run, from its receipt or, when that has none, its marker or eligible target; a
+    publication-derived validation its publication's facts (R115), as the row recorded them or, for a row that
+    predates them, from its publication in this journal. Their absence refuses nothing: that row keeps the submission.
     """
     from .governor_effects import _bound_run_id
     carried = row.get("carried_from")
@@ -1710,6 +1744,15 @@ def readback_identity(row: dict, journal: dict, governance: dict | None) -> tupl
             if not run_id:
                 return {}, "no run identity binds the cancellation"
             kept = {**kept, "run_id": str(run_id)}
+    elif (kind == "workflow_dispatch" and isinstance(row.get("derived_from"), str) and not isinstance(carried, dict)):
+        facts = row.get("publication") if valid_publication_facts(row.get("publication")) else None
+        if facts is None:
+            publication = next((other for other in journal["actions"] if other["record_id"] == row["derived_from"]),
+                               None)
+            facts = (publication_facts(publication, journal["units"].get(publication["action"]["unit"]))
+                     if publication is not None else None)
+        if facts is not None:
+            kept = {**kept, "publication": deepcopy(facts)}
     return kept, None
 
 

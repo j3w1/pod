@@ -118,7 +118,10 @@ class GovernorFakePort:
         self.issues = {}
         self.pulls = {}
         self.linked = {}
-        self.unreadable = set()  # "issue" or "pr": that read answers remote_read_failed.
+        self.unreadable = set()  # "issue", "pr" or "activity": that read answers remote_read_failed.
+        # A branch's repository activity, newest first, as `gh api .../activity` reads it (R115); none by default.
+        self.updates = {}
+        self.update_reads = []
 
     def issue(self, *, repository, number):
         self.calls.append(("issue", repository, number))
@@ -174,12 +177,20 @@ class GovernorFakePort:
         key = f"{remote}/{branch}"
         if "push" in self.rejected or (expected is not None and self.heads.get(key) not in (expected, None)):
             return {"status": "rejected", "remote_head": self.heads.get(key)}
+        # As porcelain reports it: '=' when the remote already held the commit, so no ref moved.
+        moved = self.heads.get(key) != commit
         self.heads[key] = commit
         for workflow in self.auto_ci:
             self._start(workflow, commit, event="push")
         if "push" in self.lost:
             raise PodError("remote_effect_uncertain", "lost")
-        return {"status": "pushed", "remote_head": commit}
+        return {"status": "pushed", "remote_head": commit, "ref_changed": moved}
+
+    def branch_updates(self, *, branch):
+        self.update_reads.append(branch)
+        if "activity" in self.unreadable:
+            raise PodError("remote_read_failed", "gh read did not succeed")
+        return [dict(update) for update in self.updates.get(branch, [])]
 
     def _start(self, workflow, commit, *, event, created_at=None):
         run = {"id": str(self.next_run), "status": "in_progress", "conclusion": None,
