@@ -1325,11 +1325,12 @@ def _delivery_claimed(project: Path, state: dict, journal: dict) -> bool | None:
     for member in lineage:
         if (member["raw"].get("checkpoint") or {}).get("delivery") is not None:
             return True
-        path = member["root"] / "governor.json"
+        # The Governor's own no-follow read: a missing journal is an empty one, while a link, a dangling link or an
+        # unreadable file is unknown and keeps today's rule.
         try:
-            if path.exists() and merged(_read_journal(path)):
+            if merged(_read_journal(member["root"] / "governor.json")):
                 return True
-        except (PodError, OSError):
+        except (PodError, OSError, ValueError):
             return None
     return False
 

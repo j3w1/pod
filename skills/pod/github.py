@@ -1059,9 +1059,11 @@ class GhPort:
         """
         rows = self._gh_json(["run", "list", "--workflow", workflow, "--commit", commit,
                               "--json", RUN_FIELDS, "--limit", str(RUN_LIST_LIMIT + 1)])
-        if not isinstance(rows, list):
+        # A member that is not an object is an unsupported answer, never a shorter list: a list read as empty may
+        # prove a run absent (R252).
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise PodError("gh_contract", "gh run list returned an unsupported shape")
-        return [_normalise_run(row) for row in rows if isinstance(row, dict)]
+        return [_normalise_run(row) for row in rows]
 
     def presence(self, *, kind: str, ident: str) -> dict:
         """Whether GitHub holds this repository's run, workflow file or commit, as one exact read answers (R252).

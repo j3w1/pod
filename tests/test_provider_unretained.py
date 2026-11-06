@@ -37,6 +37,12 @@ class UnretainedCase(ClosureCase):
         return {"kind": kind, "id": ident, "status": 200 if held else 404, "present": held,
                 **({"state": "active"} if kind == "workflow" and held else {})}
 
+    def malformed_list(self):
+        """GitHub's run list answered with a member that is not a run, as the port refuses it (R252)."""
+        def runs(**_):
+            raise PodError("gh_contract", "gh run list returned an unsupported shape")
+        self.remote.runs = runs
+
     def carried(self):
         self.shipped(pr=False, merged=False, ticked=False, unknown_start=False)
         rows = self.claimed_direct()
@@ -100,8 +106,9 @@ class SettlementClosesTests(UnretainedCase):
         self.assertEqual(self.status(objective="successor")["closure_preserved"], [preserved])
         self.assertFalse([call for call in self.remote.calls[start:] if call[0] in MUTATIONS])
 
-    def test_a_delivery_in_the_chain_or_a_run_listed_again_keeps_todays_refusal(self):
-        """A delivered chain keeps today's rules; a closing read that no longer proves absence holds the row."""
+    def test_a_delivery_or_unreadable_journal_in_the_chain_or_a_run_listed_again_keeps_todays_refusal(self):
+        """A delivered chain, or a predecessor journal Pod cannot read, keeps today's rules; a closing read that no
+        longer proves absence holds the row."""
         rows, record_id, path = self.carried()
         self.unretain(record_id)
         before = self.everything()
@@ -113,6 +120,15 @@ class SettlementClosesTests(UnretainedCase):
         self.assertEqual(self.everything(), before)
         self.remote.runs_by.clear()
         predecessor = _record_path(self.project, "objective")
+        saved = predecessor.read_bytes()
+        predecessor.unlink()
+        predecessor.symlink_to(predecessor.parent / "missing.json")  # A dangling link is unreadable, not absent.
+        own = self.files("successor")
+        error = self.refused(lambda: self.close(rows), code="obligation_unaccounted")
+        self.assertNotIn("provider_unretained", json.dumps(error.detail))
+        self.assertEqual(self.files("successor"), own)
+        predecessor.unlink()
+        predecessor.write_bytes(saved)
         journal = _read_journal(predecessor)
         journal["actions"].append({**deepcopy(journal["actions"][0]), "record_id": "m" * 64, "logical_key": "m" * 64,
                                    "decision": "ALLOW", "outcome": "PASS",
@@ -156,6 +172,7 @@ class SettlementRefusedTests(UnretainedCase):
             (record_id, lambda: self.absent.add(("workflow", "ci.yml")), "unretained_unproved", "workflow ci.yml"),
             (record_id, lambda: self.absent.add(("commit", commit)), "unretained_unproved", f"commit {commit}"),
             (record_id, lambda: self.failing.add("commit"), "readback_unavailable", "remote_read_failed"),
+            (record_id, self.malformed_list, "readback_unavailable", "gh_contract"),
         )
         recorded = path.read_bytes()
         for target, arrange, detail, text in cases:
@@ -164,20 +181,31 @@ class SettlementRefusedTests(UnretainedCase):
                 self.assertIn(text, str(self.refusal(target, detail)))
                 self.assertEqual(path.read_bytes(), recorded)  # Nothing is recorded.
                 self.remote.runs_by.clear(); self.present.clear(); self.absent.clear(); self.failing.clear()
+                self.remote.__dict__.pop("runs", None)
         receipt = {**_read_journal(path)["actions"][0]["receipt"], "started_at": datetime.now(timezone.utc).isoformat()}
         fresh = self.extra(path, record_id, record_id="f" * 64, receipt=receipt)
         self.assertIn("may still be in flight", str(self.refusal(fresh, "unretained_unproved")))
 
-    def test_a_bound_run_that_reads_404_settles_with_that_read(self):
-        """A performed dispatch bound to a run GitHub answers 404 for settles, its exact run read recorded."""
+    def test_a_bound_run_that_reads_404_settles_only_when_its_binding_was_proved(self):
+        """A dispatch whose run Pod's readback bound settles on that run's exact 404; a stored id Pod never proved
+        its own also needs the empty list, so a retained run that may be the row's own holds it."""
         _, record_id, path = self.carried()
-        bound = self.extra(path, record_id, record_id="d" * 64, derived_from=None,
-                           receipt={**_read_journal(path)["actions"][-1]["receipt"], "provider": {"run_id": "555"}})
+        receipt = {**_read_journal(path)["actions"][-1]["receipt"], "provider": {"run_id": "555"}}
+        proved = self.extra(path, record_id, record_id="d" * 64, derived_from=None, receipt=receipt,
+                            run_event="workflow_dispatch")
+        unproved = self.extra(path, record_id, record_id="e" * 64, receipt=receipt)
         commit = _read_journal(path)["actions"][-1]["commit"]
-        self.remote._start("ci.yml", commit, event="push")  # Another run on the commit is not this row's.
-        marker = self.unretain(bound)["unretained"]
+        self.remote._start("ci.yml", commit, event="push")  # Not a dispatch's run; maybe the derived row's own.
+        marker = self.unretain(proved)["unretained"]
         self.assertEqual((marker["run_id"], [(read["kind"], read["status"]) for read in marker["reads"]]),
                          ("555", [("workflow", 200), ("commit", 200), ("run", 404)]))
+        recorded = path.read_bytes()
+        self.assertIn("still lists 1 runs", str(self.refusal(unproved, "unretained_unproved")))
+        self.assertEqual(path.read_bytes(), recorded)
+        self.remote.runs_by.clear()
+        marker = self.unretain(unproved)["unretained"]
+        self.assertEqual((marker["run_id"], marker["listing"]["listed"], marker["reads"][-1]["status"]),
+                         ("555", 0, 404))
 
 
 class StoredShapeTests(unittest.TestCase):
@@ -223,6 +251,13 @@ class PresenceReadTests(unittest.TestCase):
                                      '"state": "active"}', 0)[0], "gh_contract")
         self.kind, self.ident = "commit", "a" * 40
         self.assertEqual(self.answer('HTTP/2.0 200 OK\n\n{"sha": "' + "a" * 40 + '"}', 0)[0]["present"], True)
+
+    def test_a_run_list_member_that_is_not_a_run_is_no_answer(self):
+        completed = subprocess.CompletedProcess([], 0, "[null]", "")
+        with patch("pod.github._run", return_value=completed):
+            with self.assertRaises(PodError) as refused:
+                GhPort(Path(".")).runs(workflow="ci.yml", commit="a" * 40)
+        self.assertEqual(refused.exception.code, "gh_contract")
 
     def test_the_allowlist_names_each_exact_presence_path(self):
         for kind, ident in (("run", "1"), ("workflow", "ci.yml"), ("commit", "a" * 40)):
