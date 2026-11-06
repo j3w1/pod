@@ -286,9 +286,9 @@ def _validate_context(value: object, *, full_history=True) -> dict:
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict):
         if checkpoint_value.get("obligations") is not None:
-            from .obligations import row_bounds
+            from .obligations import validate_map_record
             from .lineage import Lineage
-            row_bounds(checkpoint_value["obligations"])
+            validate_map_record(checkpoint_value)
             if any(isinstance(row, dict) and ("renews" in row or "renewal" in row or row.get("state") == "renewed")
                    for row in checkpoint_value["obligations"]):
                 Lineage(checkpoint_value["obligations"])
@@ -304,9 +304,6 @@ def _validate_context(value: object, *, full_history=True) -> dict:
             raise PodError("state_unsupported", "Issue revision history is missing")
         for row in revisions:
             validate_decision(row, checkpoint_value)
-        if state.get("decision_channels") == 4 or state.get("decision_channels") == 5 and checkpoint_value.get("obligations") is not None:
-            from .obligations import validate_map_record
-            validate_map_record(checkpoint_value)
         from .contracts import TOOL_QUESTION_SCHEMA
         questions = checkpoint_value.get("questions")
         if isinstance(questions, list) and any(isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA for row in questions):
@@ -2526,7 +2523,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
         raw_obligations = proposed.get("obligations")
         introducing = isinstance(raw_obligations, list) and any(
-            isinstance(row, dict) and row.get("kind") == "criterion" and row.get("id") not in prior_criteria
+            isinstance(row, dict) and row.get("kind") == "criterion"
+            and isinstance(row.get("id"), str) and row["id"] not in prior_criteria
             for row in raw_obligations)
         rebound = core.get("objective_source") != previous.get("objective_source")
         if core.get("objective_source") is not None and (introducing or rebound or issue_requested):

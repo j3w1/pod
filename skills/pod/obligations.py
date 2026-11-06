@@ -2184,8 +2184,12 @@ def validate_map_record(state: dict) -> None:
     for field in ("seq", "revision"):
         if type(value[field]) is not int or value[field] < 1:
             raise refuse("obligation_invalid", "malformed", "persisted map sequence and revision are positive integers", record="persisted map")
+    row_bounds(value["obligations"])
     for ob in value["obligations"]:
-        if not isinstance(ob, dict) or "withdrawal" not in ob:
+        _exact(ob, _OBLIGATION_FIELDS,
+               {"id", "kind", "provenance", "state", "introduced_seq", "definition"}, "obligation")
+        _structure(ob)
+        if "withdrawal" not in ob:
             continue
         withdrawal = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"),
                             "withdrawal", obligation=ob.get("id"))

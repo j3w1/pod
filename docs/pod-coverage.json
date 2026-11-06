@@ -2272,6 +2272,8 @@
         "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_prior_map_required_fields_refuse_before_lookups",
         "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_prior_governance_required_fields_refuse_before_lookups",
         "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_checkpoint_prior_map_missing_governance_refuses_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_persisted_row_required_fields_refuse_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_unhashable_caller_ids_refuse_without_writing",
         "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_valid_mapless_and_mapped_checkpoints_keep_working",
         "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths",
         "tests.test_request_contract.DiscoveryTests.test_shape_and_text_refusals_give_whole_constant_contract_without_values"
