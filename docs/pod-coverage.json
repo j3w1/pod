@@ -12076,6 +12076,35 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1032",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.UnverifiedStopTests.test_three_unverified_answers_stop_after_the_first_round",
+        "tests.test_admission_host_exit_stop.UnverifiedStopTests.test_a_verified_answer_keeps_every_later_round",
+        "tests.test_admission_host_exit_stop.UnverifiedStopTests.test_a_fault_in_the_stopping_round_names_the_fault",
+        "tests.test_admission_host_exit_stop.UnverifiedFleetTests.test_three_unverified_answers_stop_the_batch_and_hold_the_rest_unverified"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1033",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_transient_unverified_answer_then_a_verified_one_counts",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_request_is_asked_again_once_and_two_unverified_answers_hold",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_reask_never_displaces_a_planned_request_or_exceeds_r",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_reask_runs_under_the_deadline_test",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_the_stop_counts_answers_after_their_reask"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A902",
       "required_evidence": [
         "unit",
@@ -12332,6 +12361,27 @@
       "offline_test": [
         "tests.test_admission_batch.WalkReReadTests.test_a1000_a_malformed_run_identity_answers_as_the_single_query_and_never_crashes"
       ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1004",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_consumed_keep_open_guidance_preserves_native_action",
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_report_status_and_finalization_relay_labelled_guidance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1005",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_worker_tabs.ReleaseGuidanceTests.test_guidance_exclusions",
       "status": "NOT_RUN"
     }
   ],

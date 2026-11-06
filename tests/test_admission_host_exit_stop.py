@@ -1,7 +1,8 @@
-"""R212 (pod#219, pod#227): within one admission call the first `process_exit` request runs alone and the rest follow
-in rounds of at most `IN_FLIGHT`; a transport or contract fault in any round starts no further round, and every
-candidate not asked holds with that fault (A865-A867, A899-A901). A fake verifier replaces Pod's transport, so no
-process starts, and the deadline cases run on a call clock the test moves by hand."""
+"""R212 (pod#219, pod#227, pod#275): within one admission call the first `process_exit` request runs alone and the rest
+follow in rounds of at most `IN_FLIGHT`; a request answering unverified is asked once more while R leaves room; a
+transport or contract fault in any round, or `UNVERIFIED_STOP` unverified answers standing with none verified, starts no
+further round, and every candidate not asked holds with that code (A865-A867, A899-A901, A1032, A1033). A fake verifier
+replaces Pod's transport, so no process starts, and the deadline cases run on a call clock the test moves by hand."""
 
 import threading
 from unittest.mock import patch
@@ -75,11 +76,13 @@ class StopTests(FakeCase):
                 self.assertFalse(any("not_asked" in key for row in result["host_exits"] for key in row))
 
     def test_an_answer_under_the_contract_never_stops_the_call(self):
+        """An unverified `a` is also asked once more, in the next round beside `b` (pod#275), and answers the same."""
         for mode, code in ANSWERED.items():
             with self.subTest(mode), \
                     patch.object(process_exit, "_output", side_effect=FakeVerifier(modes={"a": mode})) as fake:
                 result = self.read(self.rows)
-                self.assertEqual(first_then_rest(fake.side_effect.requests), (["a"], [["b"], ["c"]]))
+                rest = [["a"], ["b"], ["c"]] if mode == "unverified" else [["b"], ["c"]]
+                self.assertEqual(first_then_rest(fake.side_effect.requests), (["a"], rest))
                 self.assertEqual(exit_codes(result), {"a": code, "b": "host_exit_query_uncovered",
                                                       "c": "host_exit_query_uncovered"})
 
@@ -288,8 +291,145 @@ class RoundTests(FleetCase):
         self.assertEqual({code for single in singles for code in exit_codes(single).values()}, {FAILED})
 
     def test_an_unverified_verifier_answers_each_query_as_its_single_query(self):
-        singles = self.assert_equal_to_singles("unverified", 14)
+        singles = self.assert_equal_to_singles("unverified", 3)
         self.assertEqual({code for single in singles for code in exit_codes(single).values()}, {"host_exit_unverified"})
+
+
+class Sequenced(FakeVerifier):
+    """A fake verifier whose answers for a request, keyed by its first id, follow `sequences` call by call; a request
+    past its sequence, or not in it, answers verified and clean."""
+
+    def __init__(self, sequences, **kwargs):
+        super().__init__(**kwargs)
+        self.sequences = {key: list(value) for key, value in sequences.items()}
+
+    def __call__(self, command, payload):
+        key = payload["references"][0]
+        with self.lock:
+            queue = self.sequences.get(key)
+            self.modes[key] = queue.pop(0) if queue else None  # concurrent requests never share a first id
+        return super().__call__(command, payload)
+
+
+class ReaskTests(FakeCase):
+    """A1033 with one id per request: a request answering unverified is asked once more, in plan order in a later
+    round, only while every unsent request still fits R beside it, under the same deadline test."""
+
+    def test_a_transient_unverified_answer_then_a_verified_one_counts(self):
+        verifier = Sequenced({"a": ["unverified", "clean"]})
+        answer = self.call(30.0, verifier)
+        self.assertEqual(first_then_rest(verifier.requests), (["a"], [["a"], ["b"], ["c"]]))
+        self.assertTrue(all(row["counted"] for row in answer["results"][0]["host_exits"]))
+        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 4, "asked": 3, "counted": 3, "reasked": 1})
+
+    def test_a_request_is_asked_again_once_and_two_unverified_answers_hold(self):
+        verifier = Sequenced({"a": ["unverified", "unverified", "clean"]})
+        answer = self.call(30.0, verifier)
+        self.assertEqual(sorted(verifier.requests), [["a"], ["a"], ["b"], ["c"]])
+        self.assertEqual(exit_codes(answer["results"][0]), {"a": "host_exit_unverified", "b": UNCOVERED,
+                                                            "c": UNCOVERED})
+        self.assertEqual(answer["discovery"]["host_exit"], {"requests": 4, "asked": 3, "counted": 0, "reasked": 1})
+
+    def test_a_reask_never_displaces_a_planned_request_or_exceeds_r(self):
+        """With R 3 there is no room beside the three planned requests; with R 4 `a` takes the one free place, and `b`,
+        answering unverified after it, finds none."""
+        for bound, sent, a_code in ((3, [["a"], ["b"], ["c"]], "host_exit_unverified"),
+                                    (4, [["a"], ["a"], ["b"], ["c"]], UNCOVERED)):
+            with self.subTest(R=bound), patch.object(process_exit, "R", bound):
+                verifier = Sequenced({"a": ["unverified", "clean"], "b": ["unverified", "clean"]})
+                answer = self.call(30.0, verifier)
+                self.assertEqual(sorted(verifier.requests), sent)
+                self.assertEqual(exit_codes(answer["results"][0]), {"a": a_code, "b": "host_exit_unverified",
+                                                                    "c": UNCOVERED})
+
+    def test_a_reask_runs_under_the_deadline_test(self):
+        """14 s: 9.8 s remain when `a` starts; it answers unverified after 0.5 s, and its re-ask beside `b` spends 1.5 s,
+        leaving 7.8 s, below 7.875 s, so `c` holds the deadline."""
+        def spend(ids):
+            verifier.clock.now += {"a": 0.5 if len(verifier.requests) == 1 else 0.0, "b": 1.5}.get(ids[0], 0.0)
+        verifier = Sequenced({"a": ["unverified", "clean"]}, before=spend)
+        result = self.call(14.0, verifier)["results"][0]
+        self.assertEqual(sorted(verifier.requests), [["a"], ["a"], ["b"]])
+        self.assertEqual(exit_codes(result), {"a": UNCOVERED, "b": UNCOVERED, "c": DEADLINE})
+
+    def test_the_stop_counts_answers_after_their_reask(self):
+        """a | a b | b c | c d: three answers stand unverified after their re-asks, so `d`'s re-ask and `e` are never
+        sent."""
+        self.rows += [stuck(self, name) for name in "de"]
+        verifier = FakeVerifier("unverified")
+        answer = self.call(30.0, verifier)
+        self.assertEqual(sorted(verifier.requests), [["a"], ["a"], ["b"], ["b"], ["c"], ["c"], ["d"]])
+        self.assertEqual(exit_codes(answer["results"][0]), dict.fromkeys("abcde", "host_exit_unverified"))
+        self.assertEqual(answer["discovery"]["host_exit"], {
+            "requests": 7, "asked": 4, "counted": 0, "reasked": 3, "not_asked_after": "host_exit_unverified",
+            "not_asked": 1})
+
+
+class UnverifiedFleetTests(FleetCase):
+    """A1032 on the fake fleet: a verifier answering every request unverified receives the first three of fourteen, and
+    every query's result equals the result of asking all fourteen."""
+
+    def test_three_unverified_answers_stop_the_batch_and_hold_the_rest_unverified(self):
+        verifier = FakeVerifier("unverified")
+        stopped = self.batch_with(verifier)
+        self.assertEqual(stopped["discovery"]["host_exit"], {
+            "requests": 3, "asked": 21, "counted": 0, "not_asked_after": "host_exit_unverified", "not_asked": 75})
+        self.assertEqual(verifier.requests[0], [f"a{index:02d}" for index in range(7)])
+        with patch.object(process_exit, "UNVERIFIED_STOP", 99):  # no stop: every request is asked and answers unverified
+            asked_all = self.batch_with(FakeVerifier("unverified"))
+        self.assertEqual(asked_all["discovery"]["host_exit"], {"requests": 14, "asked": 96, "counted": 0})
+        self.assertEqual([row["result"] for row in stopped["responses"]],
+                         [row["result"] for row in asked_all["responses"]])
+        self.assertEqual({code for row in stopped["responses"] for code in exit_codes(row["result"]).values()},
+                         {"host_exit_unverified"})
+
+
+class UnverifiedStopTests(FakeCase):
+    """A1032 with one id per request: a | b c | d e | ... Three unverified answers with none verified stop the call; any
+    verified answer, or fewer unverified ones, keeps every round."""
+
+    NAMES = FOURTEEN
+
+    def test_three_unverified_answers_stop_after_the_first_round(self):
+        self.assertEqual(process_exit.UNVERIFIED_STOP, 3)
+        verifier = FakeVerifier("unverified")
+        answer = self.call(30.0, verifier)
+        self.assertEqual(first_then_rest(verifier.requests), (["a"], [["b"], ["c"]]))
+        result = answer["results"][0]
+        self.assertEqual(exit_codes(result), dict.fromkeys(FOURTEEN, "host_exit_unverified"))
+        self.assertFalse(any(row["counted"] for row in result["host_exits"]))
+        self.assertFalse(any("not_asked" in key for row in result["host_exits"] for key in row))
+        self.assertEqual(answer["discovery"]["host_exit"], {
+            "requests": 3, "asked": 3, "counted": 0, "not_asked_after": "host_exit_unverified", "not_asked": 11})
+        with patch.object(process_exit, "UNVERIFIED_STOP", 99):
+            asked_all = self.call(30.0, FakeVerifier("unverified"))
+        self.assertEqual(asked_all["results"], answer["results"])
+
+    def test_a_verified_answer_keeps_every_later_round(self):
+        """A verified first answer, or one verified answer among the first three, usable or not, keeps every round, and
+        later unverified answers never stop the call; fewer than three unverified answers never stop it either."""
+        cases = {"first clean": {"a": "clean"}, "first round foreign host": {"c": "foreign_host"},
+                 "first round stale": {"b": "stale"}}
+        for label, modes in cases.items():
+            with self.subTest(label):
+                verifier = FakeVerifier("unverified", modes=modes)
+                answer = self.call(30.0, verifier)
+                self.assertEqual(len(verifier.requests), 14)
+                self.assertNotIn("not_asked_after", answer["discovery"]["host_exit"])
+        with self.subTest("two unverified"):
+            verifier = FakeVerifier(modes={"a": "unverified", "b": "unverified"})
+            result = self.call(30.0, verifier)["results"][0]
+            self.assertEqual(len(verifier.requests), 14)
+            self.assertEqual(exit_codes(result), {**dict.fromkeys("ab", "host_exit_unverified"),
+                                                  **dict.fromkeys("cdefghijklmn", UNCOVERED)})
+
+    def test_a_fault_in_the_stopping_round_names_the_fault(self):
+        verifier = FakeVerifier("unverified", modes={"c": "fail"})
+        answer = self.call(30.0, verifier)
+        self.assertEqual(len(verifier.requests), 3)
+        self.assertEqual(exit_codes(answer["results"][0]), {**dict.fromkeys("ab", "host_exit_unverified"),
+                                                            **dict.fromkeys("cdefghijklmn", FAILED)})
+        self.assertEqual(answer["discovery"]["host_exit"]["not_asked_after"], FAILED)
 
 
 class RoundFaultTests(FakeCase):
