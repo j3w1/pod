@@ -117,7 +117,8 @@ class BindingSourceBoundTests(KernelCase):
         self.assertLessEqual(max(chunks), CHUNK_LIMIT)
 
     def test_accumulated_receipts_at_the_bound_page_out_of_the_root(self):
-        # The largest binding a packet can carry: 128 sources whose paths fill the packet's repr bound.
+        # A conservative stress shape: 128 maximum-length paths per binding, more than one packet's
+        # representation bound can carry. Paging, not a byte estimate, keeps the root small.
         path = "p" * bound("source", "path")
 
         def receipt(number):
