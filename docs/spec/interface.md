@@ -943,7 +943,8 @@ transport as `local_append`: the personal `authorization_verifier` argv (never p
 Its whole invocation is bounded by 3 seconds, a constant of this action only; every other action keeps 5 seconds.
 It is a read of the host's own process table, not consent: there is no receipt and no write. No verifier configured
 means nothing is asked. Within one call the first request runs alone and the others follow in rounds of at most two
-in flight; a transport or contract fault starts no further round (R212).
+in flight; a request answering unverified is asked once more while R leaves room, and a transport or contract
+fault, or three unverified answers standing with none verified, starts no further round (R212).
 
 The request has exactly `schema` (`pod-relay-verification/v1`), `action` (`process_exit`) and `references`: 1 to 24
 unique, sorted Dispatch ids, each matching `[A-Za-z0-9._:-]{1,64}`; admission sends at most 7 (R212). Pod sends no
