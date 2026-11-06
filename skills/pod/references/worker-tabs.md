@@ -120,8 +120,8 @@ after a relaunch or model switch. It reads Orca and writes nothing. Each row nam
 its layer, its owner (`pod` or `host`), the expected and observed names and a
 verdict. Run every `command` it gives, and pass a coordinator session rename in
 `next_action` to your host. A host row never has a command, and neither does a
-worker tab row: its title is data only and never drift. For `unreadable`,
-repeat the named read. A worker worktree that was removed is simply absent.
+worker tab row: its title is data only and never drift. For an `unreadable`
+row that names a read, repeat that read. A worker worktree that was removed is simply absent.
 
 **Say only what the readback proves.** `backend_matches` proves Orca's backend
 names, not what the desktop shows; `desktop` stays NOT_VERIFIED until owner-visible

@@ -6536,7 +6536,8 @@
         "tests.test_display.DisplayOpTests.test_missing_or_incomplete_host_and_truncation_metadata_is_unreadable",
         "tests.test_display.DisplayOpTests.test_duplicate_or_unplaceable_worktree_rows_are_not_filtered_away",
         "tests.test_orca_adapter.OrcaAdapterTests.test_display_worktree_limit_is_one_exact_read_shape",
-        "tests.test_orca_adapter.OrcaAdapterTests.test_display_bounded_read_keeps_timeout_output_and_environment"
+        "tests.test_orca_adapter.OrcaAdapterTests.test_display_bounded_read_keeps_timeout_output_and_environment",
+        "tests.test_display.DisplayOpTests.test_worker_layers_readback_status_and_session_steps"
       ],
       "status": "NOT_RUN"
     },
