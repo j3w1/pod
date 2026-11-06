@@ -12263,6 +12263,7 @@
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_whose_governor_journal_is_unreadable_is_unproven",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_of_another_repository_is_proved_in_a_recorded_checkout_of_it",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_recorded_checkout_of_another_repository_is_never_used",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_removed_checkouts_sorting_first_never_exhaust_the_candidates",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_whose_repository_changes_between_passes_holds_as_changing",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_rebound_to_an_existing_checkout_between_passes_holds_as_changing",
         "tests.test_window_continuation.DiscoveryTests.test_a_closed_peer_whose_worktree_was_removed_no_longer_holds_the_run"

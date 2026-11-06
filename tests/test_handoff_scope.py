@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from pod.errors import PodError
-from pod.handoff import _unproven_reason, peer_label, run_scope, shared_detail
+from pod.handoff import MAX_CHECKOUTS, _unproven_reason, peer_label, run_scope, shared_detail
 from pod.internal import run
 from pod.github import repository_context
 from pod.ledger import objective_root, read
@@ -314,6 +314,19 @@ class UnprovenClosureScopeTests(WindowCase):
         self.scope([], [], [])
         self.lose()
         self.assertNotEqual(self.status()["owner_handoff"].get("condition"), "run_shared")
+
+    def test_removed_checkouts_sorting_first_never_exhaust_the_candidates(self):
+        """The live pod#251 case on 0.21.51: most recorded checkouts of the consumer repository were cleaned up and
+        sort before the one that still exists; removed paths are dropped before the candidate cap."""
+        self.peers(closed=False)
+        _, other = self.consumer_peer()
+        raw = logical_fixture(other)
+        for number in range(MAX_CHECKOUTS + 1):
+            raw["checkpoint"]["worktree"]["path"] = str(self.root / f"a-removed-{number}")  # Sorts first; gone.
+            removed = other.parent.with_name(f"removed-record-{number}")
+            removed.mkdir()
+            (removed / "context.json").write_text(json.dumps(raw))
+        self.scope([], [], [])
 
     def test_a_recorded_checkout_of_another_repository_is_never_used(self):
         self.peers(closed=False)
