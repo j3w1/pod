@@ -229,7 +229,8 @@ def _validate_route_references(state: dict) -> None:
     checkpoint = state.get("checkpoint") or {}
     obligations = {}
     for row in checkpoint.get("obligations", []):
-        _exact(row, _OBLIGATION_FIELDS, {"id", "kind"}, "obligation")
+        if isinstance(row, dict) and "id" not in row:
+            _exact(row, _OBLIGATION_FIELDS, {"id"}, "obligation")
         obligations[row["id"]] = row
     for row in admissions.values():
         for entry in row["route_decision"].get("settlements", []):
@@ -2524,7 +2525,13 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                 decision_stack.enter_context(issue_revision.capability.scope())
             proposed = {**proposed, "revision_authority": issue_revision.authority}
         from .pod_ticks import refresh as refresh_ticks
-        prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
+        from .obligations import _exact, _OBLIGATION_FIELDS
+        prior_criteria = set()
+        for row in (map_of(state) or {}).get("obligations", []):
+            if isinstance(row, dict) and "kind" not in row:
+                _exact(row, _OBLIGATION_FIELDS, {"kind"}, "obligation")
+            if row["kind"] == "criterion":
+                prior_criteria.add(row["id"])
         raw_obligations = proposed.get("obligations")
         introducing = isinstance(raw_obligations, list) and any(
             isinstance(row, dict) and row.get("kind") == "criterion"

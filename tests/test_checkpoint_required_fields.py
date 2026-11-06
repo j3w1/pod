@@ -51,6 +51,10 @@ class CheckpointRequiredFieldsTests(KernelCase):
                 del prior["checkpoint"]["obligations"][0][field]
                 publish_context(path, *prepare_context(path, prior, project=self.project))
                 before = self.files()
+                if field == "kind":
+                    # Loading this row was valid before the checkpoint-site guard.
+                    self.assertNotIn("kind", read(self.project, "objective")["checkpoint"]["obligations"][0])
+                    self.assertEqual(self.files(), before)
                 with self.assertRaises(PodError) as caught:
                     checkpoint(self.project, "objective", owner="owner", value=self.core(),
                                native={"runtime": "runtime"})
@@ -58,6 +62,20 @@ class CheckpointRequiredFieldsTests(KernelCase):
                 self.assertIn(field, caught.exception.detail["referent"]["missing"])
                 self.assertTrue(caught.exception.detail["next_action"])
                 self.assertEqual(self.files(), before)
+
+    def test_persisted_unknown_row_field_keeps_loading_without_writing(self):
+        from pod.history import prepare_context, publish_context
+        from pod.history_tree import plain
+        from pod.ledger import _path
+        self.intake()
+        state = plain(read(self.project, "objective"))
+        state["revision"] += 1
+        state["checkpoint"]["obligations"][0]["extra"] = True
+        path = _path(self.project, "objective")
+        publish_context(path, *prepare_context(path, state, project=self.project))
+        before = self.files()
+        self.assertTrue(read(self.project, "objective")["checkpoint"]["obligations"][0]["extra"])
+        self.assertEqual(self.files(), before)
 
     def test_unhashable_caller_ids_refuse_without_writing(self):
         for identity in ([], {}):
@@ -71,6 +89,28 @@ class CheckpointRequiredFieldsTests(KernelCase):
                 self.assertEqual(caught.exception.code, "obligation_invalid")
                 self.assertEqual(caught.exception.detail["referent"]["field"], "obligation id")
                 self.assertTrue(caught.exception.detail["next_action"])
+                self.assertEqual(self.files(), before)
+
+    def test_unhashable_caller_ids_with_prior_map_refuse_without_writing(self):
+        self.intake()
+        for identity in ([], {}):
+            with self.subTest(identity=identity):
+                before = self.files()
+                with self.assertRaises(PodError) as caught:
+                    self.write([{**self.criterion(), "id": identity}])
+                self.assertEqual(caught.exception.code, "obligation_invalid")
+                self.assertEqual(caught.exception.detail["referent"]["field"], "obligation id")
+                self.assertEqual(self.files(), before)
+
+    def test_closed_map_unhashable_caller_ids_keep_objective_closed_first(self):
+        self.intake()
+        self.write([self.criterion("satisfied", evidence=[self.proof("O1")])], close=True)
+        for identity in ([], {}):
+            with self.subTest(identity=identity):
+                before = self.files()
+                with self.assertRaises(PodError) as caught:
+                    self.write([{**self.criterion(), "id": identity}])
+                self.assertEqual(caught.exception.code, "objective_closed")
                 self.assertEqual(self.files(), before)
 
     def test_valid_mapless_and_mapped_checkpoints_keep_working(self):
