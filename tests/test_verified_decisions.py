@@ -687,6 +687,49 @@ class VerifiedGovernorTests(RelayCase):
         self.assertEqual(receipts, {path.name: path.read_bytes() for path in (state_root(None) / ".relay-authorizations").glob("*.json")})
         self.assertGreater(self.native_reads, 2)
 
+    def pr_text_update(self, on_text_read):
+        """A saved publish vouch pushes, then a pr_update on the same grant edits a seeded pull request (R240)."""
+        import hashlib
+        from pod.ledger import state_root
+        from tests.kernel_support import action
+        from tests.decision_policy_support import save_vouch
+        value = self.generic_request()
+        save_vouch(self, lambda: self.case.op("governor-execute", action=value))
+        self.case.op("governor-execute", action=value)
+        remote = self.case.remote
+        remote.prs[("candidate", "target")] = {"number": 9, "url": "https://example.invalid/pull/9", "head_sha": None,
+                                               "draft": False}
+        remote.texts[9] = {"head": "candidate", "base": "target", "state": "OPEN", "title": "Old", "body": "Old body"}
+        seen = {"title_sha256": hashlib.sha256(b"Old").hexdigest(), "body_sha256": hashlib.sha256(b"Old body").hexdigest()}
+        receipts = lambda: {path.name: path.read_bytes()
+                            for path in (state_root(None) / ".relay-authorizations").glob("*.json")}
+        before = receipts()
+        remote.on_text_read = on_text_read
+        update = action(kind="pr_update", unit="delivery", candidate=self.case.observed["commit"],
+                        target="origin/candidate", effects=[], authorization=deepcopy(value["authorization"]))
+        result = self.case.op("governor-execute", action=update,
+                              pull_request={"title": "New", "body": "New body", "replace_edited": seen})
+        self.assertEqual((result["decision"], result["outcome"]), ("ALLOW", "PASS"))
+        self.assertEqual(receipts(), before)
+        return result, remote
+
+    def test_pr_text_edit_rechecks_the_grant_without_consuming_it(self):
+        result, remote = self.pr_text_update(None)
+        self.assertEqual(result["receipt"]["provider"]["pr_text"]["status"], "updated")
+        self.assertEqual(remote.texts[9]["body"], "New body")
+
+    def test_a_vouch_withdrawn_after_the_push_holds_the_pr_text_edit(self):
+        def withdraw():
+            controls = json.loads(self.controls.read_text())
+            controls["saved_verdict"]["verified"] = False
+            self.controls.write_text(json.dumps(controls))
+        result, remote = self.pr_text_update(withdraw)
+        text = result["receipt"]["provider"]["pr_text"]
+        self.assertEqual(text["status"], "held")
+        self.assertEqual(remote.texts[9]["body"], "Old body")
+        self.assertFalse(any(call[0] == "pr_edit" for call in remote.calls))
+        self.assertEqual(result["receipt"]["provider"]["pr_reused"], True)
+
     def test_publish_grant_remains_applicable_to_ci_after_journal_progress(self):
         from pod.ledger import state_root
         from tests.kernel_support import action
