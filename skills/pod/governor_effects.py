@@ -258,6 +258,111 @@ def _original_attempt(port: GitHubPort, run: dict) -> dict | None:
     return first if first.get("attempt") == 1 and str(first.get("id")) == str(run.get("id")) else None
 
 
+_TEXT_FIELDS = ("title", "body")
+_TEXT_NOTES = {
+    "conflict": ("pull request text was edited after Pod last wrote it, so it was not overwritten; the lead decides: "
+                 "keep it, or publish again with pull_request.replace_edited naming pr_text.before"),
+    "unread": "pull request text was not read, so it was not updated",
+    "uncertain": "pull request text update was not confirmed; the next publication compares with both texts",
+    "failed": "pull request text update was not submitted",
+}
+
+
+def _text_digest(text: str) -> str:
+    """A pull request text's digest, ignoring line-ending style and surrounding whitespace GitHub may normalize."""
+    import hashlib
+    return hashlib.sha256(text.replace("\r\n", "\n").replace("\r", "\n").strip().encode("utf-8")).hexdigest()
+
+
+def _text_digests(text: dict) -> dict:
+    return {field + "_sha256": _text_digest(text[field]) for field in _TEXT_FIELDS if field in text}
+
+
+def _requested_text(pull_request: dict | None) -> dict:
+    """The fields a caller asked to write: a nonempty title, and a body when supplied (an empty body clears it)."""
+    requested = {}
+    if (pull_request or {}).get("title"):
+        requested["title"] = pull_request["title"]
+    if isinstance((pull_request or {}).get("body"), str):
+        requested["body"] = pull_request["body"]
+    return requested
+
+
+def _pod_text(journal: dict, row: dict, number: object) -> dict:
+    """Per field, the digests of the text Pod itself last wrote, or may have written, to this pull request.
+
+    Read from this journal's earlier pull-request updates of the unit, in order. A field Pod never recorded has no
+    entry, so any text there counts as another writer's (R240).
+    """
+    known: dict[str, set] = {}
+    for other in journal["actions"]:
+        if other is row or other["record_id"] == row["record_id"]:
+            continue
+        provider = (other.get("receipt") or {}).get("provider") or {}
+        text = provider.get("pr_text")
+        if (other["action"]["kind"] != "pr_update" or other.get("decision") != "ALLOW"
+                or other["action"].get("unit") != row["action"].get("unit")
+                or provider.get("pr") != number or not isinstance(text, dict)):
+            continue
+        status = text.get("status")
+        after = text.get("after") or {}
+        fields = text.get("fields") or list(_TEXT_FIELDS)
+        if status == "opened":
+            known = {field: {after[field + "_sha256"]} for field in _TEXT_FIELDS if field + "_sha256" in after}
+        elif status in ("updated", "unchanged"):
+            for field in fields:
+                if field + "_sha256" in after:
+                    known[field] = {after[field + "_sha256"]}
+        elif status == "uncertain":
+            # Either text may be on GitHub: the one read before the submission, or the one submitted.
+            for field in fields:
+                for side in ("before", "requested"):
+                    digest = (text.get(side) or {}).get(field + "_sha256")
+                    if digest:
+                        known.setdefault(field, set()).add(digest)
+    return known
+
+
+def _refresh_text(port: GitHubPort, row: dict, journal: dict, branch: dict, number: object,
+                  pull_request: dict | None) -> dict | None:
+    """Bring a reused pull request's title and body to the supplied text after the push (R240).
+
+    Pod reads the text fresh before writing and overwrites only text it wrote itself, unless the lead's
+    `replace_edited` names exactly the text read. Nothing here changes the row's outcome: the push and the pull
+    request it reused are proved either way, and the text step is recorded as `pr_text`.
+    """
+    requested = _requested_text(pull_request)
+    if not requested:
+        return None
+    fields = [field for field in _TEXT_FIELDS if field in requested]
+    record = {"fields": fields, "requested": _text_digests(requested)}
+    try:
+        current = port.pull_request_text(number=number)
+    except PodError as exc:
+        return {"status": "unread", **record, "detail": exc.code}
+    if (current.get("number") != number or current.get("state") != "OPEN"
+            or current.get("head") != branch["branch"] or current.get("base") != branch["base"]
+            or not all(isinstance(current.get(field), str) for field in _TEXT_FIELDS)):
+        return {"status": "unread", **record, "detail": "pull_request_changed"}
+    before = _text_digests(current)
+    record["before"] = before
+    if all(before[field + "_sha256"] == record["requested"][field + "_sha256"] for field in fields):
+        return {"status": "unchanged", **record, "after": before}
+    known = _pod_text(journal, row, number)
+    edited = [field for field in fields
+              if before[field + "_sha256"] != record["requested"][field + "_sha256"]
+              and before[field + "_sha256"] not in known.get(field, ())]
+    replace = (pull_request or {}).get("replace_edited")
+    if edited and replace != before:
+        return {"status": "conflict", **record, "edited": edited, "decision": "lead"}
+    try:
+        port.edit_pull_request(number=number, **requested)
+    except PodError as exc:
+        return {"status": "uncertain" if _uncertain(exc) else "failed", **record, "detail": exc.code}
+    after = _text_digests({**{field: current[field] for field in _TEXT_FIELDS}, **requested})
+    return {"status": "updated", **record, "after": after, **({"replaced": edited} if edited else {})}
+
+
 def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_request: dict | None, *,
              intent=None, clock=None) -> tuple[str, dict | None, str | None]:
     """Perform the admitted action against the row's own bound commit. Returns outcome, provider, detail."""
@@ -303,11 +408,20 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_reques
                     raise PodError("invalid_pull_request", "Pull request body is too large")
                 found = port.open_pull_request(head=branch["branch"], base=branch["base"], title=title, body=body)
                 provider["pr_reused"] = False
+                # The text Pod wrote, so a later publication can tell a person's edit from its own (R240).
+                provider["pr_text"] = {"status": "opened", "after": _text_digests({"title": title, "body": body})}
             else:
                 provider["pr_reused"] = True
         except PodError as exc:
             return "UNKNOWN", provider, "pull request lookup or submission unreadable after the push: " + exc.code
         provider.update({"pr": found.get("number"), "pr_url": found.get("url")})
+        if provider["pr_reused"]:
+            text = _refresh_text(port, row, journal, branch, found.get("number"), pull_request)
+            if text is not None:
+                provider["pr_text"] = text
+                note = _TEXT_NOTES.get(text["status"])
+                if note:
+                    observation_detail = "; ".join(part for part in (observation_detail, note) if part)
         return "PASS", provider, observation_detail
     if kind in DISPATCH_KINDS:
         workflow = row["action"]["target"]

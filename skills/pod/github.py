@@ -42,6 +42,8 @@ PR_FIELDS = "number,url,headRefOid,state,isDraft"
 # A pull request read back for a carried effect (R118): every state, with its merge commit.
 PR_READ_FIELDS = "number,url,headRefOid,state,mergeCommit,mergedAt"
 PR_LIST_LIMIT = 10
+# A reused pull request's text, read fresh before Pod refreshes it (R240).
+PR_TEXT_FIELDS = "number,url,state,headRefName,baseRefName,title,body"
 ISSUE_FIELDS = "number,title,body,state,stateReason,url,updatedAt"
 # What a delivery proof reads (R145): an issue's closing reason, and one pull request by its number.
 ISSUE_STATE_FIELDS = "number,url,state,stateReason,body"
@@ -223,6 +225,18 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
             and isinstance(argv[7], str) and argv[7].strip() and len(argv[7]) <= 256
             and argv[8] == "--body" and isinstance(argv[9], str) and len(argv[9]) <= 16 * 1024):
         return True
+    if (len(argv) == 5 and argv[:2] == ["pr", "view"] and _RUN_ID.fullmatch(argv[2])
+            and argv[3:] == ["--json", PR_TEXT_FIELDS]):
+        return True
+    if argv[:2] == ["pr", "edit"] and len(argv) in (5, 7) and _RUN_ID.fullmatch(argv[2]):
+        options = dict(zip(argv[3::2], argv[4::2]))
+        if len(options) != (len(argv) - 3) // 2 or not set(options) <= {"--title", "--body"}:
+            return False
+        if argv[3] != ("--title" if "--title" in options else "--body"):
+            return False
+        title, body = options.get("--title"), options.get("--body")
+        return ((title is None or (isinstance(title, str) and bool(title.strip()) and len(title) <= 256))
+                and (body is None or (isinstance(body, str) and len(body) <= 16 * 1024)))
     if (len(argv) >= 5 and argv[:2] == ["workflow", "run"] and _WORKFLOW.fullmatch(argv[2])
             and argv[3] == "--ref" and _name(argv[4])):
         tail = argv[5:]
@@ -974,6 +988,26 @@ class GhPort:
         if match is None:
             raise PodError("remote_effect_uncertain", "gh pr create did not name the pull request")
         return {"number": int(match.group(1)), "url": url, "head_sha": None, "draft": False}
+
+    def pull_request_text(self, *, number: int) -> dict:
+        """One pull request's title and body with its state and branches, read just before Pod edits them (R240)."""
+        row = self._gh_json(["pr", "view", str(number), "--json", PR_TEXT_FIELDS])
+        if not isinstance(row, dict):
+            raise PodError("gh_contract", "gh pr view returned an unsupported shape")
+        return {"number": row.get("number"), "url": row.get("url"), "state": row.get("state"),
+                "head": row.get("headRefName"), "base": row.get("baseRefName"),
+                "title": row.get("title"), "body": row.get("body")}
+
+    def edit_pull_request(self, *, number: int, title: str | None = None, body: str | None = None) -> dict:
+        argv = ["pr", "edit", str(number)]
+        if title is not None:
+            argv += ["--title", title]
+        if body is not None:
+            argv += ["--body", body]
+        completed = self._gh(argv, mutation=True)
+        if completed.returncode:
+            raise PodError("remote_effect_uncertain", "gh pr edit did not confirm the update")
+        return {"status": "edited"}
 
     def dispatch(self, *, workflow: str, ref: str, inputs: dict) -> dict:
         argv = ["workflow", "run", workflow, "--ref", ref]
