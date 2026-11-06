@@ -10698,7 +10698,7 @@
         "tests.test_admission_batch.CorrectionRoundTests.test_a_malformed_row_keeps_the_sequential_order_and_its_claims",
         "tests.test_admission_batch.FleetReadTests.test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it",
         "tests.test_admission_batch.FleetReadTests.test_a_bound_first_page_answers_none_with_one_read",
-        "tests.test_admission_batch.FleetReadTests.test_the_end_fence_reads_every_unreleased_partition_and_refuses_any_race",
+        "tests.test_admission_batch.FleetReadTests.test_the_end_fence_reads_the_walk_again_from_its_own_cursors_and_refuses_any_race",
         "tests.test_admission_batch.FleetReadTests.test_the_allowlist_accepts_exactly_the_walk_and_partition_reads",
         "tests.test_admission_batch.CorrectionRoundTests.test_a_balanced_replacement_during_the_call_is_never_a_complete_stable_answer_without_it",
         "tests.test_admission_batch.CorrectionRoundTests.test_an_active_replacement_makes_the_fence_unstable",
@@ -12247,6 +12247,50 @@
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selected_absent_branch_stays_absent_and_refuses_once_it_returns",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selected_branch_or_remote_head_returning_before_the_stash_read_refuses",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selected_checkout_returning_before_the_stash_read_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A997",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.WalkReReadTests.test_a997_every_walk_page_is_read_again_in_parallel_from_its_own_cursor"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A998",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.WalkReReadTests.test_a998_a_change_only_the_page_lists_show_makes_the_fence_unstable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A999",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.WalkReReadTests.test_a999_a_spent_budget_is_the_reason_whatever_else_failed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1000",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_batch.WalkReReadTests.test_a1000_a_malformed_run_identity_answers_as_the_single_query_and_never_crashes"
       ],
       "status": "NOT_RUN"
     }

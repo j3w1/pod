@@ -186,9 +186,10 @@ class SharedReadTests(BatchCase):
         self.assertTrue(first_after)
         self.assertEqual(sorted(set(first_after)), sorted(first_after))
         self.assertEqual(answer["discovery"]["records"], 4)
-        # Discovery's terminal list and one Run list, then the fence's terminal list, newest page and six
-        # partitions; the discovery fleet is a double.
-        self.assertEqual(answer["discovery"]["orca_reads"], 10)
+        # Discovery's terminal list and one Run list, then the fence's terminal list; the discovery fleet is a double
+        # with no walk, so the fence has no walk page to read again (its fleet side is incomplete).
+        self.assertEqual(answer["discovery"]["orca_reads"], 3)
+        self.assertEqual(answer["native_fence"]["fleet_end"]["code"], "native_fence_unavailable")
         self.assertEqual([thread for thread in threading.enumerate() if thread.name.startswith("pod-admission")], [])
 
     def test_a_change_during_the_call_reaches_only_queries_it_is_relevant_to(self):
@@ -525,7 +526,8 @@ class FencedCase(BatchCase):
         self.claim_values = {}
         def fleet():
             start = fleet_model(self.rows)
-            admission._SHARED.get().fleet_start = {"page": start([*LIST, "--limit", "100"]), "rows": list(self.rows)}
+            admission._SHARED.get().fleet_start = {"page": start([*LIST, "--limit", "100"]), "rows": list(self.rows),
+                                                   "pages": walk_pages(self.rows)}
             return {"runtime": "runtime", "complete": True, "workers": list(self.rows)}
         native = patch("pod.admission._fleet", side_effect=fleet)
         native.start(); self.addCleanup(native.stop)
@@ -595,13 +597,16 @@ class FleetFenceTests(FencedCase):
             "unreleased": 3, "unreleased_sha256": canonical("runtime", unreleased),
             "released": 120, "released_sha256": canonical("runtime", released),
             "newest": 100, "newest_sha256": canonical("runtime", newest),
+            "pages": 2, "pages_sha256": canonical("runtime", [[page["ids"], page["more"]] for page in walk_pages(self.rows)]),
             "claims_read": 1, "claims_sha256": canonical("runtime", [{"dispatch": "t2", **LIVE_CLAIM}]),
             "host_exit": 0, "host_exit_sha256": canonical("runtime", [])})  # R212: nothing counted exited
         self.assertEqual(fence["fleet_end"], fence["fleet_start"])
         self.assertTrue(answer["complete"])
         reads = self.native.calls
         self.assertIn([*LIST, "--limit", "100"], reads)
-        self.assertIn([*LIST, "--limit", "100", "--terminal-state", "released"], reads)  # every partition is re-read
+        # Every page of the walk is read again from its own cursor; no partition is read (pod#267).
+        self.assertIn([*LIST, "--limit", "100", "--cursor", "c1"], reads)
+        self.assertEqual([call for call in reads if "--terminal-state" in call], [])
 
     def test_each_fleet_change_between_discovery_and_the_end_is_unstable(self):
         stable = self.fenced()
@@ -689,8 +694,8 @@ class FleetFenceTests(FencedCase):
         bound = {"runtime": "runtime", "result": {"scope": {"source": "bound", "run": "run"}}}
         cases = {"bound end": (FleetDouble({}, overrides={tuple(page): bound}), "native_inventory_scope"),
                  "failed end": (FleetDouble({}, overrides={tuple(page): PodError("orca_read_failed", "no")}), "orca_read_failed"),
-                 "failed partition": (fleet_model(self.rows, overrides={tuple([*page, "--terminal-state", "retained"]):
-                                                                        PodError("orca_read_failed", "no")}), "orca_read_failed")}
+                 "failed walk page": (fleet_model(self.rows, overrides={tuple([*page, "--cursor", "c1"]):
+                                                                       PodError("orca_read_failed", "no")}), "orca_read_failed")}
         for label, (fleet, code) in cases.items():
             with self.subTest(label):
                 answer = self.fenced(fleet_end=fleet)
@@ -703,6 +708,96 @@ class FleetFenceTests(FencedCase):
         self.assertEqual(answer["native_fence"]["fleet_start"],
                          {"runtime": None, "complete": False, "code": "native_inventory_scope"})
         self.assertFalse(answer["native_fence"]["stable"])
+
+
+class WalkReReadTests(FencedCase):
+    """R207: the end fence reads discovery's own walk again, page by page in parallel, and compares everything (pod#267)."""
+
+    def test_a997_every_walk_page_is_read_again_in_parallel_from_its_own_cursor(self):
+        first, second = [*LIST, "--limit", "100"], [*LIST, "--limit", "100", "--cursor", "c1"]
+        both = threading.Event()
+        model = fleet_model(self.rows)
+        def page(argv):
+            if argv == second:
+                both.set()
+            elif argv == first and admission._FENCING.get():
+                self.assertTrue(both.wait(2.0), "the end read its pages one after another")
+            return model(argv)
+        class Parallel(FleetDouble):
+            def __call__(inner, argv):
+                with inner.lock:
+                    inner.calls.append(list(argv))
+                return page(argv)
+        answer = self.fenced(fleet_end=Parallel({}))
+        fence = answer["native_fence"]
+        self.assertTrue(fence["stable"], fence)
+        self.assertIsNone(fence["reason"])
+        self.assertEqual((fence["fleet_end"]["pages"], fence["fleet_end"]["released"]), (2, 120))
+        self.assertEqual(sorted(self.native.fleet.calls), sorted([first, second]))  # the walk's two pages, nothing else
+
+    def test_a998_a_change_only_the_page_lists_show_makes_the_fence_unstable(self):
+        stable = self.fenced()
+        swapped = [*self.rows[:101], self.rows[102], self.rows[101], *self.rows[103:]]  # same rows, same identities
+        more = fleet_model(self.rows, overrides={tuple([*LIST, "--limit", "100", "--cursor", "c1"]): {
+            **fleet_model(self.rows)([*LIST, "--limit", "100", "--cursor", "c1"]), "result": {
+                **fleet_model(self.rows)([*LIST, "--limit", "100", "--cursor", "c1"])["result"],
+                "page": {"limit": 100, "total": 123, "hasMore": True, "nextCursor": "c2"}}}})
+        for label, fleet in {"two old rows change places": fleet_model(swapped),
+                             "the last page reads more": more}.items():
+            with self.subTest(label):
+                answer = self.fenced(fleet_end=fleet)
+                fence = answer["native_fence"]
+                self.assertEqual({key: fence["fleet_end"][key] for key in ("unreleased_sha256", "released_sha256", "newest_sha256")},
+                                 {key: fence["fleet_start"][key] for key in ("unreleased_sha256", "released_sha256", "newest_sha256")})
+                self.assertNotEqual(fence["fleet_end"]["pages_sha256"], fence["fleet_start"]["pages_sha256"])
+                self.assertEqual(fence["reason"], "fleet_changed")
+                self.assert_unstable(answer, stable)
+
+    def test_a999_a_spent_budget_is_the_reason_whatever_else_failed(self):
+        first, second = [*LIST, "--limit", "100"], [*LIST, "--limit", "100", "--cursor", "c1"]
+        spent, failed = PodError(DEADLINE_SPENT, "spent"), PodError("orca_read_failed", "no")
+        for label, overrides in {"budget on the first page": {tuple(first): spent, tuple(second): failed},
+                                 "budget on the last page": {tuple(first): failed, tuple(second): spent}}.items():
+            with self.subTest(label):
+                fence = self.fenced(fleet_end=fleet_model(self.rows, overrides=overrides))["native_fence"]
+                self.assertEqual((fence["fleet_end"]["code"], fence["reason"]), (DEADLINE_SPENT, "discovery_budget"))
+        fence = self.fenced(fleet_end=fleet_model(self.rows, overrides={tuple(second): failed}))["native_fence"]
+        self.assertEqual((fence["fleet_end"]["code"], fence["reason"]), ("orca_read_failed", "incomplete"))
+        start = {"page": fleet_model(self.rows)(first), "rows": self.rows, "pages": walk_pages(self.rows)}
+        for claims in ({"a": failed, "b": spent}, {"a": spent, "b": failed}):
+            self.assertEqual(admission._fleet_side(start, claims)["code"], DEADLINE_SPENT)
+        invalid = {**start, "page": {**start["page"], "result": {**start["page"]["result"], "scope": {"source": "bound"}}}}
+        for label, observed in {"a failed walk page": failed, "an invalid walk page": invalid}.items():
+            with self.subTest(label):  # beside a spent claim read, in the side and through the whole batch
+                self.assertEqual(admission._fleet_side(observed, {"a": spent})["code"], DEADLINE_SPENT)
+        def claim(source, runtime):
+            if admission._FENCING.get():
+                raise spent
+            return LIVE_CLAIM
+        with patch("pod.admission._native_claim", side_effect=claim):
+            fence = self.fenced(fleet_end=fleet_model(self.rows, overrides={tuple(first): failed}))["native_fence"]
+        self.assertEqual((fence["fleet_end"]["code"], fence["reason"]), (DEADLINE_SPENT, "discovery_budget"))
+        cases = {"a changed row": (fleet_model([dict(self.rows[0], dispatchStatus="failed"), *self.rows[1:]]), None,
+                                   "fleet_changed"),
+                 "a runtime change": (fleet_model(self.rows, runtime="other-runtime"), None, "runtime_changed"),
+                 "a new terminal": (None, terminal_page([terminal("a", self.root / "other"), terminal("b", self.root / "other")]),
+                                    "terminals_changed")}
+        for label, (fleet, end, reason) in cases.items():
+            with self.subTest(label):
+                fence = self.fenced(fleet_end=fleet, end=end)["native_fence"]
+                self.assertFalse(fence["stable"])
+                self.assertEqual(fence["reason"], reason)
+
+    def test_a1000_a_malformed_run_identity_answers_as_the_single_query_and_never_crashes(self):
+        for label, value in {"list": ["malformed"], "object": {"id": "malformed"}}.items():
+            with self.subTest(label):
+                self.rows[110] = dict(self.rows[110], runId=value,
+                                      projection={**self.rows[110]["projection"], "runId": value})
+                answer = self.fenced()
+                self.assertTrue(answer["native_fence"]["stable"], answer["native_fence"])
+                self.claim_values = {"t2": [LIVE_CLAIM]}
+                self.assertEqual(without_census(answer["responses"][0]["result"]),
+                                 without_census(self.query(branch="main")))
 
 
 class FenceTests(FencedCase):
@@ -759,6 +854,13 @@ def worker(dispatch, state, **fields):
     return row
 
 
+def walk_pages(rows):
+    """The pages of discovery's newest-first walk over `rows`, as `_fleet_sequential` records them."""
+    chunks = [rows[index:index + 100] for index in range(0, max(len(rows), 1), 100)]
+    return [{"cursor": f"c{index}" if index else None, "ids": [row["dispatchId"] for row in chunk],
+             "more": index < len(chunks) - 1} for index, chunk in enumerate(chunks)]
+
+
 def fleet_model(rows, **fields):
     """A consistent fleet whose newest-first order is `rows`."""
     partitions = {}
@@ -805,7 +907,7 @@ class FleetDouble:
 
 
 class FleetReadTests(base.AdmissionQueryCase):
-    """Discovery's sequential walk, and the end fence's partition reads."""
+    """Discovery's sequential walk, and the end fence's parallel reads of it."""
 
     def read(self, double, fn=None):
         discovery = admission._Discovery()
@@ -874,30 +976,40 @@ class FleetReadTests(base.AdmissionQueryCase):
         self.assertTrue(identity.done())
         self.assertEqual(identity.result()["worktree"], here)
 
-    def test_the_end_fence_reads_every_unreleased_partition_and_refuses_any_race(self):
+    def test_the_end_fence_reads_the_walk_again_from_its_own_cursors_and_refuses_any_race(self):
         rows = self.fleet()
-        observed, _ = self.read(FleetDouble(rows), admission._fleet_end)
-        self.assertEqual(len(observed["rows"]), 381)  # all six partitions, released included
-        state = [*LIST, "--limit", "100", "--terminal-state"]
-        page = FleetDouble(rows).page
+        _, start = self.read(FleetDouble(rows))
+        pages = start.fleet_start["pages"]
+        self.assertEqual([(page["cursor"], len(page["ids"]), page["more"]) for page in pages],
+                         [(None, 100, True), ("c1", 100, True), ("c2", 100, True), ("c3", 81, False)])
+        double = FleetDouble(rows)
+        observed, _ = self.read(double, lambda discovery: admission._fleet_end(discovery, pages))
+        self.assertEqual(len(observed["rows"]), 381)
+        self.assertEqual(observed["pages"], [{"ids": page["ids"], "more": page["more"]} for page in pages])
+        walk = [*LIST, "--limit", "100"]
+        self.assertEqual(sorted(double.calls), sorted([walk, *([*walk, "--cursor", f"c{index}"] for index in (1, 2, 3))]))
+        everything = [row for state in rows.values() for row in state]
+        page = FleetDouble(rows).page(everything, 2, 381)
         bound = {"runtime": "runtime", "result": {"scope": {"source": "bound", "run": "run"}}}
+        third = tuple([*walk, "--cursor", "c2"])
         cases = {
-            "row outside its partition": FleetDouble({**rows, "active": [worker("a1", "released")]}),
-            "duplicate within a partition": FleetDouble({**rows, "active": [worker("a1", "active")] * 2}),
-            "partition total changed": FleetDouble(rows, overrides={tuple(state + ["retained", "--cursor", "c1"]):
-                page(rows["retained"], 1, 131)}),
-            "rows short of the total": FleetDouble(rows, overrides={tuple(state + ["active"]): page(rows["active"], 0, 2)}),
-            "runtime changed": FleetDouble(rows, overrides={tuple(state + ["active"]): {**page(rows["active"], 0, 1), "runtime": "other"}}),
-            "malformed row": FleetDouble({**rows, "active": [worker("a1", "active", projection=None)]}),
-            "bound": FleetDouble(rows, overrides={tuple(state + ["active"]): bound}),
-            "read failed": FleetDouble(rows, overrides={tuple(state + ["reclaimable"]): PodError("orca_read_failed", "no")}),
-            "read unreadable": FleetDouble(rows, overrides={tuple(state + ["reclaimable"]): OSError("failed")}),
+            "bound": FleetDouble(rows, overrides={third: bound}),
+            "one Run's scope": FleetDouble(rows, overrides={third: {**page, "result": {**page["result"],
+                                                                    "scope": {"source": "flag", "run": "run"}}}}),
+            "runtime changed": FleetDouble(rows, overrides={third: {**page, "runtime": "other"}}),
+            "truncated": FleetDouble(rows, overrides={third: {**page, "result": {**page["result"], "truncated": True}}}),
+            "duplicate within a page": FleetDouble(rows, overrides={third: {**page, "result": {
+                **page["result"], "workers": [page["result"]["workers"][0]] * 2}}}),
+            "read failed": FleetDouble(rows, overrides={third: PodError("orca_read_failed", "no")}),
+            "read unreadable": FleetDouble(rows, overrides={third: OSError("failed")}),
         }
         for label, double in cases.items():
             with self.subTest(label):
-                observed, _ = self.read(double, admission._fleet_end)
+                observed, _ = self.read(double, lambda discovery: admission._fleet_end(discovery, pages))
                 self.assertIsInstance(observed, (PodError, OSError))
                 self.assertFalse(admission._fleet_side(observed, {})["complete"])
+        observed, _ = self.read(FleetDouble(rows), lambda discovery: admission._fleet_end(discovery, None))
+        self.assertEqual(observed.code, "native_fence_unavailable")
 
     def test_the_allowlist_accepts_exactly_the_walk_and_partition_reads(self):
         from pod.orca import _read_allowed
