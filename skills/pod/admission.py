@@ -447,11 +447,11 @@ def _fleet() -> dict | None:
     that exists for the whole walk is listed exactly once, whatever state it changes to. Inside a batch the
     walk is also the fence's start (`fleet_start`): total and counts from its first page, the newest rows
     from that page, and the unreleased rows, the released rows and the abandoned claims from the walk. The
-    end fence re-reads every terminal-state partition, released included, and compares each Dispatch's
-    identity at both ends, so every race shows there: a Dispatch created during the walk changes the end's
-    newest page and its rows; a deletion lowers the end's total; any identity change of any row, in any
-    state, alters the end's digests. The end fence is a pure comparison, so a race during its own reads
-    only makes it unequal, which fails safe.
+    end fence reads every page of the walk again, in parallel, from the cursor Orca issued for it, and
+    compares each page's Dispatches and each Dispatch's identity at both ends, so every race shows there: a
+    Dispatch created during the walk changes the end's newest page; a deletion or a move changes a page's
+    Dispatches; any identity change of any row, in any state, alters the end's digests. The end fence is a
+    pure comparison, so a race during its own reads only makes it unequal, which fails safe.
     """
     discovery = _SHARED.get()
     fleet = _fleet_sequential(discovery)
@@ -462,7 +462,7 @@ def _fleet() -> dict | None:
 
 def _fleet_sequential(discovery=None) -> dict | None:
     prefix = [*WORKER_LIST, "--limit", "100"]
-    cursor, seen, workers, runtime = None, set(), {}, None
+    cursor, seen, workers, runtime, pages = None, set(), {}, None, []
     while True:
         response = _gated_read(prefix + (["--cursor", cursor] if cursor else []))
         first = response if cursor is None else first
@@ -490,9 +490,11 @@ def _fleet_sequential(discovery=None) -> dict | None:
                 discovery.prefetch_claim(row, runtime)
             if discovery is not None:
                 discovery.prefetch_place(row)
+        # The end fence reads this page again from the same cursor Orca issued for it (R207).
+        pages.append({"cursor": cursor, "ids": [row["dispatchId"] for row in rows], "more": page["hasMore"]})
         if not page["hasMore"]:
             if discovery is not None:
-                discovery.fleet_start = {"page": first, "rows": list(workers.values())}
+                discovery.fleet_start = {"page": first, "rows": list(workers.values()), "pages": pages}
             return {"runtime": runtime, "workers": list(workers.values()), "complete": True}
         cursor = page.get("nextCursor")
         if not rows or not isinstance(cursor, str) or not cursor or cursor in seen:
@@ -509,54 +511,6 @@ def _counts(value) -> dict:
             or any(type(count) is not int or count < 0 for count in value.values())):
         raise _rejected("Inventory counts name an unknown terminal state or are malformed")
     return value
-
-
-def _fleet_partition(state: str, discovery) -> dict:
-    """The end fence's read of one terminal-state partition, every page, with the sequential walk's
-    cursor, runtime, scope and identity checks; any refusal makes that fence side incomplete."""
-    prefix = [*WORKER_LIST, "--limit", "100", "--terminal-state", state]
-    cursor, seen, workers, runtime, total = None, set(), {}, None, None
-    while True:
-        if discovery.closed:
-            raise PodError(DEADLINE_SPENT, "The admission call has ended")
-        response = discovery.read(prefix + (["--cursor", cursor] if cursor else []))
-        result = response["result"]
-        scope = result.get("scope")
-        if isinstance(scope, dict) and scope.get("source") == "bound" and cursor is None:
-            return {"state": state, "bound": True}
-        if not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None:
-            raise _rejected("A partition page does not prove all-Run coverage")
-        if runtime is not None and runtime != response["runtime"]:
-            raise _rejected("Native runtime changed between partition pages")
-        runtime = response["runtime"]
-        rows, page = result.get("workers"), result.get("page")
-        if (not isinstance(rows, list) or len(rows) > 100 or not isinstance(page, dict)
-                or type(page.get("hasMore")) is not bool or result.get("truncated", False) is not False
-                or type(page.get("total")) is not int or page["total"] < 0):
-            raise _rejected("A partition page is incomplete")
-        if total is not None and page["total"] != total:
-            raise _rejected("A partition total changed between its pages")
-        total = page["total"]
-        for row in rows:
-            key = row.get("dispatchId") if isinstance(row, dict) else None
-            if not isinstance(key, str) or not key or key in workers:
-                raise _rejected("A partition repeats or omits a Dispatch identity")
-            if row.get("terminalState") != state:
-                raise _rejected("A Dispatch moved out of the partition it was listed in")
-            try:
-                _worker_fact(row)
-            except PodError:
-                raise _rejected("A partition row is malformed") from None
-            workers[key] = row
-        if not page["hasMore"]:
-            if len(workers) != total:
-                raise _rejected("A partition's rows differ from its total")
-            return {"state": state, "bound": False, "runtime": runtime, "total": total,
-                    "workers": list(workers.values())}
-        cursor = page.get("nextCursor")
-        if not rows or not isinstance(cursor, str) or not cursor or cursor in seen:
-            raise _rejected("A partition cursor is missing or repeated")
-        seen.add(cursor)
 
 
 def _worker_fact(row: dict) -> dict:
@@ -653,6 +607,9 @@ def _fleet_side(observed, claims, counted=()) -> dict:
     this side digests too."""
     runtime = None
     try:
+        # A spent budget anywhere this side depends on is its code, before a failed or invalid fleet read (R207).
+        _raise_first([value for value in (observed, *claims.values())
+                      if isinstance(value, PodError) and value.code in BUDGET_CODES])
         if isinstance(observed, BaseException):
             raise observed
         if observed is None:
@@ -674,11 +631,11 @@ def _fleet_side(observed, claims, counted=()) -> dict:
         released = sorted((_identity_row(row) for row in observed["rows"] if row.get("terminalState") == "released"),
                           key=lambda row: str(row["dispatchId"]))
         newest = sorted((_identity_row(row) for row in rows), key=lambda row: str(row["dispatchId"]))
-        facts = []
-        for dispatch in sorted(claims):
-            if isinstance(claims[dispatch], BaseException):
-                raise claims[dispatch]
-            facts.append(_claim_fact(dispatch, claims[dispatch]))
+        _raise_first([claims[dispatch] for dispatch in sorted(claims)])  # budget exhaustion first (R207)
+        facts = [_claim_fact(dispatch, claims[dispatch]) for dispatch in sorted(claims)]
+        pages = observed.get("pages")
+        if not isinstance(pages, list) or not pages:
+            raise PodError("native_inventory_incomplete", "The fleet read names no pages")
         by_dispatch = {row.get("dispatchId"): row for row in observed["rows"] if isinstance(row, dict)}
         exits = [_host_exit_identity(by_dispatch[dispatch]) if dispatch in by_dispatch
                  else {"dispatchId": dispatch, "missing": True} for dispatch in counted]
@@ -686,6 +643,7 @@ def _fleet_side(observed, claims, counted=()) -> dict:
                 "unreleased": len(unreleased), "unreleased_sha256": _rows_digest(runtime, unreleased),
                 "released": len(released), "released_sha256": _rows_digest(runtime, released),
                 "newest": len(newest), "newest_sha256": _rows_digest(runtime, newest),
+                "pages": len(pages), "pages_sha256": _rows_digest(runtime, [[page["ids"], page["more"]] for page in pages]),
                 "claims_read": len(facts), "claims_sha256": _rows_digest(runtime, facts),
                 "host_exit": len(exits), "host_exit_sha256": _rows_digest(runtime, exits)}
     except PodError as exc:
@@ -699,22 +657,64 @@ def _fleet_side(observed, claims, counted=()) -> dict:
     return side
 
 
-def _fleet_end(discovery) -> dict:
-    """A fresh complete fleet read for the fence: the newest page and every terminal-state partition."""
-    page = discovery.submit(("page",), lambda: discovery.read([*WORKER_LIST, "--limit", "100"]), stage="fence")
-    partitions = [discovery.submit(("partition", state), lambda state=state: _fleet_partition(state, discovery),
-                                   stage="fence") for state in TERMINAL_STATES]
-    first = page.result()
-    rows, runtimes = [], {first["runtime"]}
-    for future in partitions:
-        part = future.result()
-        if part["bound"]:
-            raise PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
-        runtimes.add(part["runtime"])
-        rows.extend(part["workers"])
-    if len(runtimes) != 1:
+BUDGET_CODES = (DEADLINE_SPENT, "admission_timeout")
+
+
+def _raise_first(outcomes) -> None:
+    """Raise one of the faults among `outcomes`, a spent budget before any other, so the fence's reason never hides
+    that the call ran out of time behind a concurrent failure (R207)."""
+    faults = [value for value in outcomes if isinstance(value, BaseException)]
+    for fault in faults:
+        if isinstance(fault, PodError) and fault.code in BUDGET_CODES:
+            raise fault
+    if faults:
+        raise faults[0]
+
+
+def _walk_page(response, runtime) -> list:
+    """One end read of a walk page, checked as the walk checks its pages: all-Run scope, one runtime, a whole page
+    of at most 100 rows each with a distinct Dispatch identity."""
+    result = response["result"]
+    scope = result.get("scope")
+    if isinstance(scope, dict) and scope.get("source") == "bound":
+        raise PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
+    if not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None:
+        raise PodError("native_inventory_scope", "A fence page does not prove all-Run coverage")
+    if response.get("runtime") != runtime:
         raise PodError("orca_runtime_changed", "Native runtime changed between fence reads")
-    return {"page": first, "rows": rows}
+    rows, page = result.get("workers"), result.get("page")
+    if (not isinstance(rows, list) or len(rows) > 100 or not isinstance(page, dict)
+            or type(page.get("hasMore")) is not bool or result.get("truncated", False) is not False):
+        raise PodError("native_inventory_incomplete", "A fence page is incomplete")
+    ids = [row.get("dispatchId") if isinstance(row, dict) else None for row in rows]
+    if any(not isinstance(key, str) or not key for key in ids) or len(set(ids)) != len(ids):
+        raise PodError("orca_pagination", "A fence page repeats or omits a Dispatch identity")
+    return rows
+
+
+def _fleet_end(discovery, pages) -> dict:
+    """A fresh complete fleet read for the fence: every page of discovery's walk again, read in parallel, each from
+    the cursor Orca issued for it during this call (R207). Membership is then each page's Dispatches, compared
+    with the start's; every failure is kept, a spent budget first."""
+    if not isinstance(pages, list) or not pages:
+        raise PodError("native_fence_unavailable", "Discovery made no fleet walk to read again")
+    futures = [discovery.submit(("walk", index), lambda page=page: discovery.read(
+                   [*WORKER_LIST, "--limit", "100", *(["--cursor", page["cursor"]] if page["cursor"] else [])]),
+                   stage="fence") for index, page in enumerate(pages)]
+    responses = []
+    for future in futures:
+        try:
+            responses.append(future.result())
+        except (PodError, OSError) as exc:
+            responses.append(exc)
+    _raise_first(responses)
+    runtime = responses[0].get("runtime")
+    rows, read = [], []
+    for response in responses:
+        page_rows = _walk_page(response, runtime)
+        rows.extend(page_rows)
+        read.append({"ids": [row["dispatchId"] for row in page_rows], "more": response["result"]["page"]["hasMore"]})
+    return {"page": responses[0], "rows": rows, "pages": read}
 
 
 def _native_fence(discovery) -> dict:
@@ -742,7 +742,8 @@ def _native_fence(discovery) -> dict:
     sources = {row.get("dispatchId"): row for row in (fleet or {}).get("workers", []) if isinstance(row, dict)}
     start_claims = {dispatch: value for (dispatch, observed), value in claimed.items() if observed == runtime}
     reads = {"end": discovery.submit(("terminals",), lambda: complete_list("terminal", discovery.read), stage="fence"),
-             "fleet": discovery.submit(("fleet",), lambda: _fleet_end(discovery), stage="fence")}
+             "fleet": discovery.submit(("fleet",), lambda: _fleet_end(
+                 discovery, fleet_start.get("pages") if isinstance(fleet_start, dict) else None), stage="fence")}
     claim_reads = {dispatch: discovery.submit(("claim", dispatch, runtime), lambda dispatch=dispatch: _native_claim(
                        sources[dispatch], runtime), stage="fence") for dispatch in start_claims if dispatch in sources}
     observed = {}
@@ -759,14 +760,32 @@ def _native_fence(discovery) -> dict:
              "fleet_end": _fleet_side(observed["fleet"], end_claims, counted)}
     sides = list(fence.values())
     compared = ("total", "counts", "unreleased", "unreleased_sha256", "released", "released_sha256",
-                "newest", "newest_sha256", "claims_read",
+                "newest", "newest_sha256", "pages", "pages_sha256", "claims_read",
                 "claims_sha256", "host_exit", "host_exit_sha256")
     fence["stable"] = bool(all(side["complete"] for side in sides)
                            and len({side["runtime"] for side in sides}) == 1
                            and fence["start"]["sha256"] == fence["end"]["sha256"]
                            and all(fence["fleet_start"][key] == fence["fleet_end"][key] for key in compared))
+    fence["reason"] = _fence_reason(fence)
     fence["host_exit_dispatches"] = list(counted)
     return fence
+
+
+def _fence_reason(fence) -> str | None:
+    """Why the fence is unstable, budget exhaustion first: null when it is stable (R207)."""
+    if fence["stable"]:
+        return None
+    sides = [fence[name] for name in ("start", "end", "fleet_start", "fleet_end")]
+    codes = [side.get("code") for side in sides if not side["complete"]]
+    if any(code in BUDGET_CODES for code in codes):
+        return "discovery_budget"
+    if codes:
+        return "incomplete"
+    if len({side["runtime"] for side in sides}) != 1:
+        return "runtime_changed"
+    if fence["start"]["sha256"] != fence["end"]["sha256"]:
+        return "terminals_changed"
+    return "fleet_changed"
 
 
 FENCE_FIELDS = ("handle", "incarnationId", "worktreePath", "worktreeId", "executionHostId", "agentIdentity",
