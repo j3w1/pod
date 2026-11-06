@@ -219,13 +219,14 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
 The worker-tab standing close authorization is independent of the objective's yolo record. Its conditions apply whether yolo is on or off; activating or revoking yolo changes no worker-tab close authority.
 
 Retain only while required corrections or a delta review of that worker's result
-are pending, or on a recorded owner request. An implementer's cycle follows
+are pending, or on a recorded owner request; after ordinary closure an agent's
+keep also retains, with reason `agent request`. An implementer's cycle follows
 required findings from the review of its recorded integrated candidate, even
 when the assurance moves to the corrected candidate for delta review.
 The acknowledgement's `retained_title` supplies the title as data, with no
 rename: the retained title is the plain role title. The reason, `corrections`,
-`delta review` or `owner request`, stays in `retention_reason` and the row's
-wording. Release when the correction
+`delta review`, `owner request` or (closed objectives only) `agent request`, stays
+in `retention_reason` and the row's wording. Release when the correction
 cycle ends: a retained-owned tab remains releasable, and holds closure.
 
 An owner-kept exception needs a recorded `user_direct` instruction through

@@ -309,7 +309,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                if row["ownership"] == "user_owned" else "Orca does not own the terminal and will not release it.")
     wording += " Do not reuse."
     if keep:
-        return finish("owner_kept_unowned", f"{kept}. " + wording, command=None)
+        return finish("owner_kept_unowned", f"{kept}. " + wording, command=None, retention_reason=reason)
     if admission.get("report") is None:
         from .util import route_hold, route_discarded, route_next_action
         if route_discarded(admission):

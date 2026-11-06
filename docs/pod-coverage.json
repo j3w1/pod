@@ -12744,6 +12744,7 @@
       ],
       "offline_test": [
         "tests.test_closed_tab_intent.AgentIntentTests.test_agent_keep_on_a_closed_objective_is_kept_by_agent_and_an_agent_may_revoke_it",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_every_kept_tab_carries_its_keeps_retention_reason_whatever_its_ownership",
         "tests.test_closed_tab_intent.AgentIntentTests.test_an_agent_cannot_revoke_the_persons_keep",
         "tests.test_closed_tab_intent.AgentIntentTests.test_an_intervening_agent_keep_never_downgrades_the_persons_keep",
         "tests.test_closed_tab_intent.AgentIntentTests.test_a_person_keep_stays_deciding_over_an_earlier_recorded_agent_row",

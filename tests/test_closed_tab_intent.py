@@ -123,6 +123,23 @@ class AgentIntentTests(ClosedTabIntentCase):
         self.assertEqual(row["command"][:3], ["orca", "terminal", "close"])
         self.assert_only_intent_changed(before)
 
+    def test_every_kept_tab_carries_its_keeps_retention_reason_whatever_its_ownership(self):
+        admission = self.closed(keep=False)
+        self.intent(admission, True, "agent-keep", authority=LOCAL)
+        for case, row_kind in (("user_owned", "owner_kept_unowned"), ("external", "owner_kept_unowned"),
+                               ("retained", "owner_kept_owned"), ("owned", "owner_kept_owned")):
+            with self.subTest(case=case):
+                self.tab_case = case
+                [row] = self.status()["worker_tabs"]
+                self.assertEqual((row["row"], row["kept_by"], row["retention_reason"]),
+                                 (row_kind, "agent", "agent request"))
+        self.intent(admission, False, "agent-let-go", authority=LOCAL)
+        self.intent(admission, True, "person-keep")
+        self.tab_case = "user_owned"
+        [row] = self.status()["worker_tabs"]
+        self.assertEqual((row["kept_by"], row["owner_kept"], row["retention_reason"]),
+                         ("person", True, "owner request"))
+
     def test_an_agent_cannot_revoke_the_persons_keep(self):
         admission = self.closed()
         self.change_runtime()
