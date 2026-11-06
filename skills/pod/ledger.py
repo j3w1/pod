@@ -1336,6 +1336,22 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
     placements = {row["admission_id"]: row["placement"] for row in (native or {}).get("assignments", [])
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
+    from .governance import scope_resolver
+    # Candidate commits are immutable object ids, so each pair is read once per context.
+    pairs: dict[tuple, object] = {}
+
+    def delta(source, target):
+        if ("delta", source, target) not in pairs:
+            pairs["delta", source, target] = git_delta(project, source, target)
+        found = pairs["delta", source, target]
+        return list(found) if isinstance(found, list) else None
+
+    def resolver(source, target):
+        # R173: REUSE resolves its scope through committed links in both candidates' trees with R203's resolver,
+        # and also compares every committed link it traverses there.
+        if ("scope", source, target) not in pairs:
+            pairs["scope", source, target] = scope_resolver(project, [source, target], links=True)
+        return pairs["scope", source, target]
     return {"admissions": state.get("admissions", {}),
             "report_runtimes": sorted({entry[field] for entry in (checkpoint_value.get("continuity") or {}).get("history", [])
                                         for field in ("from_runtime", "to_runtime")}),
@@ -1370,7 +1386,8 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "governor_pending": _governor_pending(project, objective),
             "governor_delivery": objective_delivery_reporting(project, objective),
             "closing_delivery": lambda context: objective_delivery_reporting(project, objective, context=context),
-            "git_delta": lambda source, target: git_delta(project, source, target),
+            "git_delta": delta,
+            "reuse_resolver": resolver,
             "candidate_check": lambda candidate: require_candidate(project, candidate, assurance=True),
             "is_ancestor": lambda commit, target: git_is_ancestor(project, commit, target)}
 
