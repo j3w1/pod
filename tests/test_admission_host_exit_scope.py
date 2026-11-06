@@ -8,7 +8,6 @@ read whole (A859, A898). A fake verifier replaces Pod's transport, so no process
 Orca."""
 
 import json
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -717,14 +716,14 @@ class RemovedPlacementTests(VerifierMixin, unconsumed.UnconsumedReportCase):
         relevant hold through it."""
         self.removed()
         own = self.context_path().parent.name
-        for index in range(64):  # records are read in name order: the other one must come after, to replace it
-            destination = self.foreign(name=f"foreign{index}", terminal="another-terminal", **self.FINISHED,
-                                       placement={"path": str(self.worker_path), "branch": "other",
-                                                  "repo_key": self.place["repo_key"]})
-            if destination.parent.name > own:
-                break
-            shutil.rmtree(destination.parent)
-        self.assertGreater(destination.parent.name, own)
+        destination = self.foreign(name="foreign", terminal="another-terminal", **self.FINISHED,
+                                   placement={"path": str(self.worker_path), "branch": "other",
+                                              "repo_key": self.place["repo_key"]})
+        # Records are read in name order: the other one must come after its own, to replace it. The record directory
+        # name is a hash, so move the record under a name that sorts after its own by construction, never by chance.
+        later = destination.parent.with_name(own + "0")
+        destination.parent.rename(later)
+        self.assertGreater(later.name, own)
         first = stuck(self, "first", path=self.root / "first-removed", run="run")
         self.fake.mode = "fail"
         results = [self.read([first, *self.workers()], target="main"),
