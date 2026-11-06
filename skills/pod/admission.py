@@ -232,7 +232,6 @@ class _Discovery:
         self.orca_reads = 0
         self.terminal_start = None
         self.fence_started = False  # After this, only the fence's own end reads may read Orca.
-        self.abandoned: set = set()  # Dispatches the queries' records account as abandoned.
         self.owner_runs: set = set()  # Runs whose current owner some query observes; changed under `_lock`.
         # R212: each query's candidate scope, registered at its record-pass yield; the Dispatches some query counts
         # exited, fixed before the end fence starts; and the call's own clock for the verifier's reserve.
@@ -248,7 +247,13 @@ class _Discovery:
         self._memo: dict = {}
         self._pool = ThreadPoolExecutor(max_workers=POOL_WORKERS, thread_name_prefix="pod-admission")
         self._git = ThreadPoolExecutor(max_workers=GIT_WORKERS, thread_name_prefix="pod-admission-git")
+        # Discovery's terminal-state partition walks, one thread each, so the fleet read never waits for pool room.
+        self._walks = ThreadPoolExecutor(max_workers=len(TERMINAL_STATES), thread_name_prefix="pod-admission-walk")
         self._placed: set = set()  # Workspace paths whose identity read has started.
+        # Abandoned-claim demand (R207): listed rows wait here until every query's record pass is done, or until the
+        # worktree inventory a query judges them by is known.
+        self.claims_ready = False
+        self._unjudged: list = []
 
     def memo(self, key, fn, *, stage=None):
         full = (stage or self.stage, *key)
@@ -309,13 +314,51 @@ class _Discovery:
                 self.orca_reads += 1
             return _read(argv)
 
-    def prefetch_claim(self, row, runtime):
-        """Start an abandoned worker's current-claim read as soon as its inventory row is known."""
-        key = row.get("dispatchId") if isinstance(row, dict) else None
-        if _FENCING.get():
+    def list_row(self, row, runtime):
+        """A row discovery listed: start its workspace identity read now, and its current-claim read once some
+        query's answer is known to be able to use that claim (`_claim_demanded`). A row listed before every query's
+        record pass is done, or before the worktree inventory a query judges it by, waits for `judge_claims`."""
+        self.prefetch_place(row)
+        if _FENCING.get() or not isinstance(row, dict) or not isinstance(runtime, str):
             return  # The fence re-reads exactly the claims discovery read, never new ones.
-        if isinstance(key, str) and key and isinstance(runtime, str):
-            self.submit(("claim", key, runtime), lambda: _native_claim(row, runtime))
+        with self._lock:
+            if not self.claims_ready:
+                self._unjudged.append((row, runtime))
+                return
+        if not self.judge_claim(row, runtime, wait=False):
+            with self._lock:
+                self._unjudged.append((row, runtime))
+
+    def judge_claims(self):
+        """Judge every waiting row in the caller's thread, once every query's record pass is done, waiting for each
+        worktree inventory a query needs. `_prefetch_native` then judges every row of the fleet read itself."""
+        with self._lock:
+            self.claims_ready = True
+            pending, self._unjudged = self._unjudged, []
+        for row, runtime in pending:
+            self.judge_claim(row, runtime, wait=True)
+
+    def judge_claim(self, row, runtime, *, wait) -> bool:
+        """Start the row's claim read when some query demands it; False when a needed inventory is not known yet."""
+        key = row.get("dispatchId")
+        if not isinstance(key, str) or not key:
+            return True
+        for slot in self.host_exit_slots:
+            if row.get("workerState") != "abandoned" and key not in slot.abandoned:
+                continue
+            place_key = ("places", str(slot.project))
+            if not wait:
+                future = self._memo.get(("first", *place_key))
+                if future is None or not future.done():
+                    return False
+            try:
+                places = self.memo(place_key, lambda slot=slot: _places(slot.project), stage="first")
+            except (PodError, OSError):
+                continue  # The query raises the same fault where it reads its places, and reads no claim.
+            if _claim_demanded(slot, row, places):
+                self.submit(("claim", key, runtime), lambda: _native_claim(row, runtime), stage="first")
+                return True
+        return True
 
     def prefetch_place(self, row):
         """Start a current row's workspace Git identity read (rule T 4b) as soon as its inventory row is listed.
@@ -358,6 +401,7 @@ class _Discovery:
             self.closed = True
         self._git.shutdown(wait=True, cancel_futures=True)
         self._pool.shutdown(wait=True, cancel_futures=True)
+        self._walks.shutdown(wait=True, cancel_futures=True)
         with self._lock:
             futures = sorted(self._memo.items(), key=lambda item: repr(item[0]))
         for _, future in futures:
@@ -443,28 +487,169 @@ def _fleet() -> dict | None:
     list into proof that the repository has no other worker. Every page is read, however many workers the fleet
     has (R206); a missing or repeated cursor still refuses, and the read deadline still applies.
 
-    Discovery reads only this newest-first cursor walk. Its cursor is a keyset position, so every Dispatch
-    that exists for the whole walk is listed exactly once, whatever state it changes to. Inside a batch the
-    walk is also the fence's start (`fleet_start`): total and counts from its first page, the newest rows
-    from that page, and the unreleased rows, the released rows and the abandoned claims from the walk. The
-    end fence reads every page of the walk again, in parallel, from the cursor Orca issued for it, and
+    Discovery reads the six terminal-state partitions in parallel inside a bracket (`_fleet_partitioned`), and
+    the newest-first cursor walk whenever the bracket does not prove the union whole. Either read is the fence's
+    start in a batch (`fleet_start`): total and counts from its unfiltered newest page, the newest rows from that
+    page, the unreleased and released rows from the read, and every page it read with the cursor Orca issued.
+    The end fence reads every one of those pages again, in parallel, from the same cursor and partition, and
     compares each page's Dispatches and each Dispatch's identity at both ends, so every race shows there: a
-    Dispatch created during the walk changes the end's newest page; a deletion or a move changes a page's
-    Dispatches; any identity change of any row, in any state, alters the end's digests. The end fence is a
-    pure comparison, so a race during its own reads only makes it unequal, which fails safe.
+    Dispatch created during discovery changes the end's newest page; a deletion, or a move into or out of a
+    partition, changes a page's Dispatches; any identity change of any row, in any state, alters the end's
+    digests. The end fence is a pure comparison, so a race during its own reads only makes it unequal, which
+    fails safe.
     """
     discovery = _SHARED.get()
-    fleet = _fleet_sequential(discovery)
-    if discovery is not None:
+    if discovery is None:
+        return _fleet_sequential()
+    fleet = _fleet_partitioned(discovery)
+    if isinstance(fleet, _Fallback):
+        fleet = _fleet_sequential(discovery, fleet.first)
         discovery.fleet_read = "sequential" if fleet is not None else "bound"
+    else:
+        discovery.fleet_read = "partitioned" if fleet is not None else "bound"
     return fleet
 
 
-def _fleet_sequential(discovery=None) -> dict | None:
+class _Unproved(Exception):
+    """A partitioned discovery read that does not prove the union whole: the sequential walk is read instead."""
+
+
+class _Fallback:
+    """The sequential walk is read instead, starting from the opening page: this call's own read of the walk's
+    first page, so the walk lists every Dispatch that exists from that read to its last page exactly once."""
+
+    def __init__(self, first):
+        self.first = first
+
+
+def _bracket(response) -> dict:
+    """The facts an unfiltered newest page brackets discovery's partitions with: its runtime, total, counts and the
+    identity of every row, in order. Anything malformed is unproved."""
+    try:
+        result = response["result"]
+        scope, page, rows = result.get("scope"), result.get("page"), result.get("workers")
+        runtime = response.get("runtime")
+        if (not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None
+                or not isinstance(runtime, str) or not isinstance(page, dict) or type(page.get("total")) is not int
+                or page["total"] < 0 or type(page.get("hasMore")) is not bool or not isinstance(rows, list)
+                or len(rows) > 100 or result.get("truncated", False) is not False):
+            raise _Unproved()
+        ids = [row.get("dispatchId") if isinstance(row, dict) else None for row in rows]
+        if any(not isinstance(key, str) or not key for key in ids) or len(set(ids)) != len(ids):
+            raise _Unproved()
+        return {"runtime": runtime, "total": page["total"], "counts": _counts(result.get("counts")),
+                "more": page["hasMore"], "ids": ids, "rows": [_identity_row(row) for row in rows]}
+    except (PodError, KeyError, TypeError, AttributeError, ValueError):
+        raise _Unproved() from None
+
+
+def _discovery_partition(state: str, runtime: str, discovery) -> dict:
+    """Discovery's read of one terminal-state partition, every page, with the sequential walk's cursor, runtime,
+    scope and identity checks, a constant total equal to the rows read, every row in this partition and every row
+    well formed. A failed read raises; anything else unproved raises `_Unproved`."""
+    prefix = [*WORKER_LIST, "--limit", "100", "--terminal-state", state]
+    cursor, seen, workers, pages, total = None, set(), {}, [], None
+    while True:
+        if discovery.closed:
+            raise PodError(DEADLINE_SPENT, "The admission call has ended")
+        response = discovery.read(prefix + (["--cursor", cursor] if cursor else []))
+        try:
+            result = response["result"]
+            scope, rows, page = result.get("scope"), result.get("workers"), result.get("page")
+            if (not isinstance(scope, dict) or scope.get("source") != "all" or scope.get("run") is not None
+                    or response.get("runtime") != runtime or not isinstance(rows, list) or len(rows) > 100
+                    or not isinstance(page, dict) or type(page.get("hasMore")) is not bool
+                    or result.get("truncated", False) is not False or type(page.get("total")) is not int
+                    or total is not None and page["total"] != total):
+                raise _Unproved()
+        except (KeyError, TypeError, AttributeError):
+            raise _Unproved() from None
+        total = page["total"]
+        for row in rows:
+            key = row.get("dispatchId") if isinstance(row, dict) else None
+            if not isinstance(key, str) or not key or key in workers or row.get("terminalState") != state:
+                raise _Unproved()
+            try:
+                _worker_fact(row)
+            except PodError:
+                raise _Unproved() from None  # The walk lists it, so the projection refuses it where it always did.
+            workers[key] = row
+            discovery.list_row(row, runtime)
+        # The end fence reads this page again from the same partition and cursor (R207).
+        pages.append({"cursor": cursor, "state": state, "ids": [row["dispatchId"] for row in rows],
+                      "more": page["hasMore"]})
+        if not page["hasMore"]:
+            if len(workers) != total:
+                raise _Unproved()
+            return {"total": total, "rows": list(workers.values()), "pages": pages}
+        cursor = page.get("nextCursor")
+        if not rows or not isinstance(cursor, str) or not cursor or cursor in seen:
+            raise _Unproved()
+        seen.add(cursor)
+
+
+def _fleet_partitioned(discovery):
+    """The all-Run inventory as the union of the six terminal-state partitions, read in parallel inside a bracket:
+    an unfiltered newest page read before any partition and again after them all (R207).
+
+    The union is used only when both bracket pages have equal runtime, total, counts and row identities, every
+    partition's total equals the opening count for its state and their sum the opening total, no Dispatch is in
+    two partitions, and every row of the newest page is in the union with an equal identity. Otherwise, or when a
+    partition or a bracket page does not prove its part, a `_Fallback`: the caller reads the sequential walk. A
+    failed read raises, as the walk's would. A bound caller is None after the opening page."""
+    prefix = [*WORKER_LIST, "--limit", "100"]
+    opening = discovery.read(prefix)
+    scope = opening.get("result", {}).get("scope") if isinstance(opening.get("result"), dict) else None
+    if isinstance(scope, dict) and scope.get("source") == "bound":
+        discovery.fleet_start = PodError("native_inventory_scope", "A bound caller cannot fence all-Run coverage")
+        return None
+    try:
+        before = _bracket(opening)
+        runtime = before["runtime"]
+        futures = {state: discovery._walks.submit(contextvars.copy_context().run, _discovery_partition, state,
+                                                  runtime, discovery) for state in TERMINAL_STATES}
+        parts, unproved = {}, False
+        for state, future in futures.items():
+            try:
+                parts[state] = future.result()
+            except _Unproved:
+                unproved = True
+        if unproved:
+            raise _Unproved()
+        union = {}
+        for state in TERMINAL_STATES:
+            if parts[state]["total"] != before["counts"].get(state, 0):
+                raise _Unproved()
+            for row in parts[state]["rows"]:
+                if row["dispatchId"] in union:
+                    raise _Unproved()
+                union[row["dispatchId"]] = row
+        if len(union) != before["total"]:
+            raise _Unproved()
+        if any(row["dispatchId"] not in union or _identity_row(union[row["dispatchId"]]) != row
+               for row in before["rows"]):
+            raise _Unproved()
+        if _bracket(discovery.read(prefix)) != before:
+            raise _Unproved()
+    except _Unproved:
+        with discovery._lock:
+            discovery._unjudged.clear()  # The sequential walk lists its own rows; these are not the fleet read.
+        return _Fallback(opening)
+    rows = list(union.values())
+    # The opening page is the fence's newest page; its rows are listed by their partitions, so it adds no rows.
+    pages = [{"cursor": None, "state": None, "bracket": True, "ids": before["ids"], "more": before["more"]},
+             *(page for state in TERMINAL_STATES for page in parts[state]["pages"])]
+    discovery.fleet_start = {"page": opening, "rows": rows, "pages": pages}
+    return {"runtime": runtime, "workers": rows, "complete": True}
+
+
+def _fleet_sequential(discovery=None, first=None) -> dict | None:
+    """The newest-first cursor walk; `first`, when given, is this call's own read of its first page."""
     prefix = [*WORKER_LIST, "--limit", "100"]
     cursor, seen, workers, runtime, pages = None, set(), {}, None, []
     while True:
-        response = _gated_read(prefix + (["--cursor", cursor] if cursor else []))
+        response = first if cursor is None and first is not None else _gated_read(
+            prefix + (["--cursor", cursor] if cursor else []))
         first = response if cursor is None else first
         result = response["result"]
         scope = result.get("scope")
@@ -486,10 +671,8 @@ def _fleet_sequential(discovery=None) -> dict | None:
             if not isinstance(key, str) or not key or key in workers:
                 raise PodError("orca_pagination", "Native inventory repeats or omits a Dispatch identity")
             workers[key] = row
-            if discovery is not None and row.get("workerState") == "abandoned":
-                discovery.prefetch_claim(row, runtime)
             if discovery is not None:
-                discovery.prefetch_place(row)
+                discovery.list_row(row, runtime)
         # The end fence reads this page again from the same cursor Orca issued for it (R207).
         pages.append({"cursor": cursor, "ids": [row["dispatchId"] for row in rows], "more": page["hasMore"]})
         if not page["hasMore"]:
@@ -540,6 +723,33 @@ def _worker_fact(row: dict) -> dict:
                          ("id", "ownerDispatchId", "ownershipState", "releaseState", "endpointId", "endpointIncarnation")},
             "worktree": path,
             "liveness": live.get("verdict", "unverifiable"), "released": release.get("state") == "released"}
+
+
+def _shown(source) -> dict:
+    """`_worker_fact` of a row of this call's fleet read, computed once per call for every row (R207). Each caller
+    receives its own copy, so a query's projection never sees another's changes. A row outside that read, a call
+    without shared discovery and a row whose fact refuses are computed where they are read, so a malformed row
+    raises the same refusal where it always did. Nothing outlives the call."""
+    discovery = _SHARED.get()
+    fleet = discovery.done(("fleet",)) if discovery is not None else None
+    if not isinstance(fleet, dict) or not isinstance(fleet.get("workers"), list):
+        return _worker_fact(source)
+    table = discovery.memo(("worker-facts", id(fleet)), lambda: _fact_table(fleet["workers"]), stage="first")
+    row, fact = table.get(id(source), (None, None))
+    if row is not source or fact is None:
+        return _worker_fact(source)
+    return {**fact, "resource": dict(fact["resource"])}
+
+
+def _fact_table(rows) -> dict:
+    table = {}
+    for row in rows:
+        try:
+            fact = _worker_fact(row)
+        except Exception:  # Recomputed where it is read, which raises it there.
+            fact = None
+        table[id(row)] = (row, fact)
+    return table
 
 
 def _terminal_rows(response: dict) -> list[dict]:
@@ -643,7 +853,7 @@ def _fleet_side(observed, claims, counted=()) -> dict:
                 "unreleased": len(unreleased), "unreleased_sha256": _rows_digest(runtime, unreleased),
                 "released": len(released), "released_sha256": _rows_digest(runtime, released),
                 "newest": len(newest), "newest_sha256": _rows_digest(runtime, newest),
-                "pages": len(pages), "pages_sha256": _rows_digest(runtime, [[page["ids"], page["more"]] for page in pages]),
+                "pages": len(pages), "pages_sha256": _rows_digest(runtime, [_page_identity(page) for page in pages]),
                 "claims_read": len(facts), "claims_sha256": _rows_digest(runtime, facts),
                 "host_exit": len(exits), "host_exit_sha256": _rows_digest(runtime, exits)}
     except PodError as exc:
@@ -692,14 +902,22 @@ def _walk_page(response, runtime) -> list:
     return rows
 
 
+def _page_identity(page) -> list:
+    """What the fence compares of one page read: its Dispatches, whether more followed, its partition (null for the
+    unfiltered walk) and whether it is the partitioned read's bracket page, whose rows the partitions list."""
+    return [page["ids"], page["more"], page.get("state"), bool(page.get("bracket"))]
+
+
 def _fleet_end(discovery, pages) -> dict:
-    """A fresh complete fleet read for the fence: every page of discovery's walk again, read in parallel, each from
-    the cursor Orca issued for it during this call (R207). Membership is then each page's Dispatches, compared
-    with the start's; every failure is kept, a spent budget first."""
+    """A fresh complete fleet read for the fence: every page of discovery's read again, read in parallel, each from
+    the partition and cursor Orca issued it in during this call (R207). Membership is then each page's Dispatches,
+    compared with the start's; every failure is kept, a spent budget first. A bracket page is the end's newest page
+    and adds no rows, as at the start."""
     if not isinstance(pages, list) or not pages:
         raise PodError("native_fence_unavailable", "Discovery made no fleet walk to read again")
     futures = [discovery.submit(("walk", index), lambda page=page: discovery.read(
-                   [*WORKER_LIST, "--limit", "100", *(["--cursor", page["cursor"]] if page["cursor"] else [])]),
+                   [*WORKER_LIST, "--limit", "100", *(["--terminal-state", page["state"]] if page.get("state") else []),
+                    *(["--cursor", page["cursor"]] if page["cursor"] else [])]),
                    stage="fence") for index, page in enumerate(pages)]
     responses = []
     for future in futures:
@@ -710,10 +928,12 @@ def _fleet_end(discovery, pages) -> dict:
     _raise_first(responses)
     runtime = responses[0].get("runtime")
     rows, read = [], []
-    for response in responses:
+    for page, response in zip(pages, responses):
         page_rows = _walk_page(response, runtime)
-        rows.extend(page_rows)
-        read.append({"ids": [row["dispatchId"] for row in page_rows], "more": response["result"]["page"]["hasMore"]})
+        if not page.get("bracket"):
+            rows.extend(page_rows)
+        read.append({"ids": [row["dispatchId"] for row in page_rows], "more": response["result"]["page"]["hasMore"],
+                     "state": page.get("state"), "bracket": bool(page.get("bracket"))})
     return {"page": responses[0], "rows": rows, "pages": read}
 
 
@@ -1226,6 +1446,40 @@ def _host_exit_unread(slot: _HostExitSlot, shown: dict) -> bool:
         return True
 
 
+def _claim_demanded(slot: _HostExitSlot, source: dict, places) -> bool:
+    """Whether this query's projection can read the row's current claim (R207): a superset of the rows whose claim it
+    reads, decided before the end fence from facts the record pass and the inventories already hold.
+
+    The projection reads a claim only for a row abandoned for this query (natively, or by its own records) that it
+    does not refuse as malformed, when the query names effects or `_relevant` holds for the row's actor scope. That
+    scope is computed here as the projection computes it, from the row's native location, this repository's
+    worktree registry and the placements its own records bind, which the projection consults first. Its only later
+    source, the records of other repositories naming the row's Run, adds a branch and a repository key to a row this
+    leaves without either; with the request fixed, those can only turn `_relevant` false, never true."""
+    if not isinstance(source, dict):
+        return False
+    if source.get("workerState") != "abandoned" and source.get("dispatchId") not in slot.abandoned:
+        return False
+    request = slot.request
+    if request["effects"]:
+        return True
+    try:
+        shown = _worker_fact(source)
+    except PodError:
+        return False  # The projection refuses the row there and reads no claim.
+    path = shown["worktree"]
+    registered, _ = _workspace(slot.project, path, places)
+    repo_key = slot.scope["repo_key"]
+    if registered is not None:
+        actor = {"repo_key": repo_key, "worktree": path, "branch": places.get(registered), "locations_complete": bool(path)}
+    else:
+        placement = _recovered(shown, slot.placements)
+        actor = ({"repo_key": None, "worktree": path, "branch": None, "locations_complete": False} if placement is None
+                 else {"repo_key": placement.get("repo_key"), "worktree": path, "branch": placement["branch"],
+                       "locations_complete": bool(path)})
+    return _relevant(actor, request, repo_key, _overlap)
+
+
 def _host_exit_requests(ids, hosts: dict) -> list:
     """Requests of at most K ids, grouped by host and sorted."""
     by_host = {}
@@ -1264,7 +1518,7 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
             if not isinstance(source, dict) or source.get("workerState") == "unsupervised":
                 continue
             try:
-                shown = _worker_fact(source)
+                shown = _shown(source)
                 host = _host_exit_host(source, shown, handles, slot.abandoned)
                 if host is not None and _host_exit_scope(slot, shown, places):
                     eligible.append((slot, places, source, shown, host))
@@ -2425,7 +2679,6 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
         discovery = _SHARED.get()
         if discovery is not None:
             # The call reads these native facts once, for every query, before the end fence starts.
-            discovery.abandoned |= abandoned_dispatches
             # Started while the other queries read their records, or as soon as the terminal inventory is known.
             discovery.name_owners({ref["runId"] for ownership in owner_claims() for ref in ownership["recorded_native_refs"]})
             # R212: this query's own candidate scope, which the call asks the host about before the end fence.
@@ -2534,12 +2787,6 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                 unknown(None, "native_inventory_incomplete")
                 continue
             workers = {}
-            discovery = _SHARED.get()
-            if discovery is not None:
-                for source in native["workers"]:
-                    if isinstance(source, dict) and (source.get("workerState") == "abandoned"
-                                                     or source.get("dispatchId") in abandoned_dispatches):
-                        discovery.prefetch_claim(source, native["runtime"])
             for source in native["workers"]:
                 from .ledger import _native_assignment_settled
                 if (terminals.get("complete") is True and source.get("workerState") == "unsupervised"
@@ -2553,7 +2800,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     fleet_facts[source.get("dispatchId")] = "settled"
                     context_only[source.get("dispatchId")] = source
                     continue
-                shown = _worker_fact(source)
+                shown = _shown(source)
                 path = shown["worktree"]
                 run = shown["run"]
                 if shown["liveness"] == "exited" and source.get("workerState") != "abandoned" and shown["dispatch"] not in abandoned_dispatches:
@@ -3075,7 +3322,8 @@ def _bounded(result: dict, kwargs: dict) -> dict:
 
 def _prefetch_native(discovery, budget, *, fence: bool = False, project: Path | None = None) -> None:
     """Read, in parallel, every native fact the projections will use: the fleet and terminals already
-    started, each abandoned or record-accounted abandoned Dispatch's claim, each observed Run owner and,
+    started, the claim of each abandoned or record-accounted abandoned Dispatch some query can use, each observed
+    Run owner and,
     before an end fence, rule S's Run-coordinator list under the call's deadline (`budget`). Last, R212's host
     verdicts for each query's own candidates, after every other read and before the end fence.
     Faults are kept for the queries, which raise them where they read."""
@@ -3096,12 +3344,13 @@ def _prefetch_native(discovery, budget, *, fence: bool = False, project: Path | 
             # without a fence the projection still reads it only when rule S needs it.
             discovery.submit(("run-coordinators", terminals["runtime"]),
                              lambda: _run_coordinators(terminals["runtime"], budget.check))
+    discovery.judge_claims()  # every query's record pass is done: the rows listed so far
     fleet = settled(("fleet",))
     if isinstance(fleet, dict) and isinstance(fleet.get("workers"), list) and fleet.get("complete") is True:
+        # Every row of the fleet read the queries project, whichever reader listed it, before the end fence.
         for source in fleet["workers"]:
-            if isinstance(source, dict) and (source.get("workerState") == "abandoned"
-                                             or source.get("dispatchId") in discovery.abandoned):
-                discovery.prefetch_claim(source, fleet["runtime"])
+            if isinstance(source, dict):
+                discovery.judge_claim(source, fleet["runtime"], wait=True)
     for key, future in list(discovery._memo.items()):
         if key[:2] in (("first", "claim"), ("first", "owner"), ("first", "run-coordinators")):
             try:
