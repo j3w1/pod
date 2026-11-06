@@ -9185,6 +9185,18 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A934",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_verification_gaps.GapHomeTests.test_a_post_merge_only_gap_still_defers_and_the_deferral_names_both_homes",
+        "tests.test_verification_gaps.GapHomeTests.test_the_installed_delivery_reference_names_both_homes"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A610",
       "required_evidence": [
         "unit",
