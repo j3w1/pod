@@ -1,5 +1,6 @@
 """Required checkpoint/map fields refuse before any context is published (pod#254)."""
 
+from copy import deepcopy
 from unittest.mock import patch
 
 from pod.errors import PodError
@@ -35,6 +36,42 @@ class CheckpointRequiredFieldsTests(KernelCase):
                 self.assertTrue(error.detail["next_action"])
                 self.assertEqual(self.files(), before)
                 self.assertIsNone(read(self.project, "objective"))
+
+    def test_persisted_row_required_fields_refuse_without_writing(self):
+        from pod.history import prepare_context, publish_context
+        from pod.ledger import _path
+        from pod.history_tree import plain
+        self.intake()
+        state = plain(read(self.project, "objective"))
+        path = _path(self.project, "objective")
+        for field in ("id", "kind"):
+            with self.subTest(field=field):
+                state["revision"] += 1
+                prior = deepcopy(state)
+                del prior["checkpoint"]["obligations"][0][field]
+                publish_context(path, *prepare_context(path, prior, project=self.project))
+                before = self.files()
+                with self.assertRaises(PodError) as caught:
+                    checkpoint(self.project, "objective", owner="owner", value=self.core(),
+                               native={"runtime": "runtime"})
+                self.assertEqual(caught.exception.code, "obligation_invalid")
+                self.assertIn(field, caught.exception.detail["referent"]["missing"])
+                self.assertTrue(caught.exception.detail["next_action"])
+                self.assertEqual(self.files(), before)
+
+    def test_unhashable_caller_ids_refuse_without_writing(self):
+        for identity in ([], {}):
+            with self.subTest(identity=identity):
+                value = self.core(seq=1, governance={"base_ref": "target"},
+                                  obligations=[{**self.criterion(), "id": identity}])
+                before = self.files()
+                with self.assertRaises(PodError) as caught:
+                    checkpoint(self.project, "objective", owner="owner", value=value,
+                               native={"runtime": "runtime"})
+                self.assertEqual(caught.exception.code, "obligation_invalid")
+                self.assertEqual(caught.exception.detail["referent"]["field"], "obligation id")
+                self.assertTrue(caught.exception.detail["next_action"])
+                self.assertEqual(self.files(), before)
 
     def test_valid_mapless_and_mapped_checkpoints_keep_working(self):
         checkpoint(self.project, "objective", owner="owner", value=self.core(), native={"runtime": "runtime"})

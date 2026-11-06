@@ -224,10 +224,13 @@ def _validate_admission(key: str, row: object, *, runtimes: set[str] | None = No
 
 def _validate_route_references(state: dict) -> None:
     """Read stored reference identity without rejudging a once-accepted replacement."""
-    from .obligations import _route_later
+    from .obligations import _exact, _OBLIGATION_FIELDS, _route_later
     admissions = state["admissions"]
     checkpoint = state.get("checkpoint") or {}
-    obligations = {row["id"]: row for row in checkpoint.get("obligations", [])}
+    obligations = {}
+    for row in checkpoint.get("obligations", []):
+        _exact(row, _OBLIGATION_FIELDS, {"id", "kind"}, "obligation")
+        obligations[row["id"]] = row
     for row in admissions.values():
         for entry in row["route_decision"].get("settlements", []):
             if entry.get("seq", 1) > checkpoint.get("seq", 0):
@@ -2524,7 +2527,8 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
         raw_obligations = proposed.get("obligations")
         introducing = isinstance(raw_obligations, list) and any(
-            isinstance(row, dict) and row.get("kind") == "criterion" and row.get("id") not in prior_criteria
+            isinstance(row, dict) and row.get("kind") == "criterion"
+            and isinstance(row.get("id"), str) and row["id"] not in prior_criteria
             for row in raw_obligations)
         rebound = core.get("objective_source") != previous.get("objective_source")
         if core.get("objective_source") is not None and (introducing or rebound or issue_requested):
