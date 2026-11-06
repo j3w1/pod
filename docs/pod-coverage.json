@@ -12368,6 +12368,27 @@
         "tests.test_admission_batch.WorkerFactTests.test_worker_facts_are_derived_once_per_call"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1004",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_consumed_keep_open_guidance_preserves_native_action",
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_report_status_and_finalization_relay_labelled_guidance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1005",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_worker_tabs.ReleaseGuidanceTests.test_guidance_exclusions",
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
