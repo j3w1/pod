@@ -95,7 +95,8 @@ NEXT = {
                             "reports that terminal stale or gone",
     "caller_is_worker": "a worker terminal cannot coordinate; use another terminal in the recorded worktree",
     "workers_unreadable": "the Run's worker list could not be read completely; retry the same command",
-    "run_shared": "another open objective records this Run; resolve the shared Run before continuing",
+    "run_shared": "another open or unverified-closed objective records this Run; resolve the shared Run before "
+                  "continuing",
     "scope_unreadable": "another objective record could not prove whether it uses this Run; resolve it first",
     "record_changed_during_read": "another objective record changed while it was read; it is being written and needs "
                                   "no repair, so retry the same command",
@@ -435,7 +436,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     from .relay import TIMEOUT_S
     from .ledger import _run_references, CONTINUITY_HISTORY
     from .orca import current_run, run_show, terminal_identity, worker_rows
-    from .handoff import run_scope, unfinished as handoff_unfinished
+    from .handoff import run_scope, shared_detail, shared_fields, unfinished as handoff_unfinished
     caller = os.environ.get("ORCA_TERMINAL_HANDLE") if caller is None and not objective_only else caller
     checkpoint = state.get("checkpoint") or {}
     owner = state.get("owner")
@@ -607,8 +608,9 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     _step(budget)
     if scope["objectives"]:
         result["other_objectives"] = scope["objectives"][:8]
-        return fail("run_shared", "another open objective records this Run: " + ", ".join(scope["objectives"][:8]) + ".",
-                    definitive=True)
+        result.update(shared_fields(scope, limit=8))
+        return fail("run_shared", "another open or unverified-closed objective records this Run: "
+                    + shared_detail(scope, limit=8) + ".", definitive=True)
     if scope["unreadable"]:
         return fail("scope_unreadable", f"{scope['unreadable']} objective record(s) could not prove Run membership.")
     if scope.get("changing"):
@@ -805,7 +807,7 @@ def _completed_state(state: dict, *, entry: int, owner: str, facts: dict, after:
 
 def _public(verdict: dict) -> dict:
     keep = ("status", "condition", "message", "next_action", "facts", "command", "cwd", "branch", "definitive",
-            "other_objectives", "differs", "pending")
+            "other_objectives", "open_objectives", "unproven_closures", "differs", "pending")
     return {key: verdict[key] for key in keep if key in verdict}
 
 
