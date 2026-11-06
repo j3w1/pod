@@ -968,6 +968,82 @@ def _observe(port: GitHubPort, row: dict, unit: dict, journal: dict, *, project:
     return answer
 
 
+UNRETAINED = "provider_unretained"
+UNRETAINED_KINDS = ("workflow_dispatch", "validation_rerun")
+UNRETAINED_STATEMENT = ("GitHub retains no run for this row: it was deleted, expired or never created, and these reads "
+                        "cannot tell which. Nothing shows that a run ever existed. The outcome stays UNKNOWN and there "
+                        "is nothing to compensate")
+
+
+def unretained_refusal(row: dict) -> str | None:
+    """Why this row may not settle `provider_unretained`, or None when its kind and state allow it (R252).
+
+    Only an allowed validation row (a workflow dispatch or a validation rerun, purpose validation) that is still
+    pending or UNKNOWN qualifies; a merge, push, pull-request update, diagnostic, cancellation, release or deploy
+    never does."""
+    if row["decision"] != "ALLOW":
+        return "only an admitted action carries an outcome"
+    if row["action"]["kind"] not in UNRETAINED_KINDS or row.get("purpose") != "validation":
+        return (f"a {row['action']['kind']} row is not a validation run; only a workflow dispatch or validation rerun "
+                "for validation settles provider_unretained")
+    if row["outcome"] not in ("pending", "UNKNOWN"):
+        return f"the row is already {row['outcome']}"
+    return None
+
+
+def unretained_proof(port: GitHubPort, row: dict, journal: dict, *, now: datetime) -> dict:
+    """Pod's own reads that GitHub retains no run for this validation row, writing nothing (R252).
+
+    Returns `{"marker": ...}` when they prove it, or `{"reason": ...}` naming what they do not show. The proof is
+    never an empty run list alone. Exact reads first show that GitHub holds the row's workflow file and commit, so a
+    listing of that workflow on that commit is meaningful. Every row then needs a complete, empty list of the
+    workflow's runs on the commit, of any event at any time, and a row holding a run id (its stored run, or the
+    failed run a rerun reruns) also needs GitHub's exact 404 for that id. A stored id is never taken as proof that it
+    was the row's own run, whatever event it records: an earlier Pod recorded events without R115's commit and
+    workflow checks. A call that may still be in flight is never read as absent before its absence floor. Provider
+    errors propagate; the caller records nothing for them.
+    """
+    refusal = unretained_refusal(row)
+    if refusal is not None:
+        return {"reason": refusal}
+    provider = row["receipt"].get("provider") or {}
+    workflow = row["action"]["target"]
+    commit = provider.get("ref_commit") or row.get("commit")
+    from .github import presence_path
+    if presence_path("workflow", workflow) is None or presence_path("commit", str(commit)) is None:
+        return {"reason": "the row names no workflow file and full commit id to read"}
+    started = _stamp(row["receipt"].get("started_at"))
+    if started is None or now < absent_after(started):
+        return {"reason": "its call may still be in flight, so its run is not read as absent before "
+                + (absent_after(started).isoformat() if started else "its start is known")}
+    if row["action"]["kind"] == "validation_rerun":
+        # A rerun's attempts live in the failed run it reruns.
+        run_id = _rerun_source(row, journal)
+        if run_id is None:
+            return {"reason": "no failed run with a provider identity binds this rerun"}
+    else:
+        run_id = _bound_run_id(row)
+    reads = []
+    for kind, ident in (("workflow", workflow), ("commit", commit)):
+        read = port.presence(kind=kind, ident=ident)
+        reads.append(read)
+        if not read["present"]:
+            return {"reason": f"GitHub does not show {kind} {ident} (404), so a run list for it proves nothing"}
+    runs, listing = _history(port, workflow=workflow, commit=commit)
+    listing = {key: listing[key] for key in ("scope", "limit", "listed", "truncated")}
+    if run_id is not None:
+        read = port.presence(kind="run", ident=str(run_id))
+        reads.append(read)
+        if read["present"] or any(str(item.get("id")) == str(run_id) for item in runs):
+            return {"reason": f"GitHub still retains run {run_id}; governor-reconcile reads it back"}
+    if listing["listed"] or listing["truncated"]:
+        return {"reason": f"GitHub still lists {listing['listed']}{'+' if listing['truncated'] else ''} "
+                          f"{listing['scope']}; one may be this row's run, so governor-reconcile reads them back"}
+    return {"marker": {"settlement": UNRETAINED, "at": now.isoformat(), "workflow": workflow, "commit": commit,
+                       "run_id": None if run_id is None else str(run_id), "reads": reads, "listing": listing,
+                       "statement": UNRETAINED_STATEMENT}}
+
+
 def _carried_pull_request(port: GitHubPort, row: dict, branch: dict, base: str) -> tuple[dict | None, str, bool]:
     """The pull request of a carried row's branch whose head is the row's commit, what the read covered, and
     whether it was truncated: a truncated list settles nothing, as with runs (R115)."""
