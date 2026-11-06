@@ -86,6 +86,24 @@ a new snapshot decision cannot change it and keeps the row UNKNOWN with its evid
 only a row without either binding keeps the snapshot-decision next action, because an
 owner refresh changes the base it is checked against.
 
+### R234 — Settle an unexecuted merge decision superseded by a later same-PR merge
+
+Type: B,H · Scenarios: [A1039](#a1039), [A1040](#a1040), [A1041](#a1041), [A1042](#a1042), [A1043](#a1043), [A1044](#a1044), [A1045](#a1045)
+
+An earlier pending or UNKNOWN ALLOW merge decision settles as `superseded` when a later ALLOW merge PASS in the same objective journal proves the same PR merged at a different exact candidate head on the same admitted target. The earlier row has no recorded execution evidence and is not carried. Verify the later result under R93 with its recorded provider merge commit, using local Git only. Require the earlier admitted parent to precede the later admitted parent, the old head to be absent from the later admitted target, and a complete bounded first-parent walk from the result to the earlier admitted parent showing that the old head was neither a target commit nor a merge head. For a verified fast-forward, walk from the later admitted target rather than the candidate, whose first-parent ancestry is not a record of earlier target heads. An old head contained within the refreshed candidate alone does not show execution. Missing, conflicting or over-limit proof leaves the earlier row unsettled.
+
+Store `superseded_by: {record_id, merge_commit}` on the earlier row, naming the replacing decision and exact merged result. Preserve its admitted bindings and receipt evidence, provider fields and detail. The terminal outcome removes its pending/UNKNOWN closure hold without declaring that merge executed. Recording the newer merge PASS settles qualifying earlier rows; explicit `governor-outcome superseded` and `governor-reconcile` support recovery without provider readback or remote effect and repeat idempotently. Every other outcome's rules stay unchanged: an earlier head that actually merged still settles PASS, and uncertain execution, carried rows and other action kinds gain no new settlement route.
+
+Before a new merge decision for a different head of the same PR and target, an earlier non-carried pending or UNKNOWN ALLOW causes correctness DEFER `prior_merge_unsettled`, with a next action naming the exact earlier decision and the `pod internal governor-outcome --input FILE` request: CANCELED for pending with a never-executed detail, FAILED for UNKNOWN, subject to their existing checks while the PR is open. Carried rows retain their existing admission and readback rules. No new ALLOW is recorded until that settlement. Earlier histories containing both decisions retain the recovery path above.
+
+- <a id="a1039"></a>**A1039** — Synthetic earlier history: ALLOW A, refresh to B, ALLOW B, exact merge B and its PASS settle A as superseded with replacement decision and result; A remains an ancestor inside B, no provider readback occurs and delivery and closure proceed.
+- <a id="a1040"></a>**A1040** — A merge whose head is A still records A PASS under R93 and cannot become superseded.
+- <a id="a1041"></a>**A1041** — A new same-PR merge decision for B defers while A is pending, names settlement before replacement, and allows after A is validly canceled while the target lacks it.
+- <a id="a1042"></a>**A1042** — An earlier UNKNOWN A settles from newer verified same-PR merge B while preserving A's earlier receipt detail and evidence.
+- <a id="a1043"></a>**A1043** — Both explicit superseded outcome and reconcile recover an earlier qualifying row without a provider read; exact repeats leave journal bytes unchanged.
+- <a id="a1044"></a>**A1044** — Other PRs, missing later verified PASS, recorded execution evidence, carried rows, unverified merge results and old heads already merged or in target history cannot establish supersedence; failed requests leave the journal unchanged.
+- <a id="a1045"></a>**A1045** — Installed Governor guidance explains settlement before a refreshed merge decision and local recovery of an earlier superseded decision, without changing executed-merge settlement.
+
 ### R94 — Objective cleanup plan and consent
 
 Type: B,H · Scenarios: [A170](#a170), [A171](#a171), [A172](#a172), [A410](interface.md#a410), [A476](#a476), [A477](#a477), [A485](#a485), [A498](#a498), [A499](#a499), [A500](#a500), [A976](#a976), [A977](#a977)
