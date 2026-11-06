@@ -28,7 +28,7 @@ class UnknownDecisionViewsTests(MachineCase, unittest.TestCase):
     def public_views(self, reason):
         for command in ("config", "policy"):
             with self.subTest(command=command):
-                self.unavailable(execute(parser().parse_args([command, "--json"]), None), reason)
+                self.unavailable(execute(parser().parse_args([command, "--json"]), self.root), reason)
                 output = StringIO()
                 with redirect_stdout(output), patch("sys.stdin.isatty", return_value=False):
                     self.assertEqual(main([command]), 1 if command == "config" else 0)
@@ -81,7 +81,7 @@ class UnknownDecisionViewsTests(MachineCase, unittest.TestCase):
                 config.personal_path().unlink()
             for command in ("config", "policy"):
                 with self.subTest(missing=missing, command=command):
-                    view = execute(parser().parse_args([command, "--json"]), None)
+                    view = execute(parser().parse_args([command, "--json"]), self.root)
                     self.assertEqual(view["decision_policy"]["preset"], "careful")
                     self.assertEqual(view["waiting_decisions"]["total"], 0)
                     self.assertFalse(view["needs_you"])
@@ -93,7 +93,7 @@ class UnknownDecisionViewsTests(MachineCase, unittest.TestCase):
         raw = (Path(__file__).parent / "fixtures/pod-0.6.7/config-default.yaml").read_bytes()
         path.write_bytes(raw)
         for command in ("config", "policy"):
-            view = execute(parser().parse_args([command, "--json"]), None)
+            view = execute(parser().parse_args([command, "--json"]), self.root)
             self.assertEqual(view["decision_policy"]["preset"], "careful")
             self.assertFalse(view["needs_you"])
             self.assertIsNotNone(view["setup_question"])
@@ -103,7 +103,7 @@ class UnknownDecisionViewsTests(MachineCase, unittest.TestCase):
         path = config.personal_path()
         path.write_text("schema: broken-fixture-schema\n")
         with patch("sys.stdin.isatty", return_value=True), patch("builtins.input") as prompt:
-            view = execute(parser().parse_args(["policy"]), None)
+            view = execute(parser().parse_args(["policy"]), self.root)
         prompt.assert_not_called()
         self.unavailable(view, "invalid_config")
 

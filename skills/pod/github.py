@@ -20,6 +20,7 @@ import shutil
 import subprocess
 
 from .errors import PodError
+from .util import project_path
 from .gitio import OBJECT_ID as _GIT_ID, read_environment, worktree_inventory, worktree_rows
 
 MAX_OUTPUT = 2_000_000
@@ -270,6 +271,7 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
 
 
 def _local_git(project: Path, argv: list[str], *, timeout: int = 20) -> str:
+    project = project_path(project)
     from .orca import _DEADLINE
     allowed = (
         argv == ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]
@@ -349,7 +351,7 @@ def repository_context(project: Path, *, fresh: bool = False) -> dict:
     `fresh` always reads Git, for a check that binds identity right before an effect, and the
     call's later reads then agree with what that check saw.
     """
-    root = project.resolve()
+    root = project_path(project).resolve()
     reads = _IDENTITY.get()
     if reads is not None and not fresh and str(root) in reads:
         return deepcopy(reads[str(root)])
