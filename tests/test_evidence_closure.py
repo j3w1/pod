@@ -1657,7 +1657,10 @@ class SweepTests(ClosureCase):
         plan = run("cleanup-plan", {"project": project, "objective": "objective"})
         self.assertEqual((plan["closure_basis"], plan["record_class"]), ("evidence", "older"))
         self.assertTrue(plan["resources"])
-        self.assertEqual({row["class"] for row in plan["resources"]}, {"protected"})
+        # A recorded branch that no longer exists reads absent (pod#125); every existing resource stays protected.
+        self.assertEqual({row["class"] for row in plan["resources"] if row["class"] != "absent"}, {"protected"})
+        self.assertTrue(all(row["identity"]["current"]["status"] == "absent"
+                            for row in plan["resources"] if row["class"] == "absent"))
         self.assertTrue(all(row["delete_argv"] is None for row in plan["resources"]))
         self.assertIn("Older record closed by evidence, read through its documented fields only", plan["notes"][-1])
         worktree = next(row for row in plan["resources"] if row["kind"] == "worktree")
