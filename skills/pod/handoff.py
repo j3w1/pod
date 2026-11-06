@@ -6,6 +6,7 @@ from contextlib import ExitStack
 from copy import deepcopy
 import os
 import re
+import stat
 from pathlib import Path
 
 from .errors import PodError
@@ -122,6 +123,55 @@ def record_mentions(directory: Path, text: str, check=None, *, exact: bool = Fal
         return True
 
 
+_PROOF_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# Fixed Pod-authored reasons a closed peer's closure stays unproven; never record contents or exception text (pod#250).
+BINDING_UNAVAILABLE = "recorded repository binding unavailable"
+WORKTREE_MISSING = "recorded worktree missing"
+WORKTREE_UNREADABLE = "recorded worktree unreadable"
+CLOSED_MALFORMED = "closed record malformed"
+FORMAT_UNSUPPORTED = "record format unsupported"
+
+
+def _unproven_reason(exc: BaseException) -> str:
+    """The fixed reason one failed closure proof names; a PodError adds only its bounded code."""
+    if isinstance(exc, PodError):
+        code = exc.code if isinstance(exc.code, str) and _PROOF_CODE.fullmatch(exc.code) else "unknown"
+        return f"closure proof refused ({code})"
+    if isinstance(exc, OSError):
+        return WORKTREE_UNREADABLE
+    return CLOSED_MALFORMED
+
+
+class _Unproven(Exception):
+    """A closure proof that cannot run, carrying its fixed reason."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def shared_detail(scope: dict, *, limit: int | None = None) -> str:
+    """The run_shared detail both continuation paths word alike: open peers, then closed peers with an unproven
+    closure and each fixed reason; an empty group is left out (pod#250)."""
+    opened = scope.get("open") or []
+    unproven = scope.get("closure_unproven") or []
+    groups = []
+    if opened:
+        groups.append("open: " + ", ".join(opened[:limit]))
+    if unproven:
+        groups.append("closed with unproven closure: "
+                      + ", ".join(f"{row['objective']} ({row['reason']})" for row in unproven[:limit]))
+    if not groups:  # A scope from an earlier shape: the union alone.
+        groups.append(", ".join(scope["objectives"][:limit]))
+    return "; ".join(groups)
+
+
+def shared_fields(scope: dict, *, limit: int | None = None) -> dict:
+    """The run_shared result fields beside other_objectives: the same two groups, each capped alike."""
+    return {"open_objectives": list((scope.get("open") or [])[:limit]),
+            "unproven_closures": [dict(row) for row in (scope.get("closure_unproven") or [])[:limit]]}
+
+
 def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_closure: bool = True) -> dict:
     """Prove scope without the diagnostic reader's unsupported-record skip.
 
@@ -132,6 +182,8 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     scope. Without it, continuation and owner handoff still require the complete proof.
     Discovery also passes `prove_closure=False`: a closed peer that records the Run is then
     reported in `closure_unchecked` instead of proving its closure, which only execution does.
+    `objectives` is every blocking peer; `open` and `closure_unproven` split it into peers with no closure and closed
+    peers whose closure proof failed or cannot run, each with a fixed reason (pod#250).
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, closed_snapshot_context)
@@ -157,9 +209,10 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     root = state_root(project)
     check()
     if root.is_symlink():
-        return {"objectives": [], "unreadable": 1}
+        return {"objectives": [], "open": [], "closure_unproven": [], "unreadable": 1}
     own = objective_root(project, objective) / "context.json"
     others, unknown = [], 0
+    opened, closed = [], []
     unverifiable, unchecked = [], []
     # A complete frontier is part of the proof. scandir/stat propagate errors that
     # Path.glob suppresses; an unavailable directory is never apparent absence.
@@ -167,9 +220,9 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     try:
         directories = directory_entries(root)
     except FileNotFoundError:
-        return {"objectives": [], "unreadable": 1}
+        return {"objectives": [], "open": [], "closure_unproven": [], "unreadable": 1}
     except OSError:
-        return {"objectives": [], "unreadable": 1}
+        return {"objectives": [], "open": [], "closure_unproven": [], "unreadable": 1}
     for directory in directories:
         check()
         try:
@@ -215,6 +268,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
             if supported and closure is not None and not prove_closure:
                 name = checkpoint["objective"]
                 return "unchecked", name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective"
+            reason = None  # None: the peer records no closure, so it is open.
             if supported and closure is not None:
                 from .obligations import validate_closed_snapshot
                 try:
@@ -225,27 +279,37 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                     peer_project = Path(workspace["path"]) if workspace is not None else (
                         project if objective_root(project, checkpoint["objective"]) == path.parent else None)
                     if peer_project is None:
-                        raise PodError("closure_unverified", "Peer repository binding is unavailable")
+                        raise _Unproven(BINDING_UNAVAILABLE)
                     check()
-                    if not peer_project.is_dir():
-                        raise PodError("closure_unverified", "Peer worktree is unreadable")
+                    try:
+                        found = peer_project.stat()
+                    except FileNotFoundError:
+                        raise _Unproven(WORKTREE_MISSING) from None
+                    except OSError:
+                        raise _Unproven(WORKTREE_UNREADABLE) from None
+                    if not stat.S_ISDIR(found.st_mode):
+                        raise _Unproven(WORKTREE_UNREADABLE)
                     check()
                     validate_checkpoint_snapshot(peer_project, raw)
                     check()
                     ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
                     check()
                     unproven = validate_closed_snapshot(checkpoint, ctx)
+                except _Unproven as exc:
+                    reason = exc.reason
                 except (PodError, KeyError, TypeError, ValueError, OSError) as exc:
                     if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT:
                         raise
-                    pass
+                    reason = _unproven_reason(exc)
                 else:
                     if unproven:
                         name = checkpoint["objective"]
                         return "unverifiable", name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective"
                     return None
+            elif closure is not None:
+                reason = FORMAT_UNSUPPORTED  # A closure Pod cannot read in a format it does not support.
             name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
-            return "other", name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective"
+            return "other", (name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective"), reason
         if (not readable or not supported) and record_mentions(path.parent, run_id, check):
             # A record outside the documented reference layouts holds this Run only when its decoded record names
             # it, or cannot be decoded within bounds (R206).
@@ -277,15 +341,26 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
             continue
         if outcome is None:
             continue
-        kind, name = outcome
+        kind, name = outcome[:2]
         if kind == "mentions":
             unknown += record_mentions(path.parent, run_id, check)
         elif kind == "unknown":
             unknown += 1
+        elif kind == "other":
+            others.append(name)
+            if outcome[2] is None:
+                opened.append(name)
+            else:
+                closed.append((name, outcome[2]))
         else:
-            {"other": others, "unchecked": unchecked, "unverifiable": unverifiable}[kind].append(name)
+            {"unchecked": unchecked, "unverifiable": unverifiable}[kind].append(name)
     check()
-    result = {"objectives": sorted(set(others)), "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
+    reasons = {}
+    for name, reason in sorted(closed):
+        reasons.setdefault(name, reason)  # One row per peer name.
+    result = {"objectives": sorted(set(others)), "open": sorted(set(opened)),
+              "closure_unproven": [{"objective": name, "reason": reason} for name, reason in sorted(reasons.items())],
+              "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
     if changing:
         result["changing"] = changing
     if unchecked:
@@ -404,7 +479,8 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     scope = run_scope(project, objective, run_id)
     if scope["objectives"]:
         result["other_objectives"] = scope["objectives"]
-        return fail("run_shared", "Another open or unverified-closed objective records this Run: " + ", ".join(scope["objectives"]) + ".", definitive=True,
+        result.update(shared_fields(scope, limit=8))
+        return fail("run_shared", "Another open or unverified-closed objective records this Run: " + shared_detail(scope) + ".", definitive=True,
                     action="Resolve the shared objective scope before handoff; do not run orca orchestration run-use by hand.")
     if scope["unreadable"]:
         result["unreadable_objectives"] = scope["unreadable"]
