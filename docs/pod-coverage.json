@@ -12066,6 +12066,25 @@
       ],
       "offline_test": null,
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A913",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_whose_worktree_is_missing_names_that_reason",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_whose_proof_refuses_names_only_the_code",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_worktree_path_that_is_no_directory_is_unreadable",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_with_no_binding_outside_its_own_directory_is_unavailable",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_record_in_an_unsupported_format_says_so",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_an_open_peer_is_named_open",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_open_and_unproven_peers_are_named_apart",
+        "tests.test_handoff_scope.UnprovenReasonTests.test_reasons_never_carry_exception_text",
+        "tests.test_window_continuation.DiscoveryTests.test_run_shared_names_open_peers_and_unproven_closures_apart"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

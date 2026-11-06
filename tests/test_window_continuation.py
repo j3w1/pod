@@ -1026,6 +1026,42 @@ class DiscoveryTests(WindowCase):
             self.assertEqual(self.resume()["status"], "continued")
             self.assertEqual(stages[:3], ["checkpoint", "context", "closure"])
 
+    def test_run_shared_names_open_peers_and_unproven_closures_apart(self):
+        from pod.internal import run
+        from tests.test_owner_handoff import logical_fixture
+        self.establish(admissions=False)
+        self.closed_review_peer()
+        run("checkpoint", {"project": str(self.project), "objective": "open-peer", "owner": "owner",
+                           "value": self.core(obligations=[self.criterion()],
+                                              governance={"base_ref": "refs/remotes/origin/target"})})
+        peer = objective_root(self.project, "closure-peer") / "context.json"
+        raw = logical_fixture(peer)
+        raw["checkpoint"]["worktree"]["path"] = str(self.root / SENTINEL)  # Its recorded worktree is gone.
+        peer.write_text(json.dumps(raw))
+        self.lose()
+        detail = "open: open-peer; closed with unproven closure: closure-peer (recorded worktree missing)"
+        unproven = [{"objective": "closure-peer", "reason": "recorded worktree missing"}]
+        error = self.assert_lead_refusal("run_shared")
+        block = self.status()["window_continuation"]
+        self.assertIn(detail, str(error))
+        for verdict in (error.detail["window_continuation"], block):
+            # The refusal itself is unchanged: condition, definitive flag and the blocking union.
+            self.assertEqual((verdict["condition"], verdict["definitive"], verdict["other_objectives"]),
+                             ("run_shared", True, ["closure-peer", "open-peer"]))
+            self.assertEqual(verdict["message"], "another open or unverified-closed objective records this Run: "
+                                                 + detail + ".")
+            self.assertEqual((verdict["open_objectives"], verdict["unproven_closures"]), (["open-peer"], unproven))
+            self.assertEqual(verdict["next_action"], window.LEAD + window.NEXT["run_shared"] + ".")
+            self.assertIn("open or unverified-closed", verdict["next_action"])
+        text = self.status(text=True)
+        self.assertIn("Window continuation peers: " + detail, text)
+        self.assertNotIn(SENTINEL, text)
+        # The list proves no closure: the closed peer is not proved there, so only the open peer is named.
+        continuation = self.listed()
+        self.assertEqual(continuation["condition"], "run_shared")
+        self.assertIn("open: open-peer.", continuation["message"])
+        self.assertNotIn("closure-peer", continuation["message"])
+
     def test_spent_budget_prevents_each_objective_reread(self):
         from pod import ledger
         self.establish(admissions=False)
