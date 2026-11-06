@@ -2,6 +2,7 @@
 import json
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -240,8 +241,7 @@ class UnprovenClosureScopeTests(WindowCase):
         self.peers()
         path = self.rewrite(self.gone)
         shutil.move(str(path.parent), str(path.parent.with_name("moved-peer")))
-        self.scope(["closure-peer"], [], self.unproven(
-            "recorded worktree missing; record not where its recorded repository and objective place it"))
+        self.scope(["closure-peer"], [], self.unproven("record not where its recorded repository and objective place it"))
 
     def test_a_removed_worktree_peer_whose_settled_work_changed_is_unproven(self):
         self.peers()
@@ -327,29 +327,45 @@ class UnprovenClosureScopeTests(WindowCase):
         repository = logical_fixture(other)["checkpoint"]["worktree"]["repository"]
         self.scope(["objective"], [], self.unproven(reason, "objective", repository))
 
-    def test_a_peer_whose_repository_changes_between_passes_holds_as_changing(self):
+    def changed_between_reads(self, binding):
         """Delta review F3: the checkout chosen for the first read's repository key is never used once the reread
         binding names another; the peer holds as a record changing while read, with no native mutation."""
         from pod import history
-        self.peers()
         path = self.rewrite(self.gone)
         real, reads = history.load_context, []
 
-        def alternating(target, *args, **kwargs):
+        def second_pass(target, *args, **kwargs):
             raw = real(target, *args, **kwargs)
-            if Path(target) == path:
-                reads.append(1)
-                if len(reads) % 2 == 0:  # Every second read, as the scan's second pass, names another repository.
-                    raw = json.loads(json.dumps(raw))
-                    raw["checkpoint"]["worktree"].update(repo_key="f" * 64, repository=CONSUMER)
+            frame = sys._getframe(1)
+            while frame is not None and frame.f_code.co_name != "classify":
+                frame = frame.f_back
+            if Path(target) == path and frame is not None and frame.f_locals.get("substitute") is not None:
+                reads.append(1)  # The scan's second read of this peer now names another repository.
+                raw = json.loads(json.dumps(raw))
+                raw["checkpoint"]["worktree"].update(binding)
             return raw
-        with mock.patch("pod.history.load_context", side_effect=alternating):
+        with mock.patch("pod.history.load_context", side_effect=second_pass):
             scope = run_scope(self.project, "objective", "run")
             self.assertEqual((scope["objectives"], scope["closure_unproven"], scope.get("changing")), ([], [], 1))
             self.lose()
             calls = len(self.mutations)
             self.assert_lead_refusal("record_changed_during_read")
             self.assertEqual(len(self.mutations), calls)
+        self.assertTrue(reads)
+
+    def test_a_peer_whose_repository_changes_between_passes_holds_as_changing(self):
+        self.peers()
+        self.changed_between_reads({"repo_key": "f" * 64, "repository": CONSUMER})
+
+    def test_a_peer_rebound_to_an_existing_checkout_between_passes_holds_as_changing(self):
+        """The second read names another repository's existing checkout, so its path no longer reads missing."""
+        self.peers()
+        other = self.root / "other"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(self.project), str(other)], check=True)
+        git(other, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/target")
+        context = repository_context(other)
+        self.changed_between_reads({"repo_key": context["repo_key"], "repository": context["repository"],
+                                    "path": context["worktree"], "branch": context["branch"]})
 
     def test_a_closed_peer_whose_proof_refuses_names_only_the_code(self):
         self.peers()

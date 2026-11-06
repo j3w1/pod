@@ -136,6 +136,7 @@ MAX_CHECKOUTS = 8
 MISSING = object()  # No checkout of the peer's repository was found.
 NO_CHECKOUT = WORKTREE_MISSING + "; no other checkout of its recorded repository found"
 RECORD_UNBOUND = WORKTREE_MISSING + "; record not where its recorded repository and objective place it"
+RECORD_UNBOUND_BINDING = "record not where its recorded repository and objective place it"
 
 
 def _unproven_reason(exc: BaseException) -> str:
@@ -342,6 +343,19 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                         raise _Unproven(BINDING_UNAVAILABLE)
                     check()
                     gone = False
+                    if substitute is not None:
+                        # A deferred peer's reread joins the key its checkout was chosen for before anything else,
+                        # whether its path is still missing or now exists: a changed binding is being written, so it
+                        # holds and is retried, never proved (R206).
+                        place, chosen_for = substitute
+                        if workspace is None or workspace["repo_key"] != chosen_for:
+                            raise _BindingChanged()
+                    # The binding must place this record where it lies, so the proof reads the record's own journal
+                    # (pod#251).
+                    if workspace is not None and record_name(
+                            Path(workspace["path"]), {"repo_key": workspace["repo_key"]},
+                            checkpoint["objective"]) != path.parent.name:
+                        raise _Unproven(RECORD_UNBOUND_BINDING)
                     try:
                         found = peer_project.stat()
                     except FileNotFoundError:
@@ -353,11 +367,6 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                             name = checkpoint["objective"]
                             return ("gone", name if isinstance(name, str) and 0 < len(name) <= 256
                                     else "unnamed objective", repository, workspace["repo_key"])
-                        place, chosen_for = substitute
-                        if workspace["repo_key"] != chosen_for:
-                            # The binding changed since the checkout was chosen for it: the record is being written,
-                            # so it holds with that transient cause and is never proved in the earlier checkout.
-                            raise _BindingChanged()
                         if place is MISSING:
                             raise _Unproven(NO_CHECKOUT) from None
                         gone, peer_project = True, place
@@ -367,11 +376,8 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                         if not stat.S_ISDIR(found.st_mode):
                             raise _Unproven(WORKTREE_UNREADABLE)
                     try:
-                        # The fresh binding and the checkout must both place this record where it lies, so its own
-                        # journal is the one read.
-                        if gone and (record_name(Path(workspace["path"]), {"repo_key": workspace["repo_key"]},
-                                                 checkpoint["objective"]) != path.parent.name
-                                     or objective_root(peer_project, checkpoint["objective"]) != path.parent):
+                        # The checkout must place this record where it lies too.
+                        if gone and objective_root(peer_project, checkpoint["objective"]) != path.parent:
                             raise _Unproven(RECORD_UNBOUND)
                         check()
                         validate_checkpoint_snapshot(peer_project, raw)
