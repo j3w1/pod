@@ -152,6 +152,11 @@ def facts(result):
             {json.dumps(row, sort_keys=True) for row in result["unknowns"]})
 
 
+def unrelated(result):
+    """The result's complete `unrelated_unknowns` summary (count, codes, references, diagnostic), canonically."""
+    return json.dumps(result.get("unrelated_unknowns"), sort_keys=True)
+
+
 SHAPES = ("empty", "worktree only, main", "worktree only, feature", "worktree only, removed",
           "worktree only, other repository", "worktree only, foreign owed", "branch only, main", "branch only, feature",
           "branch only, worker", "both", "target only", "effects only")
@@ -201,6 +206,8 @@ class ProjectionTests(ScopeCase, GroupedTable):
             self.placed("placed-other-key", root / "placed-other-key", "main", OTHER_KEY),
             self.placed("owed-detached", root / "owed-detached", "worker", self.key, owed=True),
             self.placed("foreign-owed", root / "foreign-owed", "worker", self.key, owed=True, foreign=True),
+            # Another repository's owed admission under its own key: the projection never claims it (`held_here`).
+            self.placed("foreign-other-key", root / "foreign-other-key", "main", OTHER_KEY, owed=True, foreign=True),
             stuck(self, "other-repo", path=root / "other", run="own-run"),
             stuck(self, "other-repo-other-run", path=root / "other" / "w", run="other-run"),
             stuck(self, "removed-other-run", path=root / "removed-2", run="other-run"),
@@ -217,8 +224,11 @@ class ProjectionTests(ScopeCase, GroupedTable):
         # query, and an unknown branch holds it; a located row holds only the worktree-only query that overlaps it. A
         # row whose placement this repository's record binds has a complete location: S judges it exactly, so it is
         # asked about only on its recorded branch and never for a target-only or effects-only request.
+        # Outside the repository on another repository's Run, with no hold this repository's projection can take:
+        # never a candidate, the empty request's included (pod#308).
+        foreign = {"other-repo-other-run", "removed-other-run", "foreign-other-key"}
         return {
-            "empty": ({}, every, None),
+            "empty": ({}, every - foreign, (every - foreign - {"foreign-owed", "old-dispatch"}, foreign)),
             "worktree only, main": ({"worktree": project}, {"main", "main-nested"} | self.ALWAYS, None),
             "worktree only, feature": ({"worktree": str(root / "feature")}, {"feature"} | self.ALWAYS, None),
             "worktree only, removed": ({"worktree": str(root / "removed")}, {"removed"} | self.ALWAYS,
@@ -228,7 +238,7 @@ class ProjectionTests(ScopeCase, GroupedTable):
             # Another repository's owed admission placed it here: counting it would expose that hold.
             "worktree only, foreign owed": ({"worktree": str(root / "foreign-owed")}, {"foreign-owed"} | self.ALWAYS,
                                             None),
-            "branch only, main": ({"branch": "main"}, {"main", "main-nested"} | placed["main"] | wider,
+            "branch only, main": ({"branch": "main"}, {"main", "main-nested", "foreign-other-key"} | placed["main"] | wider,
                                   ({"placed-main", "removed", "other-repo"},
                                    {"placed-feature", "placed-other-key", "feature", "detached"})),
             "branch only, feature": ({"branch": "feature"}, {"feature"} | placed["feature"] | wider,
@@ -258,6 +268,12 @@ class ProjectionTests(ScopeCase, GroupedTable):
             if holds is not None:
                 self.assertLessEqual(holds[0], held(seen))
                 self.assertFalse(holds[1] & held(seen), held(seen))
+            if not request:
+                # pod#308: counting every row in scope, as 0.21.53 asked about for the empty request, gives this
+                # request's result exactly; only the disclosure of the rows asked about differs.
+                self.assertEqual(facts(everything), facts(counted))
+                self.assertEqual(unrelated(everything), unrelated(counted))
+                self.assertEqual((everything["complete"], everything["status"]), (counted["complete"], counted["status"]))
 
     def test_the_empty_and_registered_worktree_requests(self): self.rows()
     def test_the_unregistered_worktree_requests(self): self.rows()
@@ -268,6 +284,16 @@ class ProjectionTests(ScopeCase, GroupedTable):
 class ProjectionTableTests(unittest.TestCase):
     def test_the_projection_table_runs_every_shape_once(self):
         assert_grouped_table(self, ProjectionTests, SHAPES, limit=3)
+
+    def test_the_unrelated_comparison_reads_every_value(self):
+        """pod#308 review R1: a changed count, code summary or reference makes the empty request's equality fail."""
+        same = {"count": 2, "by_code": {"native_liveness_unverified": 2}, "references": {"dispatches": ["a", "b"]},
+                "diagnostic": None}
+        self.assertEqual(unrelated({"unrelated_unknowns": same}), unrelated({"unrelated_unknowns": dict(same)}))
+        for changed in ({"count": 3}, {"by_code": {"native_liveness_unverified": 1, "record_changed": 1}},
+                        {"references": {"dispatches": ["a"]}}):
+            self.assertNotEqual(unrelated({"unrelated_unknowns": same}),
+                                unrelated({"unrelated_unknowns": {**same, **changed}}))
 
 
 class Memo:
@@ -372,6 +398,9 @@ class FactTests(unittest.TestCase):
                     label = f"{role} owed at {location} on {branch}"
                     rows.append(("this repository's " + label, {"row": [hold[0]]}, (), False))
                     rows.append(("foreign " + label, {}, ((None, None, hold),), False))
+                    if branch == "main":  # the same hold under another repository's key, or with none recorded
+                        for other in (OTHER_KEY, None):
+                            rows.append((f"foreign {label} under {other}", {}, ((None, None, (hold[0], other)),), False))
         return rows
 
     def held(self, slot, path, run, places, situation):
@@ -394,7 +423,8 @@ class FactTests(unittest.TestCase):
         if path and registered is None and unreadable and fault:  # the placement lookup's unknown
             return True
         return (any(relevant(hold) for hold in owed.get("row", ()))  # what counting it exposes
-                or any(isinstance(outcome, PodError) and fault or isinstance(outcome, tuple) and relevant(outcome[0])
+                or any(isinstance(outcome, PodError) and fault
+                       or isinstance(outcome, tuple) and relevant(outcome[0]) and outcome[1] in (None, key)
                        for _, _, outcome in owners))
 
     def enumerate(self, selected):

@@ -1385,14 +1385,18 @@ def _host_exit_native(slot: _HostExitSlot, shown: dict, places) -> bool:
     claim and process-liveness unknown carry exactly this location (pod#243). Any other such row keeps the
     conservative answer, since a record read later may still give it a branch."""
     request = slot.request
-    if not any(request.values()) or shown["dispatch"] in slot.gaps:
+    if shown["dispatch"] in slot.gaps:
         return True
     path = shown["worktree"]
     if path is None:
         return True  # Unlocated: `_relevant` keeps it for every request.
     registered, inside = _workspace(slot.project, path, places)
     if not inside and shown["run"] not in slot.own_runs:
-        return False  # The projection makes no claim and no process-liveness unknown for it.
+        # The projection makes no claim and no process-liveness unknown for it, the empty request's included
+        # (pod#308): only the record clauses can keep it.
+        return False
+    if not any(request.values()):
+        return True
     if request["worktree"] and not request["branch"]:
         return _overlap(request["worktree"], path)
     if registered is None:
@@ -1431,6 +1435,7 @@ def _host_exit_recorded(slot: _HostExitSlot, shown: dict) -> bool:
     placement that admission recorded; or such an owner record that cannot be read, judged as the projection's unknown
     for it. Anything that cannot be judged keeps the row."""
     request, key = slot.request, slot.scope["repo_key"]
+    empty = not any(request.values())
     try:
         if any(_relevant(held, request, key, _overlap) for held in slot.owed.get(shown["dispatch"], ())):
             return True  # this repository's records, which the query's own change recheck already covers
@@ -1440,9 +1445,13 @@ def _host_exit_recorded(slot: _HostExitSlot, shown: dict) -> bool:
             if generation is not None:
                 slot.dependencies.setdefault(directory.name, (directory, generation))
         for _, _, outcome in owners:
-            if (isinstance(outcome, PodError) and _host_exit_placement_relevant(slot, shown["worktree"])
-                    or isinstance(outcome, tuple) and _relevant(outcome[0], request, key, _overlap)):
+            if isinstance(outcome, PodError) and _host_exit_placement_relevant(slot, shown["worktree"]):
                 return True
+            if isinstance(outcome, tuple) and _relevant(outcome[0], request, key, _overlap):
+                # The empty request admits every hold, so a recorded repository key decides it as `held_here` does:
+                # the projection never claims another repository's owed placement (pod#308).
+                if not empty or outcome[1] is None or outcome[1] == key:
+                    return True
         return False
     except (PodError, OSError, ValueError, TypeError, KeyError, AttributeError):
         return True
