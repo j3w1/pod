@@ -1,10 +1,15 @@
 """Records outside the documented layouts hold handoff scope only when they could name the Run (R206)."""
 import json
+import shutil
 import unittest
 
+from pod.errors import PodError
+from pod.handoff import _unproven_reason, run_scope
+from pod.internal import run
 from pod.ledger import objective_root
 from tests.common import GroupedTable, assert_grouped_table
-from tests.test_owner_handoff import HandoffCase
+from tests.test_owner_handoff import HandoffCase, SENTINEL, logical_fixture
+from tests.test_window_continuation import WindowCase
 
 
 def older_record(**checkpoint):
@@ -84,6 +89,108 @@ class OlderSchemaScopeTests(GroupedTable):
 class OlderSchemaScopeShapeTests(unittest.TestCase):
     def test_the_scope_table_runs_every_row_once(self):
         assert_grouped_table(self, OlderSchemaScopeTests, list(CASES), limit=3)
+
+
+class UnprovenClosureScopeTests(WindowCase):
+    """A closed peer whose closure proof fails still blocks, named apart from open peers with a fixed reason (pod#250)."""
+
+    PREFIX = "Another open or unverified-closed objective records this Run: "
+
+    def peers(self, *, closed=True, opened=False):
+        """Real peer records written through the checkpoint boundary, before the coordinator is lost."""
+        self.establish(admissions=False)
+        if closed:
+            self.closed_review_peer()
+        if opened:
+            run("checkpoint", {"project": str(self.project), "objective": "open-peer", "owner": "owner",
+                               "value": self.core(obligations=[self.criterion()],
+                                                  governance={"base_ref": "refs/remotes/origin/target"})})
+
+    def rewrite(self, change, objective="closure-peer"):
+        path = objective_root(self.project, objective) / "context.json"
+        raw = logical_fixture(path)
+        change(raw)
+        path.write_text(json.dumps(raw))
+        return path
+
+    def scope(self, objectives, opened, unproven):
+        scope = run_scope(self.project, "objective", "run")
+        self.assertEqual(scope["objectives"], objectives)  # The blocking union is exactly as before.
+        self.assertEqual((scope["open"], scope["closure_unproven"]), (opened, unproven))
+        self.assertNotIn(SENTINEL, json.dumps(scope))
+        return scope
+
+    def refusal(self, detail, *, objectives, opened, unproven):
+        self.lose()
+        verdict = self.status()["owner_handoff"]
+        self.assertEqual((verdict["condition"], verdict["definitive"], verdict["other_objectives"]),
+                         ("run_shared", True, objectives))
+        self.assertEqual(verdict["next_action"], "Resolve the shared objective scope before handoff; "
+                                                 "do not run orca orchestration run-use by hand.")
+        self.assertEqual(verdict["message"], self.PREFIX + detail + ".")
+        self.assertEqual((verdict["open_objectives"], verdict["unproven_closures"]), (opened, unproven))
+        self.assertNotIn(SENTINEL, json.dumps(verdict))
+        return verdict
+
+    def test_a_closed_peer_whose_worktree_is_missing_names_that_reason(self):
+        self.peers()
+        removed = self.root / SENTINEL
+        self.rewrite(lambda raw: raw["checkpoint"]["worktree"].update(path=str(removed)))
+        unproven = [{"objective": "closure-peer", "reason": "recorded worktree missing"}]
+        self.scope(["closure-peer"], [], unproven)
+        self.refusal("closed with unproven closure: closure-peer (recorded worktree missing)",
+                     objectives=["closure-peer"], opened=[], unproven=unproven)
+
+    def test_a_closed_peer_whose_proof_refuses_names_only_the_code(self):
+        self.peers()
+        self.rewrite(lambda raw: raw["checkpoint"]["closure"]["report"].update(status=SENTINEL))
+        scope = self.scope(["closure-peer"], [], [{"objective": "closure-peer",
+                                                   "reason": "closure proof refused (obligation_invalid)"}])
+        self.assertRegex(scope["closure_unproven"][0]["reason"], r"^closure proof refused \([a-z][a-z0-9_]*\)$")
+
+    def test_a_worktree_path_that_is_no_directory_is_unreadable(self):
+        self.peers()
+        self.rewrite(lambda raw: raw["checkpoint"]["worktree"].update(path=str(self.project / "README.md")))
+        self.scope(["closure-peer"], [], [{"objective": "closure-peer", "reason": "recorded worktree unreadable"}])
+
+    def test_a_closed_peer_with_no_binding_outside_its_own_directory_is_unavailable(self):
+        self.peers()
+        path = self.rewrite(lambda raw: raw["checkpoint"].pop("worktree"))
+        shutil.move(str(path.parent), str(path.parent.with_name("moved-peer")))
+        self.scope(["closure-peer"], [], [{"objective": "closure-peer",
+                                           "reason": "recorded repository binding unavailable"}])
+
+    def test_a_closed_record_in_an_unsupported_format_says_so(self):
+        self.peers()
+        self.rewrite(lambda raw: raw.update(schema="unknown-future-context"))
+        self.scope(["closure-peer"], [], [{"objective": "closure-peer", "reason": "record format unsupported"}])
+
+    def test_an_open_peer_is_named_open(self):
+        self.peers(closed=False, opened=True)
+        self.scope(["open-peer"], ["open-peer"], [])
+        self.refusal("open: open-peer", objectives=["open-peer"], opened=["open-peer"], unproven=[])
+
+    def test_open_and_unproven_peers_are_named_apart(self):
+        self.peers(opened=True)
+        self.rewrite(lambda raw: raw["checkpoint"]["worktree"].update(path=str(self.root / "removed")))
+        unproven = [{"objective": "closure-peer", "reason": "recorded worktree missing"}]
+        self.scope(["closure-peer", "open-peer"], ["open-peer"], unproven)
+        detail = "open: open-peer; closed with unproven closure: closure-peer (recorded worktree missing)"
+        self.refusal(detail, objectives=["closure-peer", "open-peer"], opened=["open-peer"], unproven=unproven)
+        self.assertIn("Owner handoff: run_shared; " + self.PREFIX + detail + ".", self.status(text=True))
+
+
+class UnprovenReasonTests(unittest.TestCase):
+    def test_reasons_never_carry_exception_text(self):
+        for error, reason in ((PodError("history_missing", SENTINEL), "closure proof refused (history_missing)"),
+                              (PodError(SENTINEL, SENTINEL), "closure proof refused (unknown)"),
+                              (PodError("x" * 65, SENTINEL), "closure proof refused (unknown)"),
+                              (OSError(SENTINEL), "recorded worktree unreadable"),
+                              (KeyError(SENTINEL), "closed record malformed"),
+                              (TypeError(SENTINEL), "closed record malformed"),
+                              (ValueError(SENTINEL), "closed record malformed")):
+            with self.subTest(error=type(error).__name__):
+                self.assertEqual(_unproven_reason(error), reason)
 
 
 if __name__ == "__main__":
