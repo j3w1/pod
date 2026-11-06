@@ -152,6 +152,11 @@ def facts(result):
             {json.dumps(row, sort_keys=True) for row in result["unknowns"]})
 
 
+def unrelated(result):
+    """The result's complete `unrelated_unknowns` summary (count, codes, references, diagnostic), canonically."""
+    return json.dumps(result.get("unrelated_unknowns"), sort_keys=True)
+
+
 SHAPES = ("empty", "worktree only, main", "worktree only, feature", "worktree only, removed",
           "worktree only, other repository", "worktree only, foreign owed", "branch only, main", "branch only, feature",
           "branch only, worker", "both", "target only", "effects only")
@@ -266,8 +271,6 @@ class ProjectionTests(ScopeCase, GroupedTable):
             if not request:
                 # pod#308: counting every row in scope, as 0.21.53 asked about for the empty request, gives this
                 # request's result exactly; only the disclosure of the rows asked about differs.
-                unrelated = lambda result: sorted(json.dumps(row, sort_keys=True)
-                                                  for row in result.get("unrelated_unknowns", []))
                 self.assertEqual(facts(everything), facts(counted))
                 self.assertEqual(unrelated(everything), unrelated(counted))
                 self.assertEqual((everything["complete"], everything["status"]), (counted["complete"], counted["status"]))
@@ -281,6 +284,16 @@ class ProjectionTests(ScopeCase, GroupedTable):
 class ProjectionTableTests(unittest.TestCase):
     def test_the_projection_table_runs_every_shape_once(self):
         assert_grouped_table(self, ProjectionTests, SHAPES, limit=3)
+
+    def test_the_unrelated_comparison_reads_every_value(self):
+        """pod#308 review R1: a changed count, code summary or reference makes the empty request's equality fail."""
+        same = {"count": 2, "by_code": {"native_liveness_unverified": 2}, "references": {"dispatches": ["a", "b"]},
+                "diagnostic": None}
+        self.assertEqual(unrelated({"unrelated_unknowns": same}), unrelated({"unrelated_unknowns": dict(same)}))
+        for changed in ({"count": 3}, {"by_code": {"native_liveness_unverified": 1, "record_changed": 1}},
+                        {"references": {"dispatches": ["a"]}}):
+            self.assertNotEqual(unrelated({"unrelated_unknowns": same}),
+                                unrelated({"unrelated_unknowns": {**same, **changed}}))
 
 
 class Memo:
