@@ -12098,6 +12098,18 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1143",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_scope.ProjectionTests.test_the_empty_and_registered_worktree_requests",
+        "tests.test_admission_host_exit_scope.FactTests.test_every_hold_is_kept_for_the_other_requests"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A899",
       "required_evidence": [
         "unit",
