@@ -536,7 +536,8 @@ def main(argv: list[str] | None = None) -> int:
     if workspace and sys.stdin.isatty() and sys.stdout.isatty():
         from .tui import run as run_tui
         try:
-            return run_tui(Path.cwd())
+            from .util import project_path
+            return run_tui(project_path(Path.cwd()))
         except PodError as exc:
             print(f"pod: {exc.code}: {exc}", file=sys.stderr)
             return 1

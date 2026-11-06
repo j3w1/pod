@@ -1,7 +1,7 @@
 """Project input validation precedes Git, native reads and command dispatch."""
 
 from argparse import Namespace
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
@@ -114,3 +114,19 @@ class ProjectPathTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())['error']['code'], 'project_path_invalid')
         self.assertNotIn('private-name', output.getvalue())
         process.assert_not_called()
+
+    def test_interactive_main_checks_before_workspace_reads(self):
+        for argv in ([], ['models']):
+            errors = StringIO()
+            with self.subTest(argv=argv), \
+                    patch.object(Path, 'cwd', return_value=Path('private-name')), \
+                    patch('sys.stdin.isatty', return_value=True), \
+                    patch('sys.stdout.isatty', return_value=True), \
+                    patch('pod.tui.run') as workspace, \
+                    patch('subprocess.run') as process, redirect_stderr(errors):
+                self.assertEqual(cli_main(argv), 1)
+            self.assertIn('project_path_invalid', errors.getvalue())
+            self.assertIn('pass the absolute worktree path', errors.getvalue())
+            self.assertNotIn('private-name', errors.getvalue())
+            workspace.assert_not_called()
+            process.assert_not_called()
