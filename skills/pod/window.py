@@ -21,7 +21,7 @@ import subprocess
 from threading import Lock, Thread
 
 from .errors import PodError
-from .orca import DEADLINE_SPENT
+from .orca import DEADLINE_SPENT, FULL_JSON
 from .util import digest
 
 ACTION = "orca_window"
@@ -747,7 +747,7 @@ def continue_objective(project: Path, objective: str, *, owner: str, port) -> di
         if verdict["branch"] in ("fresh", "replace"):
             failed = None
             try:
-                receipt = mutate_command(["orchestration", "run-use", "--id", facts["run"], "--json"], accept_exit=(0, 1))
+                receipt = mutate_command(["orchestration", "run-use", "--id", facts["run"], *FULL_JSON], accept_exit=(0, 1))
                 if receipt.get("error") or receipt.get("exit") != 0:
                     failed = "run-use refused"
             except PodError:

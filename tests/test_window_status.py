@@ -41,7 +41,7 @@ class ReservedSuccessorStatusTests(WindowCase, SuccessionCase):
             return native(argv, **kwargs)
 
         def move(argv, **kwargs):
-            self.assertEqual(argv, ["orchestration", "run-use", "--id", "run-s", "--json"])
+            self.assertEqual(argv, ["orchestration", "run-use", "--id", "run-s", "--json", "--full"])
             self.current.update(coordinator_handle="third", consumer_generation=2)
             return {"runtime": self.port.runtime, "exit": 0, "error": None, "result": {}}
 

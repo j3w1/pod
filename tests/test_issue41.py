@@ -452,7 +452,7 @@ class DiagnosticsBoundaryTests(ProductionCase):
             payload=json.dumps({"ok":False,"error":{"code":code,"message":"PRIVATE-NATIVE-MESSAGE"}})
             proc=subprocess.CompletedProcess([],1,payload,"")
             with patch("pod.orca.executable",return_value=Path("/test/orca")),patch("subprocess.run",return_value=proc),self.assertRaises(PodError) as caught:
-                real(["orchestration","run-current","--json"])
+                real(["orchestration","run-current","--json", "--full"])
             self.assertEqual(caught.exception.code,"orca_read_failed")
             expected=code if isinstance(code,str) and code in ("no_active_sender_terminal","a"*64) else None
             self.assertEqual((caught.exception.detail or {}).get("native_code"),expected)
@@ -463,7 +463,7 @@ class DiagnosticsBoundaryTests(ProductionCase):
                         json.dumps({"error":{"code":"no_active_sender_terminal"}})+" "*MAX_OUTPUT):
             proc=subprocess.CompletedProcess([],1,payload,"")
             with patch("pod.orca.executable",return_value=Path("/test/orca")),patch("subprocess.run",return_value=proc),self.assertRaises(PodError) as caught:
-                real(["orchestration","run-current","--json"])
+                real(["orchestration","run-current","--json", "--full"])
             self.assertEqual(caught.exception.code,"orca_read_failed")
             self.assertNotIn("native_code",caught.exception.detail or {})
 

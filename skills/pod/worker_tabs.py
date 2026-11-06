@@ -36,12 +36,12 @@ def rename(title_value: str, handle: str | None, *, started: bool = True) -> dic
 
 
 def read_command(dispatch: str) -> list[str]:
-    return ["orca", "orchestration", "worker-show", "--dispatch", dispatch, "--json"]
+    return ["orca", "orchestration", "worker-show", "--dispatch", dispatch, "--json", "--full"]
 
 
 def keep_open_command(dispatch: str) -> list[str]:
     """R214: Orca's own keep-open step, relayed for the coordinator; Pod runs no lifecycle operation."""
-    return ["orca", "orchestration", "worker-keep-open", "--dispatch", dispatch, "--json"]
+    return ["orca", "orchestration", "worker-keep-open", "--dispatch", dispatch, "--json", "--full"]
 
 
 def _keep(state: dict, objective: str, dispatch: str, handle: str) -> dict | None:

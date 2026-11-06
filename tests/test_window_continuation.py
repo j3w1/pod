@@ -185,7 +185,7 @@ class ContinuationTests(WindowCase):
         self.assertEqual(after["checkpoint"]["continuity"]["binding"], {"run": "run", "coordinator": "next", "generation": 2})
         self.assert_only_continuation_changes(before, after, owner="next")
         self.assertEqual((context_decisions(after), map_decisions(after["checkpoint"])), decisions)
-        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json"]])
+        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json", "--full"]])
         self.assertEqual(self.host_requests[0]["orca_window"], {"old_runtime": OLD, "current_runtime": NEW,
                                                                "coordinator": "owner"})
         self.assertEqual(self.host_requests[0]["reference"], "orca-runtime:" + OLD)
@@ -423,7 +423,7 @@ class ContinuationTests(WindowCase):
         entry = self.resume()["window_continuation"]
         self.assertEqual((entry["state"], entry["at"], entry["to_owner"]), ("done", pending["at"], "next"))
         self.assertEqual(len(self.rows()), 1)
-        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json"]])
+        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json", "--full"]])
 
     def test_a_window_with_two_runtime_changes_continues_from_the_first_stop(self):
         self.establish()

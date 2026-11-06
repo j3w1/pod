@@ -18,7 +18,7 @@ from .errors import PodError
 from . import gitio, history, listing, process_exit
 from .github import repository_context
 from .ledger import binding_valid, record_name, state_root
-from .orca import DEADLINE_SPENT, WORKER_TERMINAL_STATES as TERMINAL_STATES, _read, _passable, complete_list, read_deadline
+from .orca import DEADLINE_SPENT, FULL_JSON, WORKER_TERMINAL_STATES as TERMINAL_STATES, _read, _passable, complete_list, read_deadline
 from .util import digest as _digest, public_decisions
 from .window import Budget
 
@@ -27,7 +27,7 @@ MAX_CLAIM_BYTES = 8 * 1024 * 1024
 MAX_ORCA_READS = 8  # Orca CLI subprocesses one call runs at once.
 POOL_WORKERS = 12
 GIT_WORKERS = 4  # Foreign worktree identity reads started from inventory rows, in their own pool.
-WORKER_LIST = ["orchestration", "worker-list", "--include-remote", "--json"]
+WORKER_LIST = ["orchestration", "worker-list", "--include-remote", *FULL_JSON]
 # The single query's input faults; a batch names the query that raised one.
 INPUT_FAULTS = ("admission_candidate", "admission_target", "admission_timeout", "admission_scope_unavailable",
                 "repository_identity_unavailable", "git_unavailable")
@@ -811,7 +811,7 @@ def _native_claim(source: dict, runtime: str):
         from .abandoned import current_claim, is_abandoned
     except ImportError:
         raise PodError("native_claim_reader_unavailable", "The shared current-claim reader is not installed") from None
-    response = _gated_read(["orchestration", "worker-show", "--dispatch", source["dispatchId"], "--json"])
+    response = _gated_read(["orchestration", "worker-show", "--dispatch", source["dispatchId"], *FULL_JSON])
     result = response.get("result") or {}
     dispatch, worker, projection = (result.get(name) or {} for name in ("dispatch", "worker", "projection"))
     if (not all(isinstance(row, dict) for row in (dispatch, worker, projection))
@@ -929,7 +929,7 @@ def _run_coordinators(runtime: str, check=None) -> dict | None:
     while True:
         if check is not None:
             check()
-        response = _gated_read(["orchestration", "run-list", "--limit", "100", "--json",
+        response = _gated_read(["orchestration", "run-list", "--limit", "100", *FULL_JSON,
                                 *(["--cursor", cursor] if cursor else [])])
         result = response.get("result") if isinstance(response, dict) else None
         if (not isinstance(result, dict) or response.get("runtime") != runtime
@@ -2041,7 +2041,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             repair = {"command": ["orca", "terminal", "list", "--json"],
                       "condition": "Establish complete, well-formed current native terminal ownership"}
         elif record is None and code.startswith("orca_"):
-            repair = {"command": ["orca", "orchestration", "worker-list", "--include-remote", "--limit", "100", "--json"],
+            repair = {"command": ["orca", "orchestration", "worker-list", "--include-remote", "--limit", "100", *FULL_JSON],
                       "condition": "Reconcile the failed native inventory fact; incomplete coverage never proves absence"}
         elif record is None and code == "discovery_budget":
             repair = {"action": "inspect_read_budget", "condition": "Identify and reconcile the source read that exhausted CE's deadline before retrying"}
@@ -2532,7 +2532,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         "dispatch": shown["dispatch"], "scope": {"run": run, "worktree": path},
                         "relevance": "settled_dispatch_gone_resources",
                         "reconciliation": {"command": ["orca", "orchestration", "worker-show", "--dispatch",
-                                                       shown["dispatch"], "--json"],
+                                                       shown["dispatch"], *FULL_JSON],
                                            "condition": "Settled with its terminal, workspace and Run coordinator gone; "
                                                         "it holds no current resource"}})
                     continue
@@ -2599,7 +2599,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             if native_effects and effects:
                                 unknown(None, "native_effect_identity_unknown", dispatch=shown["dispatch"],
                                         fact_scope={"effects": None}, fact="native_effect_identity",
-                                        reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
+                                        reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], *FULL_JSON],
                                                         "condition": "Reconcile the W1-reported pending native effects and their targets"})
                             if native_effects and target:
                                 from .abandoned import _effect_conflicts
@@ -2609,7 +2609,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                                                      {"repo_key": context["repo_key"], "branch": target_branch}):
                                     unknown(None, "native_effect_target_unknown", dispatch=shown["dispatch"],
                                         fact="native_effect_target", fact_scope={"repo_key": context["repo_key"], "target": target},
-                                        reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
+                                        reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], *FULL_JSON],
                                                        "condition": "Reconcile the shared-reader native effect that may update this target"})
                     except PodError as exc:
                         unknown(None, exc.code, dispatch=shown["dispatch"],
@@ -2621,7 +2621,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                         run_repo_keys = run_repositories.get(run, set())  # Never rebinds the owners dict.
                         unknown(None, "native_location_unavailable", dispatch=shown["dispatch"],
                                 fact_scope={"repo_keys": sorted(key for key in run_repo_keys if key), "run": run},
-                                reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
+                                reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], *FULL_JSON],
                                                 "condition": "Resolve the native resource's repository and worktree ownership"})
                     # No claim here, live or not, but another repository's owed admission may have placed it here:
                     # its owners are still read, so the record holds that placement (pod#237).
@@ -2652,7 +2652,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             **({"host_exit": {"code": host_decision["code"]}} if host_decision is not None else {}),
                             fact="process_liveness", fact_scope={"repo_key": actor_repo, "worktree": path, "branch": branch_fact,
                                 "locations_complete": bool(path) and branch_known},
-                            reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], "--json"],
+                            reconciliation={"command": ["orca", "orchestration", "worker-show", "--dispatch", shown["dispatch"], *FULL_JSON],
                                             "condition": "Read authoritative process liveness; resource release alone is not process exit"})
             checked_runs = [requested_run] if requested_run else list(runs)
             for run in checked_runs:

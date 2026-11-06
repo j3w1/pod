@@ -628,15 +628,15 @@ class RetryAdapterTests(unittest.TestCase):
                             '--effort', 'medium', '--retry-of', 'parent']
                 if request:
                     expected += ['--retry-request', request]
-                self.assertEqual(runner.call_args.args[0], expected + ['--json'])
+                self.assertEqual(runner.call_args.args[0], expected + ['--json', '--full'])
                 self.assertEqual(result['retryOfDispatchId'], 'parent')
 
     def test_retry_adapter_rejects_terminal_escape_invalid_parent_and_duplicate_flags(self):
         base = ['orchestration', 'worker-start', '--task', 'task', '--run', 'run', '--worktree', 'current']
-        invalid = [base + ['--terminal', 'term', '--retry-of', 'parent', '--json'],
-                   base + ['--agent', 'codex', '--model', 'model', '--retry-of', 'parent', '--retry-of', 'parent', '--json']]
+        invalid = [base + ['--terminal', 'term', '--retry-of', 'parent', '--json', '--full'],
+                   base + ['--agent', 'codex', '--model', 'model', '--retry-of', 'parent', '--retry-of', 'parent', '--json', '--full']]
         for value in ('-bad', 'x\x00y', 'x\ud800', ''):
-            invalid.append(base + ['--agent', 'codex', '--model', 'model', '--retry-of', value, '--json'])
+            invalid.append(base + ['--agent', 'codex', '--model', 'model', '--retry-of', value, '--json', '--full'])
         with patch('pod.orca.subprocess.run') as runner:
             for argv in invalid:
                 with self.subTest(argv=ascii(argv)), self.assertRaises(PodError) as caught:

@@ -15,7 +15,7 @@ from .ledger import (admission_identity, binding_valid, bound_assignments as _bo
                      objective_root, read, reserve,
                      update_admission, retry_parent, _lock, _path, _read, _write, _native_assignment_settled,
                      _native_assignment_claim_free)
-from .orca import (MAX_OUTPUT, PREFLIGHT_REFUSALS, _passable, contract, current_run, mutate_command, read_command,
+from .orca import (FULL_JSON, MAX_OUTPUT, PREFLIGHT_REFUSALS, _passable, contract, current_run, mutate_command, read_command,
                    worker_rows, worker_show, worktree_identity, worktree_selector)
 from .util import atomic_json, bounded_json, bounded_text, digest
 
@@ -407,14 +407,14 @@ class OrcaPort:
         if retry_request is not None:
             _valid_request_uuid(retry_request)
             argv += ["--retry-request", retry_request]
-        receipt = mutate_command(argv + ["--json"], accept_exit=(0, 1))
+        receipt = mutate_command(argv + FULL_JSON, accept_exit=(0, 1))
         return {"runtime": receipt["runtime"], "exit": receipt["exit"],
                 "request_uuid": receipt.get("request_uuid"), **receipt["result"],
                 "native_observation": receipt.get("native_observation")}
 
     def request_show(self, request_uuid: str) -> dict:
         _valid_request_uuid(request_uuid)
-        return read_command(["orchestration", "request-show", "--request", request_uuid, "--json"])
+        return read_command(["orchestration", "request-show", "--request", request_uuid, *FULL_JSON])
 
     def find_worker(self, *, run: str, task: str) -> list[dict]:
         fleet = worker_rows(run)

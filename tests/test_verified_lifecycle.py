@@ -231,7 +231,7 @@ class VerifiedHandoffTests(LifecycleMatrix, handoff.HandoffCase):
         self.assertEqual(read(self.project, "objective")["owner"], "next")
         self.assertEqual(read(self.project, "objective")["checkpoint"]["obligations"],
                          self.maps_before["objective"])
-        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json"]])
+        self.assertEqual(self.mutations, [["orchestration", "run-use", "--id", "run", "--json", "--full"]])
 
     def stored_decision(self):
         return self.entry()["decision"]

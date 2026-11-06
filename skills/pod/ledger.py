@@ -2784,7 +2784,7 @@ def refuse_released_reuse(placement: object, reuse_of: str, *, request_uuid: str
     if request_uuid is not None:
         detail.update(request_uuid=request_uuid,
                       next_action="inspect the pending request with `orca orchestration request-show --request "
-                                  + request_uuid + " --json`; it is not replayed onto the released terminal")
+                                  + request_uuid + " --json --full`; it is not replayed onto the released terminal")
     raise PodError("reuse_released", "The prior worker's terminal was released, so it cannot be reused. "
                    "Next: admit the follow-up without reuse_of on a fresh terminal; to reuse a worker later, "
                    "admit it with keep_open or keep it open with `orca orchestration worker-keep-open` "
