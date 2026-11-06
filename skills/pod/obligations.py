@@ -2514,18 +2514,29 @@ def _closure_record(value: object) -> dict:
         if normalize_timestamp(closed["at"], field="Closure time", code="obligation_invalid") != closed["at"]:
             raise refuse("obligation_invalid", "malformed", "closure retains its recorded UTC time", record="closure")
     rows = closed.get("preserved")
+
+    def superseded(row: dict) -> bool:
+        return (set(row) == PRESERVED_FIELDS and row["kind"] == "workflow_dispatch"
+                and row["recorded"] in ("pending", "UNKNOWN") and row["reason"] == "superseded_by_merged_head"
+                and type(row["pr"]) is int and row["pr"] >= 1
+                and isinstance(row["merged_head"], str) and _COMMIT.fullmatch(row["merged_head"]) is not None)
+
+    def unretained(row: dict) -> bool:
+        # A no-delivery objective's validation rows settled provider_unretained (R252).
+        return (set(row) == {"record", "kind", "recorded", "outcome", "reason", "workflow", "commit"}
+                and row["kind"] in ("workflow_dispatch", "validation_rerun")
+                and row["recorded"] == "UNKNOWN" and row["reason"] == "provider_unretained"
+                and isinstance(row["workflow"], str) and 0 < len(row["workflow"]) <= 128
+                and isinstance(row["commit"], str) and _COMMIT.fullmatch(row["commit"]) is not None)
     if "preserved" in closed and (
             not isinstance(rows, list) or not 0 < len(rows) <= 64
-            or any(not isinstance(row, dict) or set(row) != PRESERVED_FIELDS
-                   or not isinstance(row["record"], str) or not 0 < len(row["record"]) <= 128
-                   or row["kind"] != "workflow_dispatch" or row["recorded"] not in ("pending", "UNKNOWN")
-                   or row["outcome"] != "UNKNOWN" or row["reason"] != "superseded_by_merged_head"
-                   or type(row["pr"]) is not int or row["pr"] < 1
-                   or not isinstance(row["merged_head"], str) or _COMMIT.fullmatch(row["merged_head"]) is None
+            or any(not isinstance(row, dict) or not isinstance(row.get("record"), str)
+                   or not 0 < len(row["record"]) <= 128 or row.get("outcome") != "UNKNOWN"
+                   or not (superseded(row) or unretained(row))
                    for row in rows)
             or len({row["record"] for row in rows}) != len(rows)):
-        raise refuse("obligation_invalid", "malformed", "closure preserves only superseded derived validations",
-                     record="closure")
+        raise refuse("obligation_invalid", "malformed", "closure preserves only superseded derived validations and "
+                     "unretained validations of an objective that claims no delivery", record="closure")
     return closed
 
 

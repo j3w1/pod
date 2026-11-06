@@ -12705,6 +12705,47 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1125",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_provider_unretained.SettlementClosesTests.test_an_unlisted_carried_validation_settles_and_its_no_delivery_successor_closes",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1126",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_provider_unretained.SettlementRefusedTests.test_merge_push_and_other_kinds_are_refused_before_any_read",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1127",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_provider_unretained.SettlementRefusedTests.test_a_listed_or_retained_run_and_an_unproved_listing_are_refused",
+        "tests.test_provider_unretained.SettlementRefusedTests.test_a_stored_run_id_never_stands_in_for_the_empty_list",
+        "tests.test_provider_unretained.PresenceReadTests.test_only_an_exact_200_or_404_answers",
+        "tests.test_provider_unretained.PresenceReadTests.test_a_run_list_member_that_is_not_a_run_is_no_answer",
+        "tests.test_provider_unretained.PresenceReadTests.test_the_allowlist_names_each_exact_presence_path"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1128",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_provider_unretained.SettlementClosesTests.test_a_delivery_or_unreadable_journal_in_the_chain_or_a_run_listed_again_keeps_todays_refusal",
+        "tests.test_provider_unretained.StoredShapeTests.test_the_closure_record_accepts_only_the_exact_unretained_shape"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A1053",
       "required_evidence": [
         "unit"

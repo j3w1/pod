@@ -113,6 +113,7 @@ class GitHubPort(Protocol):
     def run(self, *, run_id: str, attempt: int | None = None) -> dict: ...
     def rerun(self, *, run_id: str, failed_only: bool) -> dict: ...
     def cancel(self, *, run_id: str) -> dict: ...
+    def presence(self, *, kind: str, ident: str) -> dict: ...
 
 
 # --------------------------------------------------------------------------- journal
@@ -163,6 +164,29 @@ def _validate_row(row: object) -> None:
                 or marker["record_id"] == row["record_id"] or not isinstance(marker["merge_commit"], str)
                 or not _GIT_ID.fullmatch(marker["merge_commit"])):
             raise _malformed("superseded merge replacement")
+    if "unretained" in row:
+        _validate_unretained(row)
+
+
+_UNRETAINED_FIELDS = {"settlement", "at", "workflow", "commit", "run_id", "reads", "listing", "statement"}
+
+
+def _validate_unretained(row: dict) -> None:
+    """A provider_unretained settlement's stored proof (R252): an allowed validation row and its proving reads."""
+    marker = row["unretained"]
+    reads = marker.get("reads") if isinstance(marker, dict) else None
+    listing = marker.get("listing") if isinstance(marker, dict) else None
+    if (row["decision"] != "ALLOW" or row["action"]["kind"] not in ("workflow_dispatch", "validation_rerun")
+            or not isinstance(marker, dict) or set(marker) != _UNRETAINED_FIELDS
+            or marker["settlement"] != "provider_unretained" or not isinstance(marker["at"], str)
+            or marker["workflow"] != row["action"]["target"] or not isinstance(marker["commit"], str)
+            or not _GIT_ID.fullmatch(marker["commit"])
+            or not (marker["run_id"] is None or isinstance(marker["run_id"], str) and marker["run_id"].isdigit())
+            or not isinstance(reads, list) or not 2 <= len(reads) <= 3
+            or any(not isinstance(read, dict) or read.get("kind") not in ("workflow", "commit", "run")
+                   or read.get("status") not in (200, 404) for read in reads)
+            or not isinstance(listing, dict) or not isinstance(marker["statement"], str)):
+        raise _malformed("provider_unretained settlement")
 
 
 def _validate_unit(name: str, unit: object) -> None:
@@ -2184,11 +2208,14 @@ def _readback_answer(project: Path, row: dict, journal: dict, outcome: str, port
 
 def record_outcome(project: Path, objective: str, *, owner: str, record_id: str, outcome: str,
                    provider: object = None, evidence: list[str] | None = None, detail: str | None = None,
-                   now: datetime | None = None, port: GitHubPort | None = None) -> dict:
+                   now: datetime | None = None, port: GitHubPort | None = None,
+                   settlement: str | None = None) -> dict:
     """Bind the real result of an allowed action, refused unless that outcome's evidence is present.
 
     A restatement of the recorded outcome changes nothing. A merge PASS then reads back the unit's
     unsettled effects, so a merged candidate never leaves a validation whose readback was never attempted.
+    `settlement: provider_unretained` records UNKNOWN for a validation row from Pod's own proof that GitHub
+    retains no run for it (R252).
     """
     bounded_text(owner, name="owner")
     bounded_text(record_id, name="record_id", limit=128)
@@ -2202,6 +2229,12 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
         bounded_text(item, name="evidence", limit=512)
     if detail is not None:
         bounded_text(detail, name="detail", limit=1024)
+    if settlement is not None:
+        if settlement != "provider_unretained" or outcome != "UNKNOWN" or provider is not None or detail is not None:
+            raise PodError("invalid_outcome", "settlement provider_unretained records outcome UNKNOWN from Pod's own "
+                           "reads, with no provider receipt or detail")
+        return _record_unretained(project, objective, owner=owner, record_id=record_id, evidence=references,
+                                  now=now, port=port)
     context_path = _path(project, objective)
     record_path = _record_path(project, objective)
     clock = now or datetime.now(timezone.utc)
@@ -2255,6 +2288,53 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
         result["readback"] = _merged_readback(project, objective, owner=owner, row=row, port=port,
                                               now=now or datetime.now(timezone.utc))
     return result
+
+
+def _record_unretained(project: Path, objective: str, *, owner: str, record_id: str, evidence: list[str],
+                       now: datetime | None, port: GitHubPort | None) -> dict:
+    """Record a validation row UNKNOWN with Pod's own proof that GitHub retains no run for it (R252).
+
+    The reads run with no lock held; the row must be unchanged when the result is written. A row already settled
+    this way answers from its record. Nothing else about the row changes: a later readback that finds its run
+    still settles it as today.
+    """
+    from .governor_effects import UNRETAINED_STATEMENT, _port, unretained_proof, unretained_refusal
+    context_path = _path(project, objective)
+    record_path = _record_path(project, objective)
+    with _lock(context_path):
+        _owned_state(project, objective, owner, context_path)
+        journal = _read_journal(record_path)
+        row = _find_row(journal, record_id)
+        if row["outcome"] == "UNKNOWN" and "unretained" in row:
+            return {"status": "recorded", "record_id": record_id, "outcome": row["outcome"],
+                    "receipt": row["receipt"], "unretained": deepcopy(row["unretained"])}
+        refusal = unretained_refusal(row)
+        if refusal is not None:
+            raise _outcome_refusal("not_validation", "provider_unretained is refused: " + refusal,
+                                   "settle this row by its existing rules; governor-reconcile reads it back",
+                                   record_id)
+        snapshot = deepcopy(row)
+    clock = now or datetime.now(timezone.utc)
+    try:
+        proof = unretained_proof(port or _port(project), snapshot, journal, now=clock)
+    except PodError as exc:
+        raise _outcome_refusal("readback_unavailable", "Pod could not read the provider back (" + exc.code + ")",
+                               "retry when the provider answers; nothing was recorded", record_id) from exc
+    if "marker" not in proof:
+        raise _outcome_refusal("unretained_unproved", "provider_unretained is refused: " + proof["reason"],
+                               "keep the row as it is, or settle it by readback with governor-reconcile", record_id)
+    with _lock(context_path):
+        _owned_state(project, objective, owner, context_path)
+        journal = _read_journal(record_path)
+        row = _find_row(journal, record_id)
+        if row != snapshot:
+            raise PodError("outcome_conflict", "The row changed while it was read back; retry")
+        row["unretained"] = proof["marker"]
+        _settle(journal, row, outcome="UNKNOWN", provider=None, evidence=evidence,
+                detail="provider_unretained: " + UNRETAINED_STATEMENT, moment=clock.isoformat())
+        _write_journal(record_path, journal)
+    return {"status": "recorded", "record_id": record_id, "outcome": row["outcome"], "receipt": row["receipt"],
+            "unretained": deepcopy(row["unretained"])}
 
 
 def _merged_readback(project: Path, objective: str, *, owner: str, row: dict, port: GitHubPort | None,
