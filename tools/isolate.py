@@ -15,12 +15,15 @@ The command sees the host file system read-only, with /home, /root, /mnt, /media
 directories its `.git` file points at) and any `--readable` path put back read-only. The environment
 is rebuilt from a short allowlist, for bubblewrap itself as well as for the command, so no token or
 Orca variable crosses (the command's own `/proc/1/environ` is bubblewrap's). A fixture's own files live
-in one more fresh memory file system at `/tmp/isolated`, with HOME at `/tmp/isolated/home` and
-TMPDIR at `/tmp/isolated`. Hiding a host `/tmp` that is itself a memory file system stacks a second
-mount on `/tmp`, and Pod's cleanup placement checks rightly refuse a path whose mount point has two
-entries in `/proc/self/mountinfo`; `/tmp/isolated` is created inside the hidden `/tmp`, so it has
-exactly one. This is protection from accidental contamination of a trusted developer's host,
-not a sandbox for hostile code: the network is shared and the host's read-only system tree stays
+in one more fresh memory file system at `/tmp/isolated-<random>`, with TMPDIR there and HOME at its
+`home`. Hiding a host `/tmp` that is itself a memory file system stacks a second mount on `/tmp`, and
+Pod's cleanup placement checks rightly refuse a path whose mount point has two entries in
+`/proc/self/mountinfo`. So each invocation picks a mount point inside the hidden `/tmp` that nothing
+in the caller's `/proc/self/mountinfo` is at or under: not a host mount, and not the fixture mount of
+a wrapper this one runs inside, whose entry the read-only root bind carries in even though `/tmp` hides
+it. The fixture mount point therefore has exactly one entry, in a nested run too, and no readable path
+may cover it or lie inside it. This is protection from accidental contamination of a trusted developer's
+host, not a sandbox for hostile code: the network is shared and the host's read-only system tree stays
 visible.
 
 `tests/boundary.py` still gives every test process disposable homes and a scrubbed Git environment.
@@ -32,6 +35,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -40,8 +45,8 @@ import textwrap
 
 ROOT = Path(__file__).resolve().parents[1]
 HIDDEN = ("/home", "/root", "/mnt", "/media", "/srv", "/tmp", "/var/tmp", "/run/user")
-# The fixture tree: a fresh mount point inside the hidden /tmp, so nothing on the host is under it.
-FIXTURE = "/tmp/isolated"
+# The fixture tree's mount point is this prefix plus a random name, inside the hidden /tmp (fresh_fixture).
+FIXTURE_PREFIX = "/tmp/isolated-"
 PASSED = ("PATH", "LANG", "LANGUAGE", "TERM", "PYTHONPATH", "PYTHONHASHSEED", "PYTHONDONTWRITEBYTECODE", "CI",
           "GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_SHA", "POD_REQUIRE_PTY")
 
@@ -63,16 +68,38 @@ def git_directories(checkout: Path) -> list[Path]:
     return found
 
 
-def environment(env: dict[str, str]) -> dict[str, str]:
+def mount_points(mountinfo: str) -> list[Path]:
+    """Every mount point in `/proc/self/mountinfo` text, with its octal escapes decoded."""
+    return [Path(re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), line.split(" ")[4]))
+            for line in mountinfo.splitlines() if line.strip()]
+
+
+def fresh_fixture(taken: list[Path] | None = None) -> str:
+    """A new mount point for the fixture tree, inside the hidden /tmp, that no mount the caller can see
+    (`taken`, by default its own mountinfo) is at or under: neither a host mount nor the fixture mount
+    of a wrapper this one runs inside, so the fixture mount point gets exactly one entry."""
+    if taken is None:
+        taken = mount_points(Path("/proc/self/mountinfo").read_text())
+    for _ in range(64):
+        candidate = Path(FIXTURE_PREFIX + secrets.token_hex(6))
+        if not any(point.is_relative_to(candidate) for point in taken):
+            return str(candidate)
+    raise SystemExit("isolate: found no fresh fixture mount point")
+
+
+def environment(env: dict[str, str], fixture: str | None = None) -> dict[str, str]:
+    """The allowlisted environment, with HOME and TMPDIR on the fixture tree when one is given."""
     kept = {key: value for key, value in env.items() if key in PASSED or key.startswith("LC_")}
-    kept["HOME"] = f"{FIXTURE}/home"
-    kept["TMPDIR"] = FIXTURE
+    if fixture:
+        kept["HOME"] = f"{fixture}/home"
+        kept["TMPDIR"] = fixture
     return kept
 
 
-def arguments(command: list[str], *, checkout: Path = ROOT, readable: tuple[str, ...] = (),
+def arguments(command: list[str], *, fixture: str, checkout: Path = ROOT, readable: tuple[str, ...] = (),
               env: dict[str, str] | None = None, cwd: Path | None = None) -> list[str]:
-    """The bubblewrap command line; pure, so it can be tested without bubblewrap."""
+    """The bubblewrap command line for the fixture mount point `fixture` (fresh_fixture); pure, so it can
+    be tested without bubblewrap."""
     env = os.environ if env is None else env
     shown = [checkout, *git_directories(checkout), *map(Path, readable)]
     shown += [Path(entry) for entry in env.get("PYTHONPATH", "").split(os.pathsep) if entry]
@@ -83,16 +110,16 @@ def arguments(command: list[str], *, checkout: Path = ROOT, readable: tuple[str,
         if os.path.isdir(hidden):
             argv += ["--tmpfs", hidden]
     # One fresh mount for HOME and TMPDIR at a new mount point; --self-check proves it is not stacked.
-    argv += ["--tmpfs", FIXTURE, "--dir", f"{FIXTURE}/home"]
+    argv += ["--tmpfs", fixture, "--dir", f"{fixture}/home"]
     for path in dict.fromkeys(item.resolve() for item in shown if item.exists()):
-        if Path(FIXTURE).is_relative_to(path):
-            raise SystemExit(f"isolate: showing {path} would overmount the fixture tree {FIXTURE}")
+        if Path(fixture).is_relative_to(path) or path.is_relative_to(fixture):
+            raise SystemExit(f"isolate: showing {path} would overmount or fill the fixture tree {fixture}")
         argv += ["--ro-bind", str(path), str(path)]
     summary = env.get("GITHUB_STEP_SUMMARY")
     if summary and os.path.isfile(summary):
         argv += ["--bind", summary, summary]
     argv += ["--chdir", str(cwd or checkout), "--clearenv"]
-    for key, value in environment(dict(env)).items():
+    for key, value in environment(dict(env), fixture).items():
         argv += ["--setenv", key, value]
     if summary and os.path.isfile(summary):
         argv += ["--setenv", "GITHUB_STEP_SUMMARY", summary]
@@ -109,22 +136,27 @@ def git(where: Path, *argv: str) -> str:
                           env=env).stdout.strip()
 
 
-def launch(command: list[str], *, capture: bool = False, env: dict[str, str] | None = None, **options):
-    """Start the command under bubblewrap, itself started with only the allowlisted environment."""
+def launch(command: list[str], *, capture: bool = False, env: dict[str, str] | None = None,
+           fixture: str | None = None, **options):
+    """Start the command under bubblewrap, itself started with only the allowlisted environment. The
+    fixture mount point is chosen once (fresh_fixture), and HOME and TMPDIR follow it."""
     env = dict(os.environ if env is None else env)
     tool = shutil.which("bwrap", path=env.get("PATH"))
     if not tool:
         raise SystemExit("isolate: bubblewrap (bwrap) is required")
-    argv = arguments(command, env=env, **options)
+    fixture = fixture or fresh_fixture()
+    argv = arguments(command, fixture=fixture, env=env, **options)
     argv[0] = tool
-    return subprocess.run(argv, check=False, env=environment(env), capture_output=capture, text=capture)
+    return subprocess.run(argv, check=False, env=environment(env, fixture), capture_output=capture, text=capture)
 
 
 def run(command: list[str], **options) -> int:
     return launch(command, **options).returncode
 
 
-PROBE = textwrap.dedent('''
+# The fixture part of the probe, also run alone under a nested wrapper. With no "fixture" in the spec
+# (a nested wrapper picks its own), TMPDIR's own path is expected to be the fixture mount point.
+FIXTURE_PROBE = textwrap.dedent('''
     import json, os, re, subprocess, sys
     from pathlib import Path
     spec, out = json.loads(sys.argv[1]), {}
@@ -134,21 +166,29 @@ PROBE = textwrap.dedent('''
     for line in Path("/proc/self/mountinfo").read_text().splitlines():
         fields = line.split(" ")
         mounts.append((Path(unescape(fields[4])), fields[0], fields[fields.index("-", 6) + 1]))
+    expected = spec.get("fixture") or os.path.realpath(os.environ["TMPDIR"])
     def mount(path):
         point = max((row[0] for row in mounts if path.is_relative_to(row[0])), key=lambda row: len(row.parts))
         return point, [row for row in mounts if row[0] == point]
     def on_fixture(when):
         for name in ("TMPDIR", "HOME"):
             point, entries = mount(Path(os.path.realpath(os.environ[name])))
-            if str(point) != spec["fixture"]:
-                yield f"{when} {name} is on {point}, not on the fixture mount {spec['fixture']}"
+            if str(point) != expected:
+                yield f"{when} {name} is on {point}, not on the fixture mount {expected}"
             elif len(entries) != 1 or entries[0][2] != "tmpfs":
                 yield f"{when} {name}'s mount point {point} is overmounted or not one tmpfs: {entries}"
     fixture = list(on_fixture("the wrapper's"))
     if sorted(os.listdir(os.environ["TMPDIR"])) != ["home"] or os.listdir(os.environ["HOME"]):
         fixture.append("the fixture mount was not fresh")
+    # Every fixture mount point, this wrapper's and any inherited from a wrapper outside, has one entry.
+    points = [str(row[0]) for row in mounts if str(row[0]).startswith(spec["prefix"])]
+    fixture += [f"the fixture mount point {point} has {points.count(point)} entries"
+                for point in sorted(set(points)) if points.count(point) != 1]
     import tests  # the test boundary's own disposable homes must land on the same single mount
     out["fixture"] = fixture + list(on_fixture("the test boundary's"))
+    out["tmpdir"], out["points"] = expected, sorted(set(points))
+''')
+PROBE = FIXTURE_PROBE + textwrap.dedent('''
     def attempt(name, action):
         try:
             action(); out[name] = "allowed"
@@ -203,12 +243,18 @@ def self_check() -> int:
         # The stand-in checkout is shown read-only as a real checkout is; the home is simply absent,
         # because only the checkout and what is passed with --readable are put back.
         options = {"readable": (str(stand_in), str(discovery))}
+        fixture = fresh_fixture()
         spec = {"stand_in": str(stand_in), "credentials": str(home / ".codex/auth.json"), "checkout": str(ROOT),
-                "fixture": FIXTURE}
+                "fixture": fixture, "prefix": FIXTURE_PREFIX}
         caller = {**os.environ, "PYTHONPATH": str(ROOT), "POD_CANARY_TOKEN": "canary"}
-        probe = launch([sys.executable, "-c", PROBE, json.dumps(spec)], capture=True, env=caller, **options)
+        probe = launch([sys.executable, "-c", PROBE, json.dumps(spec)], capture=True, env=caller, fixture=fixture,
+                       **options)
         discover = launch([sys.executable, "-m", "unittest", "discover", "-s", str(discovery), "-t", str(discovery)],
                           capture=True, env=caller, **options)
+        # A wrapper inside this one inherits this fixture's mount entry and must still get a mount of its own.
+        nested = launch([sys.executable, "-B", str(ROOT / "tools/isolate.py"), "--", sys.executable, "-c",
+                         FIXTURE_PROBE + "print(json.dumps(out))\n", json.dumps({"prefix": FIXTURE_PREFIX})],
+                        capture=True, env=caller, fixture=fixture)
         problems = []
         if probe.returncode:
             problems.append(f"probe failed: {probe.stderr.strip()[-300:]}")
@@ -217,12 +263,22 @@ def self_check() -> int:
             if seen.pop("environment"):
                 problems.append("the caller's environment reached the sandbox (own or /proc/1/environ)")
             problems += seen.pop("fixture")
+            seen.pop("tmpdir"), seen.pop("points")
             if seen.pop("control") != 0:
                 problems.append("a fixture could not use Git in its own /tmp repository")
             problems += [f"{name}: {result}" for name, result in seen.items()
                          if result in ("allowed", 0)]
         if discover.returncode:
             problems.append(f"discovery-time import was not confined: {discover.stderr.strip()[-300:]}")
+        if nested.returncode:
+            problems.append(f"nested probe failed: {nested.stderr.strip()[-300:]}")
+        else:
+            inner = json.loads(nested.stdout)
+            problems += [f"nested: {problem}" for problem in inner["fixture"]]
+            if inner["tmpdir"] == fixture or Path(inner["tmpdir"]).parent != Path("/tmp"):
+                problems.append(f"nested: the inner fixture {inner['tmpdir']} is not a fresh mount point in /tmp")
+            if fixture not in inner["points"]:
+                problems.append("nested: the outer fixture's mount entry was not inherited, so nesting was not tested")
         if snapshot(stand_in) != before or (home / ".codex/auth.json").read_text() != "synthetic\n" \
                 or (home / "import-leak").exists():
             problems.append("a stand-in changed")

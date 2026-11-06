@@ -175,7 +175,9 @@ class ContaminationTests(unittest.TestCase):
 
 
 class IsolateTests(unittest.TestCase):
-    """The command line tools/isolate.py builds. `python tools/isolate.py --self-check` runs it for real."""
+    """The command line tools/isolate.py builds. `python tools/isolate.py --self-check` runs it for real,
+    nested under a second wrapper too."""
+    FIXTURE = isolate.FIXTURE_PREFIX + "0123456789ab"  # injected, so the command line is deterministic
 
     @staticmethod
     def bound(argv, path) -> bool:
@@ -184,7 +186,7 @@ class IsolateTests(unittest.TestCase):
     def argv(self, **options):
         env = {"PATH": "/usr/bin", "HOME": "/home/x", "GH_TOKEN": "t", "ORCA_HOOK": "h", "SSH_AUTH_SOCK": "s",
                "GIT_DIR": "/host/.git", "LC_ALL": "C", "POD_REQUIRE_PTY": "1", "PYTHONPATH": str(ROOT / "skills")}
-        return isolate.arguments(["true"], env=env, **options)
+        return isolate.arguments(["true"], env=env, **{"fixture": self.FIXTURE, **options})
 
     def test_the_host_is_read_only_and_home_credentials_and_scratch_are_empty(self):
         argv = self.argv()
@@ -200,10 +202,10 @@ class IsolateTests(unittest.TestCase):
     def test_home_and_tmpdir_get_one_fresh_mount_that_overmounts_nothing(self):
         """pod#170: hiding a host /tmp that is itself a tmpfs stacks two mounts on /tmp, so fixtures live on
         a new mount point inside it, mounted once, after /tmp is hidden and never covered by a bind."""
-        fixture = isolate.FIXTURE
-        inside = Path(fixture) / "outer-fixture"
+        fixture = self.FIXTURE
+        outer = isolate.FIXTURE_PREFIX + "outer0000000/pod-run"  # an outer wrapper's fixture, shown in a nested run
         with patch.object(isolate.Path, "exists", return_value=True):
-            argv = self.argv(readable=(str(inside),))
+            argv = self.argv(readable=(outer,))
         self.assertTrue(Path(fixture).parent.as_posix() in isolate.HIDDEN and fixture not in isolate.HIDDEN, fixture)
         mounted = [i for i, item in enumerate(argv) if item in ("--tmpfs", "--bind", "--ro-bind") and argv[i + 1] == fixture]
         self.assertEqual(len(mounted), 1, "exactly one mount at the fixture mount point")
@@ -213,16 +215,46 @@ class IsolateTests(unittest.TestCase):
         self.assertLess(mounted[0], min(binds))
         self.assertFalse([argv[i + 2] for i in binds if Path(fixture).is_relative_to(argv[i + 2])],
                          "no bind covers the fixture mount point")
-        self.assertTrue(self.bound(argv, inside), "a nested run's own fixture is still shown on top")
+        self.assertTrue(self.bound(argv, outer), "a nested run's outer fixture is still shown, beside this one")
         self.assertIn(["--dir", f"{fixture}/home"], [argv[i:i + 2] for i in range(len(argv))])
         values = {argv[i + 1]: argv[i + 2] for i, item in enumerate(argv) if item == "--setenv"}
         self.assertEqual((values["TMPDIR"], values["HOME"]), (fixture, f"{fixture}/home"))
 
-    def test_a_readable_path_that_would_overmount_the_fixture_tree_is_refused(self):
-        for covering in (isolate.FIXTURE, str(Path(isolate.FIXTURE).parent)):
+    def test_a_readable_path_that_would_overmount_or_fill_the_fixture_tree_is_refused(self):
+        for covering in (self.FIXTURE, str(Path(self.FIXTURE).parent), f"{self.FIXTURE}/home"):
             with self.subTest(covering), patch.object(isolate.Path, "exists", return_value=True), \
                     self.assertRaises(SystemExit):
                 self.argv(readable=(covering,))
+
+    def test_the_fixture_mount_point_is_one_no_visible_mount_is_at_or_under(self):
+        """pod#170 R1: a wrapper inside another inherits the outer fixture's mount entry through the read-only
+        root bind, so a reused name would stack a second tmpfs on it; any name a mount is at or under is skipped."""
+        names = iter(["inherited000", "underneath00", "fresh0000000"])
+        taken = isolate.mount_points(
+            "21 1 0:1 / / ro - ext4 /dev/root ro\n"
+            "22 21 0:2 / /tmp rw - tmpfs tmpfs rw\n"
+            "23 22 0:3 / /tmp/isolated-inherited000 rw - tmpfs tmpfs rw\n"
+            "24 22 0:4 / /tmp/isolated-underneath00/run\\040x ro - ext4 /dev/root ro\n")
+        self.assertIn(Path("/tmp/isolated-underneath00/run x"), taken, "octal escapes are decoded")
+        with patch.object(isolate.secrets, "token_hex", side_effect=lambda size: next(names)):
+            chosen = isolate.fresh_fixture(taken)
+        self.assertEqual(chosen, isolate.FIXTURE_PREFIX + "fresh0000000")
+        self.assertIn(Path(chosen).parent.as_posix(), isolate.HIDDEN)
+        with patch.object(isolate.secrets, "token_hex", return_value="inherited000"), self.assertRaises(SystemExit):
+            isolate.fresh_fixture(taken)
+
+    def test_one_selection_places_the_mount_home_and_tmpdir_for_bubblewrap_and_the_command(self):
+        chosen = isolate.FIXTURE_PREFIX + "selected0000"
+        with patch.object(isolate, "fresh_fixture", return_value=chosen) as selected, \
+                patch.object(isolate.shutil, "which", return_value="/usr/bin/bwrap"), \
+                patch.object(isolate.subprocess, "run") as started:
+            isolate.launch(["true"], env={"PATH": "/usr/bin"})
+        selected.assert_called_once_with()
+        argv, options = started.call_args.args[0], started.call_args.kwargs
+        self.assertIn(["--tmpfs", chosen, "--dir", f"{chosen}/home"], [argv[i:i + 4] for i in range(len(argv))])
+        values = {argv[i + 1]: argv[i + 2] for i, item in enumerate(argv) if item == "--setenv"}
+        self.assertEqual((values["TMPDIR"], values["HOME"]), (chosen, f"{chosen}/home"))
+        self.assertEqual((options["env"]["TMPDIR"], options["env"]["HOME"]), (chosen, f"{chosen}/home"))
 
     def test_nothing_is_inherited_except_an_allowlist(self):
         argv = self.argv()
