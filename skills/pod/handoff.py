@@ -130,6 +130,14 @@ WORKTREE_MISSING = "recorded worktree missing"
 WORKTREE_UNREADABLE = "recorded worktree unreadable"
 CLOSED_MALFORMED = "closed record malformed"
 FORMAT_UNSUPPORTED = "record format unsupported"
+# With the recorded worktree gone, the closure is proved from the peer's own records; each names the record fact that
+# failed (pod#251).
+RECORD_UNBOUND = WORKTREE_MISSING + "; record not where its recorded repository and objective place it"
+RECORD_CLOSURE_MALFORMED = WORKTREE_MISSING + "; closure record malformed"
+RECORD_SETTLEMENT_CHANGED = WORKTREE_MISSING + "; settled work changed since closure"
+RECORD_WORK_UNSETTLED = WORKTREE_MISSING + "; recorded work unsettled"
+RECORD_GOVERNOR_UNREADABLE = WORKTREE_MISSING + "; Governor journal unreadable"
+RECORD_GOVERNOR_PENDING = WORKTREE_MISSING + "; Governor effect pending"
 
 
 def _unproven_reason(exc: BaseException) -> str:
@@ -150,25 +158,96 @@ class _Unproven(Exception):
         self.reason = reason
 
 
+def _recorded_closure(directory: Path, raw: dict, checkpoint: dict, workspace: dict, check) -> str | None:
+    """A closed peer whose recorded worktree is gone, proved closed from its own records alone (pod#251).
+
+    The record must sit in the directory Pod derives from its recorded repository key and objective, so it is that
+    objective's own record; its closure must match its map's sequence and revision; the work it settled must still
+    reproduce the closure's settled set (or, for a closure recorded before that set, every admission must carry its
+    durable settlement record); and its Governor journal beside it may hold no unsettled effect apart from rows the
+    closure preserved. Evidence is not judged again: that needs the worktree's Git and governance. Returns None when
+    proved, else the fixed reason naming the first fact that failed."""
+    from .governor import _read_journal
+    from .ledger import _outstanding_ids, record_name, settlement_facts
+    from .obligations import _closure_record, validate_map_record
+    objective = checkpoint["objective"]
+    if record_name(Path(workspace["path"]), {"repo_key": workspace["repo_key"]}, objective) != directory.name:
+        return RECORD_UNBOUND
+    check()
+    try:
+        validate_map_record(checkpoint)
+        closure = _closure_record(checkpoint["closure"])
+        if any(closure[key] != checkpoint[key] for key in ("seq", "revision")):
+            return RECORD_CLOSURE_MALFORMED
+        history = (checkpoint.get("continuity") or {}).get("history", [])
+        runtimes = {entry[field] for entry in history for field in ("from_runtime", "to_runtime")}
+        check()
+        if "settlement_digest" in closure:
+            if settlement_facts(raw["admissions"], runtimes=runtimes, seq=checkpoint["seq"])[0] \
+                    != closure["settlement_digest"]:
+                return RECORD_SETTLEMENT_CHANGED
+        elif _outstanding_ids(raw, None, recorded={"runtimes": runtimes, "seq": checkpoint["seq"],
+                                                    "is_ancestor": None}):
+            # Without Git an ancestry-validated disposition stays unproven, as the replay leaves anything unprovable.
+            return RECORD_WORK_UNSETTLED
+    except (PodError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        if isinstance(exc, PodError) and exc.code == _deadline():
+            raise
+        return RECORD_CLOSURE_MALFORMED
+    check()
+    try:
+        journal = _read_journal(directory / "governor.json")
+    except PodError as exc:
+        if exc.code == _deadline():
+            raise
+        return RECORD_GOVERNOR_UNREADABLE
+    except OSError:
+        return RECORD_GOVERNOR_UNREADABLE
+    preserved = {row.get("record") for row in closure.get("preserved") or [] if isinstance(row, dict)}
+    if any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")
+           and row["record_id"] not in preserved for row in journal["actions"]):
+        return RECORD_GOVERNOR_PENDING
+    return None
+
+
+def _deadline() -> str:
+    from .orca import DEADLINE_SPENT
+    return DEADLINE_SPENT
+
+
+def peer_label(row) -> str:
+    """One peer named with its repository, so a same-named objective elsewhere never reads as this one (pod#251)."""
+    if isinstance(row, str):  # A scope from an earlier shape names the objective alone.
+        return row
+    repository = row.get("repository")
+    return f"{row['objective']} in " + (repository if repository else "an unrecorded repository")
+
+
 def shared_detail(scope: dict, *, limit: int | None = None) -> str:
     """The run_shared detail both continuation paths word alike: open peers, then closed peers with an unproven
-    closure and each fixed reason; an empty group is left out (pod#250)."""
+    closure and each fixed reason; an empty group is left out (pod#250). Each peer carries its repository (pod#251)."""
     opened = scope.get("open") or []
     unproven = scope.get("closure_unproven") or []
     groups = []
     if opened:
-        groups.append("open: " + ", ".join(opened[:limit]))
+        groups.append("open: " + ", ".join(peer_label(row) for row in opened[:limit]))
     if unproven:
         groups.append("closed with unproven closure: "
-                      + ", ".join(f"{row['objective']} ({row['reason']})" for row in unproven[:limit]))
+                      + ", ".join(f"{peer_label(row)} ({row['reason']})" for row in unproven[:limit]))
     if not groups:  # A scope from an earlier shape: the union alone.
         groups.append(", ".join(scope["objectives"][:limit]))
     return "; ".join(groups)
 
 
+def peer_list(rows: list, *, limit: int | None = None) -> str:
+    """Peers named with their repositories, as the closure-unchecked and peer-history refusals list them."""
+    return ", ".join(peer_label(row) for row in rows[:limit])
+
+
 def shared_fields(scope: dict, *, limit: int | None = None) -> dict:
     """The run_shared result fields beside other_objectives: the same two groups, each capped alike."""
-    return {"open_objectives": list((scope.get("open") or [])[:limit]),
+    return {"open_objectives": [dict(row) if isinstance(row, dict) else row
+                                for row in (scope.get("open") or [])[:limit]],
             "unproven_closures": [dict(row) for row in (scope.get("closure_unproven") or [])[:limit]]}
 
 
@@ -183,7 +262,9 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     Discovery also passes `prove_closure=False`: a closed peer that records the Run is then
     reported in `closure_unchecked` instead of proving its closure, which only execution does.
     `objectives` is every blocking peer; `open` and `closure_unproven` split it into peers with no closure and closed
-    peers whose closure proof failed or cannot run, each with a fixed reason (pod#250).
+    peers whose closure proof failed or cannot run, each with a fixed reason (pod#250). Their rows, and
+    `unverifiable_rows` and `closure_unchecked_rows` beside the name lists, carry each peer's recorded repository; a
+    closed peer whose recorded worktree is gone is proved from its own records instead (pod#251).
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, closed_snapshot_context)
@@ -211,6 +292,26 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     if root.is_symlink():
         return {"objectives": [], "open": [], "closure_unproven": [], "unreadable": 1}
     own = objective_root(project, objective) / "context.json"
+    own_repository = []
+
+    def repository_of(checkpoint, path):
+        """The peer's recorded repository: its worktree binding's, else this project's for a record in this
+        project's own directory, else None."""
+        from .records import worktree_binding
+        try:
+            if "worktree" in checkpoint:
+                return worktree_binding(checkpoint["worktree"]).get("repository")
+            name = checkpoint["objective"]
+            if objective_root(project, name) != path.parent:
+                return None
+            if not own_repository:
+                from .github import repository_context
+                own_repository.append(repository_context(project).get("repository"))
+            return own_repository[0]
+        except (PodError, KeyError, TypeError, ValueError, AttributeError, OSError) as exc:
+            if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT:
+                raise
+            return None
     others, unknown = [], 0
     opened, closed = [], []
     unverifiable, unchecked = [], []
@@ -265,9 +366,13 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
             pass
         if referenced:
             closure = checkpoint.get("closure") if isinstance(checkpoint, dict) else None
+            repository = repository_of(checkpoint, path) if isinstance(checkpoint, dict) else None
+            if not (isinstance(repository, str) and 0 < len(repository) <= 256):
+                repository = None
             if supported and closure is not None and not prove_closure:
                 name = checkpoint["objective"]
-                return "unchecked", name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective"
+                return ("unchecked", name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective",
+                        repository)
             reason = None  # None: the peer records no closure, so it is open.
             if supported and closure is not None:
                 from .obligations import validate_closed_snapshot
@@ -284,7 +389,13 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                     try:
                         found = peer_project.stat()
                     except FileNotFoundError:
-                        raise _Unproven(WORKTREE_MISSING) from None
+                        if workspace is None:
+                            raise _Unproven(WORKTREE_MISSING) from None
+                        # Normal completion cleanup removed the worktree: prove the closure from its records (pod#251).
+                        gone = _recorded_closure(path.parent, raw, checkpoint, workspace, check)
+                        if gone is not None:
+                            raise _Unproven(gone) from None
+                        return None
                     except OSError:
                         raise _Unproven(WORKTREE_UNREADABLE) from None
                     if not stat.S_ISDIR(found.st_mode):
@@ -304,12 +415,15 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                 else:
                     if unproven:
                         name = checkpoint["objective"]
-                        return "unverifiable", name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective"
+                        return ("unverifiable",
+                                name if isinstance(name, str) and 0 < len(name) <= 256 else "unnamed objective",
+                                repository)
                     return None
             elif closure is not None:
                 reason = FORMAT_UNSUPPORTED  # A closure Pod cannot read in a format it does not support.
             name = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
-            return "other", (name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective"), reason
+            return ("other", (name if isinstance(name, str) and name and len(name) <= 256 else "unnamed objective"),
+                    reason, repository)
         if (not readable or not supported) and record_mentions(path.parent, run_id, check):
             # A record outside the documented reference layouts holds this Run only when its decoded record names
             # it, or cannot be decoded within bounds (R206).
@@ -349,22 +463,29 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         elif kind == "other":
             others.append(name)
             if outcome[2] is None:
-                opened.append(name)
+                opened.append((name, outcome[3] or ""))
             else:
-                closed.append((name, outcome[2]))
+                closed.append((name, outcome[3] or "", outcome[2]))
         else:
-            {"unchecked": unchecked, "unverifiable": unverifiable}[kind].append(name)
+            {"unchecked": unchecked, "unverifiable": unverifiable}[kind].append((name, outcome[2] or ""))
     check()
+
+    def rows(found):
+        """One row per peer and repository, so same-named objectives of two repositories stay apart (pod#251)."""
+        return [{"objective": name, "repository": repository or None} for name, repository in sorted(set(found))]
     reasons = {}
-    for name, reason in sorted(closed):
-        reasons.setdefault(name, reason)  # One row per peer name.
-    result = {"objectives": sorted(set(others)), "open": sorted(set(opened)),
-              "closure_unproven": [{"objective": name, "reason": reason} for name, reason in sorted(reasons.items())],
-              "unreadable": unknown, "unverifiable": sorted(set(unverifiable))}
+    for name, repository, reason in sorted(closed):
+        reasons.setdefault((name, repository), reason)  # One row per peer.
+    result = {"objectives": sorted(set(others)), "open": rows(opened),
+              "closure_unproven": [{"objective": name, "repository": repository or None, "reason": reason}
+                                   for (name, repository), reason in sorted(reasons.items())],
+              "unreadable": unknown, "unverifiable": sorted({name for name, _ in unverifiable}),
+              "unverifiable_rows": rows(unverifiable)}
     if changing:
         result["changing"] = changing
     if unchecked:
-        result["closure_unchecked"] = sorted(set(unchecked))
+        result["closure_unchecked"] = sorted({name for name, _ in unchecked})
+        result["closure_unchecked_rows"] = rows(unchecked)
     return result
 
 
@@ -494,10 +615,11 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                     action="Retry the handoff detection; do not run orca orchestration run-use by hand.")
     if scope.get("unverifiable"):
         names = scope["unverifiable"]
+        listed = scope.get("unverifiable_rows") or names  # Each peer with its repository (pod#251).
         result["unverifiable_peers"] = names[:8]
         result["remaining_peers"] = max(0, len(names) - 8)
         return fail("peer_history_unverifiable", "Handoff holds: the original eligibility scope of retained REUSE cannot be verified for peer "
-                    + ", ".join(names[:8]) + ("; and " + str(len(names) - 8) + " more" if len(names) > 8 else "") + ".",
+                    + peer_list(listed, limit=8) + ("; and " + str(len(listed) - 8) + " more" if len(listed) > 8 else "") + ".",
                     action="Resolve the named peer history before handoff; ordinary writes remain available. No confirmation overrides this hold; do not run orca orchestration run-use by hand.")
     work = continuity_work(state, runtime=first["runtime"], port=port)
     if work["differs"]:
