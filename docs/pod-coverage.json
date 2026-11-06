@@ -11231,6 +11231,64 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1074",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_admission_binds_the_reviewed_change_s_own_rows_and_keeps_ordinary_files_whole",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_review_carries_across_a_merge_of_unrelated_rows",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_rows_are_judged_against_the_merge_base",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_without_row_binding_the_same_merge_invalidates_as_before",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_an_edit_to_an_own_row_invalidates",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_schema_change_invalidates",
+        "tests.test_keyed_index_binding.BindingTests.test_binding_keeps_identity_and_binds_only_the_changed_rows",
+        "tests.test_keyed_index_binding.BindingTests.test_other_rows_do_not_change_the_binding",
+        "tests.test_keyed_index_binding.BindingTests.test_bound_rows_schema_and_unparseable_files_invalidate",
+        "tests.test_keyed_index_binding.BindingTests.test_lane_rows_bind_by_test_id",
+        "tests.test_keyed_index_binding.ParseTests.test_rows_are_keyed_by_collection_and_key_and_members_by_name",
+        "tests.test_keyed_index_binding.BindingTests.test_lane_controls_are_schema_and_provenance_members_are_rows"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1075",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_an_unparseable_index_invalidates",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_duplicate_key_invalidates",
+        "tests.test_keyed_index_binding.ParseTests.test_anything_not_exactly_a_known_index_is_not_parsed",
+        "tests.test_keyed_index_binding.BindingTests.test_a_malformed_index_never_holds",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_stored_index_that_disagrees_with_an_unchanged_file_never_holds",
+        "tests.test_keyed_index_binding.BindingTests.test_a_surrogate_key_elsewhere_invalidates_and_valid_non_ascii_keys_bind",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_lone_surrogate_elsewhere_invalidates",
+        "tests.test_keyed_index_binding.ParseTests.test_a_document_the_interpreter_cannot_decode_or_canonicalize_is_not_parsed"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1076",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_an_ordinary_bound_file_keeps_whole_content_binding",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_index_path_without_a_row_binding_stays_touched",
+        "tests.test_keyed_index_binding.BindingTests.test_whole_content_binding_is_kept_when_rows_cannot_be_bound_exactly",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_caller_cannot_supply_bound_rows",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_map_evidence_cannot_supply_bound_rows",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_the_delivered_tree_reader_judges_bound_rows",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_an_ordinary_json_source_with_a_non_text_schema_keeps_whole_content",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_bound_rows_written_into_assurance_evidence_are_not_stored"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A806",
       "required_evidence": [
         "unit",
