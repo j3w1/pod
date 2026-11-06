@@ -537,7 +537,7 @@ MAX_LINK_HOPS = 8
 RESOLVABLE_MODES = ("100644", "100755", "040000")  # plus symlinks (120000), which are followed
 
 
-def scope_resolver(project: Path, commits: list[str]):
+def scope_resolver(project: Path, commits: list[str], *, links: bool = False):
     """R203: what one declared scope path names in each immutable Git tree involved, following committed symlinks.
 
     Each component, parents included, is resolved within the repository against each commit's own tree, with at
@@ -545,6 +545,9 @@ def scope_resolver(project: Path, commits: list[str]):
     that does not exist in a tree stays as named. Returns the resolved paths, or None when any tree is unreadable,
     a component has any other mode (a gitlink's opaque subtree included), or a link is absolute, leaves the
     repository, loops or exceeds the bound. Host paths, submodule checkouts and remotes are never read.
+
+    With `links` (R173's REUSE comparison) the result also names every committed link traversed in each tree,
+    parent-link prefixes and intermediate hops included, after that tree's resolved path; R203 never passes it.
     """
     tables: dict[str, gitio.TreeView | None] = {}
     blobs: dict[str, str | None] = {}
@@ -568,7 +571,7 @@ def scope_resolver(project: Path, commits: list[str]):
         rows = entries(commit)
         if rows is None:
             return None
-        done, queue, hops = [], [part for part in path.split("/") if part not in ("", ".")], 0
+        done, queue, hops, traversed = [], [part for part in path.split("/") if part not in ("", ".")], 0, []
         while queue:
             part = queue.pop(0)
             if part == "..":
@@ -581,6 +584,7 @@ def scope_resolver(project: Path, commits: list[str]):
                 return None
             mode, obj = (found[0], found[2]) if found is not None else (None, None)
             if mode == "120000":
+                traversed.append("/".join([*done, part]))
                 hops += 1
                 link = target(obj) if _OBJECT.fullmatch(obj) else None
                 if hops > MAX_LINK_HOPS or link is None or link.startswith("/") or "\0" in link:
@@ -590,16 +594,15 @@ def scope_resolver(project: Path, commits: list[str]):
             if mode not in (None, *RESOLVABLE_MODES):
                 return None  # an allow-list: a gitlink or any other mode is opaque, so the path is unresolved
             done.append(part)
-        return "/".join(done) or "."
+        return ["/".join(done) or ".", *(traversed if links else [])]
 
     def resolved(path):
         found = []
         for commit in dict.fromkeys(commits):
-            name = resolve(path, commit)
-            if name is None:
+            names = resolve(path, commit)
+            if names is None:
                 return None
-            if name not in found:
-                found.append(name)
+            found += [name for name in names if name not in found]
         return found
     return resolved
 
