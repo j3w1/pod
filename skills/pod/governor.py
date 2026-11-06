@@ -1977,10 +1977,14 @@ def _superseding_merge(project: Path, state: dict, journal: dict, row: dict) -> 
             continue
         # Scan only target history: A being an ancestor inside B is expected after a refresh.
         # A first-parent commit or an actual merge head in that history proves A did execute.
+        # A fast-forward's candidate ancestry is not a history of target heads. Its admitted
+        # target is the last observed target head, and R93 already proves the exact new head.
+        history_start = parent if verified["method"] == "fast-forward" else verified["result"]
         history = gitio.read(project, ["rev-list", "--first-parent", "--parents",
-                                      f"--max-count={MAX_RESULT_SCAN + 1}", verified["result"], "^" + old_parent])
+                                      f"--max-count={MAX_RESULT_SCAN + 1}", history_start, "^" + old_parent])
         lines = history.stdout.splitlines() if history is not None and history.returncode == 0 else []
-        if (not lines or len(lines) > MAX_RESULT_SCAN
+        if (history is None or history.returncode != 0 or (not lines and history_start != old_parent)
+                or len(lines) > MAX_RESULT_SCAN
                 or any(old_head == words[0] or old_head in words[2:]
                        for line in lines if (words := line.split()))):
             continue

@@ -68,9 +68,15 @@ class MergeSupersedenceTests(KernelCase):
         _write_journal(self.journal, journal)
         return original
 
-    def land(self):
+    def land(self, method="merge"):
         git(self.project, "checkout", "-q", "target")
-        git(self.project, "merge", "--no-ff", "-qm", "merge candidate", "candidate")
+        if method == "fast-forward":
+            git(self.project, "merge", "--ff-only", "candidate")
+        elif method == "squash":
+            git(self.project, "merge", "--squash", "candidate")
+            git(self.project, "commit", "-qm", "squash candidate")
+        else:
+            git(self.project, "merge", "--no-ff", "-qm", "merge candidate", "candidate")
         self.result = git(self.project, "rev-parse", "HEAD")
         git(self.project, "update-ref", "refs/remotes/origin/target", self.result)
         return self.result
@@ -191,7 +197,7 @@ class MergeSupersedenceTests(KernelCase):
         git(self.project, "checkout", "-q", "candidate")
         git(self.project, "merge", "--no-ff", "-qm", "refresh after earlier merge", "target")
         self.prepare()
-        # Synthetic legacy replacement binding to the target that already contains A.
+        # Synthetic earlier replacement binding to the target that already contains A.
         journal = _read_journal(self.journal)
         newer = journal["actions"][1]
         bound = journal["units"]["delivery"]["candidate"]
@@ -259,3 +265,15 @@ class MergeSupersedenceTests(KernelCase):
             with self.assertRaises(PodError) as caught:
                 _validate_row(row)
             self.assertEqual(caught.exception.code, "state_unsupported")
+
+    def test_fast_forward_replacement_keeps_candidate_ancestry_distinct_from_target_heads(self):
+        self.legacy_pair()
+        self.land("fast-forward")
+        self.outcome(self.second, "PASS", provider={"merge_commit": self.result})
+        self.assert_superseded()
+
+    def test_squash_replacement_settles_earlier_unexecuted_merge(self):
+        self.legacy_pair()
+        self.land("squash")
+        self.outcome(self.second, "PASS", provider={"merge_commit": self.result})
+        self.assert_superseded()

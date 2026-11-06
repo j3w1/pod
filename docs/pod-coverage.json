@@ -12460,7 +12460,11 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_merge_supersedence.MergeSupersedenceTests.test_merge_pass_settles_legacy_pending_and_closure_proceeds_without_provider",
+      "offline_test": [
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_merge_pass_settles_legacy_pending_and_closure_proceeds_without_provider",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_fast_forward_replacement_keeps_candidate_ancestry_distinct_from_target_heads",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_squash_replacement_settles_earlier_unexecuted_merge"
+      ],
       "status": "NOT_RUN"
     },
     {
