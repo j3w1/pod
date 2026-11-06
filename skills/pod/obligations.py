@@ -2628,6 +2628,14 @@ def admission_binding(body: dict, ctx: dict, state: dict) -> dict:
     sources = [*(body.get("sources") or []),
                *({"path": ref["path"], "state": "present", "sha256": ref["sha256"]}
                  for ref in (body.get("context") or []) if ref.get("kind") in ("source", "instruction"))]
+    limit = bound("assurance binding", "sources", "max_items")
+    if len(sources) > limit:
+        # R227: refuse before reservation what a completed review's receipt could not record.
+        raise refuse("unbound_assignment", "binding_sources_exceeded",
+                     f"a binding joins the packet sources and source/instruction context entries; at most {limit}",
+                     sources=len(sources), limit=limit, record="assurance binding",
+                     next_action=f"bind at most {limit} sources and source/instruction context entries together, "
+                                 "for example by narrowing the review's scope or splitting it; no worker was started")
     return {"policy_revision": ctx.get("policy_revision"), "environment": verification.get("environment"),
             "dependencies": list(verification.get("dependencies", [])), "sources": sources,
             "governance": bound_governance_digest(state),
