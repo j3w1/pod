@@ -111,31 +111,45 @@ ADDED = (FIELD, "decision_order", "decision_channels")
 SIDECAR_FIELDS = {"schema", "objective", "repository", "record", "receipt", FIELD, "decision_order"}
 
 # The one older format retirement reads whole: the shape the 0.6.0 cutover left (R205). Each key is READ and proven
-# by detection, holds only the resource-free values listed (a tuple), or is DESCRIPTIVE text that never names a
-# native resource. Any other key or value refuses `retirement_scope_unproved`, naming its field.
-READ, DESCRIPTIVE = "read", "descriptive"
+# by detection or has an exact descriptive shape: scalar types, lists of one shape, allow-listed maps, or a tuple
+# of alternatives (including resource-free literals). No descriptive map can carry an unexamined nested value.
+READ = "read"
+OLDER_ROUTE = {"agent": str, "model": str, "effort": str, "context": str}
+OLDER_REQUEST = {**OLDER_ROUTE, "reason": str}
+OLDER_ROUTE_DECISION = {"agent": str, "model": str, "requested_effort": str, "requested_context": str,
+                        "reason": str, "preference_revision": str, "policy_revision": str, "mode": str,
+                        "constraint_refs": [(str, None)], "pod_version": str, "effective": OLDER_ROUTE,
+                        "route_mismatch": bool, "effective_unknown": bool}
+OLDER_EFFECTIVE_EVIDENCE = {"requested": OLDER_REQUEST, "effective": OLDER_ROUTE}
+OLDER_CONSTRAINT_VALUES = {"only_agents": [str], "only_models": [str], "exclude_models": [str],
+                           "role_model": str, "max_workers": int, "allow_disabled": str,
+                           "allow_delegation": bool}
+OLDER_CONSTRAINT = {"id": str, "kind": str, "provenance": str, "value": READ,
+                    "role": str, "saved_state": str, "mode": str, "file_stamp": str, "active": bool}
+OLDER_SOURCE = {"schema": str, "repository": str, "number": int, "locator": str, "body_sha256": str,
+                "amendments": [{"locator": str, "sha256": str}]}
 OLDER_FORMAT = {"context": "pod-context/v4", "checkpoint": "pod-checkpoint/v2", "admission": "pod-admission/v3"}
-OLDER_CONTEXT = {"schema": READ, "owner": READ, "admissions": READ, "checkpoint": READ, "revision": DESCRIPTIVE,
-                 "constraints": DESCRIPTIVE, "interventions": ({},), "source_rejections": ({},)}
+OLDER_CONTEXT = {"schema": READ, "owner": READ, "admissions": READ, "checkpoint": READ, "revision": int,
+                 "constraints": [OLDER_CONSTRAINT], "interventions": ({},), "source_rejections": ({},)}
 OLDER_CHECKPOINT = {"schema": READ, "objective": READ, "worktree": READ, "native_refs": READ,
                     "assignments": ([],), "questions": ([],), "continuity": (None,),
-                    "criteria": DESCRIPTIVE, "candidate": DESCRIPTIVE, "plan_revision": DESCRIPTIVE,
-                    "policy_revision": DESCRIPTIVE, "bundle_digest": DESCRIPTIVE, "pod_version": DESCRIPTIVE,
-                    "next_safe_action": DESCRIPTIVE, "verification_gaps": DESCRIPTIVE,
-                    "remaining_gates": DESCRIPTIVE}
+                    "criteria": [str], "candidate": str, "plan_revision": str,
+                    "policy_revision": str, "bundle_digest": str, "pod_version": str,
+                    "next_safe_action": str, "verification_gaps": [str], "remaining_gates": [str]}
 OLDER_ADMISSION = {"schema": READ, "admission_id": READ, "objective": READ, "owner": READ, "state": READ,
                    "run_id": READ, "task_id": READ, "request_uuid": READ, "native_binding": READ, "worktree": READ,
-                   "recovery": READ, "runtime": DESCRIPTIVE, "request": DESCRIPTIVE, "route_decision": DESCRIPTIVE,
-                   "effective_evidence": DESCRIPTIVE, "plan_revision": DESCRIPTIVE, "packet_id": DESCRIPTIVE,
-                   "created_at": DESCRIPTIVE, "updated_at": DESCRIPTIVE, "error": (None,), "failures": ([],),
+                   "recovery": READ, "runtime": str, "request": OLDER_REQUEST,
+                   "route_decision": OLDER_ROUTE_DECISION, "effective_evidence": OLDER_EFFECTIVE_EVIDENCE,
+                   "plan_revision": str, "packet_id": str, "created_at": str, "updated_at": str,
+                   "error": (None,), "failures": ([],),
                    "reuse_of": (None,)}
 OLDER_RECOVERY = {"checkpoint_binding": READ, "placement_binding": READ, "failed_stage": (None,),
                   "native_start_state": ("ready",), "receipt": ("recorded",), "residual_resources": ([], None)}
-OLDER_CHECKPOINT_BINDING = {"worktree": READ, "candidate": DESCRIPTIVE, "criteria": DESCRIPTIVE,
-                            "objective_source": DESCRIPTIVE, "plan_revision": DESCRIPTIVE,
-                            "policy_revision": DESCRIPTIVE}
-OLDER_WORKTREE = {"path": READ, "branch": DESCRIPTIVE, "repo_key": DESCRIPTIVE, "repository": DESCRIPTIVE}
-OLDER_REF = {"runId": READ, "runtime": DESCRIPTIVE}
+OLDER_CHECKPOINT_BINDING = {"worktree": READ, "candidate": str, "criteria": [str],
+                            "objective_source": (None, OLDER_SOURCE), "plan_revision": str,
+                            "policy_revision": str}
+OLDER_WORKTREE = {"path": READ, "branch": str, "repo_key": (None, str), "repository": (None, str)}
+OLDER_REF = {"runId": READ, "runtime": str}
 OLDER_BINDING = ("dispatchId", "runId", "taskId", "workerId", "worktreeId", "terminalHandle")
 
 
@@ -303,10 +317,54 @@ def older_scope(raw: dict, objective: str) -> tuple[list[str], str | None]:
             return where
         for key, item in value.items():
             handling = fields.get(key)
-            if handling is None or isinstance(handling, tuple) and not any(
-                    type(item) is type(allowed) and item == allowed for allowed in handling):
-                return f"{where}.{key}" if where else str(key)
+            path = f"{where}.{key}" if where else str(key)
+            if handling is None:
+                return path
+            found = descriptive(item, handling, path)
+            if found is not None:
+                return found
         return None
+
+    def descriptive(value: object, shape: object, where: str) -> str | None:
+        if shape == READ:
+            return None  # Proven separately below and by detection.
+        if isinstance(shape, type):
+            return None if type(value) is shape and (shape is not str or _encodable(value)) else where
+        if isinstance(shape, dict):
+            if not shape:
+                return None if type(value) is dict and value == {} else where
+            required = set(shape)
+            if shape is OLDER_EFFECTIVE_EVIDENCE and value == {}:
+                return None  # Reserved admissions have no effective evidence yet.
+            if shape is OLDER_CONSTRAINT and isinstance(value, dict):
+                required = {"kind", "provenance", "value"}
+                kind = value.get("kind")
+                if not isinstance(kind, str) or kind not in OLDER_CONSTRAINT_VALUES:
+                    return where + ".kind"
+                shape = {**shape, "value": OLDER_CONSTRAINT_VALUES[kind]}
+            found = unlisted(value, shape, where)
+            if found is not None:
+                return found
+            missing = sorted(required - set(value))
+            return where + "." + missing[0] if missing else None
+        if isinstance(shape, list) and shape:
+            if not isinstance(value, list):
+                return where
+            for index, item in enumerate(value):
+                found = descriptive(item, shape[0], f"{where}[{index}]")
+                if found is not None:
+                    return found
+            return None
+        if isinstance(shape, tuple):
+            found = where
+            for option in shape:
+                refused = descriptive(value, option, where)
+                if refused is None:
+                    return None
+                if refused != where:
+                    found = refused
+            return found
+        return None if type(value) is type(shape) and value == shape else where
 
     def place(value: object, where: str) -> str | None:
         if value is None:
@@ -374,13 +432,17 @@ def older_scope(raw: dict, objective: str) -> tuple[list[str], str | None]:
         found = unlisted(recovery, OLDER_RECOVERY, where + ".recovery")
         if found is not None:
             return bad(found)
-        if recovery.get("placement_binding") not in (None, worktree):
-            return bad(where + ".recovery.placement_binding")
+        found = place(recovery.get("placement_binding"), where + ".recovery.placement_binding")
+        if found is not None or recovery.get("placement_binding") not in (None, worktree):
+            return bad(found or where + ".recovery.placement_binding")
         snapshot = recovery.get("checkpoint_binding")
         if snapshot is not None:
             found = unlisted(snapshot, OLDER_CHECKPOINT_BINDING, where + ".recovery.checkpoint_binding")
             if found is not None or snapshot.get("worktree") not in (None, worktree):
                 return bad(found or where + ".recovery.checkpoint_binding.worktree")
+            found = place(snapshot.get("worktree"), where + ".recovery.checkpoint_binding.worktree")
+            if found is not None:
+                return bad(found)
     return sorted(runs), None
 
 
