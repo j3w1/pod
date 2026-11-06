@@ -281,9 +281,27 @@ def _handoff_route(state: dict, facts: dict) -> dict:
     else:
         return {**route, "condition": "lineage_unproven",
                 "message": "the Run was rebound outside a pending handoff"}
+    workspace = (state.get("checkpoint") or {}).get("worktree")
+    path = workspace.get("path") if isinstance(workspace, dict) else None
+    if condition == "fresh" or pending["verified"].get("unlinked") is True:
+        # A new terminal takes the handoff, and finishes one it began without a current Run, only in the recorded
+        # worktree as it is recorded (pod#292).
+        from .handoff import recorded_place
+        place = recorded_place(None, state.get("checkpoint") or {}, caller=False)
+        if place is not None:
+            if place.get("unverified"):
+                return {**route, "status": "unverified", "condition": place["condition"],
+                        "message": "the recorded worktree could not be read, so whether a new terminal can take "
+                                   "the handoff is unknown"}
+            return {**route, "condition": place["condition"],
+                    "message": "no new terminal can take the handoff: the recorded worktree is "
+                               + ("unrecorded" if place["condition"] == "caller_not_linked" else
+                                  "missing or no longer its recorded repository, key or branch")
+                               + "; a successor claim is the route"}
     return {**route, "status": "available", "condition": condition,
-            "message": f"from a live terminal on Run {facts['run']} with the owner's direct confirmation; "
-                       "that terminal's status runs the remaining checks"}
+            "message": (f"from a live terminal in the recorded worktree {path}" if condition == "fresh"
+                        else "from the terminal that holds the pending handoff")
+                       + " with the owner's direct confirmation; that terminal's status runs the remaining checks"}
 
 
 def _evidence_route(project: Path | None, objective: str, port) -> dict:

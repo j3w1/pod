@@ -380,6 +380,8 @@ def _models(project: Path, action: str | None, *, check: bool = False,
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
+    from .util import project_path
+    project = project_path(project)
     if args.command == "admission" and args.selected:
         from .admission import selected_command
         return selected_command(args, project)
@@ -534,7 +536,8 @@ def main(argv: list[str] | None = None) -> int:
     if workspace and sys.stdin.isatty() and sys.stdout.isatty():
         from .tui import run as run_tui
         try:
-            return run_tui(Path.cwd())
+            from .util import project_path
+            return run_tui(project_path(Path.cwd()))
         except PodError as exc:
             print(f"pod: {exc.code}: {exc}", file=sys.stderr)
             return 1

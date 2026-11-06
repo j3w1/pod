@@ -6,6 +6,7 @@ from io import StringIO
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -554,13 +555,14 @@ class IssueBodyWriteTests(unittest.TestCase):
 
     def test_issue_write_forgets_scoped_repository_identity(self):
         context = {"repository": "acme/widgets"}
-        with repository_reads(), patch("pod.github._read_repository_context", return_value=(context, True)) as read, \
+        with tempfile.TemporaryDirectory() as directory, repository_reads(), \
+             patch("pod.github._read_repository_context", return_value=(context, True)) as read, \
              self.perform(completed("HTTP/2.0 200 OK\n\n{}")), \
              patch("pod.github.gh_executable", return_value=Path("/fixture/gh")):
-            repository_context(Path("/fixture"))
-            repository_context(Path("/fixture"))
-            GhPort(Path("/fixture")).issue_body_write(source=issue_binding(), body="new")
-            repository_context(Path("/fixture"))
+            repository_context(Path(directory))
+            repository_context(Path(directory))
+            GhPort(Path(directory)).issue_body_write(source=issue_binding(), body="new")
+            repository_context(Path(directory))
             self.assertEqual(read.call_count, 2)
 
 

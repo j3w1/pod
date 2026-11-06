@@ -413,6 +413,9 @@ for _name in ("revision authority", "user source", "authorization", "standing de
                     for key in ("actor", "decided_at", "recorded_at", "decision_binding", "decision_verification")})
 TABLE["withdrawal"]["fields"]["by"] = choice(("user_direct", "agent_decision", "project_policy", "coordinator", "issue_revision"))
 TABLE["withdrawal"]["fields"]["accepted_seq"] = {"type": "integer", "stored_only": True}
+TABLE["withdrawal"]["fields"]["follows"] = {
+    "type": "object", "stored_only": True,
+    "form": "kernel-owned: the withdrawn parent assurance (obligation, by, reason) a coordinator correction retires with"}
 
 
 def fields(name):

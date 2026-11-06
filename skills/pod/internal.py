@@ -825,6 +825,9 @@ def run(operation: str, request: dict) -> dict:
     handler = _OPERATIONS.get(operation)
     if handler is None:
         raise PodError("unknown_operation", "Unsupported private helper operation")
+    if isinstance(request, dict) and "project" in request:
+        from .util import project_path
+        project_path(request["project"])
     from .github import repository_reads
     from .ledger import continuity_events
     events = continuity_events()

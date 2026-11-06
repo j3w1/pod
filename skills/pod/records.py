@@ -319,6 +319,11 @@ def evidence(value: Any, *, criterion: str, candidate: str, policy_revision: str
 
 
 def source_identity(root: Path, relative: str, *, max_bytes: int = 1_048_576) -> dict:
+    return source_content(root, relative, max_bytes=max_bytes)[0]
+
+
+def source_content(root: Path, relative: str, *, max_bytes: int = 1_048_576) -> tuple[dict, bytes | None]:
+    """`source_identity` and, when the source is present, the exact bytes it hashed."""
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise PodError("unsafe_source", "Source path must stay relative to project")
     if "\x00" in relative:
@@ -345,19 +350,19 @@ def source_identity(root: Path, relative: str, *, max_bytes: int = 1_048_576) ->
                 try:
                     parent = os.open(part, flags | directory, dir_fd=parent)
                 except FileNotFoundError:
-                    return {"path": relative, "state": "absent"}
+                    return {"path": relative, "state": "absent"}, None
                 stack.callback(os.close, parent)
             try:
                 fd = os.open(Path(relative).name, flags | nonblock, dir_fd=parent)
             except FileNotFoundError:
-                return {"path": relative, "state": "absent"}
+                return {"path": relative, "state": "absent"}, None
             stack.callback(os.close, fd)
         except (NotImplementedError, TypeError) as exc:
             raise PodError("source_unavailable", "Descriptor-relative source access is unsupported") from exc
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOTDIR):
                 raise PodError("unsafe_source", "Source path contains a redirect or non-directory") from exc
-            return {"path": relative, "state": "unavailable"}
+            return {"path": relative, "state": "unavailable"}, None
         try:
             before = os.fstat(fd)
             if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
@@ -371,12 +376,12 @@ def source_identity(root: Path, relative: str, *, max_bytes: int = 1_048_576) ->
                 remaining -= len(chunk)
             after = os.fstat(fd)
         except OSError:
-            return {"path": relative, "state": "unavailable"}
+            return {"path": relative, "state": "unavailable"}, None
         data = b"".join(chunks)
         identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
         if len(data) > max_bytes or len(data) != before.st_size or identity(before) != identity(after):
-            return {"path": relative, "state": "unavailable"}
-        return {"path": relative, "state": "present", "sha256": hashlib.sha256(data).hexdigest()}
+            return {"path": relative, "state": "unavailable"}, None
+        return {"path": relative, "state": "present", "sha256": hashlib.sha256(data).hexdigest()}, data
 
 
 def verify_sources(root: Path, bound: list[dict]) -> None:

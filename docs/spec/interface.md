@@ -160,7 +160,7 @@ When status's exact native settlement read fails, every open admission is listed
 
 Type: B · Scenarios: [A200](#a200), [A201](#a201), [A227](#a227), [A376](#a376), [A377](#a377), [A378](#a378), [A379](#a379), [A397](#a397)
 
-An `exact()` shape refusal lists its record's complete accepted and optional field names, including for a non-object. Missing/unsupported caller names remain bounded in count and length and control-stripped. A non-object also names its expected type; a `pod internal` refusal names its operation. A first checkpoint requesting a map, including one supplying only `seq`, names missing `governance` and `obligations` through this refusal shape and writes no context. A checkpoint with no map fields remains valid. No refused value is echoed, except the policy digests below. There are no prose examples or generated schemas.
+An `exact()` shape refusal lists its record's complete accepted and optional field names, including for a non-object. Missing/unsupported caller names remain bounded in count and length and control-stripped. A non-object also names its expected type; a `pod internal` refusal names its operation. A first checkpoint requesting a map, including one supplying only `seq`, names missing `governance` and `obligations` through this refusal shape and writes no context. A persisted row missing `id` uses the same named shape refusal at the existing load-time identity read; missing `kind` refuses at the checkpoint criterion read. Other load-time validation stays in place. An unhashable caller criterion id reaches the ordinary named identifier refusal. These guards write nothing and do not advance semantic validation or change the closed-map refusal precedence. A checkpoint with no map fields remains valid. No refused value is echoed, except the policy digests below. There are no prose examples or generated schemas.
 
 `skills/pod/contracts.py` owns the input-field table for packet, report, checkpoint, map and its obligations, waits, externals, withdrawals, evidence and acceptances, admission and Governor action, plus their bounded subrecords. These include action.authorization (its decision fields, authorized_by/reference/target up to 512 and scope of 1–8 vocabulary items), the report request's triage finding (summary up to 512, downgrade reason up to 1024, root_cause up to 512, groups of 1–8 finding/severity members), the keep_worker_tab constraint value (objective, dispatch and terminal up to 256) and the checkpoint's display record (task up to 48 characters, at most 32 continued entries and host_tab, R142). Parent field descriptions name the authorization, finding and group-member records. The validators read that table's names, text/count bounds, identifier forms and vocabulary. Existing opaque fields stay opaque and acquire no new validation. Before any write, `pod internal contract` reads a named record or `all`, selected by its required `record` field, returning bounded constant field data with accepted/optional names. Shape and text-limit refusals include every bounded field of the affected record and its complete accepted/optional names; those constant lists bypass the kernel's eight-item caller-referent cap.
 
@@ -422,7 +422,7 @@ Admission and replacement are admission digests; source has only its nonempty re
 - <a id="a192"></a>**A192** — With a changed runtime and N open admissions, status reports 0 active and N under `assignments.unverified`, its render counts the N as unverified, and no progress line or next action waits for their delivery.
 - <a id="a193"></a>**A193** — The same status names the failed read's code, the objective's bound and current runtime (unknown when unread) and Orca's attention for each unverified row, labelled as Orca's.
 - <a id="a194"></a>**A194** — A verified read explicitly asserts the genuine 0.6.6 v4 and current v5 envelope markers and preserves exact equality of every other comparable projection field apart from R114's new fields, and of the rendering after its readiness line, for the same missing-fact fixture, with additive current resource/stage facts under R48 when observed, including an objective whose checkpoint recorded its consumer generation and has no rebind history; with a changed runtime the kernel's outstanding set is unchanged and status writes nothing. A sanitized R15-shaped incident (5 finished Dispatches, 4 consumed reports) shows 0 active and 5 unverified.
-- <a id="a200"></a>**A200** — For every `pod internal` operation, a request missing one required field and carrying one unknown field is refused naming the operation, the record and both fields; a sentinel value in the request appears on neither stdout nor stderr. Every shape or text-limit refusal also lists complete accepted/optional constant names and every bounded field of its record from the discovery table; a non-object names its expected type without values. First-checkpoint map omissions refuse with the missing names and next action, preserving persisted bytes; valid mapless and mapped checkpoints still pass.
+- <a id="a200"></a>**A200** — For every `pod internal` operation, a request missing one required field and carrying one unknown field is refused naming the operation, the record and both fields; a sentinel value in the request appears on neither stdout nor stderr. Every shape or text-limit refusal also lists complete accepted/optional constant names and every bounded field of its record from the discovery table; a non-object names its expected type without values. First-checkpoint map omissions refuse with the missing names and next action, preserving persisted bytes; valid mapless and mapped checkpoints still pass. Persisted rows missing `id` or `kind` and unhashable caller criterion ids refuse with the field named and no changed bytes; derived governance projections, earlier-record loading and closed-map refusal precedence remain unchanged.
 - <a id="a201"></a>**A201** — The same inputs keep their acceptance/refusal codes and prior diagnostic detail, with additive contract and repair data; obligation-kernel referents and corrections are self-describing without values except known policy digests, and numerous, long or control-character caller field names are bounded and cleaned. Accepted/optional names, bounded-field data and validated obligation-restatement lists remain complete beyond eight entries through util and kernel refusal paths; caller field names remain bounded and control-stripped.
 - <a id="a202"></a>**A202** — Issue intake, including `internal issue-intake`, returns no binding and refuses `issue_is_evidence_ledger` for an `EEL:` title, or for the exact format line as the first non-empty unindented body line with or without `<br>` and with LF or CRLF endings; the refusal says the issue is evidence only and implementation needs a separate Pod Execution Spec citing it.
 - <a id="a203"></a>**A203** — A bound Pod Execution Spec issue that later gains either marker, including only a title change, is refused at the next recheck; continuation, affected admission, final verification and `internal issue-recheck` surface the EEL refusal, not `issue_reconciliation_required`.
@@ -1426,7 +1426,7 @@ full audit and explicit migration are separate operations.
 
 ### R207 — Answer many admission queries over one shared discovery
 
-Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787), [A825](#a825), [A861](#a861), [A862](#a862), [A868](#a868), [A869](#a869), [A997](#a997), [A998](#a998), [A999](#a999), [A1000](#a1000)
+Type: B,I · Scenarios: [A779](#a779), [A780](#a780), [A781](#a781), [A782](#a782), [A783](#a783), [A784](#a784), [A785](#a785), [A786](#a786), [A787](#a787), [A825](#a825), [A861](#a861), [A862](#a862), [A868](#a868), [A869](#a869), [A997](#a997), [A998](#a998), [A999](#a999), [A1000](#a1000), [A1018](#a1018), [A1019](#a1019), [A1020](#a1020)
 
 `pod admission --batch --timeout SECONDS --json` reads one `pod-admission-batch-request/v1`
 object from stdin and answers `pod-admission-batch/v1`. With `--batch` every per-query flag is
@@ -1465,13 +1465,25 @@ abandoned worker's current claim, each Run's owner observation, each repository'
 worktree inventory, each effect policy revision, each target resolution and R212's host process-exit verdicts.
 It also derives once, for every query, the local facts each query would otherwise repeat: each repository's state
 root, each known repository path's resolution, each workspace's rule T 4b judgement, each Dispatch's rule S verdict,
-each terminal record's validation and each context's or journal's recheck identity. Each query receives
+each terminal record's validation, each context's or journal's recheck identity, and each fleet row's worker
+facts (once, whether the partition reader's row check, a claim's demand or a projection asks first), of which
+every query receives its own copy. Each query receives
 the value or the fault of that one read at the point where the single query would read it, so a
 read fault stays a scoped unknown of every result it is relevant to, never a batch failure.
 Nothing is cached across calls. A bound caller keeps the `native_inventory_scope` unknown. The
 fleet, the terminal inventory and the worktree inventories are read in a bounded pool of threads,
-at most eight Orca reads at once, while the queries read their records, and an abandoned
-worker's claim read starts as soon as its inventory row is listed. A listed worker's workspace
+at most eight Orca reads at once, while the queries read their records. An abandoned worker's
+current-claim read starts only when some query's answer can use it: once every query's record pass
+is done and the row is listed, when the row is abandoned for that query (natively, or by its own
+records), passes the projection's row checks, and the query names effects or the row's actor scope
+is relevant to the request. That scope is computed as the projection computes it, from the row's native
+location, the repository's worktree registry and the placements its own records bind, which the projection
+consults first; a row neither places gets no branch and no repository key. The projection's only later
+source, the records of another repository naming the row's Run, can only add a branch and a repository
+key, and with the request fixed they can only make the scope irrelevant, so every claim a result reads is
+read before the end fence. Every row of the fleet read is judged so before the end fence, whichever reader
+listed it. A row whose judgement meets a fault is demanded, and each query meets the same fault where it reads
+that fact, as its scoped unknown. A listed worker's workspace
 Git identity read starts the same way, in its own pool of at most four, and rule T 4b takes that
 workspace's worktree registry from the same read. In a batch the Run-coordinator list starts as
 soon as the terminal inventory is known, and each Run owner read as soon as both a query's record
@@ -1479,10 +1491,22 @@ pass has named it and the terminal inventory is known, whichever comes last. Eve
 call returns, and exhausting the shared deadline is `discovery_budget` exactly as in the single
 query.
 
-Discovery reads the all-Run inventory with the newest-first cursor walk alone, the same reader and
-checks as the single query before 0.21.31. Its cursor is a keyset position, so every Dispatch that
-exists for the whole walk is listed exactly once, whatever state it changes to, and a malformed row
-fails where it always did. `discovery.fleet_read` is `sequential`, or `bound` for a bound caller,
+Discovery reads the all-Run inventory as the six terminal-state partitions in parallel, one thread
+each, inside a bracket: an unfiltered newest-first page read before any partition and again after them
+all. Each partition is read with the walk's cursor, scope, runtime and identity checks, a total that stays
+the same on every page and equals its rows, every row in that partition and every row passing the
+projection's row checks. The union is used only when both bracket pages have equal runtime, total, counts
+and row identities, every partition's total equals the opening page's count for its state and their sum its
+total, no Dispatch is in two partitions, and every row of the opening page is in the union with an equal
+identity; its rows are in partition order. Otherwise discovery reads the newest-first cursor walk, starting
+from the opening page, the same reader and checks as the single query before 0.21.31: its cursor is a
+keyset position, so every Dispatch that exists for the whole walk is listed exactly once, whatever state
+it changes to, and a malformed row fails where it always did. A failed read fails discovery as the walk's
+would, once every partition has settled: a spent budget is its fault before any other read fault, and a
+programming fault is never hidden behind one. The released partition, about one page per 100 released Dispatches, is the read's floor; Orca can
+filter released rows by Run alone, and an answer can depend on released rows found only by reading them
+(released abandoned rows, rows a record binds, rule S's later owners), so they are read once per call.
+`discovery.fleet_read` is `partitioned`, `sequential` after a fallback, or `bound` for a bound caller,
 `discovery.orca_reads` counts the call's Orca reads, and `discovery.host_exit` counts R212's
 requests (`requests`, `asked`, `counted`, and after a stop `not_asked_after` and `not_asked`); `discovery` is diagnostic only. The
 inventory's cost grows with the Dispatches Orca keeps, about 0.15 s per 100 finished Dispatches.
@@ -1523,12 +1547,15 @@ projection and the shared recheck run beside them, and a native read requested a
 is refused `native_read_after_fence` rather than made: a claim read becomes that scoped unknown, and
 a Run-owner read keeps its owner observation with that code, `owner_identity_matches` false, and
 also adds the scoped unknown, so the result is incomplete. Each side holds `total` and `counts` from the unfiltered newest-first
-page of up to 100 rows (the walk's first page at the start; a fresh page at the end); `unreleased` and `unreleased_sha256` over every row whose terminal state is not
+page of up to 100 rows (the opening bracket page or the walk's first page at the start; that page read again
+at the end); `unreleased` and `unreleased_sha256` over every row whose terminal state is not
 `released`, and `released` and `released_sha256` over every row whose terminal state is `released`
-(both from the walk's rows at the start; at the end from every page of that same walk read again, each from
-the cursor Orca issued for it during this call's walk, the first with none, all in parallel and each with the
-walk's scope, runtime, completeness and identity checks); `pages` and `pages_sha256` over each walk page's
-Dispatch identities in order with its `hasMore` (`[[IDS, MORE], ...]`, at the start as the walk read them and
+(both from discovery's rows at the start; at the end from every page discovery read, read again, each in its
+partition and from the cursor Orca issued for it during this call, the first with none, all in parallel and
+each with the walk's scope, runtime, completeness and identity checks; the bracket page adds no rows, since
+its rows are listed by their partitions); `pages` and `pages_sha256` over each page's
+Dispatch identities in order with its `hasMore`, its partition (null for the unfiltered walk) and whether it
+is the bracket page (`[[IDS, MORE, STATE, BRACKET], ...]`, at the start as discovery read them and
 at the end as those reads return them); `newest` and `newest_sha256` over that
 page's rows; and `claims_read` and `claims_sha256` over the claim Pod derived,
 `{dispatch, process, effects}`, for every abandoned Dispatch whose current claim discovery read,
@@ -1561,12 +1588,20 @@ changing an identity field, including a Dispatch settling into `released` or lea
 released Dispatch becoming abandoned; any change
 among the newest 100 rows, which holds every Dispatch created during the call; a deleted Dispatch,
 which lowers `total`; a change in an abandoned Dispatch's derived claim; a change to any extended field of a Dispatch counted exited on the host's verdict; and a runtime change.
-A change during the discovery walk is one of these, since the start side is that walk: a Dispatch
+A change during discovery is one of these, since the start side is discovery's own read: a Dispatch
 created during it is on the end's newest page, a deletion lowers the end's total, and any identity
-change alters the end's counts or row digests. The end's membership is the walk's: each end page is the
-rows Orca lists after the cursor it issued for that page, so equal page lists mean no Dispatch was created,
-deleted or moved anywhere in the order, and any difference in a page's Dispatches, their order or its
-`hasMore` changes `pages_sha256`. A cursor Orca no longer accepts fails its read, which leaves the end
+change alters the end's counts or row digests. The end's membership is discovery's: each end page is the
+rows Orca lists in that partition after the cursor it issued for that page, so equal page lists mean no
+Dispatch was created, deleted or moved anywhere in any partition's order, and any difference in a page's
+Dispatches, their order or its `hasMore` changes `pages_sha256`. A Dispatch moving between partitions
+during a partitioned discovery is listed in both (refused, so the walk is read), listed once, or listed in
+neither. Listed in neither, it is on a page of its new partition at the end, or above that partition's first
+page, which is read from the top, so that page's Dispatches change; and its old partition's total, read
+after it left, differs from the opening page's count unless another move balances it, which takes a
+creation (the newest page) or a deletion (the total), both of which the bracket's equal pages and the end
+fence each show. A balanced create, settle and delete during discovery therefore changes the closing page
+(the walk is read) or a page at the end (the fence is unstable), never a complete stable answer without the
+moved Dispatch. A cursor Orca no longer accepts fails its read, which leaves the end
 incomplete. The end fence is a pure comparison, so a race during its
 own reads only makes it unequal. Balanced changes cannot cancel out: a created Dispatch shows in the newest page, a settled one
 leaves the unreleased set, and a deleted one lowers the total, so creating, settling and deleting
@@ -1584,8 +1619,8 @@ admission reads them in its recorded-binding check, foreign holds and rule S, so
 
 - <a id="a779"></a>**A779** — Every request refusal is one `admission_batch_request` (or `admission_timeout`) error with no responses and exit 1; a per-query input fault names its query id before any discovery read; responses follow request order with their ids; the 8 MiB response limit refuses the whole batch; a factual batch answer exits zero.
 - <a id="a780"></a>**A780** — For the occupancy (worktree, branch, both), target with objective, candidate and target commit, effects, mismatched expect, native writer, bound caller, unreadable and unrelated records and projection-limit shapes, each batch result equals the single query with the same doubles.
-- <a id="a781"></a>**A781** — One batch of eight queries reads the fleet, the terminal inventory and each record once, plus one shared recheck that reads each rechecked file once; two calls each read afresh; an abandoned worker's claim is read once for every query and is started from its inventory row; no thread outlives the call.
-- <a id="a782"></a>**A782** — Discovery reads the fleet with the sequential walk alone (`fleet_read` `sequential`, or `bound` with no further read) and the fence's start comes from that walk, which records each page's cursor, Dispatches and `hasMore`; the end fence reads every walk page again from its own cursor and refuses a bound or one-Run scope, a runtime change, a truncated page, a duplicate within a page, a failed or unreadable read and a missing walk, each making the fence's end incomplete; the allowlist accepts exactly the walk and partition reads; a balanced replacement, an active replacement, a creation, a deletion, an old abandoned Dispatch settling beside a deletion and a creation, and a balanced state swap during discovery each give the changed Dispatch's claim or an unstable fence, never a complete stable answer without it.
+- <a id="a781"></a>**A781** — One batch of eight queries reads the fleet, the terminal inventory and each record once, plus one shared recheck that reads each rechecked file once; two calls each read afresh; an abandoned worker's claim some query can use is read once for every query and is started from its inventory row; no thread outlives the call.
+- <a id="a782"></a>**A782** — The sequential walk, discovery's fallback (`fleet_read` `sequential`, or `bound` with no further read), records each page's cursor, Dispatches and `hasMore` as the fence's start; the end fence reads every walk page again from its own cursor and refuses a bound or one-Run scope, a runtime change, a truncated page, a duplicate within a page, a failed or unreadable read and a missing walk, each making the fence's end incomplete; the allowlist accepts exactly the walk and partition reads; with discovery partitioned, a balanced replacement, an active replacement, a creation, a deletion, an old abandoned Dispatch settling beside a deletion and a creation, and a balanced state swap before the end reads each give the changed Dispatch's claim or an unstable fence, never a complete stable answer without it.
 - <a id="a783"></a>**A783** — Exhausting the shared deadline during the call gives `discovery_budget` in every relevant result.
 - <a id="a784"></a>**A784** — A record changed during the call is `record_changed` only in the queries it is relevant to and unrelated uncertainty in the others; a record added during discovery is `inventory_changed` in every query.
 - <a id="a785"></a>**A785** — A stable fence's fingerprints equal an independent computation of the documented rule and the end returns the nine-field rows; a connected flip, a new terminal or a runtime change at the end, an incomplete end and a failed end each make the fence unstable and the batch `unknown` and incomplete while every result is unchanged.
@@ -1594,6 +1629,9 @@ admission reads them in its recorded-binding check, foreign holds and rule S, so
 - <a id="a998"></a>**A998** — Two old rows changing places and a last page that now reports more rows leave every row digest equal but change `pages_sha256`, so the fence is unstable with `reason` `fleet_changed` while every result is unchanged.
 - <a id="a999"></a>**A999** — A spent budget on any walk page is the end's `code` and the reason `discovery_budget` whichever page another failure hit, and a spent claim read is a side's `code` beside another failed claim and beside a failed or refused walk page; another failed end read alone is `incomplete`; a changed row is `fleet_changed`, a runtime change `runtime_changed` and a new terminal `terminals_changed`.
 - <a id="a1000"></a>**A1000** — A released row whose Run identity is a list or an object answers in a batch as in the single query, with a stable fence, and never raises.
+- <a id="a1018"></a>**A1018** — An abandoned row a query can use starts its claim read while discovery lists it, once every record pass is done, and one no query can use starts none; a worktree-only query reads no claim of another worktree's abandoned row, a branch or effects query reads it, a record-accounted abandoned row is judged like a native one and a malformed row is not, under an effects query too; a fault judging a row's demand reads its claim and stays each query's scoped unknown; every result equals its single query and the result of reading every abandoned row's claim.
+- <a id="a1019"></a>**A1019** — Discovery reads the opening newest page, the six partitions in parallel and the closing newest page, answers the union in partition order and records every page, the bracket page first, as the fence's start; a Dispatch in two partitions, a count or total that differs from the union, a row outside its partition, a partition total that changes between pages, a malformed row, a newest row whose identity differs from its partition's and a closing page that differs each read the sequential walk instead, which lists the fleet; a failed partition read fails discovery once every partition settled, with a spent budget before any other read fault and a programming fault never hidden, in either order; the end reads every partition page again in its own partition and from its own cursor, the bracket page adds no rows, and a Dispatch that moved between partitions with every total and count kept changes the page and row digests.
+- <a id="a1020"></a>**A1020** — A batch through real partitioned discovery derives each fleet row's worker facts once per call, partition row check and a settled context-only row included, and every call afresh; each query receives its own copy, so one query's change never reaches another; a malformed row's refusal is raised again to every asker; every result equals its single query.
 - <a id="a787"></a>**A787** — During one call, a changed record is `record_changed` and incomplete only in the results it is relevant to, an added or removed record is `inventory_changed`, and a changed effect policy is `effect_policy_changed`; a fault inside one query's projection prints no partial batch; an unlocated foreign worker together with an open record's stale runtime answers normally in both forms; an OSError from the fleet or from a record read stays the scoped `inventory_unreadable` or `unreadable` answer in both forms; a Run-owner read asked for after the end fence started is never made and adds a scoped `native_read_after_fence` unknown.
 - <a id="a825"></a>**A825** — In a batch, an ended Dispatch whose terminal, workspace and Run coordinator are gone settles under rule S exactly as in the single query, with the same result and the same blocking unknowns, the Run list walked once for the call; no native read is requested after the end fence starts.
 - <a id="a861"></a>**A861** — In a batch the Run-coordinator list and each named Run owner's read start while discovery's fleet walk still runs, once the terminal inventory is known; a Run named before the terminal inventory completes starts its owner read when it completes, before the next query's record pass; no read follows the end fence and no thread outlives the call.
@@ -1811,3 +1849,13 @@ of 10 seconds and maximum of 30, and every read spends it.
 - <a id="a802"></a>**A802** — The same facts give the same digest, recomputable from the returned answer without `digest`, `status`, `conflicts` and `next_action`; a changed plan revision or policy revision gives a new digest; `--expect` with a stale digest adds `digest_changed` and makes the answer `blocked` with exit 0 while returning the unchanged facts digest; a malformed `--expect` and the `--tree` mismatch refuse with exit 1.
 - <a id="a803"></a>**A803** — An exhausted deadline (during the proof, at the end of the last read, before the record is read, or once the answer is finished), a record changed during the read, a failed exact worker read and an answer over the projection bound each give `unknown` with exactly their code, never `ready` and never a refusal; the bound applies to the final printed answer, and the over-bound answer has a null digest and no snapshot, assurances or attempts.
 - <a id="a804"></a>**A804** — A ready proof whose reviewer attempt lacks its recorded effort stays `ready` with no top-level unknown; the gap is visible in that attempt's `unknowns`, and filling it changes the digest.
+
+### R236 — Validate project paths before external reads
+
+Type: B,I · Scenarios: [A1053](#a1053), [A1054](#a1054), [A1055](#a1055)
+
+Every public command and internal helper accepting `project` validates the original input before Git or native reads. It must name an absolute path to an existing directory; do not resolve a relative path into a valid input. Invalid input refuses `project_path_invalid`, naming `project`, the value's kind without its contents, and the next action `pass the absolute worktree path`. Git discovery applies the same check before path resolution. A valid directory retains `git_unavailable` for Git launch or timeout failures.
+
+- <a id="a1053"></a>**A1053** — Bare names, relative paths, missing absolute paths, files and malformed values refuse `project_path_invalid` before subprocess execution, with the field, safe value kind and next action; absolute directories and directory symlinks pass validation.
+- <a id="a1054"></a>**A1054** — Every public command dispatch and internal operation carrying `project` validates before dispatch or external reads; issue-intake and public JSON diagnostics contain no private input contents. Git discovery rejects relative paths before resolution.
+- <a id="a1055"></a>**A1055** — Git launch and timeout failures in a valid existing absolute directory retain `git_unavailable`.
