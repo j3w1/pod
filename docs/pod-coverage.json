@@ -11265,7 +11265,8 @@
         "tests.test_keyed_index_binding.BindingTests.test_a_malformed_index_never_holds",
         "tests.test_keyed_index_binding.ReviewCarryTests.test_a_stored_index_that_disagrees_with_an_unchanged_file_never_holds",
         "tests.test_keyed_index_binding.BindingTests.test_a_surrogate_key_elsewhere_invalidates_and_valid_non_ascii_keys_bind",
-        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_lone_surrogate_elsewhere_invalidates"
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_lone_surrogate_elsewhere_invalidates",
+        "tests.test_keyed_index_binding.ParseTests.test_a_document_the_interpreter_cannot_decode_or_canonicalize_is_not_parsed"
       ],
       "status": "NOT_RUN"
     },

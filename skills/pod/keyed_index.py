@@ -67,7 +67,8 @@ def parse(data: Any) -> tuple[str, dict[str, str]] | None:
     """The schema digest and every row's digest, or None for any file that is not exactly a known index:
     undecodable or invalid JSON, a duplicate member name at any depth, a format name that is not a known text,
     a collection of the wrong type, a list row without a text `id`, two rows with one key, or a value that has
-    no exact canonical form (a nonfinite number, a lone surrogate, nesting too deep). It never raises."""
+    no exact canonical form (a nonfinite number, a lone surrogate in a value or a name), or that the interpreter
+    cannot decode or canonicalize (such as nesting beyond its recursion limit). It never raises."""
     if not isinstance(data, (bytes, bytearray)):
         return None
     try:

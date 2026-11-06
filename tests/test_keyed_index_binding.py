@@ -42,6 +42,14 @@ OWN = coverage(("A1", "NOT_RUN"), ("A2", "NOT_RUN"), ("A10", "NOT_RUN"))
 
 
 class ParseTests(unittest.TestCase):
+    def test_a_document_the_interpreter_cannot_decode_or_canonicalize_is_not_parsed(self):
+        # How deep the interpreter can nest depends on its build and stack, so the guard is forced here.
+        data = dump(OWN)
+        for target in ("pod.keyed_index.json.loads", "pod.keyed_index.json.dumps"):
+            for error in (RecursionError, MemoryError):
+                with self.subTest(target=target, error=error.__name__), patch(target, side_effect=error):
+                    self.assertIsNone(parse(data))
+
     def test_rows_are_keyed_by_collection_and_key_and_members_by_name(self):
         schema, rows = parse(dump(OWN))
         self.assertEqual(sorted(rows), ['["note"]', '["scenarios","A1"]', '["scenarios","A10"]',
@@ -73,7 +81,6 @@ class ParseTests(unittest.TestCase):
             "a lone low surrogate key": b'{"schema": "suite-lanes/v1", "durations": {"\\udc00": 2}}',
             "a lone surrogate member name": dump(BASE).replace(b'"note"', b'"\\ud800"', 1),
             "a lone surrogate row id": dump(BASE).replace(b'"A2"', b'"\\udfff"', 1),
-            "nesting too deep": b'{"schema": "suite-lanes/v1", "budgets": ' + b"[" * 100000 + b"]" * 100000 + b"}",
         }
         for label, data in cases.items():
             with self.subTest(label):
