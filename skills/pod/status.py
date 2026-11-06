@@ -832,6 +832,12 @@ def render(result: dict) -> None:
             print(("Window continuation: available; " if window["status"] == "window_available"
                    else f"Window continuation: unavailable ({clean(window['condition'])}); ")
                   + clean(window["next_action"]))
+            if window.get("condition") == "run_shared" and "open_objectives" in window:
+                # Which peers share the Run: open ones, and closed ones whose closure is unproven, with the reason.
+                from .handoff import shared_detail
+                print("Window continuation peers: " + clean(shared_detail({
+                    "objectives": window.get("other_objectives") or [], "open": window["open_objectives"],
+                    "closure_unproven": window.get("unproven_closures") or []})))
         claim = result.get("successor_claim")
         if isinstance(claim, dict):
             print("Successor claim: " + ("available; " if claim["status"] == "claim_available"
