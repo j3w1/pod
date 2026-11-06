@@ -392,7 +392,7 @@ class CompletedRemainingRefTests(_CompletedFixture):
         state["admissions"]["conflict"] = {"admission_id": "conflict", "state": "closed", "recovery": {
             "placement_binding": {"path": str(path), "branch": branch}}}
         with patch("pod.cleanup.read", return_value=state):
-            row = self.row(self.observed(), "local_branch")
+            row = next(row for row in self.observed()["resources"] if row["id"] == "local_branch:" + self.ref)
         self.assertIsNone(row["delete_argv"])
         self.assertIn("ambiguous", " ".join(row["reasons"]))
 
