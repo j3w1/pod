@@ -239,10 +239,19 @@ class ClosureTests(TickCase):
 
     def test_refused_changed_body_is_reconciliation_block_at_closure_E2_B2(self):
         self.bind(); self.prove(); self.issue.refuse_next = 403
-        self.issue.other_actor = "- [x] **PoD#1"
+        self.issue.other_actor = "- [ ] **PoD#1 outside edit"
         self.failure("issue_reconciliation_required", self.tick)
         closed = self.write(close=True)
         self.assertEqual(closed["pod_ticks"]["lines"][0]["blocked_at_closure"]["block"]["row"], "B2")
+
+    def test_outside_tick_of_proven_line_is_observed_current_not_blocked_at_closure_E2(self):
+        self.bind(); self.prove(); self.issue.refuse_next = 403
+        self.issue.other_actor = "- [x] **PoD#1"
+        self.failure("issue_reconciliation_required", self.tick)
+        row = self.line()
+        self.assertEqual((row["status"], row["authorship"], row["due"]), ("current", "not_pod", False))
+        closed = self.write(close=True)
+        self.assertNotIn("blocked_at_closure", closed["pod_ticks"]["lines"][0])
 
     def test_lost_outside_body_is_reconciliation_block_at_closure_E3_B2(self):
         self.bind(); self.prove(); self.issue.lose_next = "not_landed"

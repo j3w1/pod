@@ -227,3 +227,30 @@ class ContinuedStateTests(SuccessionCase):
             self.assertEqual(caught.exception.code, "objective_continued")
             self.assertEqual(self.snapshot(), before)
             self.assertEqual(issue.calls, [])
+
+
+class UnreconciledEditTests(TickCase):
+    """pod#75: status after an observed, unreconciled outside edit (R10 D1/D5, R133)."""
+
+    def drifted(self):
+        second = self.criterion("waiting", id="O2", source={"ref": "PoD#2"},
+                                wait={"class": "sequenced", "referent": "O1"})
+        self.bind("- [ ] **PoD#1\n- [ ] **PoD#2\n- [ ] **PoD#3", second, criteria=["PoD#1", "PoD#2"])
+        self.prove(); self.tick(1); self.tick(2)
+        self.issue.body += "\nOutside edit"
+        self.failure("issue_reconciliation_required", self.tick, 1)
+
+    def test_own_tick_is_not_due_after_drift_D5(self):
+        self.drifted()
+        self.assertFalse(self.ticks()["facts_current"])
+        own = self.line(2)
+        self.assertEqual((own["ticked"], own["authorship"], own["proven"]), (True, "own", True))
+        self.assertEqual((own["status"], own["direction"], own["due"]), ("current", None, False))
+        closed = self.write(close=True)
+        self.assertFalse([row for row in closed["pod_ticks"]["lines"] if "blocked_at_closure" in row])
+
+    def test_unmapped_line_stays_blocked_unmapped_after_drift_D1(self):
+        self.drifted()
+        unmapped = self.line(3)
+        self.assertEqual((unmapped["status"], unmapped["blocked"]["code"]), ("blocked", "unmapped"))
+        self.assertEqual(len(self.issue.writes), 2)

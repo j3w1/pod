@@ -450,7 +450,12 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
         ticked = observed[0] if len(observed) == 1 else None
         author = ledger["authors"].get(key, "not_pod")
         direction, block, label = None, None, "not_proven"
-        if not fresh:
+        # A successful read of a body that drifted from the binding (an outside
+        # edit not yet reconciled) is an observation, not an absence: a line it
+        # shows exactly once keeps its R10 row. Failed reads leave the facts
+        # stale and conservative.
+        observed_drift = not fresh and facts is not None and ledger["read"]["status"] == "read" and len(observed) == 1
+        if not fresh and not observed_drift:
             # Never let absent/stale facts hide a potentially writable proven
             # line, or the invalidation of a tick whose authorship we hold.
             direction = "tick" if proven else "untick" if author == "own" else None
