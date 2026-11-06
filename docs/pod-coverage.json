@@ -12682,7 +12682,8 @@
         "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_orphaned_correction_refusals_name_the_mechanical_step",
         "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_follows_is_kernel_owned_and_persisted_record_revalidates",
         "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_satisfied_correction_keeps_its_receipts",
-        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_follows_the_withdrawn_tip_of_a_renewed_assurance"
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_follows_the_withdrawn_tip_of_a_renewed_assurance",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_non_orphan_refusals_keep_their_own_next_action"
       ],
       "status": "NOT_RUN"
     }

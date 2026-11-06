@@ -78,7 +78,7 @@ class WithdrawnAssuranceCorrectionTests(ProductionCase):
         self.assert_follows("coordinator", "another approach was accepted")
         # R3: status shows the correction withdrawn with its parent's reason.
         row = next(line for line in status_lines(self) if line.startswith("  K "))
-        self.assertIn("withdrawn        retired with withdrawn parent: another approach was accepted "
+        self.assertIn("withdrawn        follows withdrawn parent: another approach was accepted "
                       "(A, by coordinator); by coordinator: the tool was cancelled", row)
         closed = self.close()["checkpoint"]
         self.assertEqual(closed["closure"]["report"]["status"], "closed")
@@ -171,6 +171,20 @@ class WithdrawnAssuranceCorrectionTests(ProductionCase):
                          {"obligation": "A2", "by": "coordinator", "reason": "another approach was accepted"})
         self.assertEqual(self.close()["checkpoint"]["closure"]["report"]["status"], "closed")
 
+    def test_non_orphan_refusals_keep_their_own_next_action(self):
+        """R246 changes guidance only for an orphaned correction: other rows keep their existing retry action."""
+        self.write(seq=self.next_seq(), obligations=[*self.stored(), {
+            "id": "S", "kind": "subgoal", "provenance": "coordinator", "parent": "O1", "check": "S is delivered",
+            **waiting()}])
+        follows = {"obligation": "O1", "by": "user_direct", "reason": "unused"}
+        for key in ("S", "K"):
+            with self.subTest(row=key):
+                caught = self.refusal(update={key: {"state": "withdrawn", "withdrawal": {
+                    "by": "coordinator", "reason": "cancelled", "follows": follows}}})
+                self.assertEqual((caught.code, caught.detail["detail"]), ("obligation_invalid", "withdrawal_unauthorized"))
+                self.assertEqual(caught.detail["next_action"], 'withdraw it with {"by": "coordinator", "reason": "<why>"}')
+                self.assertTrue(str(caught).endswith('. Next: withdraw it with {"by": "coordinator", "reason": "<why>"}'))
+
 
 class LongIdentifierStatusTests(ProductionCase):
     def test_parent_reason_survives_the_status_bound_with_maximum_length_ids(self):
@@ -183,7 +197,7 @@ class LongIdentifierStatusTests(ProductionCase):
             k: {"state": "withdrawn", "withdrawal": {"by": "coordinator", "reason": "the tool was cancelled"}}})
         row = next(line for line in status_lines(self) if line.startswith("  " + k))
         self.assertLessEqual(len(row), 160)
-        self.assertIn("retired with withdrawn parent: another approach was accepted", row)
+        self.assertIn("follows withdrawn parent: another approach was accepted", row)
 
 
 if __name__ == "__main__":

@@ -1675,7 +1675,7 @@ def _withdrawal_record(ob: dict, user: bool, authority: dict | None, *, stored: 
     if "follows" in record and not stored:
         raise refuse("obligation_invalid", "withdrawal_unauthorized",
                      "the withdrawn parent a correction follows is kernel-owned; give only by and reason",
-                     obligation=ob["id"])
+                     next_action='withdraw it with {"by": "coordinator", "reason": "<why>"}', obligation=ob["id"])
     _text(record["reason"], "reason", limit=bound("withdrawal", "reason"), obligation=ob["id"])
     by = record["by"]
     actor_kind = ((authority or {}).get("actor") or {}).get("kind", "person")
@@ -3044,7 +3044,7 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
             if isinstance(follows, dict):
                 # R246: the parent's reason leads, before identifiers and history counts, so the
                 # 160-character row keeps it even with maximum-length ids.
-                detail = (f"retired with withdrawn parent: {follows['reason']} ({follows['obligation']}, by "
+                detail = (f"follows withdrawn parent: {follows['reason']} ({follows['obligation']}, by "
                           f"{follows['by']}); by {ob['withdrawal']['by']}: {ob['withdrawal']['reason']}")
             if ob["withdrawal"]["by"] in ("user_direct", "agent_decision"):
                 channel = decision_channel(ob["withdrawal"])
