@@ -170,7 +170,15 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
   arguments to the CLI, without an executable: run the selected Orca executable
   followed by those arguments unchanged, adding or altering no flags. The leading
   `orca` in Pod's displayed command names that selected executable. Pod never builds
-  a release command. If Orca gives none, repeat the named `worker-show` read.
+  Orca's native action. A separately labelled `next_action.source: pod_guidance`
+  with kind `worker_release` and `command_source: pod_guidance` gives the exact
+  release command only for a consumed, settled worker that Pod asked to keep open,
+  now owned and retained with no recorded reuse or retention remaining. Native
+  retention reasons other than absent, `coordinator_request` or `user_requested`
+  exclude it. Choose release yourself; Pod runs nothing. `user_requested` cannot
+  distinguish Pod's request from a later person's request: if a person asked to
+  keep it, do not release it. Every other empty-argv case repeats the named
+  `worker-show` read.
   On a continued record or one ended by historical retirement, release is
   still owed; do not describe it as due before closure.
 - For a release pending or unknown, follow Orca's next action or repeat that

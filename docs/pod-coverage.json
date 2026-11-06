@@ -12331,6 +12331,27 @@
         "tests.test_admission_batch.WalkReReadTests.test_a1000_a_malformed_run_identity_answers_as_the_single_query_and_never_crashes"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1004",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_consumed_keep_open_guidance_preserves_native_action",
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_report_status_and_finalization_relay_labelled_guidance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1005",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_worker_tabs.ReleaseGuidanceTests.test_guidance_exclusions",
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
