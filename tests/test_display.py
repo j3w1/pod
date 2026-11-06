@@ -456,12 +456,11 @@ class DisplayOpTests(TabCase):
                 self.worktrees = deepcopy(valid); self.worktrees["result"].update(change)
                 self.assertEqual(self.run_display()["rows"][0]["verdict"], "unreadable")
 
-    def test_duplicate_or_unplaceable_worktree_rows_are_not_filtered_away(self):
+    def test_unplaceable_worktree_rows_are_not_filtered_away(self):
         self.setup_display()
         valid = self.bounded_worktrees(1)
         original = valid["result"]["worktrees"][0]
-        for extra in (deepcopy(original), {**original, "id": "other"},
-                      {**original, "path": "/other"}, {"id": "unknown"},
+        for extra in ({"id": "unknown"},
                       {"id": "other", "path": "relative"}, {"id": "other", "path": "//other"},
                       {"id": "other", "path": "/other", "git": {"path": "/different"}},
                       {"id": "other", "path": "/other", "git": {}}, None):
@@ -470,6 +469,43 @@ class DisplayOpTests(TabCase):
                 self.worktrees["result"]["worktrees"].append(extra)
                 self.worktrees["result"]["totalCount"] = 2
                 self.assertEqual(self.run_display()["rows"][0]["verdict"], "unreadable")
+
+    def test_duplicates_refuse_only_what_the_objective_compares(self):
+        self.setup_display()
+        valid = self.bounded_worktrees(1)
+        original = valid["result"]["worktrees"][0]
+        unrelated = {"id": "elsewhere", "path": "/other/repo"}
+        for extra, verdict, named in (
+                ([unrelated, deepcopy(unrelated)], "host", None),
+                ([{"id": "x", "path": "/other/a"}, {"id": "x", "path": "/other/b"}], "host", None),
+                ([deepcopy(original)], "unreadable", f"duplicate worktree path {original['path']}"),
+                ([{**original, "id": "other"}], "unreadable", f"duplicate worktree path {original['path']}")):
+            with self.subTest(extra=extra):
+                self.worktrees = deepcopy(valid)
+                self.worktrees["result"]["worktrees"] += extra
+                self.worktrees["result"]["totalCount"] = len(self.worktrees["result"]["worktrees"])
+                row = self.run_display()["rows"][0]
+                self.assertEqual(row["verdict"], verdict)
+                if named:
+                    self.assertIn(named, row["reason"])
+                    self.assertIsNone(row["command"])
+
+    def test_duplicate_parent_identity_of_a_worker_row_is_unreadable_and_named(self):
+        state = state_fixture(); admit(state)
+        terms, trees = inventories(state)
+        task = trees["result"]["worktrees"][0]
+        task.update(displayNameMode="fixed", displayName="Host task")
+        worker = {"id": "worker-tree", "path": "/project/worker", "displayName": "Source changes",
+                  "displayNameMode": "fixed", "parentWorktreeId": "task-tree", "linkedIssue": {"number": 17},
+                  "linkedPR": None, "workspaceStatus": "in-progress", "comment": "Implementer working"}
+        trees["result"]["worktrees"] += [worker, {"id": "task-tree", "path": "/project/twin"}]
+        trees["result"]["totalCount"] = len(trees["result"]["worktrees"])
+        rows = {item["layer"]: item for item in display.projection(
+            state, terms, trees, {"version": "1.4.230"})["rows"]}
+        self.assertEqual(rows["worker_worktree"]["verdict"], "unreadable")
+        self.assertIn("duplicate worktree id task-tree", rows["worker_worktree"]["reason"])
+        self.assertNotEqual(rows["task_worktree"]["verdict"], "unreadable")
+
     def test_worker_layers_readback_status_and_session_steps(self):
         state = state_fixture(); row = admit(state)
         terms, trees = inventories(state)
