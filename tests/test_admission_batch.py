@@ -346,45 +346,77 @@ class ClaimDemandTests(BatchCase):
                                        scope={"repo_key": "key"}, owed={}, owners=None, unreadable=None)
         self.assertTrue(admission._claim_demanded(slot, rows[2], {}))  # accounted abandoned by this query's records
         self.assertFalse(admission._claim_demanded(slot, {**rows[2], "projection": None}, {}))  # refused as malformed
+        effects = admission._HostExitSlot(self.project.resolve(), {"worktree": None, "branch": None, "target": None,
+                                                                    "effects": ["deploy:target"]}, set(), set(), set(),
+                                          set(), scope={"repo_key": "key"}, owed={}, owners=None, unreadable=None)
+        self.assertTrue(admission._claim_demanded(effects, rows[0], {}))
+        self.assertFalse(admission._claim_demanded(effects, {**rows[0], "projection": None}, {}))  # checked first
+
+    def test_a_fault_judging_demand_stays_the_querys_scoped_unknown(self):
+        """A fault while judging a row's demand reads the claim, and each query meets the fault where it reads the same
+        fact, as when every abandoned row's claim was read; the batch never fails."""
+        self.intake(worktree=self.place)
+        queries = [{}, {"branch": "main"}]
+        everything = lambda slot, source, places: True
+        with patch("pod.admission._workspace", side_effect=OSError("unreadable workspace")):
+            answer, _, read = self.answer(queries)
+            previous, _, all_read = self.answer(queries, everything)
+        self.assertEqual(read, all_read)
+        for row, before in zip(answer["responses"], previous["responses"]):
+            self.assertEqual(row["result"], before["result"])
+            self.assertEqual(row["result"]["status"], "unknown")
 
 
 class WorkerFactTests(BatchCase):
-    """A1020: each fleet row's worker facts are derived once per call, each query receives its own copy, and every
-    result still equals its single query."""
+    """A1020: each fleet row's worker facts are derived once per call, through real partitioned discovery and every
+    query's projection; each query receives its own copy, and every result still equals its single query."""
 
     def test_worker_facts_are_derived_once_per_call(self):
         self.intake(worktree=self.place)
         rows = [base.ReviewCorrectionTests.writer(self, path=self.root / f"w{index}", dispatch=f"d{index}", verdict="live")
                 for index in range(5)]
         rows.append(base.ReviewCorrectionTests.writer(self, dispatch="mine", verdict="live"))
+        abandoned = base.ReviewCorrectionTests.writer(self, path=self.root / "gone", dispatch="lost")
+        abandoned["workerState"] = "abandoned"
+        rows.append(abandoned)
+        for row in rows:
+            row["terminalState"] = "retained"
+        self.native.fleet = fleet_model(rows)
         shapes = [{"worktree": str(self.project)}, {"branch": "main"}, {}, {"effects": ["deploy:target"]}]
-        tables = []
-        real = admission._fact_table
-        def counted(rows):
-            tables.append(len(rows))
-            return real(rows)
-        with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": rows}):
+        derived = []
+        real = admission._worker_fact
+        def counted(row):
+            derived.append(row.get("dispatchId"))
+            return real(row)
+        with patch("pod.admission._fleet", side_effect=self._real_fleet), \
+             patch("pod.admission._terminals", side_effect=self._real_terminals), \
+             patch("pod.admission._native_claim", return_value={"process": "exited", "effects": []}):
             singles = [self.query(**shape) for shape in shapes]
-            with patch("pod.admission._fact_table", side_effect=counted):
+            with patch("pod.admission._worker_fact", side_effect=counted):
                 answer = self.batch(*shapes)
+                once = sorted(derived)
                 again = self.batch(*shapes)
-        self.assertEqual(tables, [6, 6])  # once per call, never across calls
+        self.assertEqual(answer["discovery"]["fleet_read"], "partitioned")
+        self.assertEqual(once, sorted(row["dispatchId"] for row in rows))  # once each, partition check included
+        self.assertEqual(sorted(derived), sorted(once * 2))  # and afresh in the next call
         for row, single, repeated in zip(answer["responses"], singles, again["responses"]):
             self.assertEqual(without_census(row["result"]), without_census(single))
             self.assertEqual(row["result"], repeated["result"])
-        fleet = {"runtime": "runtime", "complete": True, "workers": rows}
+
+    def test_each_caller_receives_its_own_copy(self):
+        rows = [base.ReviewCorrectionTests.writer(self, dispatch="d0", verdict="live")]
         discovery = admission._Discovery()
         token = admission._SHARED.set(discovery)
         try:
-            discovery.memo(("fleet",), lambda: fleet, stage="first")
             first, second = admission._shown(rows[0]), admission._shown(rows[0])
             first["liveness"], first["resource"]["id"] = "exited", "changed"
             self.assertEqual((second["liveness"], second["resource"]["id"]), ("live", None))
             self.assertEqual(admission._shown(rows[0]), admission._worker_fact(rows[0]))
-            outside = dict(rows[0])
-            self.assertEqual(admission._shown(outside), admission._worker_fact(outside))  # not this call's row
-            with self.assertRaises(PodError):
-                admission._shown({**rows[1], "projection": None})
+            malformed = {**rows[0], "projection": None}
+            for _ in range(2):  # the kept refusal is raised again to every asker
+                with self.assertRaises(PodError) as raised:
+                    admission._shown(malformed)
+                self.assertEqual(raised.exception.code, "orca_contract")
         finally:
             admission._SHARED.reset(token)
             discovery.close()
@@ -1112,6 +1144,32 @@ class FleetReadTests(base.AdmissionQueryCase):
                                  [row["dispatchId"] for row in double.sequential])
                 self.assertIsNone(discovery.fleet_start["pages"][0].get("state"))
                 self.assertNotIn("bracket", discovery.fleet_start["pages"][0])
+
+    def test_every_partition_settles_and_a_spent_budget_is_reported_first(self):
+        """A1019: discovery waits for every partition; a spent budget is its fault before any other read fault, and a
+        programming fault is never hidden behind one, whichever partition fails first."""
+        budget, ordinary = PodError(DEADLINE_SPENT, "spent"), PodError("orca_read_failed", "no")
+        bug = RuntimeError("programming fault")
+        def failing(first, second):
+            def partition(state, runtime, discovery):
+                if state == "active":
+                    raise first
+                if state == "released":
+                    raise second
+                return {"total": 0, "rows": [], "pages": [{"cursor": None, "state": state, "ids": [], "more": False}]}
+            return partition
+        cases = {"read fault, then budget": (ordinary, budget, budget), "budget, then read fault": (budget, ordinary, budget),
+                 "read fault, then a bug": (ordinary, bug, bug), "a bug, then read fault": (bug, ordinary, bug)}
+        for label, (first, second, expected) in cases.items():
+            with self.subTest(label), patch("pod.admission._discovery_partition", side_effect=failing(first, second)):
+                value, _ = self.read(FleetDouble({}), lambda discovery: self._partitioned(discovery))
+                self.assertIs(value, expected)
+
+    def _partitioned(self, discovery):
+        try:
+            return admission._fleet_partitioned(discovery)
+        except RuntimeError as exc:
+            return exc
 
     def test_a_failed_partition_read_raises_as_the_walk_would(self):
         rows = self.fleet()

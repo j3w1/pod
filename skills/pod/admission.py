@@ -254,6 +254,7 @@ class _Discovery:
         # worktree inventory a query judges them by is known.
         self.claims_ready = False
         self._unjudged: list = []
+        self._facts: dict = {}  # id(row) -> (row, its `_worker_fact` or refusal), derived once per call
 
     def memo(self, key, fn, *, stage=None):
         full = (stage or self.stage, *key)
@@ -314,6 +315,23 @@ class _Discovery:
                 self.orca_reads += 1
             return _read(argv)
 
+    def worker_fact(self, row) -> dict:
+        """`_worker_fact` of one row, derived once per call whoever asks first (R207): the partition reader's row check,
+        the claim demand and every query's projection. A refusal is kept and raised again, as a fresh error, to
+        each asker. The caller copies the fact before changing it."""
+        with self._lock:
+            entry = self._facts.get(id(row))
+            if entry is None or entry[0] is not row:
+                try:
+                    entry = (row, _worker_fact(row))
+                except PodError as exc:
+                    entry = (row, exc)
+                self._facts[id(row)] = entry  # The entry holds the row, so its id is never reused in this call.
+        value = entry[1]
+        if isinstance(value, PodError):
+            raise PodError(value.code, str(value), value.detail)
+        return value
+
     def list_row(self, row, runtime):
         """A row discovery listed: start its workspace identity read now, and its current-claim read once some
         query's answer is known to be able to use that claim (`_claim_demanded`). A row listed before every query's
@@ -355,7 +373,11 @@ class _Discovery:
                 places = self.memo(place_key, lambda slot=slot: _places(slot.project), stage="first")
             except (PodError, OSError):
                 continue  # The query raises the same fault where it reads its places, and reads no claim.
-            if _claim_demanded(slot, row, places):
+            try:
+                demanded = _claim_demanded(slot, row, places)
+            except (PodError, OSError, ValueError, RuntimeError):
+                demanded = True  # Unjudged is demanded; the query meets the same fault where it reads that fact.
+            if demanded:
                 self.submit(("claim", key, runtime), lambda: _native_claim(row, runtime), stage="first")
                 return True
         return True
@@ -570,7 +592,7 @@ def _discovery_partition(state: str, runtime: str, discovery) -> dict:
             if not isinstance(key, str) or not key or key in workers or row.get("terminalState") != state:
                 raise _Unproved()
             try:
-                _worker_fact(row)
+                discovery.worker_fact(row)
             except PodError:
                 raise _Unproved() from None  # The walk lists it, so the projection refuses it where it always did.
             workers[key] = row
@@ -608,12 +630,20 @@ def _fleet_partitioned(discovery):
         runtime = before["runtime"]
         futures = {state: discovery._walks.submit(contextvars.copy_context().run, _discovery_partition, state,
                                                   runtime, discovery) for state in TERMINAL_STATES}
-        parts, unproved = {}, False
-        for state, future in futures.items():
+        parts, faults, unproved = {}, [], False
+        for state, future in futures.items():  # every partition settles before any outcome is chosen
             try:
                 parts[state] = future.result()
             except _Unproved:
                 unproved = True
+            except (PodError, OSError) as exc:
+                faults.append(exc)
+            except Exception as exc:  # A programming fault is never hidden behind a read fault.
+                faults.insert(0, exc)
+        if faults:
+            if not isinstance(faults[0], (PodError, OSError)):
+                raise faults[0]
+            _raise_first(faults)  # a spent budget before any other read fault, as the fence reports it
         if unproved:
             raise _Unproved()
         union = {}
@@ -726,30 +756,14 @@ def _worker_fact(row: dict) -> dict:
 
 
 def _shown(source) -> dict:
-    """`_worker_fact` of a row of this call's fleet read, computed once per call for every row (R207). Each caller
-    receives its own copy, so a query's projection never sees another's changes. A row outside that read, a call
-    without shared discovery and a row whose fact refuses are computed where they are read, so a malformed row
-    raises the same refusal where it always did. Nothing outlives the call."""
+    """`_worker_fact` of one row, derived once per call (`_Discovery.worker_fact`); each caller receives its own
+    copy, so a query's projection never sees another's changes, and a malformed row raises its refusal wherever it
+    is read. Without shared discovery it is derived where it is read. Nothing outlives the call."""
     discovery = _SHARED.get()
-    fleet = discovery.done(("fleet",)) if discovery is not None else None
-    if not isinstance(fleet, dict) or not isinstance(fleet.get("workers"), list):
+    if discovery is None or not isinstance(source, dict):
         return _worker_fact(source)
-    table = discovery.memo(("worker-facts", id(fleet)), lambda: _fact_table(fleet["workers"]), stage="first")
-    row, fact = table.get(id(source), (None, None))
-    if row is not source or fact is None:
-        return _worker_fact(source)
+    fact = discovery.worker_fact(source)
     return {**fact, "resource": dict(fact["resource"])}
-
-
-def _fact_table(rows) -> dict:
-    table = {}
-    for row in rows:
-        try:
-            fact = _worker_fact(row)
-        except Exception:  # Recomputed where it is read, which raises it there.
-            fact = None
-        table[id(row)] = (row, fact)
-    return table
 
 
 def _terminal_rows(response: dict) -> list[dict]:
@@ -1460,13 +1474,13 @@ def _claim_demanded(slot: _HostExitSlot, source: dict, places) -> bool:
         return False
     if source.get("workerState") != "abandoned" and source.get("dispatchId") not in slot.abandoned:
         return False
+    try:
+        shown = _shown(source)
+    except PodError:
+        return False  # The projection refuses the row there and reads no claim.
     request = slot.request
     if request["effects"]:
         return True
-    try:
-        shown = _worker_fact(source)
-    except PodError:
-        return False  # The projection refuses the row there and reads no claim.
     path = shown["worktree"]
     registered, _ = _workspace(slot.project, path, places)
     repo_key = slot.scope["repo_key"]
