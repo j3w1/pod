@@ -427,7 +427,7 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_reques
         if provider["pr_reused"]:
             try:
                 text = _refresh_text(port, row, journal, branch, found.get("number"), pull_request, recheck)
-            except (PodError, UnicodeError, ValueError, TypeError, KeyError) as exc:
+            except Exception as exc:  # noqa: BLE001 - an interruption (BaseException) still propagates
                 # The push and the reused pull request are proved; a text-step fault never takes them back.
                 text = {"status": "unread", "detail": getattr(exc, "code", type(exc).__name__)}
             if text is not None:
@@ -794,13 +794,19 @@ def _revalidate_standing(project: Path, objective: str, *, owner: str, row: dict
 def _recheck_text_write(project: Path, objective: str, *, owner: str, row: dict, now: datetime | None = None) -> None:
     """Before a pull request's text is edited after the push: the row's authority and candidate still hold (R240).
 
-    A standing decision is revalidated in full. A relayed decision was verified and consumed for this row before the
-    push, so its single use is not consumed again; its candidate binding is rechecked, as an explicit consent's is.
+    Every decision is revalidated as at the push, except that its single use, already consumed for this row, is
+    never consumed again: a standing decision in full, a decision-bound grant through its non-consuming reuse
+    (current candidate, identity, policy and the original vouch), and a relayed decision by a fresh verifier verdict
+    that must equal the recorded one. The candidate binding is rechecked for every consent.
     """
     _revalidate_standing(project, objective, owner=owner, row=row, now=now)
-    from .governor import _owned_state, _read_journal, _record_path
+    from .config import effective
+    from .governor import _owned_state, _read_journal, _record_path, _verify_relay, revalidate_decision_authorization
     from .ledger import map_of, require_governance_current
+    from .relay import refusal
     consent = row["action"].get("authorization") or {}
+    if "decision_binding" in consent:
+        revalidate_decision_authorization(project, objective, consent, unit=row["action"]["unit"])
     with _lock(_path(project, objective)):
         state = _owned_state(project, objective, owner, _path(project, objective), version=True)
         require_governance_current(project, map_of(state))
@@ -810,6 +816,12 @@ def _recheck_text_write(project: Path, objective: str, *, owner: str, row: dict,
                 or ("candidate" in consent and binding["commit"] != consent["candidate"])
                 or ("tree" in consent and binding["tree"] != consent["tree"])):
             raise PodError("candidate_moved", "The unit's prepared candidate changed after the push")
+        if "decision_binding" not in consent and consent.get("channel") == "relayed":
+            confirmed = _verify_relay(project, objective, consent, binding, current,
+                                      effective(project)["preferences"].get("authorization_verifier"),
+                                      pr=row["action"].get("pr"))
+            if confirmed["relay_verification"] != consent.get("relay_verification"):
+                raise refusal("relay_verifier_mismatch", fields=["relay_verification"])
 
 
 def _revalidate_relay(project: Path, objective: str, *, owner: str, row: dict) -> None:

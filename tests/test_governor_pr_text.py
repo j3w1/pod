@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from pod.errors import PodError
 from pod.github import PR_TEXT_FIELDS, GhPort, gh_allowed
-from pod.governor import execute, prepare_candidate
+from pod.governor import execute, prepare_candidate, status
 from tests.kernel_support import COMMIT, COMMIT2, COMMIT3, NOW, TREE2, TREE3, GovernorFakePort as FakePort, \
     action, observation
 from tests.test_governor import GovernorCase
@@ -228,13 +228,16 @@ class UncertainTextTests(PullRequestTextCase):
         self.assertEqual((self.text(unsupported)["status"], self.text(unsupported)["detail"]),
                          ("unread", "unsupported_text"))
         self.port.texts[7]["body"] = FIRST["body"]
-        def fault():
-            raise TypeError("unexpected shape")
-        self.port.on_text_read = fault
-        faulted = self.publish(SECOND, commit=COMMIT3)
-        self.assertEqual((faulted["outcome"], self.text(faulted)["status"], self.text(faulted)["detail"]),
-                         ("PASS", "unread", "TypeError"))
-        self.assertEqual(faulted["receipt"]["provider"]["remote_head"], COMMIT3)
+        for commit, error in ((COMMIT3, TypeError), (COMMIT4, RuntimeError), (COMMIT5, AttributeError)):
+            def fault(error=error):
+                raise error("text adapter fault")
+            self.port.on_text_read = fault
+            faulted = self.publish(SECOND, commit=commit)
+            self.assertEqual((faulted["outcome"], self.text(faulted)["status"], self.text(faulted)["detail"]),
+                             ("PASS", "unread", error.__name__))
+            self.assertEqual(faulted["receipt"]["provider"]["remote_head"], commit)
+            self.assertEqual(len([row for row in status(self.project, "objective")["actions"]
+                                  if row["derived_from"] == faulted["record_id"]]), 1)
         self.assertNotIn("pr_edit", self.remote_calls())
 
     def test_an_edit_refused_before_submission_is_failed_not_uncertain(self):
