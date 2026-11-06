@@ -2047,8 +2047,10 @@ def _verify_local_append(project: Path, objective: str, state: dict, authority: 
 def _checkpoint_map_transition(project: Path, objective: str, state: dict, authority: dict,
                                core: dict, previous: dict, proposed: dict, dispositions: list,
                                native: dict, issue_revision=None) -> tuple[dict, dict | None]:
-    from .obligations import accept_write, disposition, refuse
+    from .obligations import accept_write, disposition, refuse, validate_map_record
     prior_map = map_of(state)
+    if prior_map is not None:
+        validate_map_record(prior_map)
     map_state: dict = {}
     ctx = None
     has_delivery = "delivery" in proposed
