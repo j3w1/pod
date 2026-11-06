@@ -1642,20 +1642,43 @@ def withdrawn_parent(ob: dict, rows: dict | None, lineage) -> dict | None:
     return {"obligation": parent["id"], "by": withdrawal["by"], "reason": withdrawal["reason"]}
 
 
+def _orphan_action(follows: dict) -> str:
+    """R246: the one mechanical step for a correction whose parent assurance is withdrawn."""
+    return (f'withdraw it with {{"by": "coordinator", "reason": "<why>"}} and nothing else: its parent assurance '
+            f'{follows["obligation"]} is withdrawn, so the correction retires with it')
+
+
 @input_record("withdrawal")
 def _withdrawal(ob: dict, user: bool, authority: dict | None, *, stored: bool = False,
                 rows: dict | None = None, lineage=None) -> dict:
+    follows = withdrawn_parent(ob, rows, lineage)
+    try:
+        return _withdrawal_record(ob, user, authority, stored=stored, follows=follows, rows=rows, lineage=lineage)
+    except PodError as exc:
+        if follows is None or stored or not isinstance(exc.detail, dict):
+            raise
+        # R246: every refusal of an orphaned correction's withdrawal names the mechanical step,
+        # whichever check refused it; the refusal itself and its code are unchanged.
+        action = _orphan_action(follows)
+        exc.detail = {**exc.detail, "next_action": action}
+        text = str(exc)
+        cut = text.rfind(". Next: ")
+        exc.args = ((text[:cut] if cut >= 0 else text) + f". Next: {action}",)
+        raise
+
+
+def _withdrawal_record(ob: dict, user: bool, authority: dict | None, *, stored: bool, follows: dict | None,
+                       rows: dict | None, lineage) -> dict:
     record = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"), "withdrawal", obligation=ob["id"])
     if "decision" in record:
         raise refuse("obligation_invalid", "withdrawal_unauthorized", "issue revision decision references are kernel-owned", obligation=ob["id"])
     if "follows" in record and not stored:
         raise refuse("obligation_invalid", "withdrawal_unauthorized",
                      "the withdrawn parent a correction follows is kernel-owned; give only by and reason",
-                     next_action='withdraw it with {"by": "coordinator", "reason": "<why>"}', obligation=ob["id"])
+                     obligation=ob["id"])
     _text(record["reason"], "reason", limit=bound("withdrawal", "reason"), obligation=ob["id"])
     by = record["by"]
     actor_kind = ((authority or {}).get("actor") or {}).get("kind", "person")
-    follows = withdrawn_parent(ob, rows, lineage)
     allowed = (by == ("agent_decision" if actor_kind == "agent" else "user_direct") and user
                or by == "project_policy" and ob["provenance"] == "project_policy"
                and bool(ob.get("source", {}).get("gone"))
@@ -1731,8 +1754,7 @@ def _withdrawal_refusal(ob: dict, by: Any, user: bool, actor_kind: str, *, follo
                   else authority_shape)
     if follows is not None:
         # R246: an orphaned correction names the mechanical step, never an owner decision.
-        action = (f'withdraw it with {{"by": "coordinator", "reason": "<why>"}}: its parent assurance '
-                  f'{follows["obligation"]} is withdrawn, so the correction retires with it')
+        action = _orphan_action(follows)
     return refuse("obligation_invalid", "withdrawal_unauthorized", f"{problem}; {_WITHDRAWAL_FORMS}",
                   next_action=action, obligation=ob["id"])
 
@@ -2436,7 +2458,7 @@ def _close(state: dict, ctx: dict) -> dict:
             extra["next_action"] = (f"withdraw {', '.join(orphaned[:8])} with "
                                     '{"by": "coordinator", "reason": "<why>"}: '
                                     f"its parent assurance {parent} is withdrawn, so the correction retires with it; "
-                                    "then write the closing checkpoint again")
+                                    "then write the closing checkpoint again")  # R246
         raise refuse("obligation_unaccounted", "closure_unfinished",
                      "an objective closes only when every obligation is satisfied or withdrawn",
                      obligation=(orphaned or open_rows)[0], **extra)
@@ -3020,9 +3042,10 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
             detail = f"by {ob['withdrawal']['by']}: {ob['withdrawal']['reason']}"
             follows = ob["withdrawal"].get("follows")
             if isinstance(follows, dict):
-                # R246: show the withdrawn parent's reason first so the cause survives truncation.
-                detail = (f"by {ob['withdrawal']['by']} with {follows['obligation']} "
-                          f"(withdrawn by {follows['by']}: {follows['reason']}): {ob['withdrawal']['reason']}")
+                # R246: the parent's reason leads, before identifiers and history counts, so the
+                # 160-character row keeps it even with maximum-length ids.
+                detail = (f"retired with withdrawn parent: {follows['reason']} ({follows['obligation']}, by "
+                          f"{follows['by']}); by {ob['withdrawal']['by']}: {ob['withdrawal']['reason']}")
             if ob["withdrawal"]["by"] in ("user_direct", "agent_decision"):
                 channel = decision_channel(ob["withdrawal"])
                 detail += " (" + channel["channel"] + ("; earlier record" if channel.get("channel_recorded") is False else "") + ")"
@@ -3030,7 +3053,9 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
             detail = ob.get("check") or ob.get("resolves") or ""
         if ob["id"] in history:
             counts_kept = history[ob["id"]]
-            detail = f"{counts_kept['retained_receipts']} receipt(s), {counts_kept['retained_findings']} finding(s) retained; " + detail
+            counts = f"{counts_kept['retained_receipts']} receipt(s), {counts_kept['retained_findings']} finding(s) retained"
+            follows = (ob.get("withdrawal") or {}).get("follows") if ob["state"] == "withdrawn" else None
+            detail = f"{detail}; {counts}" if isinstance(follows, dict) else f"{counts}; {detail}"
         lines.append(f"  {ob['id']:<4} {ob['state']:<16} {detail}"[:160])
     for key, row in sorted(_admissions(ctx).items()):
         if row.get("role") == "implement" and row.get("disposition"):

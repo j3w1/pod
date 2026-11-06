@@ -14,22 +14,32 @@ def files(case):
             if path.is_file() and path.name != ".lock"}
 
 
+def review_with_correction(case, a="A", k="K"):
+    """A coordinator review assurance whose consumed review raised one required correction."""
+    case.intake({"id": a, "kind": "assurance", "provenance": "coordinator", "parent": "O1",
+                 "check": "optional evidence tool review", "scope": {"paths": ["src"]},
+                 "question": "is the evidence tool correct?", "candidate": case.candidate,
+                 "existing_evidence": "unit tests", "insufficiency": "no independent review", **waiting()})
+    packet = case.packet([a], role="review")
+    admission = case.start("review", packet)["admission"]; case.settle(admission)
+    case.report(admission, packet, map={"seq": read(case.project, "objective")["checkpoint"]["seq"] + 1, "update": {
+        a: waiting(), k: {"kind": "correction", "provenance": "coordinator", "parent": a,
+                          "check": "repair the reported defect", **waiting()}}},
+        triage=[{"finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
+                 "summary": "tool defect", "correction": k}])
+
+
+def status_lines(case):
+    from pod.obligations import status_projection
+    return status_projection(read(case.project, "objective")["checkpoint"], {})["lines"]
+
+
 class WithdrawnAssuranceCorrectionTests(ProductionCase):
     """A coordinator review assurance whose review raised one required correction K."""
 
     def setUp(self):
         super().setUp()
-        self.intake({"id": "A", "kind": "assurance", "provenance": "coordinator", "parent": "O1",
-                     "check": "optional evidence tool review", "scope": {"paths": ["src"]},
-                     "question": "is the evidence tool correct?", "candidate": self.candidate,
-                     "existing_evidence": "unit tests", "insufficiency": "no independent review", **waiting()})
-        packet = self.packet(["A"], role="review")
-        admission = self.start("review", packet)["admission"]; self.settle(admission)
-        self.report(admission, packet, map={"seq": self.next_seq(), "update": {
-            "A": waiting(), "K": {"kind": "correction", "provenance": "coordinator", "parent": "A",
-                                  "check": "repair the reported defect", **waiting()}}},
-            triage=[{"finding": "F1", "severity": "major", "triage": "required_correction", "blocks": "outcome",
-                     "summary": "tool defect", "correction": "K"}])
+        review_with_correction(self)
 
     def next_seq(self):
         return read(self.project, "objective")["checkpoint"]["seq"] + 1
@@ -66,11 +76,10 @@ class WithdrawnAssuranceCorrectionTests(ProductionCase):
         self.write(seq=self.next_seq(), update={"K": {
             "state": "withdrawn", "withdrawal": {"by": "coordinator", "reason": "the tool was cancelled"}}})
         self.assert_follows("coordinator", "another approach was accepted")
-        from pod.obligations import status_projection
-        lines = "\n".join(status_projection(read(self.project, "objective")["checkpoint"], {})["lines"])
         # R3: status shows the correction withdrawn with its parent's reason.
-        self.assertIn("K    withdrawn", lines)
-        self.assertIn("by coordinator with A (withdrawn by coordinator: another approach was accepted)", lines)
+        row = next(line for line in status_lines(self) if line.startswith("  K "))
+        self.assertIn("withdrawn        retired with withdrawn parent: another approach was accepted "
+                      "(A, by coordinator); by coordinator: the tool was cancelled", row)
         closed = self.close()["checkpoint"]
         self.assertEqual(closed["closure"]["report"]["status"], "closed")
         withdrawn = {row["obligation"]: row for row in closed["closure"]["report"]["withdrawn"]}
@@ -108,11 +117,18 @@ class WithdrawnAssuranceCorrectionTests(ProductionCase):
         self.assertEqual(caught.detail["detail"], "closure_unfinished")
         self.assertEqual(caught.detail["referent"], {"obligation": "K"})
         self.assertIn('withdraw K with {"by": "coordinator"', caught.detail["next_action"])
-        caught = self.refusal(update={"K": {
-            "state": "withdrawn", "withdrawal": {"by": "user_direct", "reason": "the tool was cancelled"}}})
-        self.assertEqual(caught.detail["detail"], "withdrawal_unauthorized")
-        self.assertIn('{"by": "coordinator"', caught.detail["next_action"])
-        self.assertIn("parent assurance A is withdrawn", caught.detail["next_action"])
+        # Every refusal exit for the orphan, whatever check refuses, names the same coordinator step.
+        for withdrawal in ({"by": "user_direct", "reason": "the tool was cancelled"},
+                           {"by": "issue_revision", "reason": "review cancelled", "decision": 1},
+                           {"by": "coordinator", "reason": "review cancelled", "channel": "session"},
+                           {"by": "coordinator", "reason": "review cancelled", "unexpected": True},
+                           {"by": "coordinator", "reason": ""}):
+            with self.subTest(withdrawal=sorted(withdrawal)):
+                caught = self.refusal(update={"K": {"state": "withdrawn", "withdrawal": withdrawal}})
+                self.assertEqual(caught.code, "obligation_invalid")
+                self.assertTrue(caught.detail["next_action"].startswith('withdraw it with {"by": "coordinator"'))
+                self.assertIn("parent assurance A is withdrawn", caught.detail["next_action"])
+                self.assertTrue(str(caught).endswith(". Next: " + caught.detail["next_action"]))
 
     def test_follows_is_kernel_owned_and_persisted_record_revalidates(self):
         self.write(seq=self.next_seq(), update={"A": {
@@ -154,6 +170,20 @@ class WithdrawnAssuranceCorrectionTests(ProductionCase):
         self.assertEqual(self.rows()["K"]["withdrawal"]["follows"],
                          {"obligation": "A2", "by": "coordinator", "reason": "another approach was accepted"})
         self.assertEqual(self.close()["checkpoint"]["closure"]["report"]["status"], "closed")
+
+
+class LongIdentifierStatusTests(ProductionCase):
+    def test_parent_reason_survives_the_status_bound_with_maximum_length_ids(self):
+        """R3: 64-character ids and retained-history counts never push the parent's reason out of the row."""
+        a, k = "A" + "a" * 63, "K" + "k" * 63
+        review_with_correction(self, a, k)
+        seq = read(self.project, "objective")["checkpoint"]["seq"]
+        self.write(seq=seq + 1, update={
+            a: {"state": "withdrawn", "withdrawal": {"by": "coordinator", "reason": "another approach was accepted"}},
+            k: {"state": "withdrawn", "withdrawal": {"by": "coordinator", "reason": "the tool was cancelled"}}})
+        row = next(line for line in status_lines(self) if line.startswith("  " + k))
+        self.assertLessEqual(len(row), 160)
+        self.assertIn("retired with withdrawn parent: another approach was accepted", row)
 
 
 if __name__ == "__main__":
