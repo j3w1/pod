@@ -2719,6 +2719,17 @@ def admission_binding(body: dict, ctx: dict, state: dict) -> dict:
     if callable(rows):
         # R239: a shared keyed index binds the rows the reviewed change edits and its schema.
         sources = [rows(entry, ctx.get("candidate")) for entry in sources]
+    scoped = ctx.get("scope_index_binding")
+    if callable(scoped) and body.get("role") == "review":
+        # R239: a keyed index the review lists only in its scope binds by the change's own rows, as a source does;
+        # past the binding bound, or when rows cannot be judged, the path keeps its scope judgement.
+        named = {entry.get("path") for entry in sources}
+        for path in dict.fromkeys(body.get("scope") or []):
+            if len(sources) >= limit:
+                break
+            if path not in named and (found := scoped(path, ctx.get("candidate"))) is not None:
+                sources.append(found)
+                named.add(path)
     return {"policy_revision": ctx.get("policy_revision"), "environment": verification.get("environment"),
             "dependencies": list(verification.get("dependencies", [])), "sources": sources,
             "governance": bound_governance_digest(state),

@@ -11289,6 +11289,24 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1133",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_only_index_binds_the_change_s_own_rows_and_carries",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_only_index_whose_own_row_changes_invalidates",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_index_path_without_a_row_binding_stays_touched",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_only_index_with_more_changed_rows_than_an_entry_binds_stays_touched",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_only_index_whose_worktree_bytes_are_not_the_candidate_s_stays_touched",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_only_index_the_change_does_not_edit_stays_touched",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_only_index_past_the_binding_bound_stays_touched",
+        "tests.test_keyed_index_binding.ReviewCarryTests.test_a_scope_index_bound_as_a_source_binds_once_and_other_roles_do_not_bind_scope"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A806",
       "required_evidence": [
         "unit",
