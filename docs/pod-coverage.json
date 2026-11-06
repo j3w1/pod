@@ -6537,6 +6537,7 @@
         "tests.test_display.DisplayOpTests.test_unplaceable_worktree_rows_are_not_filtered_away",
         "tests.test_display.DisplayOpTests.test_duplicates_refuse_only_what_the_objective_compares",
         "tests.test_display.DisplayOpTests.test_duplicate_parent_identity_of_a_worker_row_is_unreadable_and_named",
+        "tests.test_display.DisplayOpTests.test_duplicates_outrank_host_naming_for_host_owned_worker_rows",
         "tests.test_orca_adapter.OrcaAdapterTests.test_display_worktree_limit_is_one_exact_read_shape",
         "tests.test_orca_adapter.OrcaAdapterTests.test_display_bounded_read_keeps_timeout_output_and_environment",
         "tests.test_display.DisplayOpTests.test_worker_layers_readback_status_and_session_steps"

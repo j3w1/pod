@@ -506,6 +506,25 @@ class DisplayOpTests(TabCase):
         self.assertIn("duplicate worktree id task-tree", rows["worker_worktree"]["reason"])
         self.assertNotEqual(rows["task_worktree"]["verdict"], "unreadable")
 
+    def test_duplicates_outrank_host_naming_for_host_owned_worker_rows(self):
+        for extra, named in (
+                ([{"id": "worker-a", "path": "/project/worker", "parentWorktreeId": "task-tree"},
+                  {"id": "worker-b", "path": "/project/worker", "parentWorktreeId": "task-tree"}],
+                 "duplicate worktree path /project/worker"),
+                ([{"id": "worker-a", "path": "/project/worker", "parentWorktreeId": "task-tree"},
+                  {"id": "task-tree", "path": "/project/twin"}], "duplicate worktree id task-tree")):
+            with self.subTest(named=named):
+                state = state_fixture(); admit(state, naming={"mode": "fixed", "main": False})
+                terms, trees = inventories(state)
+                trees["result"]["worktrees"][0].update(displayNameMode="fixed", displayName="Host task")
+                trees["result"]["worktrees"] += extra
+                trees["result"]["totalCount"] = len(trees["result"]["worktrees"])
+                output = display.projection(state, terms, trees, {"version": "1.4.230"})
+                worker = [row for row in output["rows"] if row["layer"] == "worker_worktree"]
+                self.assertEqual([(row["owner"], row["verdict"], row["command"]) for row in worker],
+                                 [("host", "unreadable", None)])
+                self.assertIn(named, worker[0]["reason"])
+
     def test_worker_layers_readback_status_and_session_steps(self):
         state = state_fixture(); row = admit(state)
         terms, trees = inventories(state)

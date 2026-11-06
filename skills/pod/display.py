@@ -424,11 +424,14 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
     repeat_worktree = ["orca", *display_worktree_argv()]
     rows = []
 
-    def add(layer, owner, target, expected, observed, command, repeat, *, reason=None, session=None):
-        readable = observed is not None and all(key in observed for key in expected)
+    def add(layer, owner, target, expected, observed, command, repeat, *, reason=None, session=None, ambiguous=None):
+        # An ambiguous native list outranks host naming authority: the row cannot be compared at all.
+        reason = ambiguous or reason
+        readable = ambiguous is None and observed is not None and all(key in observed for key in expected)
         # A null link means Pod has no known link to set, rather than permission to clear one.
         compared = {key: value for key, value in expected.items() if value is not None}
-        verdict = ("host" if owner == "host" else "unreadable" if not readable or reason else
+        verdict = ("unreadable" if ambiguous else "host" if owner == "host" else
+                   "unreadable" if not readable or reason else
                    "matches" if all(observed[key] == value for key, value in compared.items()) else "differs")
         row = {"layer": layer, "owner": owner, "target": target, "expected": expected,
                "observed": observed, "verdict": verdict,
@@ -514,7 +517,7 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
             continue
         add("worker_worktree", "host", "path:" + worker_path, {}, observed_worktree(row_at(worker_path)),
             None, repeat_worktree,
-            reason=duplicate(worker_path))
+            ambiguous=duplicate(worker_path))
     for worker_path, row in named.items():
         # A complete inventory proves a removed worktree absent; it is not drift.
         if worktrees is not None and worker_path not in by_path:
@@ -525,7 +528,7 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         add("worker_worktree", "pod", "path:" + worker_path, expected,
             observed_worktree(row_at(worker_path)),
             worktree_command(state, row, first=True)["worktree_command"], repeat_worktree,
-            reason=duplicate(worker_path))
+            ambiguous=duplicate(worker_path))
 
     latest = {}
     for row in ordered(state):
