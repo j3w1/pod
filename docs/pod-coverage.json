@@ -12595,6 +12595,79 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1077",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governor_pr_text.OpenAndRefreshTests.test_opening_is_unchanged_and_records_the_written_text",
+        "tests.test_governor_pr_text.OpenAndRefreshTests.test_opening_without_text_records_the_reason_title_and_empty_body"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1078",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governor_pr_text.OpenAndRefreshTests.test_a_later_head_updates_the_reused_title_and_body_with_digests",
+        "tests.test_governor_pr_text.OpenAndRefreshTests.test_only_supplied_fields_are_written_and_equal_text_writes_nothing",
+        "tests.test_governor_pr_text.OpenAndRefreshTests.test_without_supplied_text_a_reused_pull_request_is_left_as_before",
+        "tests.test_governor_pr_text.ConflictTests.test_a_whitespace_only_edit_is_a_persons_edit"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1079",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governor_pr_text.ConflictTests.test_a_person_edited_pull_request_is_not_overwritten_and_records_a_lead_conflict",
+        "tests.test_governor_pr_text.ConflictTests.test_the_lead_replaces_only_exactly_the_text_it_saw",
+        "tests.test_governor_pr_text.ConflictTests.test_text_pod_never_recorded_counts_as_another_writers"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1080",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governor_pr_text.UncertainTextTests.test_an_unread_or_changed_pull_request_is_not_written",
+        "tests.test_governor_pr_text.UncertainTextTests.test_a_lost_edit_leaves_both_texts_as_pods_own",
+        "tests.test_governor_pr_text.UncertainTextTests.test_an_edit_refused_before_submission_is_failed_not_uncertain",
+        "tests.test_governor_pr_text.ConflictTests.test_an_older_pod_text_restored_after_an_uncertain_replacement_conflicts",
+        "tests.test_governor_pr_text.UncertainTextTests.test_a_candidate_prepared_after_the_push_holds_the_edit",
+        "tests.test_governor_pr_text.UncertainTextTests.test_authority_lost_after_the_push_holds_the_edit",
+        "tests.test_governor_pr_text.UncertainTextTests.test_unsupported_provider_text_or_a_text_step_fault_keeps_the_publication",
+        "tests.test_governor_pr_text.PortTests.test_an_edit_answer_over_the_output_bound_is_uncertain",
+        "tests.test_verified_decisions.VerifiedGovernorTests.test_a_vouch_withdrawn_after_the_push_holds_the_pr_text_edit",
+        "tests.test_verified_decisions.VerifiedGovernorTests.test_pr_text_edit_rechecks_the_grant_without_consuming_it"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1081",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_governor_pr_text.InputTests.test_replace_edited_is_validated_before_any_record_or_effect",
+        "tests.test_governor_pr_text.PortTests.test_text_read_and_edit_use_exact_allowlisted_argv",
+        "tests.test_governor_pr_text.PortTests.test_the_allowlist_refuses_other_edit_shapes",
+        "tests.test_governor_pr_text.InputTests.test_guidance_names_the_conflict_and_the_lead_decision"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A1093",
       "required_evidence": [
         "unit"

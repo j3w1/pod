@@ -100,6 +100,8 @@ class GovernorFakePort:
         self.blind = blind
         self.heads = {}
         self.prs = {}
+        self.texts = {}
+        self.on_text_read = None
         # Pull requests in every state, as the readback of a carried row reads them (R118).
         self.pr_history = {}
         self.runs_by = {}
@@ -217,7 +219,28 @@ class GovernorFakePort:
         self.calls.append(("pr_create", head, base, title))
         record = {"number": 7, "url": "https://example.invalid/pull/7", "head_sha": None, "draft": False}
         self.prs[(head, base)] = record
+        # The text GitHub holds for each pull request, by number, as `gh pr view` reads it (R240).
+        self.texts[7] = {"head": head, "base": base, "state": "OPEN", "title": title, "body": body}
         return record
+
+    def pull_request_text(self, *, number):
+        self.calls.append(("pr_text", number))
+        if self.on_text_read is not None:
+            # Something that happens while the text is read: another writer, or a new candidate prepared.
+            self.on_text_read()
+        if "pr_text" in self.unreadable or number not in self.texts:
+            raise PodError("remote_read_failed", "gh read did not succeed")
+        return {"number": number, "url": f"https://example.invalid/pull/{number}", **self.texts[number]}
+
+    def edit_pull_request(self, *, number, title=None, body=None):
+        self.calls.append(("pr_edit", number, title, body))
+        if "pr_edit" in self.rejected:
+            raise PodError("unsupported_gh_operation", "The GitHub port accepts only known gh operations")
+        self.texts[number].update({key: value for key, value in (("title", title), ("body", body))
+                                   if value is not None})
+        if "pr_edit" in self.lost:
+            raise PodError("remote_effect_uncertain", "lost")
+        return {"status": "edited"}
 
     def dispatch(self, *, workflow, ref, inputs):
         self.calls.append(("dispatch", workflow, ref, dict(inputs)))
