@@ -12599,7 +12599,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_mapless_delivery.MaplessDeliveryTests.test_mapless_delivery_refuses_by_name_without_writing",
+      "offline_test": [
+        "tests.test_mapless_delivery.MaplessDeliveryTests.test_mapless_delivery_refuses_by_name_without_writing",
+        "tests.test_mapless_delivery.MaplessDeliveryContinuityTests.test_mapless_delivery_refusal_defers_runtime_rebind"
+      ],
       "status": "NOT_RUN"
     },
     {

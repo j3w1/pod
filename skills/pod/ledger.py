@@ -2537,10 +2537,13 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
         local_recording = isinstance(proposed, dict) and "delivery" in proposed and (
             isinstance(delivery_input, dict) and bool({"local_append", "kind"} & set(delivery_input))
             or is_local(previous.get("delivery")))
+        # R244: with no stored map any delivery refuses `map_missing`, so it defers a rebind too and writes nothing.
+        mapless_delivery = isinstance(proposed, dict) and "delivery" in proposed and map_of(state) is None
         # A closing or reopening write carries its rebind only in its own successful write.
         authority = require_authority(project, objective, owner=owner, state=state,
                                       expected_runtime=native["runtime"],
-                                      persist_rebind=not (issue_requested or closing or reopening or local_recording),
+                                      persist_rebind=not (issue_requested or closing or reopening or local_recording
+                                                          or mapless_delivery),
                                       reopen=reopening)
         if issue_requested and authority.get("continuity") is not None:
             raise issue_refuse("native_continuity_requires_separate_checkpoint")
