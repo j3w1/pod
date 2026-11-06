@@ -115,7 +115,8 @@ def validate(value: object) -> None:
             raise PodError("state_unsupported", "PoD tick authorship is malformed")
     facts = row["facts"]
     if facts is not None:
-        exact(facts, {"source", "body_sha256", "lines", "blocks", "mapping_scope_sha256", "mapping_source_current"},
+        exact(facts, {"source", "body_sha256", "lines", "blocks", "mapping_scope_sha256", "mapping_source_current",
+                     "drift_of"},
               {"source", "body_sha256", "lines"}, name="PoD line facts")
         if (not isinstance(facts["source"], str) or not _SHA.fullmatch(facts["source"])
                 or not isinstance(facts["body_sha256"], str) or not _SHA.fullmatch(facts["body_sha256"])
@@ -124,6 +125,8 @@ def validate(value: object) -> None:
         if "mapping_scope_sha256" in facts and (not isinstance(facts["mapping_scope_sha256"], str)
                                                 or not _SHA.fullmatch(facts["mapping_scope_sha256"])):
             raise PodError("state_unsupported", "PoD mapping observation is malformed")
+        if "drift_of" in facts and (not isinstance(facts["drift_of"], str) or not _SHA.fullmatch(facts["drift_of"])):
+            raise PodError("state_unsupported", "PoD drift observation is malformed")
         if "mapping_source_current" in facts and type(facts["mapping_source_current"]) is not bool:
             raise PodError("state_unsupported", "PoD mapping source observation is malformed")
         for key, states in facts["lines"].items():
@@ -249,6 +252,13 @@ def _facts(ledger: dict, source: dict, body: str, *, context: dict | None = None
     # no longer establishes continuous authorship of a later tick.
     ledger["authors"] = {key: author for key, author in ledger["authors"].items()
                          if lines.get(key) and all(lines[key])}
+
+
+def _mark_drift(ledger: dict, bound: dict) -> None:
+    """Name the binding a successful read of a drifted body was taken against."""
+    facts = ledger["facts"]
+    if facts is not None and facts["source"] != digest(bound):
+        facts["drift_of"] = digest(bound)
 
 
 def _bind_proof_scopes(entry: dict, row: dict, earlier: dict, observed: dict | None, seq: int) -> None:
@@ -454,7 +464,8 @@ def projection(state: dict | None, map_state: dict | None, ctx: dict, *, project
         # edit not yet reconciled) is an observation, not an absence: a line it
         # shows exactly once keeps its R10 row. Failed reads leave the facts
         # stale and conservative.
-        observed_drift = not fresh and facts is not None and ledger["read"]["status"] == "read" and len(observed) == 1
+        observed_drift = (not fresh and facts is not None and ledger["read"]["status"] == "read"
+                          and facts.get("drift_of") == digest(source) and len(observed) == 1)
         if not fresh and not observed_drift:
             # Never let absent/stale facts hide a potentially writable proven
             # line, or the invalidation of a tick whose authorship we hold.
@@ -680,10 +691,17 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                     ticks["read"] = unread
             if row is not None or live is not None and pod in pod_lines(live["body"], seal=source.get("role") == "SEAL"):
                 ticks["requests"][key] = deepcopy(request)
-                if live is not None:
+                if live is None:
+                    # A failed read ends any earlier drift observation's standing.
+                    if ticks["facts"] is not None:
+                        ticks["facts"].pop("drift_of", None)
+                elif recorded["checkpoint"].get("objective_source") == source:
+                    # A read started under an older binding must not replace
+                    # facts a concurrent rebind refreshed.
                     _facts(ticks, {**source, "body_sha256": _hash(live["body"])}, live["body"],
                            context=recorded if _hash(live["body"]) == source["body_sha256"] else None,
                            mapping_check=checked)
+                    _mark_drift(ticks, source)
                 mapping_changed = True
             if mapping_changed:
                 store._write(path, recorded)
@@ -854,13 +872,17 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             # Pod's own confirmed tick flips one checkbox: no material scope moves.
             from .standing import carry_tick
             carry_tick(state, source)
-        if live is not None:
+        if live is None:
+            if ledger["facts"] is not None:
+                ledger["facts"].pop("drift_of", None)
+        elif current_source == source or already_rebound:
             _facts(ledger, state["checkpoint"]["objective_source"], live["body"], context=state,
                    mapping_check=checked or reader.mapping_check)
             # Drift observations are stale facts: never pretend that their body
             # is the checkpoint binding, even though status retains the readback.
             if now != state["checkpoint"]["objective_source"]["body_sha256"]:
                 ledger["facts"]["source"] = digest({**source, "body_sha256": now})
+                _mark_drift(ledger, state["checkpoint"]["objective_source"])
         if live is None and any("pod_mapping" in row for row in state["checkpoint"].get("obligations", [])):
             ledger["read"] = {"status": "not_read", "reason": failure.code}
         if rebind and request["direction"] == "tick":
