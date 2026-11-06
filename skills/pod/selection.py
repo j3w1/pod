@@ -104,13 +104,15 @@ def validate_constraint(value: object, snapshot: dict | None = None, *, new: boo
     if not isinstance(value, dict):
         raise PodError("invalid_constraint", "Constraint must be a record")
     required = {"kind", "provenance", "value"}
-    if set(value) - (required | {"id", "role", "saved_state", "mode", "file_stamp", "active"} | DECISION_FIELDS) or not required <= set(value):
+    if set(value) - (required | {"id", "role", "saved_state", "mode", "file_stamp", "active", "observed_runtime"} | DECISION_FIELDS) or not required <= set(value):
         raise PodError("invalid_constraint", "Constraint has missing or unsupported fields")
     kind, provenance, item = value["kind"], value["provenance"], value["value"]
-    model_decision = kind in (*RULE_CONSTRAINTS, "route_rule") and provenance in RULE_DECISIONS
+    model_decision = kind in (*RULE_CONSTRAINTS, "route_rule", "keep_worker_tab") and provenance in RULE_DECISIONS
     if (kind not in CONSTRAINT_KINDS or provenance not in PROVENANCE
             and not model_decision):
         raise PodError("invalid_constraint", "Constraint kind or provenance is unsupported")
+    if "observed_runtime" in value and kind != "keep_worker_tab":
+        raise PodError("invalid_constraint", "Only a worker-tab intent records its observed runtime")
     if provenance == "user_direct" or model_decision:
         value = owner_decision(value, kind="constraint", stored=not (new or snapshot is not None))
     elif (DECISION_FIELDS - {"provenance"}) & set(value):
@@ -134,9 +136,14 @@ def validate_constraint(value: object, snapshot: dict | None = None, *, new: boo
         if snapshot is not None and item > snapshot["max_active"]:
             raise PodError("constraint_authority", "Objective maximum cannot widen personal ceiling")
     elif kind == "keep_worker_tab":
-        if provenance != "user_direct" or not value.get("instruction"):
-            raise PodError("constraint_authority", "A worker-tab keep or revocation needs a recorded user_direct instruction")
+        # R127: the person's instruction, or an agent decision under `routine` (only on a closed objective).
+        if provenance not in RULE_DECISIONS or not value.get("instruction"):
+            raise PodError("constraint_authority", "A worker-tab keep or revocation needs a recorded instruction")
         _worker_tab_instruction(item)
+        runtime = value.get("observed_runtime")
+        if "observed_runtime" in value and (new or snapshot is not None or runtime is not None and (
+                not isinstance(runtime, str) or not runtime or len(runtime) > 512)):
+            raise PodError("invalid_constraint", "observed_runtime is recorded by Pod, never supplied")
     elif kind == "allow_disabled":
         if not isinstance(item, str) or (supported_route(item) is None and item not in known()):
             raise PodError("invalid_constraint", "Disabled exception needs an exact supported route")

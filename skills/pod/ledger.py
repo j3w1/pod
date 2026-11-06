@@ -3663,19 +3663,26 @@ def constraints_update(project: Path, objective: str, *, owner: str,
         return {"constraints": state["constraints"] if state else []}
     with _lock(path):
         state = _read(path)
-        if state["owner"] != owner:
-            from .handoff import refuse_nonowner
-            refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
-            raise PodError("coordinator_conflict", "Constraint belongs to another coordinator")
         tab_instruction = (action == "add" and isinstance(value, dict) and value.get("kind") == "keep_worker_tab")
-        try:
+        closed_intent = False
+        if tab_instruction:
+            # R127 (pod#192): a closed objective's tab intent changes no map, checkpoint or closure report and
+            # never enters runtime continuity. Continuation, historical retirement and evidence closure refuse.
+            try:
+                _require_open(state)
+            except PodError as exc:
+                if exc.code != "objective_closed":
+                    raise
+                from .evidence_closure import refuse_objective
+                refuse_objective(project, objective)
+                closed_intent = True
+        if not closed_intent:
+            if state["owner"] != owner:
+                from .handoff import refuse_nonowner
+                refuse_nonowner(project, objective, state, owner, code="coordinator_conflict")
+                raise PodError("coordinator_conflict", "Constraint belongs to another coordinator")
             _require_open(state)
-        except PodError as exc:
-            # An owner's tab keep/revocation changes no map or closure report.
-            # Continuation and historical retirement still refuse all writes.
-            if not tab_instruction or exc.code != "objective_closed":
-                raise
-        require_authority(project, objective, owner=owner, state=state)
+            require_authority(project, objective, owner=owner, state=state)
         if action == "add":
             snapshot = load(project)
             from .relay import current_decision
@@ -3686,6 +3693,20 @@ def constraints_update(project: Path, objective: str, *, owner: str,
             row = validate_constraint(value, snapshot)
             if row["kind"] == "keep_worker_tab" and row["value"]["objective"] != objective:
                 raise PodError("invalid_constraint", "Worker-tab instruction must name this objective")
+            if row["kind"] == "keep_worker_tab":
+                from .worker_tabs import intent_refusal
+                reason = intent_refusal(state, row)
+                if reason is not None:
+                    raise PodError("constraint_authority", reason)
+            if closed_intent:
+                # The runtime this write observed is provenance on the intent alone; nothing is rebound.
+                from .orca import contract
+                try:
+                    observed = contract()
+                except PodError:
+                    observed = {}
+                runtime = observed.get("runtime") if observed.get("status") == "observed" else None
+                row = {**row, "observed_runtime": runtime if isinstance(runtime, str) and runtime else None}
             if not isinstance(row.get("id"), str) or not row["id"] or len(row["id"]) > 128:
                 raise PodError("invalid_constraint", "Constraint id is required")
             if any(c.get("id") == row["id"] for c in state["constraints"]):

@@ -37,21 +37,73 @@ def keep_open_command(dispatch: str) -> list[str]:
     return ["orca", "orchestration", "worker-keep-open", "--dispatch", dispatch, "--json", "--full"]
 
 
-def _keep(state: dict, objective: str, dispatch: str, handle: str) -> dict | None:
-    instruction = None
+TAB_INTENT_PROVENANCE = ("user_direct", "agent_decision", "decision_request")
+
+
+def intent_actor(row: dict) -> str:
+    """Who decided a recorded tab intent: `person` or `agent`; an earlier user_direct row is the person's."""
+    actor = row.get("actor")
+    if isinstance(actor, dict) and actor.get("kind") in ("person", "agent"):
+        return actor["kind"]
+    return "person" if row.get("provenance") == "user_direct" else "agent"
+
+
+def deciding_intent(state: dict, objective: str, dispatch: str, handle: str) -> dict | None:
+    """The tab intent that decides this exact objective, Dispatch and terminal, keep or revocation.
+
+    The last active intent decides, except that the person's keep stays deciding until the person
+    revokes it: a later agent keep or let-go never downgrades or ends it (R127).
+    """
+    decided = person = None
     for row in state.get("constraints", []):
         value = row.get("value")
-        if (row.get("kind") == "keep_worker_tab" and row.get("provenance") == "user_direct"
+        if (row.get("kind") == "keep_worker_tab" and row.get("provenance") in TAB_INTENT_PROVENANCE
                 and row.get("active", True) and isinstance(value, dict)
                 and (value.get("objective"), value.get("dispatch"), value.get("terminal"))
                 == (objective, dispatch, handle)):
-            instruction = row if value.get("keep") is True else None
-    return instruction
+            decided = row
+            if intent_actor(row) == "person":
+                person = row
+    if person is not None and person["value"].get("keep") is True:
+        return person
+    return decided
+
+
+def _keep(state: dict, objective: str, dispatch: str, handle: str) -> dict | None:
+    row = deciding_intent(state, objective, dispatch, handle)
+    if row is None or row["value"].get("keep") is not True:
+        return None
+    # R127: an agent's keep exists only on a closed record; the closure gate counts only the person's keeps.
+    if intent_actor(row) != "person" and not (state.get("checkpoint") or {}).get("closure"):
+        return None
+    return row
+
+
+def intent_refusal(state: dict, row: dict) -> str | None:
+    """R127 (pod#192): why a new validated tab intent may not be recorded, or None. Reads nothing."""
+    if intent_actor(row) != "person" and not (state.get("checkpoint") or {}).get("closure"):
+        return "An agent's worker-tab intent is accepted only on a closed objective; record the person's instruction"
+    value = row["value"]
+    current = deciding_intent(state, value["objective"], value["dispatch"], value["terminal"])
+    if (intent_actor(row) != "person" and current is not None and current["value"].get("keep") is True
+            and intent_actor(current) == "person"):
+        # The person's keep stands until the person revokes it; an agent intent cannot replace it.
+        return ("Revoking a keep the person asked for needs the person's direct decision" if value["keep"] is False
+                else "The person's keep already decides this tab until the person revokes it")
+    return None
+
+
+def tab_intent(state: dict, dispatch: str, handle: str) -> dict:
+    """The tab-intent write that records keep or let-go for this tab, as data; Pod runs nothing."""
+    objective = (state.get("checkpoint") or {}).get("objective")
+    return {"command": ["pod", "internal", "constraint", "--input", "FILE"],
+            "input": {"action": "add", "value": {"kind": "keep_worker_tab", "value": {
+                "objective": objective, "dispatch": dispatch, "terminal": handle}}}}
 
 
 def retention_reason(state: dict, admission: dict, keep: dict | None) -> str | None:
     if keep:
-        return "owner request"
+        return "owner request" if intent_actor(keep) == "person" else "agent request"
     obligations = (state.get("checkpoint") or {}).get("obligations") or []
     from .lineage import Lineage
     lineage = Lineage(obligations)
@@ -152,6 +204,19 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
     if not failure and not resource and not release and not terminal:
         return finish("not_materialized", "This worker has no tab.")
     if failure and runtime_changed:
+        if (state.get("checkpoint") or {}).get("closure") and not (
+                state.get("continued_by") or state.get("historical_retirement")):
+            # R127 (pod#192): a closed record is never rebound and needs no reopening; its tab intent stays open.
+            decided = deciding_intent(state, objective, dispatch, handle)
+            intent = tab_intent(state, dispatch, handle)
+            recorded = (f" The recorded intent is {'keep' if decided['value'].get('keep') is True else 'let go'}"
+                        f" by {intent_actor(decided)} instruction {decided.get('id')}." if decided else "")
+            return finish("runtime_changed", f"Orca's runtime changed ({failure}); this closed objective is never "
+                          "rebound and needs no reopening. Record this tab's intent with "
+                          f"{shlex.join(intent['command'])} (action add, kind keep_worker_tab, keep true to keep it "
+                          f"or false to let it go).{recorded}",
+                          state="unknown", listed=True, blocks_closure=True, tab_intent=intent,
+                          failed_read={"code": failure, "command": None})
         return finish("runtime_changed", f"Orca's runtime changed ({failure}); the next Pod write rebinds "
                       "when continuity is proven, or the owner decides when it is ambiguous.",
                       state="unknown", listed=True, blocks_closure=True,
@@ -190,8 +255,11 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                       command=None, state="unknown", blocks_closure=True,
                       failed_read={"code": "worker_terminal_unverified", "command": repeat})
     if keep:
-        row.update(owner_kept=True, owner_instruction={key: keep[key] for key in
+        by = intent_actor(keep)
+        row.update(owner_kept=by == "person", kept_by=by, owner_instruction={key: keep[key] for key in
                    ("id", "instruction", "channel", "relay") if key in keep})
+        kept = f"Owner-kept by instruction {keep['id']}" if by == "person" else f"Kept by agent instruction {keep['id']}"
+        let_go = "when the owner lets it go" if by == "person" else "when that keep is revoked"
     if (owned and row["release_state"] == "retained" and admission.get("keep_open") == "requested"
             and admission.get("report") is not None and reason is None
             and facts.get("retained_reason") in (None, "coordinator_request", "user_requested")
@@ -211,7 +279,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                      + row["next_action"]["text"])
     if owned:
         debt = "Release still owed" if recorded_settlement else "Release owed"
-        wording = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
+        wording = (f"{kept}; release available {let_go}: {next_step}."
                    if keep else f"{debt}{timing}: {next_step}.")
         cycle = (f" Retain only while {reason} of this result are pending; release when the cycle ends."
                  if reason in ("corrections", "delta review") else "")
@@ -228,7 +296,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         wording = keep_now + wording
         if acknowledgement:
             fields["closure_wording"] = wording
-            option = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
+            option = (f"{kept}; release available {let_go}: {next_step}."
                       if keep else f"{next_step}." if (row["next_action"] or {}).get("source") == "pod_guidance"
                       else f"Orca's release option: {next_step}.")
             wording = keep_now + decision + " " + option + cycle
@@ -241,7 +309,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                if row["ownership"] == "user_owned" else "Orca does not own the terminal and will not release it.")
     wording += " Do not reuse."
     if keep:
-        return finish("owner_kept_unowned", f"Owner-kept by instruction {keep['id']}. " + wording, command=None)
+        return finish("owner_kept_unowned", f"{kept}. " + wording, command=None, retention_reason=reason)
     if admission.get("report") is None:
         from .util import route_hold, route_discarded, route_next_action
         if route_discarded(admission):
