@@ -47,7 +47,13 @@ The governor binds a validation row to a run only when the run matches what the 
 started: one of its events, its exact head commit, created at or after the submission, and its own
 attempt (R115). A push or pull-request update starts `push` runs and, on a branch with an open pull
 request, `pull_request` or `pull_request_target` runs, so a row derived from a publication binds
-only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. Every row
+only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. A recorded
+push that moved no ref (Git reports it up to date, or an older row names no `ref_changed`) starts no
+run, so its derived row reads the branch with
+`gh api repos/{owner}/{repo}/activity?ref=refs/heads/BRANCH&direction=desc&per_page=21`: only when
+the newest update at or before the submission set the branch to the row's exact head does the floor
+move back to that update's time. Any other answer keeps the submission, and the row says which time
+it used (`created_after` basis `remote_update` or `publication`). Every row
 binds its run's first attempt, except a rerun. Before rerunning, the governor records the run, its
 latest attempt and the submission start, and right after GitHub accepts the call it records that
 acceptance; one rule binds the rerun's attempt on every path. The count proves it: with the

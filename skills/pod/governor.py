@@ -68,7 +68,8 @@ NEXT_ACTIONS = {
     "candidate_unbound": "checkpoint a candidate, or prepare one for the delivery unit",
     "superseded_candidate": "re-issue the request against the unit's current candidate generation",
     "candidate_unfrozen": "commit or discard the working-tree changes, then prepare the candidate again",
-    "candidate_unpublished": "push the candidate commit to the unit's branch first",
+    "candidate_unpublished": ("publish the candidate commit to the unit's branch through governor-execute (push or "
+                              "pr_update), never plain git: Pod counts only the pushes it recorded"),
     "effects_unknown": "declare effects: [] for none, or workflow:ci.yml (a bare workflow file name); inspect governor-status trigger_proposal; proposals are never applied",
     "effect_unresolved": "reconcile the unresolved submission with the governor-reconcile helper before submitting again",
     "integration_unsettled": "settle the unit's native work and corrections first",
@@ -105,6 +106,7 @@ class GitHubPort(Protocol):
     def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> dict: ...
     def dispatch(self, *, workflow: str, ref: str, inputs: dict) -> dict: ...
     def runs(self, *, workflow: str, commit: str) -> list[dict]: ...
+    def branch_updates(self, *, branch: str) -> list[dict]: ...
     def run(self, *, run_id: str, attempt: int | None = None) -> dict: ...
     def rerun(self, *, run_id: str, failed_only: bool) -> dict: ...
     def cancel(self, *, run_id: str) -> dict: ...
@@ -1095,7 +1097,8 @@ def _check_binding(action: dict, unit: dict | None, binding: dict | None, checkp
         key = unit["branch"]["remote"] + "/" + unit["branch"]["branch"]
         if unit["published"].get(key) != binding["commit"]:
             _reason(reasons, "correctness", "candidate_unpublished",
-                    f"{key} does not carry the candidate commit according to recorded pushes")
+                    f"{key} does not carry the candidate commit according to the pushes Pod recorded; a push "
+                    "made with plain git is not one of them")
 
     return superseded, current, starting
 

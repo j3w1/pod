@@ -3785,6 +3785,46 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A948",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_noop_push_readback.NoopPushTests.test_a_noop_push_binds_a_run_created_after_the_remote_update",
+        "tests.test_noop_push_readback.NoopPushTests.test_a_bound_run_from_before_the_remote_update_is_rejected",
+        "tests.test_github.PortReadingTests.test_push_is_read_from_porcelain_output",
+        "tests.test_github.PortReadingTests.test_branch_updates_are_read_from_repository_activity",
+        "tests.test_github.AllowlistTests.test_branch_activity_shape_is_exact"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A949",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_noop_push_readback.ReadbackSettlesUnknownTests.test_an_unknown_noop_validation_settles_by_readback_and_the_objective_closes",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A950",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_noop_push_readback.RefChangingPushTests.test_a_push_that_moved_the_ref_keeps_the_submission",
+        "tests.test_noop_push_readback.RefChangingPushTests.test_an_older_row_whose_activity_shows_the_push_set_the_head_keeps_the_submission",
+        "tests.test_noop_push_readback.FallbackTests.test_every_unproved_activity_keeps_the_submission",
+        "tests.test_noop_push_readback.FallbackTests.test_a_requested_dispatch_keeps_its_own_rule",
+        "tests.test_governor.DecisionTests.test_a_dispatch_needs_the_candidate_on_the_branch_first",
+        "tests.test_noop_push_readback.GuidanceTests.test_the_governor_reference_names_governor_publication"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A292",
       "required_evidence": [
         "unit",
