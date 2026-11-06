@@ -142,7 +142,7 @@ class RepositoryReadsTests(unittest.TestCase):
             github.repository_context(self.project)
             with patch("pod.orca.executable", return_value="/bin/false"), \
                     patch("pod.orca._mutate_allowed", return_value=True), self.assertRaises(PodError):
-                orca.mutate_command(["orchestration", "run-use", "--id", "run", "--json"])
+                orca.mutate_command(["orchestration", "run-use", "--id", "run", "--json", "--full"])
             github.repository_context(self.project)
             github._run(["true"], cwd=self.project, timeout=5, mutation=False)
             github.repository_context(self.project)

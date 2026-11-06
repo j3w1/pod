@@ -351,7 +351,7 @@ class AdmissionQueryTests(AdmissionQueryCase):
 
     def test_allowlist_accepts_only_the_native_inventory_shapes(self):
         from pod.orca import _read_allowed
-        prefix = ["orchestration", "worker-list", "--include-remote", "--json"]
+        prefix = ["orchestration", "worker-list", "--include-remote", "--json", "--full"]
         self.assertTrue(_read_allowed([*prefix, "--limit", "100"]))
         self.assertTrue(_read_allowed([*prefix, "--limit", "100", "--cursor", "next"]))
         self.assertFalse(_read_allowed([*prefix, "--limit", "101"]))

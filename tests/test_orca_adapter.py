@@ -13,8 +13,10 @@ from pod.orca import (compile_cache, contract, current_run, executable, mutate_c
 from pod.operations import OrcaPort
 from tests.common import envelope, ORCA_VERSION
 
-START=['orchestration','worker-start','--task','task','--run','run','--worktree','current',
-       '--agent','codex','--model','gpt-6-sol','--effort','high','--json']
+FULL_JSON=['--json','--full']
+OPTIONS=['orchestration','worker-start','--task','task','--run','run','--worktree','current',
+         '--agent','codex','--model','gpt-6-sol','--effort','high']
+START=OPTIONS+FULL_JSON
 
 
 class OrcaAdapterTests(unittest.TestCase):
@@ -256,13 +258,13 @@ class OrcaAdapterTests(unittest.TestCase):
         from pod.orca import _envelope,_read_allowed,run_show
         for bad in ('d\ud800','d\udcff','d\x00x'):
             for argv in (['terminal','show','--terminal',bad,'--json'],
-                         ['orchestration','worker-show','--dispatch',bad,'--json'],
-                         ['orchestration','run-show','--id',bad,'--json'],
-                         ['orchestration','request-show','--request',bad,'--json'],
+                         ['orchestration','worker-show','--dispatch',bad,'--json','--full'],
+                         ['orchestration','run-show','--id',bad,'--json','--full'],
+                         ['orchestration','request-show','--request',bad,'--json','--full'],
                          ['worktree','show','--worktree','path:/w/'+bad,'--json'],
                          ['terminal','list','--worktree','path:/w/'+bad,'--json'],
-                         ['orchestration','worker-list','--include-remote','--json','--run',bad],
-                         ['orchestration','worker-list','--include-remote','--json','--run','run','--cursor',bad]):
+                         ['orchestration','worker-list','--include-remote','--json','--full','--run',bad],
+                         ['orchestration','worker-list','--include-remote','--json','--full','--run','run','--cursor',bad]):
                 with self.subTest(argv=ascii(argv)),patch('pod.orca.subprocess.run') as runner:
                     self.assertFalse(_read_allowed(argv))
                     with self.assertRaises(PodError) as caught: read_command(argv)
@@ -276,8 +278,10 @@ class OrcaAdapterTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code,code)
                 runner.assert_not_called()
             with patch('pod.orca.subprocess.run') as runner:
-                for argv in (['orchestration','run-use','--id',bad,'--json'],
-                             START[:3]+[bad]+START[4:],START[:-2]+[bad,'--json']):
+                self.assertTrue(orca_module._mutate_allowed(START))  # Each case differs from it only by `bad`.
+                for argv in (['orchestration','run-use','--id',bad,'--json','--full'],
+                             START[:3]+[bad]+START[4:],OPTIONS[:-1]+[bad]+FULL_JSON):
+                    self.assertEqual(argv[-2:],FULL_JSON)
                     with self.subTest(argv=ascii(argv)),self.assertRaises(PodError) as caught: mutate_command(argv)
                     self.assertEqual(caught.exception.code,'unsupported_orca_mutation')
                 runner.assert_not_called()
@@ -294,10 +298,10 @@ class OrcaAdapterTests(unittest.TestCase):
             # surrogate or NUL, and would pass a surrogate-escaped one (\udcff) to Orca as the raw byte.
             for allowed,call,code in (
                     ('_read_allowed',
-                     lambda value: read_command(['orchestration','worker-show','--dispatch',value,'--json']),
+                     lambda value: read_command(['orchestration','worker-show','--dispatch',value,'--json','--full']),
                      'unsupported_orca_read'),
                     ('_mutate_allowed',
-                     lambda value: mutate_command(['orchestration','run-use','--id',value,'--json']),
+                     lambda value: mutate_command(['orchestration','run-use','--id',value,'--json','--full']),
                      'unsupported_orca_mutation')):
                 with patch('pod.orca.executable',return_value=tool),patch('pod.orca.'+allowed,return_value=True):
                     for bad in ('d\ud800','d\udcff','d\x00x'):
@@ -310,7 +314,7 @@ class OrcaAdapterTests(unittest.TestCase):
                     started.unlink()
             out.write_text(json.dumps({'ok':True,'result':{},'_meta':{'runtimeId':'r\ud800'}}))
             with patch('pod.orca.executable',return_value=tool),self.assertRaises(PodError) as caught:
-                read_command(['orchestration','run-current','--json'])
+                read_command(['orchestration','run-current','--json','--full'])
             self.assertEqual(caught.exception.code,'orca_contract')
 
     def test_orca_identities_pod_records_or_passes_back_must_pass_exactly(self):
@@ -345,8 +349,8 @@ class OrcaAdapterTests(unittest.TestCase):
     def test_read_allowlist_refuses_native_mutations_and_account_reads(self):
         with patch('pod.orca.subprocess.run') as runner:
             for argv in (['account','list','--json'],['host','list','--json'],
-                         ['orchestration','worker-list','--include-remote','--json'],
-                         ['orchestration','check','--json'],['orchestration','run-list','--json']):
+                         ['orchestration','worker-list','--include-remote','--json','--full'],
+                         ['orchestration','check','--json','--full'],['orchestration','run-list','--json','--full']):
                 with self.subTest(argv=argv),self.assertRaises(PodError): read_command(argv)
             runner.assert_not_called()
 
@@ -380,7 +384,7 @@ class OrcaAdapterTests(unittest.TestCase):
             port.start_worker(run='r',task='t',owner='o',route=route)
             self.assertEqual(mutate.call_args.args[0],['orchestration','worker-start',
                 '--task','t','--run','r','--worktree','current','--agent','codex',
-                '--model','gpt-6-sol','--effort','high','--json'])
+                '--model','gpt-6-sol','--effort','high','--json','--full'])
             port.start_worker(run='r',task='t',owner='o',route={**route,'effort':'native_default'})
             self.assertNotIn('--effort',mutate.call_args.args[0])
             port.start_worker(run='r',task='t',owner='o',route=route,terminal='terminal')
@@ -399,17 +403,18 @@ class OrcaAdapterTests(unittest.TestCase):
             result=OrcaPort().start_worker(run='run',task='task',owner='owner',
                                            route=route,worktree='current',retry_request=request)
         self.assertEqual(result['request_uuid'],request)
-        self.assertEqual(native.call_args.args[0][-3:],['--retry-request',request,'--json'])
+        self.assertEqual(native.call_args.args[0][-4:],['--retry-request',request,'--json','--full'])
         self.assertEqual(native.call_args.args[0].count('--retry-request'),1)
 
     def test_mutation_allowlist_blocks_every_other_native_effect(self):
+        self.assertTrue(orca_module._mutate_allowed(START))  # The option cases differ from it by one option.
         with patch('pod.orca.subprocess.run') as runner:
-            for argv in (['orchestration','worker-release','--dispatch','d','--json'],
-                         ['orchestration','worker-start','--task','t','--json'],
-                         START[:-1]+['--context','max','--json'],
-                         START[:-1]+['--terminal','t','--json'],
+            for argv in (['orchestration','worker-release','--dispatch','d','--json','--full'],
+                         ['orchestration','worker-start','--task','t','--json','--full'],
+                         OPTIONS+['--context','max']+FULL_JSON,
+                         OPTIONS+['--terminal','t']+FULL_JSON,
                          ['orchestration','worker-start','--task','t','--run','r','--worktree',
-                          'new-child','--agent','codex','--model','gpt-6-sol','--json']):
+                          'new-child','--agent','codex','--model','gpt-6-sol','--json','--full']):
                 with self.subTest(argv=argv),self.assertRaises(PodError) as caught:
                     mutate_command(argv)
                 self.assertEqual(caught.exception.code,'unsupported_orca_mutation')

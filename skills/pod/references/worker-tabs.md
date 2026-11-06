@@ -153,7 +153,7 @@ unless it is kept open, so decide retention and reuse before that:
   starts exactly as before.
 - At report time a row whose retention is intended (a correction cycle or an
   owner keep) and whose terminal Orca will release at `autoReleaseAt` carries
-  `keep_open_command`, `orca orchestration worker-keep-open --dispatch D --json`;
+  `keep_open_command`, `orca orchestration worker-keep-open --dispatch D --json --full`;
   run it at once. A worker that is not retained is left to Orca's release.
 - `reuse_of` naming a worker Orca has already released is refused with
   `reuse_released` before any start: admit the follow-up without `reuse_of`.

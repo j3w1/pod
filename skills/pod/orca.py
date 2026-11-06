@@ -38,6 +38,12 @@ AGENTS = ("codex", "claude")
 MESSAGE_ROUTE_DEPENDENCY = "https://github.com/stablyai/orca/issues/28190"
 PREFLIGHT_REFUSALS = ("task_not_found", "task_not_startable", "inject_rejected")
 WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:", "issue:")
+# R214: since Orca 1.4.246 (stablyai/orca#36498) every `orchestration` command prints a concise agent view with
+# `--json`, and `--full` prints the full record. Pod reads only the full record, so every orchestration command it
+# runs ends its output flags with exactly these two. Orca's other commands (`status`, `terminal`, `worktree`) are
+# unchanged and refuse `--full`.
+FULL_JSON = ["--json", "--full"]
+CONCISE_VIEW = ("Orca returned its concise orchestration view, not the full record (--json --full) Pod reads")
 
 
 def executable() -> Path:
@@ -83,7 +89,7 @@ def _read_allowed(argv: list[str]) -> bool:
     if argv == display_worktree_argv():
         return True
     if argv in (["--version"], ["status", "--json"],
-                ["orchestration", "run-current", "--json"],
+                ["orchestration", "run-current", "--json", "--full"],
                 # R113: the complete inventories that prove a released path absent.
                 ["worktree", "list", "--json"], ["terminal", "list", "--json"]):
         return True
@@ -96,20 +102,21 @@ def _read_allowed(argv: list[str]) -> bool:
     if (len(argv) == 8 and argv[:3] == ["terminal", "read", "--terminal"] and _argument(argv[3])
             and argv[4:6] == ["--screen", "--limit"] and argv[6] in SCREEN_LIMITS and argv[7] == "--json"):
         return True
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
-            and _argument(argv[3]) and argv[4] == "--json"):
+    # R214: every orchestration read asks for Orca's full record (`--json --full`); the concise default is never read.
+    if (len(argv) == 6 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
+            and _argument(argv[3]) and argv[4:] == FULL_JSON):
         return True
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "run-show", "--id"]
-            and _argument(argv[3]) and argv[4] == "--json"):
+    if (len(argv) == 6 and argv[:3] == ["orchestration", "run-show", "--id"]
+            and _argument(argv[3]) and argv[4:] == FULL_JSON):
         return True
     # R206 rule S: the whole Run list, page by page, for each Run's current coordinator.
-    if argv == ["orchestration", "run-list", "--limit", "100", "--json"]:
+    if argv == ["orchestration", "run-list", "--limit", "100", *FULL_JSON]:
         return True
-    if (len(argv) == 7 and argv[:5] == ["orchestration", "run-list", "--limit", "100", "--json"]
-            and argv[5] == "--cursor" and _argument(argv[6], limit=1024)):
+    if (len(argv) == 8 and argv[:6] == ["orchestration", "run-list", "--limit", "100", *FULL_JSON]
+            and argv[6] == "--cursor" and _argument(argv[7], limit=1024)):
         return True
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "request-show", "--request"]
-            and _argument(argv[3]) and argv[4] == "--json"):
+    if (len(argv) == 6 and argv[:3] == ["orchestration", "request-show", "--request"]
+            and _argument(argv[3]) and argv[4:] == FULL_JSON):
         return True
     if (len(argv) == 5 and argv[:3] == ["worktree", "show", "--worktree"]
             and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
@@ -118,8 +125,8 @@ def _read_allowed(argv: list[str]) -> bool:
             and isinstance(argv[3], str) and argv[3].startswith("path:")
             and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
         return True
-    if argv[:4] == ["orchestration", "worker-list", "--include-remote", "--json"]:
-        return _worker_list_tail(argv[4:])
+    if argv[:5] == ["orchestration", "worker-list", "--include-remote", *FULL_JSON]:
+        return _worker_list_tail(argv[5:])
     return False
 
 
@@ -246,11 +253,19 @@ def _read(argv: list[str], *, timeout: float | None = None) -> dict:
         raise
 
 
+def concise_view(value: object) -> bool:
+    """Whether an Orca answer is the concise orchestration view (R214): the bare `{ok, result}` or `{ok, error}`
+    envelope without the request `id` and `_meta` every full record carries. It never proves anything."""
+    return isinstance(value, dict) and "ok" in value and "_meta" not in value and "id" not in value
+
+
 def _envelope(stdout: str) -> dict:
     try:
         value = json.loads(stdout)
     except ValueError as exc:
         raise PodError("orca_contract", "Orca returned invalid JSON") from exc
+    if concise_view(value):
+        raise PodError("orca_contract", CONCISE_VIEW)
     if not isinstance(value, dict) or not value.get("ok") or not isinstance(value.get("result"), dict):
         raise PodError("orca_contract", "Orca returned an unsupported result")
     meta = value.get("_meta")
@@ -273,6 +288,8 @@ def _mutation_envelope(stdout: str | bytes) -> dict:
         raise PodError("native_effect_uncertain", "Native response is not valid JSON") from exc
     if not isinstance(value, dict):
         raise PodError("native_effect_uncertain", "Native response is malformed")
+    if concise_view(value):
+        raise PodError("native_effect_uncertain", CONCISE_VIEW)
     meta = value.get("_meta")
     runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
     if not isinstance(runtime, str) or not runtime:
@@ -365,8 +382,8 @@ def _worker_list_tail(tail: list[str]) -> bool:
 
 
 def _mutate_allowed(argv: list[str]) -> bool:
-    if (len(argv) == 5 and argv[:3] == ["orchestration", "run-use", "--id"]
-            and _argument(argv[3]) and argv[4] == "--json"):
+    if (len(argv) == 6 and argv[:3] == ["orchestration", "run-use", "--id"]
+            and _argument(argv[3]) and argv[4:] == FULL_JSON):
         return True
     if argv[:2] == ["orchestration", "worker-start"]:
         return _worker_start_shape(argv[2:])
@@ -374,6 +391,9 @@ def _mutate_allowed(argv: list[str]) -> bool:
 
 
 def _worker_start_shape(tail: list[str]) -> bool:
+    if tail[-1:] != ["--full"]:
+        return False  # R214: the full record, which admission reads; the concise view is never asked for.
+    tail = tail[:-1]
     retry = None
     if len(tail) >= 3 and tail[-3] == "--retry-request" and tail[-1] == "--json":
         retry = tail[-2]
@@ -575,7 +595,7 @@ def worker_rows(run: str) -> dict:
     Under a `read_deadline` each page is one bounded read, and no page starts once the deadline is spent."""
     if not _argument(run):
         raise PodError("orca_contract", "Exact Run identity is required for worker reads")
-    prefix = ["orchestration", "worker-list", "--include-remote", "--json", "--limit", "100"]
+    prefix = ["orchestration", "worker-list", "--include-remote", *FULL_JSON, "--limit", "100"]
     prefix += ["--run", run]
     all_rows: list[dict] = []
     identities = set()
@@ -620,7 +640,7 @@ def current_run(*, timeout: int | None = None) -> dict:
     """Read this terminal's native coordinator binding without adopting or creating one.
 
     `timeout` shortens the read for a caller that must stay responsive (the objective list)."""
-    argv = ["orchestration", "run-current", "--json"]
+    argv = ["orchestration", "run-current", *FULL_JSON]
     response = _read(argv, timeout=timeout)
     result = response["result"]
     if "run" not in result:
@@ -647,7 +667,7 @@ def run_show(run: str) -> dict:
     """Who coordinates one exact Run now; only its identity and generation leave this port."""
     if not _argument(run):
         raise PodError("orca_contract", "Exact Run identity is required for a Run read")
-    response = _read(["orchestration", "run-show", "--id", run, "--json"])
+    response = _read(["orchestration", "run-show", "--id", run, *FULL_JSON])
     row = response["result"].get("run") if isinstance(response["result"], dict) else None
     coordinator = row.get("coordinator_handle") if isinstance(row, dict) else None
     generation = row.get("consumer_generation") if isinstance(row, dict) else None
@@ -660,7 +680,7 @@ def run_show(run: str) -> dict:
 
 
 def worker_show(dispatch: str) -> dict:
-    return _read(["orchestration", "worker-show", "--dispatch", dispatch, "--json"])
+    return _read(["orchestration", "worker-show", "--dispatch", dispatch, *FULL_JSON])
 
 
 def _whole(response: object, kind: str) -> bool:
@@ -791,7 +811,7 @@ def mailbox_check(run: str, *, ack: str | None = None, wait_ms: int | None = Non
         argv += ["--ack", ack]
     if wait_ms is not None:
         argv += ["--wait", "--timeout-ms", str(wait_ms)]
-    argv.append("--json")
+    argv += FULL_JSON
     command = [str(executable()), *argv]
     limit = (wait_ms or 0) / 1000 + MAILBOX_GRACE_SECONDS
     try:
@@ -808,6 +828,8 @@ def mailbox_check(run: str, *, ack: str | None = None, wait_ms: int | None = Non
         value = None
     if not isinstance(value, dict):
         raise PodError("orca_contract", "Orca mailbox check returned invalid JSON")
+    if concise_view(value):
+        raise PodError("orca_contract", CONCISE_VIEW)
     if value.get("ok") is not True:
         error = value.get("error") if isinstance(value.get("error"), dict) else {}
         code = error.get("code") if isinstance(error.get("code"), str) else None

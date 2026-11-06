@@ -535,7 +535,7 @@ def _preflight_decision(path, state, value, verified, pending, capability):
 
 def owner_handoff(project: Path, objective: str, *, owner: str, decision: object, port) -> dict:
     from .ledger import (_lock, _path, _read, _write, _require_open, CONTINUITY_HISTORY)
-    from .orca import current_run, mutate_command, terminal_identity
+    from .orca import FULL_JSON, current_run, mutate_command, terminal_identity
     value = exact(decision, DECISION | CHANNEL_FIELDS, DECISION, name="handoff_decision")
     from .relay import Decision, decision_input, _raw_decision, same_decision_input
     generic = decision_input(value)
@@ -638,7 +638,7 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
         failed = None
         if verdict["condition"] == "fresh":
             try:
-                receipt = mutate_command(["orchestration", "run-use", "--id", value["run"], "--json"], accept_exit=(0, 1))
+                receipt = mutate_command(["orchestration", "run-use", "--id", value["run"], *FULL_JSON], accept_exit=(0, 1))
                 if receipt.get("error") or receipt.get("exit") != 0:
                     failed = "run-use refused"
             except PodError:

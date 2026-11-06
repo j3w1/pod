@@ -173,8 +173,8 @@ class PreV3ArgvTests(unittest.TestCase):
         empty = {"ok": True, "result": {"messages": [], "count": 0}, **meta}
         timed = {"ok": True, "result": {"messages": [], "count": 0, "timedOut": True}, **meta}
         argv, result = self.native(PRE_V3, [empty, timed])
-        self.assertEqual(argv, [["orchestration", "check", "--run", RUN, "--ack", "delivery_1", "--json"],
-                                ["orchestration", "check", "--run", RUN, "--wait", "--timeout-ms", "2000", "--json"]])
+        self.assertEqual(argv, [["orchestration", "check", "--run", RUN, "--ack", "delivery_1", "--json", "--full"],
+                                ["orchestration", "check", "--run", RUN, "--wait", "--timeout-ms", "2000", "--json", "--full"]])
         self.assertEqual(result, {"schema": "pod-wake/v1", "status": "timeout", "run": RUN, "waited": True,
                                   "delivery": None, "replayed": False, "events": [], "duplicates": [],
                                   "ack": {"requested": "delivery_1", "status": "applied"},
@@ -184,7 +184,7 @@ class PreV3ArgvTests(unittest.TestCase):
         self.assertEqual(unread_argv, argv)
         self.assertEqual(unread["orchestration"], {"mode": "pre_v3", "basis": "unread", "reason": "orca_read_failed"})
         v3_argv, drained = self.native(V3, [empty])
-        self.assertEqual(v3_argv, [["orchestration", "check", "--run", RUN, "--json"]])
+        self.assertEqual(v3_argv, [["orchestration", "check", "--run", RUN, "--json", "--full"]])
         self.assertEqual(drained["status"], "drained")
 
     def test_pre_v3_worker_start_argv_is_unchanged_and_keep_open_adds_one_flag(self):
@@ -195,21 +195,22 @@ class PreV3ArgvTests(unittest.TestCase):
         receipt = {"runtime": "r", "exit": 0, "request_uuid": None, "result": {"state": "ready"}}
         with patch("pod.operations.mutate_command", return_value=receipt) as mutate:
             OrcaPort().start_worker(run="r", task="t", owner="o", route=route)
-            self.assertEqual(mutate.call_args.args[0], base + ["--json"])
+            self.assertEqual(mutate.call_args.args[0], base + ["--json", "--full"])
             OrcaPort().start_worker(run="r", task="t", owner="o", route=route, keep_open=True,
                                     retry_request="11111111-1111-4111-8111-111111111111")
             self.assertEqual(mutate.call_args.args[0], base + ["--keep-open", "--retry-request",
-                                                               "11111111-1111-4111-8111-111111111111", "--json"])
-        self.assertTrue(orca._mutate_allowed(base + ["--keep-open", "--json"]))
+                                                               "11111111-1111-4111-8111-111111111111", "--json", "--full"])
+        self.assertTrue(orca._mutate_allowed(base + ["--keep-open", "--json", "--full"]))
         self.assertTrue(orca._mutate_allowed(["orchestration", "worker-start", "--task", "t", "--run", "r",
-                                              "--worktree", "current", "--terminal", "term", "--keep-open", "--json"]))
-        for shape in (base[:8] + ["--keep-open"] + base[8:] + ["--json"], base + ["--keep-open", "--keep-open", "--json"],
-                      ["orchestration", "worker-keep-open", "--dispatch", "d", "--json"],
-                      ["orchestration", "send", "--to", "dispatch:d", "--subject", "s", "--body", "b", "--json"]):
+                                              "--worktree", "current", "--terminal", "term", "--keep-open", "--json", "--full"]))
+        for shape in (base[:8] + ["--keep-open"] + base[8:] + ["--json", "--full"],
+                      base + ["--keep-open", "--keep-open", "--json", "--full"],
+                      ["orchestration", "worker-keep-open", "--dispatch", "d", "--json", "--full"],
+                      ["orchestration", "send", "--to", "dispatch:d", "--subject", "s", "--body", "b", "--json", "--full"]):
             with self.subTest(shape=shape):
                 self.assertFalse(orca._mutate_allowed(shape))
         with self.assertRaises(PodError) as caught:
-            mutate_command(["orchestration", "send", "--to", "dispatch:d", "--json"])
+            mutate_command(["orchestration", "send", "--to", "dispatch:d", "--json", "--full"])
         self.assertEqual(caught.exception.code, "unsupported_orca_mutation")
 
 
@@ -333,7 +334,7 @@ class TabKeepOpenTests(unittest.TestCase):
     def test_keep_open_is_relayed_only_for_intended_retention_before_automatic_release(self):
         kept = self.row(self.facts(autoReleaseAt="2026-11-05T00:02:00Z"), keep=True)
         self.assertEqual(kept["keep_open_command"],
-                         ["orca", "orchestration", "worker-keep-open", "--dispatch", "d1", "--json"])
+                         ["orca", "orchestration", "worker-keep-open", "--dispatch", "d1", "--json", "--full"])
         self.assertTrue(kept["wording"].startswith("Keep it open now"))
         plain = self.row(self.facts(autoReleaseAt="2026-11-05T00:02:00Z"))
         self.assertNotIn("keep_open_command", plain)
@@ -501,7 +502,7 @@ class DocumentationTests(unittest.TestCase):
         for name in V3_CAPABILITY_KEYS.values():
             self.assertIn(name.removeprefix("orchestration."), wake_text)
         for phrase in ("## On Orchestration V3", "Drain, act, end the turn", "no `--wait` and no `--ack`",
-                       "`delivery_final: true`", "orchestration check --run RUN --all --json",
+                       "`delivery_final: true`", "orchestration check --run RUN --all --json --full",
                        "orchestration inbox --terminal run:RUN", "`worker_stopped`", "Never send to a settled Dispatch",
                        # The pre-V3 replay promise stays, scoped to a pre-V3 runtime.
                        "On a pre-V3 runtime an unacknowledged batch replays with the same `delivery`"):

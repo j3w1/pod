@@ -150,7 +150,7 @@ class NoDiscoveryTests(SelectedCase):
         self.ready()
         real = OrcaPort.read_native
         injected = {
-            "orca_cli": lambda: operations.read_command(["orchestration", "worker-list", "--include-remote", "--json",
+            "orca_cli": lambda: operations.read_command(["orchestration", "worker-list", "--include-remote", "--json", "--full",
                                                          "--limit", "100"]),
             "terminal_inventory": lambda: orca.complete_list("terminal"),
             "fleet": lambda: admission._fleet(),

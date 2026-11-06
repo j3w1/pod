@@ -248,7 +248,7 @@ print(json.dumps({'path':str(objective_root(Path.cwd(),data['objective'])/'conte
         entry = state["checkpoint"]["continuity"]["history"][-1]
         self.assertEqual(entry["state"], "pending")
         self.assertEqual(state["owner"], "owner")
-        self.assertEqual(argv, ["orchestration", "run-use", "--id", "run", "--json"])
+        self.assertEqual(argv, ["orchestration", "run-use", "--id", "run", "--json", "--full"])
         if self.mode not in ("refused", "error_unchanged", "unreadable"):
             self.current.update(coordinator_handle=os.environ["ORCA_TERMINAL_HANDLE"], consumer_generation=2)
         if self.mode == "unreadable":
@@ -1602,16 +1602,16 @@ finally: case.doCleanups()
     def test_exact_native_allowlists(self):
         from pod.orca import _read_allowed, _mutate_allowed
         self.assertTrue(_read_allowed(["terminal", "show", "--terminal", "next", "--json"]))
-        self.assertTrue(_mutate_allowed(["orchestration", "run-use", "--id", "run", "--json"]))
-        self.assertTrue(_read_allowed(["orchestration", "run-show", "--id", "run", "--json"]))
-        self.assertFalse(_mutate_allowed(["orchestration", "run-show", "--id", "run", "--json"]))
+        self.assertTrue(_mutate_allowed(["orchestration", "run-use", "--id", "run", "--json", "--full"]))
+        self.assertTrue(_read_allowed(["orchestration", "run-show", "--id", "run", "--json", "--full"]))
+        self.assertFalse(_mutate_allowed(["orchestration", "run-show", "--id", "run", "--json", "--full"]))
         for argv in (["terminal", "show", "--json"], ["terminal", "show", "--terminal", "-bad", "--json"],
-                     ["orchestration", "run-show", "--id", "-bad", "--json"], ["orchestration", "run-show", "--id", "run"],
-                     ["orchestration", "run-show", "--run", "run", "--json"],
+                     ["orchestration", "run-show", "--id", "-bad", "--json", "--full"], ["orchestration", "run-show", "--id", "run"],
+                     ["orchestration", "run-show", "--run", "run", "--json", "--full"],
                      ["terminal", "show", "--terminal", "next", "--preview", "--json"],
-                     ["orchestration", "run-use", "--id", "run"], ["orchestration", "run-use", "--run", "run", "--json"],
-                     ["orchestration", "run-use", "--id", "run", "--json", "--from", "next"],
-                     ["orchestration", "run-create", "--json"]):
+                     ["orchestration", "run-use", "--id", "run"], ["orchestration", "run-use", "--run", "run", "--json", "--full"],
+                     ["orchestration", "run-use", "--id", "run", "--json", "--full", "--from", "next"],
+                     ["orchestration", "run-create", "--json", "--full"]):
             with self.subTest(argv=argv):
                 self.assertFalse(_read_allowed(argv)); self.assertFalse(_mutate_allowed(argv))
 

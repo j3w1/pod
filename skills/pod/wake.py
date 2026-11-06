@@ -19,7 +19,7 @@ MAX_WAIT_MS = 6 * 60 * 60 * 1000
 IDLE_SECONDS = 180
 EVENT_LIMIT = 50
 # What the coordinator must read before it acknowledges: the message text and payload, each bounded. Anything cut
-# is flagged, and the complete message stays readable with `orca orchestration check --run RUN --all --json`.
+# is flagged, and the complete message stays readable with `orca orchestration check --run RUN --all --json --full`.
 BODY_LIMIT = 16 * 1024
 PAYLOAD_LIMIT = 16 * 1024
 SETTLE_TYPES = ("worker_done",)
@@ -80,8 +80,8 @@ def classify(message: dict, features: dict | None = None) -> dict:
             and capabilities.get("worker_turn_stop_reports") is True):
         # Orca reports a worker whose turn ended without worker_done; the Dispatch stays open and no reply settles it.
         kind, extra = "worker_stopped", {"stop_reason": stop_reason}
-        show = ("`orca orchestration worker-show --dispatch " + dispatch + " --json`" if dispatch
-                else "`orca orchestration worker-show --dispatch DISPATCH --json`")
+        show = ("`orca orchestration worker-show --dispatch " + dispatch + " --json --full`" if dispatch
+                else "`orca orchestration worker-show --dispatch DISPATCH --json --full`")
         action = ("The worker stopped without worker_done (stopReason " + stop_reason + "); its Dispatch is still "
                   "open and a reply does not settle it. Read the worker with " + show + ", then decide from Pod's "
                   "records: consume a report it left through the recorded admission, record a failed or uncertain "
@@ -97,8 +97,8 @@ def classify(message: dict, features: dict | None = None) -> dict:
         action = ("Validate against the expected active Dispatch, then consume the report or the failure through "
                   "the recorded admission; decide the terminal's release, reuse or retention.")
         if capabilities.get("worker_auto_release") is True:
-            keep = ("`orca orchestration worker-keep-open --dispatch " + dispatch + " --json`" if dispatch
-                    else "`orca orchestration worker-keep-open --dispatch DISPATCH --json`")
+            keep = ("`orca orchestration worker-keep-open --dispatch " + dispatch + " --json --full`" if dispatch
+                    else "`orca orchestration worker-keep-open --dispatch DISPATCH --json --full`")
             action += (" Orca releases this worker about two minutes after worker_done unless it is kept open: to "
                        "retain or reuse it, run " + keep + " now. Never send to this settled Dispatch, which starts "
                        "a follow-up Task Pod never admitted; admit any follow-up through Pod.")
@@ -157,7 +157,7 @@ def _result(run: str, status: str, *, waited: bool, delivery=None, replayed=Fals
                        "native wake starts your next turn when more mail reaches Run " + run + ". Hold no wait.")
         if cut:
             next_action = ("Message(s) " + ", ".join(str(i) for i in cut) + " were cut to the helper's bounds: read them "
-                           "in full with `orca orchestration check --run " + run + " --all --json` before you act. "
+                           "in full with `orca orchestration check --run " + run + " --all --json --full` before you act. "
                            + next_action)
     elif status == "events" and final:
         # A delivery Orca already acknowledged is final on any runtime: never wait for its replay or acknowledge it.
@@ -166,7 +166,7 @@ def _result(run: str, status: str, *, waited: bool, delivery=None, replayed=Fals
                        + run + "` with no acknowledgement if you still own work.")
         if cut:
             next_action = ("Message(s) " + ", ".join(str(i) for i in cut) + " were cut to the helper's bounds: read them "
-                           "in full with `orca orchestration check --run " + run + " --all --json` before you act. "
+                           "in full with `orca orchestration check --run " + run + " --all --json --full` before you act. "
                            + next_action)
     elif status == "events":
         next_action = ("Process every event, then acknowledge delivery " + str(delivery)
@@ -177,7 +177,7 @@ def _result(run: str, status: str, *, waited: bool, delivery=None, replayed=Fals
                        + str(delivery) + "`.")
         if cut:
             next_action = ("Message(s) " + ", ".join(str(i) for i in cut) + " were cut to the helper's bounds: read them "
-                           "in full with `orca orchestration check --run " + run + " --all --json` before you "
+                           "in full with `orca orchestration check --run " + run + " --all --json --full` before you "
                            "acknowledge. " + next_action)
     elif status == "drained":
         next_action = ("No mail is pending for Run " + run + ". End your turn: Orca's native wake starts your next turn "
@@ -185,7 +185,7 @@ def _result(run: str, status: str, *, waited: bool, delivery=None, replayed=Fals
     elif status == "timeout":
         next_action = ("The wait ended with no mail: a checkpoint, not a failure. If you still own work, arm one "
                        "new wait with `pod wake --run " + run + "`; after repeated empty waits inspect once with "
-                       "`orca orchestration worker-list --run " + run + " --json` and act only on positive proof.")
+                       "`orca orchestration worker-list --run " + run + " --json --full` and act only on positive proof.")
     elif status == "disconnected":
         next_action = ("No wait remains armed and nothing was consumed. Verify the Run still binds this terminal, "
                        "then arm one new wait with `pod wake --run " + run + "`.")

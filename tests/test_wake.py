@@ -347,7 +347,7 @@ class MailboxCheckTests(unittest.TestCase):
         result, runner = self.run_check(payload, ack="delivery_1", wait_ms=2000)
         argv = runner.call_args.args[0]
         self.assertEqual(argv, ["/fixture/orca", "orchestration", "check", "--run", RUN, "--ack", "delivery_1",
-                                "--wait", "--timeout-ms", "2000", "--json"])
+                                "--wait", "--timeout-ms", "2000", "--json", "--full"])
         self.assertGreater(runner.call_args.kwargs["timeout"], 2)
         self.assertTrue(result["timed_out"])
         self.assertIsNone(result["delivery"])

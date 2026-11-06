@@ -14,7 +14,7 @@ from pod.orca import DEADLINE_SPENT, read_deadline
 from pod.window import Budget
 from tests import test_admission_query as base
 
-LIST = ["orchestration", "worker-list", "--include-remote", "--json"]
+LIST = ["orchestration", "worker-list", "--include-remote", "--json", "--full"]
 LIVE = {"connected": True, "writable": True, "orphaned": False}
 RUNS = {"runtime": "runtime", "result": {"runs": [], "nextCursor": None}}
 
@@ -853,12 +853,12 @@ class FleetReadTests(base.AdmissionQueryCase):
                                  projection={"id": "w", "dispatchId": "a1", "runId": "run", "taskId": "task"})]
         shown = {"runtime": "runtime", "result": {"dispatch": {"id": "a1", "runId": "run", "taskId": "task"},
                  "worker": {}, "projection": {"id": "w"}}}
-        double = FleetDouble(rows, overrides={tuple(["orchestration", "worker-show", "--dispatch", "a1", "--json"]): shown})
+        double = FleetDouble(rows, overrides={tuple(["orchestration", "worker-show", "--dispatch", "a1", "--json", "--full"]): shown})
         with patch("pod.abandoned.is_abandoned", return_value=True), \
              patch("pod.abandoned.current_claim", return_value={"process": "exited", "effects": []}):
             fleet, discovery = self.read(double)
         self.assertEqual(discovery.fleet_read, "sequential")
-        self.assertIn(["orchestration", "worker-show", "--dispatch", "a1", "--json"], double.calls)
+        self.assertIn(["orchestration", "worker-show", "--dispatch", "a1", "--json", "--full"], double.calls)
         self.assertEqual(discovery.done(("claim", "a1", "runtime")), {"process": "exited", "effects": []})
 
     def test_a_listed_workspace_starts_its_identity_read_during_the_walk(self):

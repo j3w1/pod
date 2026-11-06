@@ -1684,7 +1684,7 @@ class SweepTests(ClosureCase):
         self.native_calls.clear()
         code, result = self.sweep()
         self.assertEqual((code, self.swept(result)["outcome"]), (0, "closed"))
-        self.assertNotIn(["orchestration", "run-current", "--json"], self.native_calls)
+        self.assertNotIn(["orchestration", "run-current", "--json", "--full"], self.native_calls)
         self.assertEqual((len(self.port.starts), self.mutations), (starts, []))
         self.assertFalse([call for call in self.remote.calls[calls:] if call[0] in MUTATIONS])
         self.assertEqual([call for call in self.remote.calls[calls:] if call[0] == "issue_close"],
