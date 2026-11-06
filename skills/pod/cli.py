@@ -380,6 +380,8 @@ def _models(project: Path, action: str | None, *, check: bool = False,
 
 
 def execute(args: argparse.Namespace, project: Path) -> dict:
+    from .util import project_path
+    project = project_path(project)
     if args.command == "admission" and args.selected:
         from .admission import selected_command
         return selected_command(args, project)

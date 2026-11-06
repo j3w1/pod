@@ -23,6 +23,25 @@ CHANNEL_FIELDS = {"channel", "relay"} | DECISION_EVIDENCE
 RELAYED_DECISIONS = {"question", "governance", "withdrawal", "claim", "retirement"}
 
 
+def project_path(value: object) -> Path:
+    """Validate the caller's project before resolution, Git or native reads."""
+    kind = "non-path value"
+    if isinstance(value, (str, Path)):
+        path = Path(value)
+        kind = "relative path"
+        if path.is_absolute():
+            kind = "absolute path that is not an existing directory"
+            try:
+                if path.is_dir():
+                    return path
+            except (OSError, ValueError):
+                pass
+    raise PodError("project_path_invalid",
+                   f"project has kind {kind}; pass the absolute worktree path",
+                   {"field": "project", "kind": kind,
+                    "next_action": "pass the absolute worktree path"})
+
+
 @input_record("decision_relay")
 def _decision_relay(value):
     relay = exact(value, fields("decision_relay"), required("decision_relay"), name="decision_relay")
