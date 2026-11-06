@@ -436,7 +436,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     from .relay import TIMEOUT_S
     from .ledger import _run_references, CONTINUITY_HISTORY
     from .orca import current_run, run_show, terminal_identity, worker_rows
-    from .handoff import run_scope, shared_detail, shared_fields, unfinished as handoff_unfinished
+    from .handoff import peer_list, run_scope, shared_detail, shared_fields, unfinished as handoff_unfinished
     caller = os.environ.get("ORCA_TERMINAL_HANDLE") if caller is None and not objective_only else caller
     checkpoint = state.get("checkpoint") or {}
     owner = state.get("owner")
@@ -619,10 +619,10 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                     "since they are being written and need no repair.")
     if scope.get("closure_unchecked"):
         return fail("peer_closure_unverified", "a closed objective that records this Run is proved closed only by the "
-                    "command itself: " + ", ".join(scope["closure_unchecked"][:8]) + ".")
+                    "command itself: " + peer_list(scope.get("closure_unchecked_rows") or scope["closure_unchecked"], limit=8) + ".")
     if scope.get("unverifiable"):
         return fail("peer_history_unverifiable", "peer history cannot prove closure: "
-                    + ", ".join(scope["unverifiable"][:8]) + ".")
+                    + peer_list(scope.get("unverifiable_rows") or scope["unverifiable"], limit=8) + ".")
     admissions, differs, read_failures = _admissions(state, runtime=runtime, port=port, budget=budget)
     if differs:
         result["differs"] = differs[:16]
