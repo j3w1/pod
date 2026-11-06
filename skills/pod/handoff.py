@@ -515,6 +515,61 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     return result
 
 
+SUCCESSOR = "Start a successor objective that claims this one; do not run orca orchestration run-use by hand."
+
+
+def _unlinked_run(project: Path, checkpoint: dict, run_id: str | None, runtime: str) -> dict:
+    """For a caller with no current Run: the recorded worktree, then the Run's coordinator by run show (pod#292)."""
+    from .operations import _check_worktree_binding
+    from .orca import run_show
+    from .window import _cwd_toplevel, _worktree_directory
+    workspace = checkpoint.get("worktree")
+    if not isinstance(workspace, dict) or not isinstance(workspace.get("path"), str) or not workspace["path"]:
+        return {"condition": "caller_not_linked", "action": SUCCESSOR,
+                "message": "The caller has no stable current Run binding, and the objective records no worktree "
+                           "in which a new terminal could take the handoff."}
+    if run_id is None:
+        return {"condition": "caller_not_linked", "action": SUCCESSOR,
+                "message": "The caller has no stable current Run binding, and the objective records no single Run to bind."}
+    recorded = Path(workspace["path"])
+    here = ("Run the handoff from a live terminal in the recorded worktree " + workspace["path"]
+            + ", or start a successor objective; do not run orca orchestration run-use by hand.")
+    try:
+        if not _worktree_directory(recorded):
+            return {"condition": "worktree_changed", "action": SUCCESSOR,
+                    "message": "The recorded worktree is missing, so no new terminal can take the handoff."}
+        _check_worktree_binding(recorded, workspace)
+    except PodError as exc:
+        if exc.code != "worktree_binding_changed":
+            return {"condition": "worktree_unreadable", "message": "The recorded worktree could not be read (" + exc.code + ")."}
+        return {"condition": "worktree_changed", "action": SUCCESSOR,
+                "message": "The recorded worktree's repository, key or branch differs from the record."}
+    try:
+        _check_worktree_binding(project, workspace)
+    except PodError:
+        return {"condition": "worktree_changed", "action": here,
+                "message": "This terminal's repository, branch or worktree differs from the record."}
+    top = _cwd_toplevel()
+    if top is None or Path(top).resolve() != recorded.resolve():
+        return {"condition": "worktree_changed", "action": here,
+                "message": "The caller has no current Run binding and does not run in the recorded worktree."}
+    try:
+        shown = run_show(run_id)
+    except PodError as exc:
+        return {"condition": "run_unreadable", "message": "The recorded Run could not be read (" + exc.code + ")."}
+    if shown["runtime"] != runtime or not shown["coordinator_known"]:
+        return {"condition": "run_unreadable", "message": "The Run read does not prove its coordinator at the caller's runtime."}
+    return {"shown": shown}
+
+
+def _shown_again(run_id: str) -> dict | None:
+    from .orca import run_show
+    try:
+        return run_show(run_id)
+    except PodError:
+        return None
+
+
 def detect(project: Path, objective: str, state: dict, *, port, caller: str | None = None) -> dict:
     """Fresh native facts only. No writes, native mutations or presentation data."""
     from .ledger import _run_references, continuity_work
@@ -587,8 +642,26 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         return fail("binding_unreadable", "The caller's current Run binding could not be read (" + exc.code + ").")
     facts["current_runtime"] = first["runtime"]
     run = first["run"]
-    if run is None or own["runtime"] != first["runtime"]:
+    if own["runtime"] != first["runtime"]:
         return fail("caller_not_linked", "The caller has no stable current Run binding at its live runtime.")
+    shown = None
+    if run is None:
+        # A new terminal has no current Run (pod#292). It may bind the recorded Run inside the handoff itself, as the
+        # window continuation does, only from the recorded worktree and only while run show names the recorded owner.
+        unlinked = _unlinked_run(project, checkpoint, run_id, first["runtime"])
+        if "condition" in unlinked:
+            return fail(unlinked["condition"], unlinked["message"], action=unlinked.get("action"))
+        shown = unlinked["shown"]
+        run = {"id": run_id, "coordinator_handle": shown["coordinator_handle"],
+               "consumer_generation": shown["consumer_generation"]}
+        result["unlinked"] = True
+        if run["coordinator_handle"] == caller:
+            # Orca names this terminal the Run's coordinator but not its current Run: never a definite loss.
+            return fail("binding_unstable", "Orca shows this terminal coordinating the Run without a current Run binding; re-read status.")
+        if run["coordinator_handle"] != owner:
+            # Only the fresh branch can start unlinked; a resume always reads its own rebound current Run.
+            return fail("lineage_unproven", "The Run was rebound outside a live matching pending handoff; lineage is unproven.", definitive=True,
+                        action="Continue in a successor or recovery objective; do not run orca orchestration run-use by hand.")
     if run_id is None or run["id"] != run_id:
         return fail("different_run", "The caller resolves a different Run from the recorded objective.", definitive=True)
     if run["coordinator_handle"] == owner:
@@ -656,7 +729,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
         after = current_run()
     except PodError:
         after = None
-    if after != first:
+    if after != first or shown is not None and _shown_again(run_id) != shown:
         return fail("binding_unstable", "The caller's Run binding or runtime changed during detection.")
     facts["ambiguity"] = work["ambiguity"] + (["recorded consumer generation (none recorded)"] if binding is None else [])
     facts["ambiguity"] += [f"run {other}: not shown by run-current" for other in sorted(set(refs) - {run_id})]
@@ -874,7 +947,14 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
                     after = None
                 old = {"id": value["run"], "coordinator_handle": value["from_owner"],
                        "consumer_generation": value["recorded_generation"]}
-                if after and after["runtime"] == value["current_runtime"] and after["run"] == old:
+                if after and after["runtime"] == value["current_runtime"] and after["run"] is None and verdict.get("unlinked"):
+                    # An unlinked caller's authoritative readback is the Run itself (pod#292).
+                    shown = _shown_again(value["run"])
+                    if shown and shown["runtime"] == value["current_runtime"] and shown["coordinator_known"] and {
+                            "id": shown["run"], "coordinator_handle": shown["coordinator_handle"],
+                            "consumer_generation": shown["consumer_generation"]} == old:
+                        abort(pending, failed, state)
+                elif after and after["runtime"] == value["current_runtime"] and after["run"] == old:
                     abort(pending, failed, state)
                 raise PodError("owner_handoff_refused", failed + "; re-read status and rerun the same handoff confirmation; no work was changed",
                                {"handoff_state": pending["state"]})

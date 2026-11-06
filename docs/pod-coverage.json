@@ -12627,6 +12627,37 @@
       ],
       "offline_test": "tests.test_project_path.ProjectPathTests.test_valid_directory_keeps_git_unavailable",
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1085",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_new_terminal_in_the_recorded_worktree_completes_the_handoff",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_live_old_coordinator_still_refuses",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_caller_outside_the_recorded_worktree_refuses_and_is_told_where",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_every_r105_check_still_applies_to_an_unlinked_caller",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_worker_terminal_cannot_take_the_handoff_unlinked",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_refused_run_use_aborts_only_on_the_run_readback",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_an_unreadable_run_after_a_refused_run_use_stays_pending"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1086",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_available_names_the_recorded_worktree",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_missing_or_unrecorded_worktree_reads_blocked",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_pending_resume_stays_available_to_its_holder",
+        "tests.test_handoff_unlinked.NoRecordedWorktreeTests.test_no_recorded_worktree_names_the_successor_claim"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
