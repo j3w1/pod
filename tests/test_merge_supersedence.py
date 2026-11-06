@@ -1,4 +1,4 @@
-"""Offline Governor regressions; legacy two-ALLOW histories are explicitly synthetic."""
+"""Offline Governor regressions; earlier-writer two-ALLOW histories are explicitly synthetic."""
 from copy import deepcopy
 from unittest.mock import patch
 
@@ -87,7 +87,9 @@ class MergeSupersedenceTests(KernelCase):
         held = self.admit()
         self.assertEqual(held["decision"], "DEFER")
         self.assertIn("prior_merge_unsettled", [reason["code"] for reason in held["reasons"]])
-        self.assertIn("governor-outcome CANCELED", held["next_action"])
+        self.assertIn("pod internal governor-outcome --input FILE", held["next_action"])
+        self.assertIn(self.first, held["next_action"])
+        self.assertIn('"outcome": "CANCELED"', held["next_action"])
         self.outcome(self.first, "CANCELED", detail="never executed before refresh")
         self.assertEqual(self.admit()["decision"], "ALLOW")
 
@@ -210,3 +212,50 @@ class MergeSupersedenceTests(KernelCase):
         for phrase in ("prior_merge_unsettled", "governor-outcome superseded", "without provider readback",
                        "superseded_by", "earlier head still settles PASS"):
             self.assertIn(phrase, guidance)
+
+    def test_unknown_prior_names_failed_and_exact_request(self):
+        self.outcome(self.first, "UNKNOWN", detail="uncertain")
+        self.refresh()
+        held = self.admit()
+        self.assertEqual(held["decision"], "DEFER")
+        self.assertIn(self.first, held["next_action"])
+        self.assertIn("pod internal governor-outcome --input FILE", held["next_action"])
+        self.assertIn('"outcome": "FAILED"', held["next_action"])
+        self.assertNotIn("CANCELED", held["next_action"])
+        self.outcome(self.first, "FAILED")
+        self.assertEqual(self.admit()["decision"], "ALLOW")
+
+    def test_carried_pending_prior_keeps_existing_admission_rule(self):
+        journal = _read_journal(self.journal)
+        journal["actions"][0]["carried_from"] = {"objective": "predecessor"}
+        _write_journal(self.journal, journal)
+        self.refresh()
+        answer = self.admit()
+        self.assertEqual(answer["decision"], "ALLOW", answer)
+        self.assertEqual(self.row(self.first)["outcome"], "pending")
+        self.assertNotIn("superseded_by", self.row(self.first))
+
+    def test_explicit_superseded_preserves_recorded_detail_and_evidence(self):
+        self.restore_legacy_pending()
+        self.outcome(self.first, "UNKNOWN", detail="earlier uncertainty", evidence=["earlier-proof"])
+        before = self.journal.read_bytes()
+        for fields in ({"detail": "replacement detail"}, {"evidence": ["new-proof"]}):
+            with self.assertRaises(PodError) as caught:
+                self.outcome(self.first, "superseded", **fields)
+            self.assertEqual(caught.exception.detail["detail"], "receipt_recorded")
+            self.assertEqual(before, self.journal.read_bytes())
+        result = self.outcome(self.first, "superseded", detail="earlier uncertainty", evidence=["earlier-proof"])
+        self.assertEqual(result["receipt"]["detail"], "earlier uncertainty")
+        self.assertEqual(result["receipt"]["evidence"], ["earlier-proof"])
+
+    def test_malformed_superseded_replacement_is_not_readable(self):
+        from pod.governor import _validate_row
+        self.restore_legacy_pending()
+        self.outcome(self.first, "superseded")
+        original = deepcopy(self.row(self.first))
+        for marker in (None, {}, {"record_id": self.second, "merge_commit": "short"}):
+            row = deepcopy(original)
+            row["superseded_by"] = marker
+            with self.assertRaises(PodError) as caught:
+                _validate_row(row)
+            self.assertEqual(caught.exception.code, "state_unsupported")

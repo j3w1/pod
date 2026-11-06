@@ -92,10 +92,7 @@ NEXT_ACTIONS = {
     "repeat_diagnostic": "this probe already ran unchanged; change the check or record the answer",
     "publication_unsettled": "record or reconcile the pending publication before requesting this validation",
     "exception_grant_required": "bind the exception to a current personal efficiency_exception grant",
-    "prior_merge_unsettled": ("before taking a new merge decision, settle the earlier decision while the PR is open: "
-                              "record governor-outcome CANCELED with detail that it was never executed, or FAILED "
-                              "when supported; if a newer decision already merged, record superseded on the earlier "
-                              "row or call governor-reconcile"),
+    "prior_merge_unsettled": "settle the named earlier merge decision before taking its replacement",
     "carried_row": "read the carried row back with governor-reconcile; a carried row is never cancelled",
 }
 
@@ -156,6 +153,14 @@ def _validate_row(row: object) -> None:
             or not isinstance(row.get("run_event"), (str, type(None)))
             or not isinstance(row.get("rejected_run"), (dict, type(None)))):
         raise _malformed("action row")
+    marker = row.get("superseded_by")
+    if row["outcome"] == "superseded" or "superseded_by" in row:
+        if (row["outcome"] != "superseded" or row["decision"] != "ALLOW" or row["action"]["kind"] != "merge"
+                or not isinstance(marker, dict) or set(marker) != {"record_id", "merge_commit"}
+                or not isinstance(marker["record_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", marker["record_id"])
+                or marker["record_id"] == row["record_id"] or not isinstance(marker["merge_commit"], str)
+                or not _GIT_ID.fullmatch(marker["merge_commit"])):
+            raise _malformed("superseded merge replacement")
 
 
 def _validate_unit(name: str, unit: object) -> None:
@@ -1180,13 +1185,20 @@ def _check_unresolved(action: dict, journal: dict, logical_key: str,
         prior = next((row for row in journal["actions"]
                       if row["decision"] == "ALLOW" and row["action"]["kind"] == "merge"
                       and row["outcome"] in ("pending", "UNKNOWN")
+                      and not isinstance(row.get("carried_from"), dict)
                       and row["action"].get("pr") == action["pr"]
                       and row["action"]["target"] == action["target"]
                       and row.get("commit") != (binding or {}).get("commit")), None)
         if prior is not None:
+            outcome = "CANCELED" if prior["outcome"] == "pending" else "FAILED"
+            detail = ', "detail": "Never executed before refreshing the candidate"' if outcome == "CANCELED" else ""
+            request = ('{"project": "<project>", "objective": "<objective>", "owner": "<coordinator>", '
+                       f'"record_id": "{prior["record_id"]}", "outcome": "{outcome}"' + detail + '}')
             _reason(reasons, "correctness", "prior_merge_unsettled",
-                    f"earlier merge decision {prior['record_id']} for PR #{action['pr']} is unsettled; "
-                    + NEXT_ACTIONS["prior_merge_unsettled"])
+                    f"Earlier merge decision {prior['record_id']} for PR #{action['pr']} is unsettled. "
+                    f"{_fetch_first(prior)}; then run pod internal governor-outcome --input FILE, "
+                    f"where FILE contains {request} with this objective's actual binding. "
+                    "Only settle when its existing absence and execution checks pass; then retry the new decision.")
     for row in journal["actions"]:
         if (row["action"]["unit"] == action["unit"] and row["decision"] == "ALLOW"
                 and row["outcome"] == "UNKNOWN" and row["logical_key"] != logical_key
@@ -1497,8 +1509,12 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
         route_reasons = [reason for reason in verdict["reasons"] if reason["code"] == "route_mismatch"]
         missing = next((reason for reason in verdict["reasons"]
                         if reason["code"] == "authorization_missing"), None)
+        prior_merge = next((reason for reason in verdict["reasons"]
+                            if reason["code"] == "prior_merge_unsettled"), None)
         if route_reasons:
             next_action = " ".join(reason["detail"] for reason in route_reasons)
+        elif prior_merge is not None:
+            next_action = prior_merge["detail"]
         elif missing is not None:
             next_action = missing["detail"]
         if merge_readiness is not None:
@@ -2004,6 +2020,9 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
                                    "superseded without executing its head", "settle the newer same-PR merge PASS "
                                    "first; retain uncertain or executed rows under their existing settlement rules",
                                    record_id)
+        if not _restated(row, None, evidence, detail):
+            raise _outcome_refusal("receipt_recorded", "Supersedence preserves the earlier receipt evidence and detail",
+                                   "omit evidence and detail, or restate their recorded values", record_id)
         row["superseded_by"] = replacement
         return None
     if outcome == "UNKNOWN":
