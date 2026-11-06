@@ -701,7 +701,8 @@ def tick(project: Path, objective: str, *, owner: str, pod: int) -> dict:
                     _facts(ticks, {**source, "body_sha256": _hash(live["body"])}, live["body"],
                            context=recorded if _hash(live["body"]) == source["body_sha256"] else None,
                            mapping_check=checked)
-                    _mark_drift(ticks, source)
+                    if checked is not None:
+                        _mark_drift(ticks, source)
                 mapping_changed = True
             if mapping_changed:
                 store._write(path, recorded)
@@ -882,7 +883,8 @@ def _readback(project: Path, objective: str, owner: str, key: str, request: dict
             # is the checkpoint binding, even though status retains the readback.
             if now != state["checkpoint"]["objective_source"]["body_sha256"]:
                 ledger["facts"]["source"] = digest({**source, "body_sha256": now})
-                _mark_drift(ledger, state["checkpoint"]["objective_source"])
+                if checked is not None:  # an incomplete recheck is no observation
+                    _mark_drift(ledger, state["checkpoint"]["objective_source"])
         if live is None and any("pod_mapping" in row for row in state["checkpoint"].get("obligations", [])):
             ledger["read"] = {"status": "not_read", "reason": failure.code}
         if rebind and request["direction"] == "tick":

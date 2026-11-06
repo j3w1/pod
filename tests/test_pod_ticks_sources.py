@@ -284,3 +284,22 @@ class UnreconciledEditTests(TickCase):
         self.assertTrue(row["facts_current"])
         self.assertEqual((row["status"], row["direction"]), ("due", "tick"))
         self.failure("pod_ticks_due", self.write, close=True)
+
+    def test_incomplete_readback_is_no_drift_observation_for_closure_D5(self):
+        self.issue.amendments[99] = "Original"
+        self.bind(amendments=[self.locator + "#issuecomment-99"]); self.prove()
+        self.issue.refuse_next = 403
+        self.issue.other_actor = "- [x] **PoD#1\nOutside edit"
+        original = self.issue.amendment
+
+        def failing(**arguments):
+            if self.issue.writes:
+                raise PodError("issue_access_unavailable", "Simulated inaccessible amendment")
+            return original(**arguments)
+        self.issue.amendment = failing
+        self.failure("issue_access_unavailable", self.tick)
+        self.assertNotEqual(self.line()["status"], "current")
+        self.issue.amendment = original
+        self.issue.body = "- [ ] **PoD#1"
+        self.write()
+        self.failure("pod_ticks_due", self.write, close=True)
