@@ -29,8 +29,8 @@ def dump(document):
 
 
 def lanes(durations, **extra):
-    return {"schema": "suite-lanes/v1", "budgets": {"test_max_seconds": 60}, "durations": durations,
-            "overrides": {}, **extra}
+    return {"schema": "suite-lanes/v1", "budgets": {"test_max_seconds": 60}, "lanes": {"serial": {"shards": 1}},
+            "durations": durations, "overrides": {}, **extra}
 
 
 def entry(data, path=COVERAGE):
@@ -65,6 +65,11 @@ class ParseTests(unittest.TestCase):
             "a duplicate member name": dump(BASE).replace(b'"note"', b'"note": "x", "note"', 1),
             "a duplicate name inside a row": dump(BASE).replace(b'"status"', b'"status": "x", "status"', 1),
             "not bytes": None,
+            "an object schema": b'{"schema": {}, "settings": {}}',
+            "an array schema": b'{"schema": []}',
+            "an overflowing number": dump(lanes({})).replace(b'"durations": {}', b'"durations": {"t": 1e400}'),
+            "a lone surrogate": dump(BASE).replace(b'"NOT_RUN"', b'"\\ud800"', 1),
+            "nesting too deep": b'{"schema": "suite-lanes/v1", "budgets": ' + b"[" * 100000 + b"]" * 100000 + b"}",
         }
         for label, data in cases.items():
             with self.subTest(label):
@@ -129,6 +134,19 @@ class BindingTests(unittest.TestCase):
             with self.subTest(index=str(index)[:40]):
                 self.assertFalse(keyed_index.valid(index))
                 self.assertFalse(current({**bound, "index": index}, dump(OWN)))
+
+    def test_lane_controls_are_schema_and_provenance_members_are_rows(self):
+        base = lanes({"tests.a.T.test_x": 1.5}, source={"run_id": 1}, fast_mean_seconds=0.2)
+        now = lanes({"tests.a.T.test_x": 1.5, "tests.b.T.test_y": 3.0}, source={"run_id": 1}, fast_mean_seconds=0.2)
+        bound = binding(entry(dump(now), "tests/suite_lanes.json"), dump(now), dump(base))
+        for label, later, holds in (
+                ("another source and mean", {**now, "source": {"run_id": 2}, "fast_mean_seconds": 0.3}, True),
+                ("another calibration", {**now, "calibration": {"lanes": {}}}, False),   # a new member
+                ("a budget change", {**now, "budgets": {"test_max_seconds": 600}}, False),
+                ("a lane table change", {**now, "lanes": {"serial": {"shards": 2}}}, False),
+                ("an override for a prefix", {**now, "overrides": {"tests.b": {"lane": "serial"}}}, False)):
+            with self.subTest(label):
+                self.assertIs(current(bound, dump(later)), holds)
 
     def test_lane_rows_bind_by_test_id(self):
         base = lanes({"tests.a.T.test_x": 1.5})
@@ -276,6 +294,38 @@ class ReviewCarryTests(KernelCase):
         view = kernel_context(self.project, "objective", read(self.project, "objective"), None)
         self.assertTrue(view["source_current"](bound))
         self.assertTrue(view["source_current_at"](merged)(bound))
+
+    def test_a_stored_index_that_disagrees_with_an_unchanged_file_never_holds(self):
+        bound = next(item for item in self.reviewed()["sources"] if item["path"] == COVERAGE)
+        view = kernel_context(self.project, "objective", read(self.project, "objective"), None)
+        readers = {"worktree": view["source_current"], "tree": tree_source_current(self.project, self.candidate),
+                   "kernel tree": view["source_current_at"](self.candidate)}
+        for label, index in {"another schema digest": {**bound["index"], "schema": "0" * 64},
+                             "another row digest": {**bound["index"], "rows": {'["scenarios","A10"]': "0" * 64}},
+                             "a malformed index": {"rows": {}}}.items():
+            for name, reader in readers.items():
+                with self.subTest(label, reader=name):
+                    self.assertTrue(reader(bound))
+                    self.assertFalse(reader({**bound, "index": index}))
+
+    def test_an_ordinary_json_source_with_a_non_text_schema_keeps_whole_content(self):
+        (self.project / "ordinary.json").write_text('{"schema": {}, "settings": {}}\n')
+        git(self.project, "add", "ordinary.json")
+        self.candidate = self.commit(coverage(*BASE_ROWS, ("A3", "NOT_RUN"), ("A4", "NOT_RUN"), ("A10", "NOT_RUN"),
+                                              ("A11", "NOT_RUN")), "ordinary json")
+        sources = {item["path"]: item for item in self.reviewed(sources=("ordinary.json", COVERAGE))["sources"]}
+        self.assertEqual(sources["ordinary.json"], source_identity(self.project, "ordinary.json"))
+        self.assertIn("index", sources[COVERAGE])
+
+    def test_bound_rows_written_into_assurance_evidence_are_not_stored(self):
+        self.reviewed()
+        rows = self.stored()
+        assurance = next(row for row in rows if row["id"] == "A")
+        recorded = assurance["evidence"][0]["binding"]["sources"][0]["index"]
+        assurance["evidence"][0]["binding"]["sources"][0]["index"] = {"schema": "0" * 64, "rows": {}}
+        self.write(rows)
+        stored = next(row for row in self.stored() if row["id"] == "A")["evidence"][0]["binding"]["sources"][0]
+        self.assertEqual(stored["index"], recorded)
 
     def test_a_caller_cannot_supply_bound_rows(self):
         self.intake()

@@ -1337,8 +1337,10 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                 return False
             if "index" not in entry:
                 return source_identity(project, entry["path"]) == entry
+            # An index entry is judged by its rows and schema even when the whole file is unchanged, so a
+            # stored index that disagrees with its own bytes never holds.
             identity, data = source_content(project, entry["path"])
-            return identity == {key: entry[key] for key in ("path", "state", "sha256")} or keyed_index.current(entry, data)
+            return identity.get("state") == "present" and keyed_index.current(entry, data)
         except (PodError, KeyError, TypeError):
             return False
 
@@ -1989,8 +1991,7 @@ def tree_source_current(project: Path, commit: str):
             identity, data = reader(entry["path"])
             if "index" not in entry:
                 return identity == entry
-            return (identity == {key: entry[key] for key in ("path", "state", "sha256")}
-                    or (identity or {}).get("state") == "present" and keyed_index.current(entry, data))
+            return (identity or {}).get("state") == "present" and keyed_index.current(entry, data)
         except (KeyError, TypeError, AttributeError):
             return False
     return current

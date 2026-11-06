@@ -2,8 +2,9 @@
 
 An index file is a JSON object whose `schema` member names a known index format. Each entry of its keyed
 collections is one row, keyed by the collection and the entry's key; every other top-level member except
-`schema` is one row keyed by its name. The file's schema is its format name, its top-level member names and
-which of them are keyed collections. Row order is not bound.
+`schema` and the format's global controls is one row keyed by its name. The file's schema is its format name,
+its top-level member names, which of them are keyed collections, and the values of its global controls (such
+as suite-lane budgets, lanes and overrides, which can change how any row is judged). Row order is not bound.
 
 A binding entry for such a file keeps its whole-content identity and adds `index`: the schema digest and,
 for each row the reviewed change adds, removes or edits against its merge base, that row's digest (null when
@@ -19,11 +20,17 @@ import json
 import re
 from typing import Any
 
-# The keyed collections of each known index format. A list collection is keyed by its entries' `id`; an
+# The keyed collections of each known index format: a list collection is keyed by its entries' `id`, an
 # object collection by its member names.
 KINDS: dict[str, dict[str, str]] = {
     "pod-scenario-coverage/v1": {"scenarios": "list", "withdrawn_scenarios": "list"},
-    "suite-lanes/v1": {"durations": "object", "overrides": "object"},
+    "suite-lanes/v1": {"durations": "object"},
+}
+# Members whose values belong to the schema: they apply to every row. Suite-lane budgets gate each test, the
+# lane table places it, and an override may name a module or class prefix that moves a bound test.
+CONTROLS: dict[str, tuple[str, ...]] = {
+    "pod-scenario-coverage/v1": (),
+    "suite-lanes/v1": ("budgets", "lanes", "overrides"),
 }
 MAX_ROWS = 256      # bound rows per entry; a larger change keeps whole-content binding
 MAX_KEY = 512       # characters of one row key
@@ -58,20 +65,26 @@ def _key(*parts: str) -> str:
 
 def parse(data: Any) -> tuple[str, dict[str, str]] | None:
     """The schema digest and every row's digest, or None for any file that is not exactly a known index:
-    undecodable or invalid JSON, a duplicate member name at any depth, an unknown format, a collection of
-    the wrong type, a list row without a text `id`, or two rows with one key."""
+    undecodable or invalid JSON, a duplicate member name at any depth, a format name that is not a known text,
+    a collection of the wrong type, a list row without a text `id`, two rows with one key, or a value that has
+    no exact canonical form (a nonfinite number, a lone surrogate, nesting too deep). It never raises."""
     if not isinstance(data, (bytes, bytearray)):
         return None
     try:
-        document = json.loads(bytes(data).decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
-    except (UnicodeDecodeError, ValueError, RecursionError):
+        return _parse(bytes(data))
+    except (ValueError, TypeError, RecursionError, MemoryError):  # UnicodeError is a ValueError
         return None
-    if not isinstance(document, dict) or document.get("schema") not in KINDS:
+
+
+def _parse(data: bytes) -> tuple[str, dict[str, str]] | None:
+    document = json.loads(data.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
+    if not isinstance(document, dict) or not isinstance(document.get("schema"), str) \
+            or document["schema"] not in KINDS:
         return None
-    collections = KINDS[document["schema"]]
+    collections, controls = KINDS[document["schema"]], CONTROLS[document["schema"]]
     rows: dict[str, str] = {}
     for name, value in document.items():
-        if name == "schema":
+        if name == "schema" or name in controls:
             continue
         shape = collections.get(name)
         if shape is None:
@@ -95,7 +108,8 @@ def parse(data: Any) -> tuple[str, dict[str, str]] | None:
                 return None
             rows[item] = _digest(row)
     schema = _digest({"schema": document["schema"], "members": sorted(document),
-                      "collections": sorted(name for name in collections if name in document)})
+                      "collections": sorted(name for name in collections if name in document),
+                      "controls": {name: document[name] for name in controls if name in document}})
     return schema, rows
 
 
