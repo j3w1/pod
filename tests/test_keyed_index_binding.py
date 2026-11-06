@@ -209,14 +209,15 @@ class ReviewCarryTests(KernelCase):
                      "check": "independent review", "scope": {"paths": list(scope)}, "question": "right?",
                      "candidate": self.candidate, "existing_evidence": "tests", "insufficiency": "no review",
                      "state": "waiting", "wait": {"class": "sequenced", "referent": "O1"}})
-        frozen = self.packet(["A"], role="review", sources=[source_identity(self.project, path) for path in sources])
+        frozen = self.packet(["A"], role="review", scope=list(scope),
+                             sources=[source_identity(self.project, path) for path in sources])
         admission = self.start("review", frozen)["admission"]
         self.settle(admission)
         rows = self.stored()
         row = next(row for row in rows if row["id"] == "A")
         row.pop("executor")
         row.update(state="satisfied", evidence=[{"attempt": admission["admission_id"]}])
-        self.report(admission, frozen, map={"obligations": rows})
+        self.report(admission, frozen, scope=tuple(scope), map={"obligations": rows})
         self.reviewed_at = self.candidate
         return read(self.project, "objective")["admissions"][admission["admission_id"]]["binding"]
 
@@ -303,10 +304,66 @@ class ReviewCarryTests(KernelCase):
         self.target(b"readme changed elsewhere\n", "README.md")
         self.refused_carry()
 
-    def test_a_scope_index_path_without_a_row_binding_stays_touched(self):
+    def test_a_scope_only_index_binds_the_change_s_own_rows_and_carries(self):
+        """pod#300 PoD#1: the index listed only in the packet's scope carries across another change's rows."""
+        sources = {item["path"]: item for item in self.reviewed(sources=("src/old.py",))["sources"]}
+        self.assertEqual(list(sources), ["src/old.py", COVERAGE])
+        self.assertEqual((sources[COVERAGE]["sha256"], list(sources[COVERAGE]["index"]["rows"])),
+                         (source_identity(self.project, COVERAGE)["sha256"], ['["scenarios","A10"]']))
+        self.target(coverage(("A0", "NOT_RUN"), ("A1", "PASS"), *BASE_ROWS[1:], ("A3", "NOT_RUN"),
+                             ("A4", "NOT_RUN")))
+        self.carry()
+        row = next(row for row in self.stored() if row["id"] == "A")
+        self.assertEqual((row["state"], row["reuse"]["from"]), ("satisfied", self.reviewed_at))
+        self.assertIn(COVERAGE, row["reuse"]["delta"])
+
+    def test_a_scope_only_index_whose_own_row_changes_invalidates(self):
         self.reviewed(sources=("src/old.py",))
         self.target(coverage(("A0", "NOT_RUN"), *BASE_ROWS, ("A3", "NOT_RUN"), ("A4", "NOT_RUN")))
+        self.later(coverage(("A0", "NOT_RUN"), *BASE_ROWS, ("A3", "NOT_RUN"), ("A4", "NOT_RUN"), ("A10", "PASS")))
+        self.refused_carry()
+
+    def scope_only_unbound(self):
+        """pod#300 PoD#2: a scope-only index Pod cannot judge row by row keeps today's scope judgement."""
+        self.assertNotIn(COVERAGE, [item["path"] for item in self.reviewed(sources=("src/old.py",))["sources"]])
+        git(self.project, "checkout", "-q", "--", COVERAGE)
+        self.target(coverage(("A0", "NOT_RUN"), *BASE_ROWS, ("A3", "NOT_RUN"), ("A4", "NOT_RUN")))
         self.refused_carry("candidate-only", [COVERAGE])
+
+    def test_a_scope_index_path_without_a_row_binding_stays_touched(self):
+        with patch("pod.keyed_index.binding", side_effect=lambda item, now, base: item):
+            self.scope_only_unbound()
+
+    def test_a_scope_only_index_with_more_changed_rows_than_an_entry_binds_stays_touched(self):
+        self.later(coverage(*BASE_ROWS, ("A3", "NOT_RUN"), ("A4", "NOT_RUN"),
+                            *((f"B{n}", "NOT_RUN") for n in range(MAX_ROWS + 1))))
+        self.scope_only_unbound()
+
+    def test_a_scope_only_index_whose_worktree_bytes_are_not_the_candidate_s_stays_touched(self):
+        (self.project / COVERAGE).write_bytes((self.project / COVERAGE).read_bytes() + b" ")
+        self.scope_only_unbound()
+
+    def test_a_scope_only_index_the_change_does_not_edit_stays_touched(self):
+        self.later(coverage(*BASE_ROWS, ("A3", "NOT_RUN"), ("A4", "NOT_RUN")))
+        self.scope_only_unbound()
+
+    def test_a_scope_only_index_past_the_binding_bound_stays_touched(self):
+        from pod import obligations
+        real = obligations.bound
+        limit = lambda record, *path: 1 if record == "assurance binding" else real(record, *path)
+        with patch("pod.obligations.bound", side_effect=limit):
+            self.scope_only_unbound()
+
+    def test_a_scope_index_bound_as_a_source_binds_once_and_other_roles_do_not_bind_scope(self):
+        sources = [item["path"] for item in self.reviewed(sources=(COVERAGE, "src/old.py"))["sources"]]
+        self.assertEqual(sources, [COVERAGE, "src/old.py"])
+        state = read(self.project, "objective")
+        view = kernel_context(self.project, "objective", state, None)
+        from pod.obligations import admission_binding
+        body = {"role": "implement", "serves": [], "scope": [COVERAGE], "sources": [], "context": []}
+        with patch("pod.obligations.bound_governance_digest", return_value=None):
+            self.assertEqual(admission_binding(body, view, {"obligations": []})["sources"], [])
+            self.assertIn("index", admission_binding({**body, "role": "review"}, view, {"obligations": []})["sources"][0])
 
     def test_rows_are_judged_against_the_merge_base(self):
         """A review admitted after the merge binds only its own rows, not the target's."""

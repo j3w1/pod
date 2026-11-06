@@ -1369,6 +1369,22 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
         before, base_data = bases[head](entry["path"])
         return keyed_index.binding(entry, data, base_data if (before or {}).get("state") == "present" else None)
 
+    def scope_index_binding(path: str, candidate: str | None = None) -> dict | None:
+        """R239 for a path a review lists only in its scope: the row-bound entry when it is an exact keyed index
+        whose worktree bytes are the reviewed candidate's and whose rows that candidate's change edits; else None,
+        so the path keeps today's scope judgement."""
+        head = candidate if candidate is not None else context_candidate
+        try:
+            identity, data = source_content(project, path)
+            if (not isinstance(head, str) or identity.get("state") != "present"
+                    or keyed_index.parse(data) is None
+                    or delivered_source_reader(project, head)(path) != identity):
+                return None
+        except (PodError, KeyError, TypeError, AttributeError, ValueError):
+            return None
+        bound = index_binding(identity, head)
+        return bound if (bound.get("index") or {}).get("rows") else None
+
     map_state = map_of(state)
     base_ref = (map_state or {}).get("governance", {}).get("base_ref")
     context_candidate = candidate if candidate is not None else checkpoint_value.get("candidate")
@@ -1431,6 +1447,7 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "source_state": source_state,
             "source_current": source_current,
             "index_binding": index_binding,
+            "scope_index_binding": scope_index_binding,
             "source_current_at": lambda commit: trees.setdefault(commit, tree_source_current(project, commit)),
             "policy_revision": effective(project)["revision"],
             "verification": verification if verification is not None else checkpoint_value.get("verification"),
