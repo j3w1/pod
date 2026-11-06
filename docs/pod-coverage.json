@@ -9214,6 +9214,45 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A941",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_reuse_link_scope.ResolvedScopeTests.test_a_file_link_whose_target_the_delta_edits_is_touched",
+        "tests.test_reuse_link_scope.ResolvedScopeTests.test_a_parent_directory_link_is_touched",
+        "tests.test_reuse_link_scope.ResolvedScopeTests.test_the_direct_path_control_is_touched",
+        "tests.test_reuse_link_scope.ResolvedScopeTests.test_an_unrelated_link_whose_target_is_untouched_still_reuses",
+        "tests.test_reuse_link_scope.ResolvedScopeTests.test_a_link_to_version_under_a_version_only_delta_is_touched",
+        "tests.test_reuse_link_scope.ResolvedScopeTests.test_a_scope_that_merely_contains_the_root_keeps_a_version_only_delta",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_a_link_loop_refuses_naming_the_path",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_an_over_long_chain_refuses_naming_the_path",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_a_gitlink_scope_refuses_naming_the_path",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_an_escaping_link_refuses_naming_the_path",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_bind_reuse_words_the_refusal_as_unresolved_and_directs_fresh_evidence",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_a_gitlink_beside_a_touched_path_is_still_named_unresolved",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_a_loop_beside_a_touched_path_binds_a_refusal_naming_both",
+        "tests.test_reuse_link_scope.UnresolvedScopeTests.test_a_loop_beside_a_touched_path_names_both_in_the_aggregate_refusal",
+        "tests.test_reuse_link_scope.LinkChainTests.test_re_pointing_an_intermediate_link_to_another_unchanged_file_touches_the_chain",
+        "tests.test_reuse_link_scope.LinkChainTests.test_an_equivalent_spelling_of_an_intermediate_link_touches_the_chain",
+        "tests.test_reuse_link_scope.LinkChainTests.test_an_intermediate_link_under_a_parent_link_prefix_touches_the_scope",
+        "tests.test_reuse_link_scope.LinkChainTests.test_an_unchanged_chain_still_reuses",
+        "tests.test_reuse_link_scope.LinkChainTests.test_a_stored_reuse_across_a_re_pointed_intermediate_link_is_not_current_proof",
+        "tests.test_reuse_link_scope.LinkChainTests.test_r203_resolution_without_links_is_unchanged",
+        "tests.test_reuse_link_scope.ProposalTests.test_a_link_touched_scope_proposes_fresh_evidence",
+        "tests.test_reuse_link_scope.ProposalTests.test_an_unresolved_scope_proposes_fresh_evidence_naming_the_path",
+        "tests.test_reuse_link_scope.ProposalTests.test_an_unrelated_link_proposes_the_reuse",
+        "tests.test_reuse_link_scope.RetainedHistoryTests.test_a_stored_now_touched_reuse_is_not_current_proof",
+        "tests.test_reuse_link_scope.RetainedHistoryTests.test_its_receipt_history_stays_valid",
+        "tests.test_reuse_link_scope.RetainedHistoryTests.test_the_next_write_gets_an_ordinary_refusal_with_a_fresh_evidence_route",
+        "tests.test_reuse_link_scope.RetainedHistoryTests.test_fresh_evidence_at_the_current_candidate_is_accepted",
+        "tests.test_reuse_link_scope.LedgerContextTests.test_the_kernel_context_supplies_the_resolver_cached_per_pair",
+        "tests.test_reuse_link_scope.LedgerContextTests.test_the_kernel_context_compares_a_re_pointed_intermediate_link"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A609",
       "required_evidence": [
         "unit",

@@ -452,10 +452,19 @@ def review_completed(admission: Any) -> bool:
 
 
 def _reuse_valid(ob: dict, ctx: dict, candidate: str) -> bool:
+    """Whether the row's recorded REUSE carries its proof to this candidate now.
+
+    Binding checked the scope; a context that resolves committed links checks it again here, so a REUSE
+    recorded under the earlier lexical comparison never counts as current proof for a scope a link reaches.
+    """
     from .obligations import definition_id
     reuse = ob.get("reuse")
-    return (isinstance(reuse, dict) and reuse.get("to") == candidate
-            and reuse.get("definition") == definition_id(ob) and isinstance(reuse.get("delta"), list))
+    if not (isinstance(reuse, dict) and reuse.get("to") == candidate
+            and reuse.get("definition") == definition_id(ob) and isinstance(reuse.get("delta"), list)):
+        return False
+    if not callable(ctx.get("reuse_resolver")):
+        return True
+    return isinstance(reuse.get("from"), str) and reuse_eligibility(ob, reuse["from"], ctx, target=candidate)[0] == "eligible"
 
 
 def _reuse_delta(source: str, target: str, ctx: dict, *, obligation: str) -> list[str] | None:
@@ -476,33 +485,57 @@ def _reuse_record(source: str, target: str, definition: str, delta: list[str]) -
 VERSION_ALLOCATION = frozenset({"VERSION"})
 
 
-def _reuse_scope(ob: dict, delta: list[str]) -> tuple[str, list[str]]:
+UNRESOLVED = "unresolved scope path "  # the label continues with the path that does not resolve
+
+
+def _reuse_scope(ob: dict, delta: list[str], resolve=None) -> tuple[str, list[str]]:
     """Whether the Git delta touches the reviewed or declared scope.
+
+    `resolve` (R203's `scope_resolver` for the compared candidates' trees, with `links`) gives
+    what each declared path names through committed links, parents included, and every link
+    traversed on the way; a delta touching the path as named or any of those names touches the
+    scope. A path that does not resolve is not provably untouched: its label names it, and the
+    returned paths carry it first, then any touched names. Without `resolve`, paths compare as
+    named: the retained receipt check keeps the comparison each stored REUSE was verified under.
 
     A bump of the root `VERSION` alone is not a change to the reviewed work: a scope
     that merely contains the repository root does not reopen for it. A scope naming
-    `VERSION`, and every other path including installation or behavior metadata,
-    still overlaps normally.
+    `VERSION`, as named or through a link, and every other path including installation
+    or behavior metadata, still overlaps normally.
     """
     from .obligations import overlap
     paths = ob.get("proof_scope", ob["scope"]["paths"] if ob["kind"] == "assurance" else ob["boundary"]["paths"])
     if not paths and "proof_scope" not in ob:
         return "no declared scope", []
-    relevant = [path for path in delta if path not in VERSION_ALLOCATION or path in paths]
-    touched = overlap({"paths": relevant, "surfaces": []}, {"paths": paths, "surfaces": []})["paths"]
+    names, unresolved = [], None
+    for path in paths:
+        found = resolve(path) if resolve is not None else []
+        if found is None:
+            unresolved, found = unresolved or path, []
+        names += [name for name in [path, *found] if name not in names]
+    relevant = [path for path in delta if path not in VERSION_ALLOCATION or path in names]
+    touched = overlap({"paths": relevant, "surfaces": []}, {"paths": names, "surfaces": []})["paths"]
+    if unresolved is not None:
+        return UNRESOLVED + unresolved, [unresolved, *[path for path in touched if path != unresolved]]
     return ("touched" if touched else "eligible"), touched
 
 
-def reuse_eligibility(ob: dict, source: str, ctx: dict) -> tuple[str, list[str], list[str] | None]:
-    """One read-only scope/delta check shared by binding and complete refusals."""
+def reuse_eligibility(ob: dict, source: str, ctx: dict, *, target: str | None = None) -> tuple[str, list[str], list[str] | None]:
+    """One read-only scope/delta check shared by binding, current proof and complete refusals.
+
+    The context's `reuse_resolver` gives R203's resolver for [evidence candidate, current candidate];
+    a context without one (a pure kernel fixture) compares paths as named.
+    """
     paths = ob.get("proof_scope", ob["scope"]["paths"] if ob["kind"] == "assurance" else ob["boundary"]["paths"])
     if not paths and "proof_scope" not in ob:
         return "no declared scope", [], None
-    current = ctx.get("candidate")
+    current = ctx.get("candidate") if target is None else target
     delta = _reuse_delta(source, current, ctx, obligation=ob["id"])
     if delta is None:
         return "delta unreadable", [], None
-    label, touched = _reuse_scope(ob, delta)
+    factory = ctx.get("reuse_resolver")
+    resolve = factory(source, current) if callable(factory) else (lambda path: [])
+    label, touched = _reuse_scope(ob, delta, resolve)
     return label, touched, delta
 
 
@@ -524,7 +557,18 @@ def _reuse_next_action(ob: dict, source: str | None, label: str, touched: list[s
     detail = {"touched": "the Git delta touches its scope" + (f" ({', '.join(touched[:4])})" if touched else ""),
               "no declared scope": "it declares no scope to compare against",
               "delta unreadable": "the Git delta between the candidates is unreadable"}.get(label, "its recorded proof cannot be reused")
+    if label.startswith(UNRESOLVED):
+        detail = _unresolved_detail(label, touched)
     return f"record fresh evidence for {ob['id']}; {detail}"
+
+
+def _unresolved_detail(label: str, paths: list[str]) -> str:
+    """The unresolved path's wording; `paths` is that path followed by any names the delta also touches."""
+    also = paths[1:]
+    return (f"its scope path {label[len(UNRESOLVED):]} is unresolved through committed links in the compared candidate "
+            "trees (a gitlink or another opaque mode, an unreadable tree, or an absolute, escaping, looping or over-long "
+            "link), so it is not provably untouched and never eligible"
+            + (f"; the Git delta also touches its scope ({', '.join(also[:4])})" if also else ""))
 
 
 def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
@@ -631,7 +675,8 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
                          else ("ineligible", [], None))
     correction = (f"add reuse {{from: {source}}} to {ob['id']}" if label == "eligible"
                   else f"record fresh evidence for {ob['id']}" + (" after governance refresh/rebind" if classification == "governance change" else "")
-                  + (f"; the Git delta from {source[:12]} touches its scope" if label == "touched" else ""))
+                  + (f"; the Git delta from {source[:12]} touches its scope" if label == "touched" else "")
+                  + (f"; {_unresolved_detail(label, touched)}" if label.startswith(UNRESOLVED) else ""))
     mismatch = _delivered_mismatch(ob, ctx) if classification == "binding change" else []
     if mismatch:
         touched = mismatch
