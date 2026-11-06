@@ -126,7 +126,9 @@ cleanly) always fails. A confirmed, attributable slowness fails: an unrecorded t
 recorded test at more than twice its recorded duration and 10 s over it, fails only when two
 consecutive re-timings of that test alone are both over the limit, and so does a test over the
 60 s ceiling (up to five tests per share are re-timed, ceiling breaches and new slow tests first;
-past that, only an unconfirmed ceiling breach fails and the rest warn). Everything else is timing noise and only warns: a test that is over a limit in the share but
+past that, only an unconfirmed ceiling breach fails and the rest warn). A re-timing alone that fails,
+skips, exits uncleanly or never finishes is not a timing sample: it fails the share at once and a later fast
+re-timing cannot mask it. Everything else is timing noise and only warns: a test that is over a limit in the share but
 within it alone, or over it once and then within it, and a lane share over its target. A share fails
 on wall time alone only past four times its lane target (720 s at the 180 s target), which is hang
 class; the job's own `timeout-minutes` still ends a true hang. Each warning records the

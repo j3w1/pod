@@ -770,17 +770,29 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
                 outcome["fixture_errors"] += accounted["fixture_errors"]
                 outcome["ran"] += accounted["ran"]
         lane_wall = time.monotonic() - started
+        solo_problems: list[str] = []
+
         def alone(test_id: str, seconds: float) -> float:
+            """Re-time one test alone; any functional problem or missing completion is a failure, never a timing."""
             item = run_pool(root, [("solo", [test_id], min(300.0, 3 * seconds + 30))], directory, 1)[0]
-            stops = [event for event in _read_events(item["events"]) if event.get("event") == "stop"]
+            events = _read_events(item["events"])
             item["events"].unlink(missing_ok=True)
-            return stops[-1]["seconds"] if stops else float("inf")
+            accounted = account([test_id], events, name="solo", exit_note=item["note"], forbid_skips=forbid_skips,
+                                exit_code=item["code"])
+            stops = [event for event in events if event.get("event") == "stop"]
+            if accounted["problems"] or not stops:
+                sys.stdout.write(_group(f"solo {test_id}", item["log_file"].read_text(encoding="utf-8",
+                                                                                      errors="replace")))
+                solo_problems.extend(accounted["problems"] or [f"NOT RUN {test_id} alone: no completion recorded"])
+                return float("inf")
+            return stops[-1]["seconds"]
 
         problems, warnings = judge(ranked_candidates(outcome["results"], manifest), manifest, strict, alone)
-        outcome["problems"] += problems
+        outcome["problems"] += solo_problems + problems
         outcome["warnings"] += warnings
         if target is not None:
-            lane_problems, lane_warnings = lane_findings(lane_wall, target, strict, attributed=bool(problems))
+            lane_problems, lane_warnings = lane_findings(lane_wall, target, strict,
+                                                         attributed=bool(problems or solo_problems))
             outcome["problems"] += lane_problems
             outcome["warnings"] += lane_warnings
     outcome["wall"] = time.monotonic() - started
@@ -813,15 +825,20 @@ def judge(candidates: list[tuple[str, str, float]], manifest: dict, strict: bool
         needed, timings = CONFIRMATIONS, []
         while len(timings) < needed:
             timings.append(alone(test_id, seconds))
-            if not violation(manifest, test_id, timings[-1]):
+            if timings[-1] == math.inf or not violation(manifest, test_id, timings[-1]):
                 break
-        message = gate_message(kind, test_id, seconds, timings[-1], manifest)
-        if len(timings) == needed and all(violation(manifest, test_id, solo) for solo in timings) and strict:
-            problems.append(message)
-        else:
-            warnings.append(message + (" [slow alone once, not again]" if any(violation(manifest, test_id, solo)
-                                                                              for solo in timings)
-                                       else " [within limits alone: runner contention]"))
+        # An alone run that did not finish (timeout, crash, no completion) is a hang or failure, not a timing
+        # sample: it fails at once and cannot be masked by a later fast run.
+        hung = math.inf in timings
+        confirmed = len(timings) == needed and all(violation(manifest, test_id, solo) for solo in timings)
+        note = ""
+        if hung:
+            note = " [alone run did not finish]"
+        elif not confirmed:
+            note = (" [slow alone once, not again]" if any(violation(manifest, test_id, solo) for solo in timings)
+                    else " [within limits alone: runner contention]")
+        message = gate_message(kind, test_id, seconds, timings[-1], manifest) + note
+        (problems if strict and (hung or confirmed) else warnings).append(message)
     return problems, warnings
 
 

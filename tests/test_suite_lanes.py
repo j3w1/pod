@@ -1,9 +1,12 @@
 """Suite lanes: classification, deterministic plans, exact-once accounting, gates and refresh."""
 
+from contextlib import nullcontext, redirect_stdout
 from copy import deepcopy
+import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -311,22 +314,24 @@ class GateTests(unittest.TestCase):
 
     def test_past_the_cap_only_a_ceiling_breach_fails_unconfirmed(self):
         value = manifest(durations={f"tests.m.C.test_drift_{index}": 10.0 for index in range(3)})
-        candidates = ([("tests.m.C.test_huge", "CEILING", 95.0)]
-                      + [(f"tests.m.C.test_new_{index}", "UNRECORDED SLOW", 4.0 - index / 10) for index in range(6)]
-                      + [(f"tests.m.C.test_drift_{index}", "DRIFT", 40.0) for index in range(3)])
+        ceilings = [(f"tests.m.C.test_huge_{index}", "CEILING", 95.0 - index) for index in range(sl.SOLO_LIMIT + 1)]
+        others = ([(f"tests.m.C.test_new_{index}", "UNRECORDED SLOW", 4.0 - index / 10) for index in range(2)]
+                  + [(f"tests.m.C.test_drift_{index}", "DRIFT", 40.0) for index in range(3)])
         timed = []
 
         def alone(test_id, seconds):  # Every test is within limits alone: pure contention.
             timed.append(test_id)
             return 0.5
 
-        problems, warnings = sl.judge(candidates, value, True, alone)
-        self.assertEqual(len(timed), sl.SOLO_LIMIT)
-        self.assertEqual(problems, [])  # The ceiling breach ranks first and is timed alone: within limits alone.
-        self.assertEqual(sum("[not timed alone]" in item for item in warnings), 5)
+        problems, warnings = sl.judge(ceilings + others, value, True, alone)
+        self.assertEqual(timed, [item[0] for item in ceilings[:sl.SOLO_LIMIT]])  # Ceiling breaches are timed first.
+        self.assertEqual(problems, [sl.gate_message("CEILING", ceilings[-1][0], 95.0 - sl.SOLO_LIMIT, None, value)
+                                    + " [not timed alone]"])  # The sixth is untimed, so it fails unconfirmed.
+        self.assertEqual(sum("[not timed alone]" in item for item in warnings), len(others))
         self.assertEqual(sum("runner contention" in item for item in warnings), sl.SOLO_LIMIT)
-        relaxed, _ = sl.judge(candidates, value, False, alone)
+        relaxed, relaxed_warnings = sl.judge(ceilings + others, value, False, alone)
         self.assertEqual(relaxed, [])
+        self.assertEqual(len(relaxed_warnings), len(ceilings) + len(others))
 
     def test_slowness_fails_only_when_every_alone_re_timing_confirms_it(self):
         value = manifest(durations={})
@@ -336,7 +341,10 @@ class GateTests(unittest.TestCase):
                  ("UNRECORDED SLOW", "tests.m.C.test_new", 5.0, [0.5], 0, 1, "runner contention"),
                  ("CEILING", "tests.m.C.test_huge", 95.0, [90.0, 80.0], 1, 2, None),
                  ("CEILING", "tests.m.C.test_huge", 95.0, [90.0, 0.5], 0, 2, "slow alone once"),
-                 ("CEILING", "tests.m.C.test_huge", 95.0, [0.5], 0, 1, "runner contention"))
+                 ("CEILING", "tests.m.C.test_huge", 95.0, [0.5], 0, 1, "runner contention"),
+                 # An alone run that never finished is a hang or a failure, whatever a later run would show.
+                 ("UNRECORDED SLOW", "tests.m.C.test_new", 5.0, [float("inf"), 0.5], 1, 1, "did not finish"),
+                 ("CEILING", "tests.m.C.test_huge", 95.0, [float("inf"), 0.5], 1, 1, "did not finish"))
         for kind, test_id, measured, sequence, failures, runs, note in table:
             with self.subTest(kind=kind, alone=sequence):
                 calls, taken = iter(sequence), []
@@ -344,7 +352,53 @@ class GateTests(unittest.TestCase):
                                               lambda *_: taken.append(1) or next(calls))
                 self.assertEqual((len(problems), len(warnings), len(taken)), (failures, 1 - failures, runs))
                 if note:
-                    self.assertIn(note, warnings[0])
+                    self.assertIn(note, (problems + warnings)[0])
+
+    def execute_with(self, seconds, alone_events, *, strict=True, walls=None):
+        """Run `execute` over a fake pool: the first job reports `seconds`, a solo job replays `alone_events`."""
+        test_id, scratch = "tests.m.C.test_a", tempfile.mkdtemp(prefix="suite-fake-")
+        self.addCleanup(shutil.rmtree, scratch, True)
+
+        def fake_pool(root, jobs, directory, concurrency):
+            items = []
+            for name, ids, _ in jobs:
+                events = [{"event": "start", "id": test_id}, {"event": "stop", "id": test_id,
+                          "outcome": "success", "seconds": seconds}, {"event": "done", "ok": True}]
+                if name == "solo":
+                    events = alone_events
+                items.append({"name": name, "ids": ids, "wall": 0.0, "note": "exited", "code": 0,
+                              "log_file": Path(scratch) / f"{name}.log", "events": Path(scratch) / f"{name}.events"})
+                items[-1]["log_file"].write_text("fake log\n")
+                items[-1]["events"].write_text("\n".join(json.dumps(event) for event in events))
+            return items
+
+        clock = patch.object(sl.time, "monotonic", side_effect=walls) if walls else nullcontext()
+        with patch.object(sl, "run_pool", fake_pool), clock, redirect_stdout(io.StringIO()):
+            return sl.execute(Path(scratch), [[("parallel-1", [test_id])]], ONE_SHARD, strict=strict,
+                              forbid_skips=True, concurrency=1, target=180.0)
+
+    def test_an_alone_run_that_fails_or_never_finishes_fails_the_share(self):
+        test_id = "tests.m.C.test_a"
+        failed = [{"event": "start", "id": test_id}, {"event": "stop", "id": test_id, "outcome": "failure",
+                                                      "seconds": 0.1}, {"event": "done", "ok": True}]
+        crashed = [{"event": "start", "id": test_id}]
+        unclean = [{"event": "start", "id": test_id}, {"event": "stop", "id": test_id, "outcome": "success",
+                                                       "seconds": 0.1}]
+        for name, events, expected in (("failed alone", failed, f"FAILURE {test_id}"),
+                                       ("crashed alone", crashed, f"IN FLIGHT {test_id}"),
+                                       ("unclean alone", unclean, "without a clean finish")):
+            with self.subTest(name):
+                outcome = self.execute_with(3.0, events)
+                text = "\n".join(outcome["problems"])
+                self.assertIn(expected, text)
+                self.assertIn("alone run did not finish", text)
+
+    def test_a_strict_share_between_two_and_four_times_its_target_stays_green(self):
+        outcome = self.execute_with(0.01, None, walls=[0.0, 364.0, 365.0])  # PR 146: 364 s against 360 s.
+        self.assertEqual(outcome["problems"], [])
+        self.assertTrue(any("LANE share took 364 s, over its 180 s target" in item for item in outcome["warnings"]))
+        hung = self.execute_with(0.01, None, walls=[0.0, 721.0, 722.0])
+        self.assertTrue(any("past 4 times the target" in item for item in hung["problems"]))
 
     def test_a_slow_lane_warns_and_only_a_hang_class_wall_time_fails(self):
         target = 180.0
