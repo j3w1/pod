@@ -2,8 +2,10 @@
 
 `pod status --objective ID --admission ADMISSION --json` is the supported public proof that Pod accepted a
 worker's report. It projects only identifiers, digests and receipt fields, under their recorded names, and never
-the report body, packet text, transcript or source content. It reads one record without a lock through the
-lockless scan read (R206): no Orca, preference, provider or GitHub read, and no write, conversion or repair.
+the report body, packet text, transcript, source content or any record-derived message. It reads one record through
+the scan read (R206), taking no record lock: its only lock is the shared, non-blocking history read pin every Pod
+reader holds, which never waits for or blocks a writer. It makes no Orca, preference, provider or GitHub read, and
+no write, conversion or repair.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ VALUE_LIMIT = 512
 # The whole projection stays within this many encoded bytes; tests hold it there.
 VIEW_BYTES = 8 * 1024
 ADMISSION_ID = re.compile(r"[a-f0-9]{64}")
+# The objective name is echoed, so it is bounded before any lookup.
+OBJECTIVE_LIMIT = 256
 UNKNOWN = "unknown"
 NO_REPORT = "no report has been consumed for this admission"
 
@@ -31,8 +35,34 @@ def _value(value):
     return None
 
 
-def _count(value):
-    return len(value) if isinstance(value, list) else None
+# Fixed public explanations: a refusal's own message can name rejected record content, so it is never copied.
+RECORD_REASONS = {
+    "invalid_record": "the record is not readable JSON",
+    "invalid_context": "the record is not a supported objective record",
+    "state_unsupported": "the record uses a shape this Pod version does not read",
+    "history_invalid": "the record's history storage is not readable",
+    "history_missing": "the record's history storage is missing",
+    "history_integrity": "the record's history storage does not verify",
+    "history_busy": "the record's history storage is being reclaimed; retry",
+    "record_changed_during_read": "the record was being written while it was read; retry",
+    "record_too_large": "the record exceeds Pod's read bound",
+    "unsafe_state": "the state directory cannot be read safely",
+    "git_unavailable": "the repository identity cannot be read",
+    "admission_unreadable": "the admission is not a record",
+    "record_unreadable": "the record cannot be read",
+    "view_limit": "the projection exceeded its bound",
+}
+RECORD_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _count(facts, field, value, *, kind):
+    """A recorded count, or `unknown` named in `unknown` with its reason."""
+    if kind == "list" and isinstance(value, list):
+        return len(value)
+    if kind == "integer" and type(value) is int and value >= 0:
+        return value
+    facts.unknown.append({"field": field, "reason": "absent" if value is None else "unreadable"})
+    return UNKNOWN
 
 
 class _Facts:
@@ -59,15 +89,17 @@ def _ingestion(row: dict, facts: _Facts) -> dict:
     base = facts.text("report.ingestion.base", result.get("base"), nullable=True)
     head = facts.text("report.ingestion.head", result.get("head"), nullable=True)
     if result.get("paths_status") == "over_limit":
-        count = result.get("path_count")
         return {"status": "over_limit", "reason": "changed_paths_limit", "base": base, "head": head,
-                "changed_path_count": count if type(count) is int else UNKNOWN}
-    changed, exceeded = _count(row.get("changed_paths")), _count(row.get("boundary_exceeded"))
-    if changed is None:
-        facts.unknown.append({"field": "report.ingestion", "reason": "changed paths were not recorded"})
+                "changed_path_count": _count(facts, "report.ingestion.changed_path_count",
+                                             result.get("path_count"), kind="integer")}
+    if not isinstance(row.get("changed_paths"), list):
+        facts.unknown.append({"field": "report.ingestion", "reason": "absent" if row.get("changed_paths") is None
+                              else "unreadable"})
         return {"status": UNKNOWN, "base": base, "head": head}
-    return {"status": "recorded", "base": base, "head": head, "changed_path_count": changed,
-            "boundary_exceeded_count": exceeded if exceeded is not None else UNKNOWN}
+    return {"status": "recorded", "base": base, "head": head,
+            "changed_path_count": len(row["changed_paths"]),
+            "boundary_exceeded_count": _count(facts, "report.ingestion.boundary_exceeded_count",
+                                              row.get("boundary_exceeded"), kind="list")}
 
 
 def _report(row: dict, facts: _Facts) -> dict:
@@ -118,12 +150,25 @@ def _project(row: dict) -> dict:
     return view
 
 
-def _unread(reason: str, detail: str) -> dict:
-    """Every fact reads unknown when the record itself cannot be read."""
+def _unread(code: object) -> dict:
+    """Every fact reads unknown when the record itself cannot be read; the reason is Pod's own code with its fixed
+    explanation, never the refusal's message."""
+    reason = code if isinstance(code, str) and RECORD_CODE.fullmatch(code) else "record_unreadable"
     fields = ("found", "state", "role", "packet_id", "candidate", "assignment_digest", "run_id", "task_id",
               "dispatch_id", "report")
     return {**{field: UNKNOWN for field in fields},
-            "unknown": [{"field": "record", "reason": reason, "detail": detail[:VALUE_LIMIT]}]}
+            "unknown": [{"field": "record", "reason": reason,
+                         "detail": RECORD_REASONS.get(reason, RECORD_REASONS["record_unreadable"])}]}
+
+
+def _bounded(result: dict) -> dict:
+    """Hold every response, early ones included, within the documented byte bound."""
+    if len(json.dumps(result["admission_view"], ensure_ascii=False).encode("utf-8")) <= VIEW_BYTES:
+        return result
+    # Unreachable with the bounded inputs and values; kept so the documented bound can never be exceeded.
+    head = {"schema": SCHEMA, "objective": UNKNOWN, "admission": result["admission_view"].get("admission")}
+    return {"schema": result["schema"], "status": "unavailable",
+            "admission_view": {**head, "record": UNKNOWN, **_unread("view_limit")}}
 
 
 def view(project: Path, objective: str, admission: str) -> dict:
@@ -131,8 +176,12 @@ def view(project: Path, objective: str, admission: str) -> dict:
     from .history import load_context, scan_read
     from .ledger import _record_exists, objective_root
     result = {"schema": "pod-cli/v5", "status": "observed"}
+    if (not isinstance(objective, str) or not objective or len(objective) > OBJECTIVE_LIMIT
+            or not objective.isprintable()):
+        raise PodError("invalid_objective", f"--objective names a recorded objective of at most {OBJECTIVE_LIMIT} "
+                       "printable characters", {"next_action": "pass the objective name from pod status --list --json"})
     head = {"schema": SCHEMA, "objective": objective, "admission": admission}
-    if not ADMISSION_ID.fullmatch(admission):
+    if not isinstance(admission, str) or not ADMISSION_ID.fullmatch(admission):
         raise PodError("invalid_admission", "--admission names a Pod admission id: 64 lower-case hex characters",
                        {"next_action": "pass the admission id from pod status --objective ID --json"})
     try:
@@ -146,29 +195,23 @@ def view(project: Path, objective: str, admission: str) -> dict:
         row = admissions.get(admission)
     except PodError as exc:
         if exc.code == "objective_unknown":
-            return {**result, "status": "blocked", "blocker": exc.code,
-                    "next_safe_action": "name a recorded objective in this repository",
-                    "admission_view": {**head, "record": "absent", "found": False, "unknown": [],
-                                       "reason": "this repository has no record for the objective"}}
-        return {**result, "status": "unavailable",
-                "admission_view": {**head, "record": UNKNOWN, **_unread(exc.code, str(exc))}}
-    except OSError as exc:
-        return {**result, "status": "unavailable",
-                "admission_view": {**head, "record": UNKNOWN, **_unread("record_unreadable", type(exc).__name__)}}
+            return _bounded({**result, "status": "blocked", "blocker": exc.code,
+                             "next_safe_action": "name a recorded objective in this repository",
+                             "admission_view": {**head, "record": "absent", "found": False, "unknown": [],
+                                                "reason": "this repository has no record for the objective"}})
+        return _bounded({**result, "status": "unavailable",
+                         "admission_view": {**head, "record": UNKNOWN, **_unread(exc.code)}})
+    except OSError:
+        return _bounded({**result, "status": "unavailable",
+                         "admission_view": {**head, "record": UNKNOWN, **_unread("record_unreadable")}})
     if row is None:
-        return {**result, "status": "absent",
-                "admission_view": {**head, "record": "read", "found": False, "unknown": [],
-                                   "reason": "the objective's record holds no admission with this id"}}
+        return _bounded({**result, "status": "absent",
+                         "admission_view": {**head, "record": "read", "found": False, "unknown": [],
+                                            "reason": "the objective's record holds no admission with this id"}})
     if not isinstance(row, dict):
-        return {**result, "status": "unavailable",
-                "admission_view": {**head, "record": "read", **_unread("admission_unreadable",
-                                                                       "the admission is not a record")}}
-    projected = {**head, "record": "read", **_project(row)}
-    if len(json.dumps(projected, ensure_ascii=False).encode("utf-8")) > VIEW_BYTES:
-        # Unreachable with bounded values; kept so the documented bound can never be exceeded.
-        projected = {**head, "record": "read", **_unread("view_limit", "the projection exceeded its bound")}
-        result["status"] = "unavailable"
-    return {**result, "admission_view": projected}
+        return _bounded({**result, "status": "unavailable",
+                         "admission_view": {**head, "record": "read", **_unread("admission_unreadable")}})
+    return _bounded({**result, "admission_view": {**head, "record": "read", **_project(row)}})
 
 
 def render(result: dict) -> None:

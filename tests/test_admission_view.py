@@ -1,14 +1,16 @@
 """R250: `pod status --objective ID --admission ADMISSION --json` projects one admission's packet and
-report-receipt facts from Pod's own record, read-only and bounded, and leaks no report or packet content
-(A1117-A1121)."""
+report-receipt facts from Pod's own record, read-only and bounded, and leaks no report, packet or record-derived
+content (A1117-A1121)."""
 
 import contextlib
+import fcntl
 import io
 import json
 from unittest.mock import patch
 
 from pod import admission_view, cli
 from pod.ledger import objective_root, read
+from tests.common import logical_json
 from tests.kernel_support import KernelCase, git
 
 # Text that appears only in report or packet bodies; the projection must never carry any of it.
@@ -158,3 +160,78 @@ class AdmissionViewEdgeTests(AdmissionViewCase):
         reserved = admission_view._project({"state": "reserved", "role": "review", "native_binding": None,
                                             "report": None})
         self.assertIsNone(reserved["dispatch_id"])
+
+
+class AdmissionViewCorrectionTests(AdmissionViewCase):
+    """The review's corrections: no record-derived text, only the shared read pin, bounded early responses and a
+    reason for every unknown count."""
+
+    def consumed(self):
+        frozen, started = self.implementer()
+        self.consume(started, frozen)
+        return started["admission_id"]
+
+    def edit(self, admission, change):
+        raw = logical_json(self.record)
+        change(raw["admissions"][admission])
+        self.record.write_text(json.dumps(raw))
+
+    def test_unreadable_record_never_carries_record_derived_text(self):
+        frozen, started = self.implementer()
+        sentinel = "PRIVATE_SOURCE_CONTENT_SENTINEL"
+        for content in ({"schema": "pod-context/v4", sentinel: True}, {"schema": sentinel},
+                        {**logical_json(self.record), sentinel: {"source": sentinel}}):
+            self.record.write_text(json.dumps(content))
+            code, text = self.pod("--objective", "objective", "--admission", started["admission_id"], "--json")
+            self.assertEqual(code, 1)
+            self.assertNotIn(sentinel, text)
+            unknown = json.loads(text)["admission_view"]["unknown"]
+            self.assertEqual(len(unknown), 1)
+            self.assertEqual(unknown[0]["detail"], admission_view.RECORD_REASONS.get(
+                unknown[0]["reason"], admission_view.RECORD_REASONS["record_unreadable"]))
+        self.assertEqual(admission_view._unread("Not A Code; " + sentinel)["unknown"][0]["reason"], "record_unreadable")
+
+    def test_only_the_shared_non_blocking_read_pin_is_taken(self):
+        admission = self.consumed()
+        calls, real = [], fcntl.flock
+        def traced(fd, operation):
+            calls.append(operation)
+            return real(fd, operation)
+        with patch("pod.history.fcntl.flock", side_effect=traced):
+            code, result = self.view(admission)
+        self.assertEqual((code, result["status"]), (0, "observed"))
+        self.assertTrue(calls)
+        self.assertLessEqual(set(calls), {fcntl.LOCK_SH | fcntl.LOCK_NB, fcntl.LOCK_UN})
+
+    def test_objective_is_bounded_and_every_response_stays_within_the_limit(self):
+        self.intake()
+        code, text = self.pod("--objective", "x" * 9000, "--admission", "a" * 64, "--json")
+        result = json.loads(text)
+        self.assertEqual((code, result["error"]["code"]), (1, "invalid_objective"))
+        self.assertNotIn("x" * 300, text)
+        wide = "\u20ac" * admission_view.OBJECTIVE_LIMIT
+        code, result = self.view("a" * 64, objective=wide)
+        self.assertEqual((code, result["status"], result["admission_view"]["objective"]), (1, "blocked", wide))
+        code, text = self.pod("--objective", "bad\nname", "--admission", "a" * 64, "--json")
+        self.assertEqual(json.loads(text)["error"]["code"], "invalid_objective")
+        oversized = {"schema": "pod-cli/v5", "status": "observed",
+                     "admission_view": {"admission": "a" * 64, "padding": "y" * admission_view.VIEW_BYTES}}
+        bounded = admission_view._bounded(oversized)
+        self.assertEqual((bounded["status"], bounded["admission_view"]["unknown"][0]["reason"]),
+                         ("unavailable", "view_limit"))
+        self.assertLessEqual(len(json.dumps(bounded["admission_view"]).encode()), admission_view.VIEW_BYTES)
+
+    def test_every_unknown_ingestion_count_names_its_reason(self):
+        admission = self.consumed()
+        self.edit(admission, lambda row: row.update(boundary_exceeded=None))
+        code, result = self.view(admission)
+        item = result["admission_view"]
+        self.assertEqual((code, item["report"]["ingestion"]["boundary_exceeded_count"]), (0, "unknown"))
+        self.assertEqual(item["unknown"], [{"field": "report.ingestion.boundary_exceeded_count", "reason": "absent"}])
+        self.edit(admission, lambda row: (row.update(boundary_exceeded=[]),
+                                          row["result"].update(paths_status="over_limit", path_count="bad")))
+        code, result = self.view(admission)
+        item = result["admission_view"]
+        self.assertEqual((code, item["report"]["ingestion"]["status"], item["report"]["ingestion"]["changed_path_count"]),
+                         (0, "over_limit", "unknown"))
+        self.assertEqual(item["unknown"], [{"field": "report.ingestion.changed_path_count", "reason": "unreadable"}])
