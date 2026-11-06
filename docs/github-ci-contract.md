@@ -47,7 +47,23 @@ The governor binds a validation row to a run only when the run matches what the 
 started: one of its events, its exact head commit, created at or after the submission, and its own
 attempt (R115). A push or pull-request update starts `push` runs and, on a branch with an open pull
 request, `pull_request` or `pull_request_target` runs, so a row derived from a publication binds
-only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. Every row
+only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. A recorded
+push that Git reports up to date (`ref_changed: false`) moved no ref and started no run, so it binds
+none when it is performed. Its derived row, and one whose publication names no `ref_changed` (an
+older or caller-performed one), reads the branch with
+`gh api repos/{owner}/{repo}/activity?ref=refs/heads/BRANCH&direction=desc&per_page=21`. This
+host's clock may lag GitHub's, so once that activity shows the head being set, the floor is never
+below the newest listed update that set the branch to the row's exact head (never a deletion), over
+the whole list: that update's second when the whole second is complete and agrees, otherwise the
+start of the next whole second (another commit or a deletion in that second, or a truncated list
+whose extra update shares it). This holds for an older row without `ref_changed` too. Readable
+activity that lists no update setting the head holds the row: nothing binds and a bound run is
+neither accepted nor rejected until a later read shows it. Only without activity information (an
+unreadable or empty answer, one in another shape or not newest first, or a time it cannot read)
+does the submission stay, and then it cannot see a host clock that lags GitHub's. A `remote_update`
+floor Pod's own readback recorded is reused, and the derived row keeps the publication's branch and
+`ref_changed` so a successor that carried it without the publication applies the same rule. The row
+says which time it used (`created_after` basis `remote_update` or `publication`). Every row
 binds its run's first attempt, except a rerun. Before rerunning, the governor records the run, its
 latest attempt and the submission start, and right after GitHub accepts the call it records that
 acceptance; one rule binds the rerun's attempt on every path. The count proves it: with the
