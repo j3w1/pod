@@ -39,7 +39,7 @@ _KINDS = {
     "human_login": "human_login", "publish": "merge_publish",
     "merge": "merge_publish", "release": "merge_publish",
     "deployment": "production_deployment", "deploy": "production_deployment",
-    "install": "routine", "cleanup": "routine",
+    "install": "routine", "cleanup": "routine", "keep_worker_tab": "routine",
     "unique_deletion": "irreversible_deletion", "scope_growth": "scope_changes",
     "secrets": "secrets", "speaking_for_person": "speaking_for_person",
     "irreversible_deletion": "irreversible_deletion", "routine": "routine",
