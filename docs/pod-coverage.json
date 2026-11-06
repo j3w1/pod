@@ -2267,6 +2267,8 @@
       "offline_test": [
         "tests.test_input_refusals.OperationFieldRefusalTests.test_every_operation_names_operation_record_and_both_fields_without_values",
         "tests.test_input_refusals.OperationFieldRefusalTests.test_non_object_names_only_the_expected_type",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_first_checkpoint_missing_map_fields_refuses_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_valid_mapless_and_mapped_checkpoints_keep_working",
         "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths",
         "tests.test_request_contract.DiscoveryTests.test_shape_and_text_refusals_give_whole_constant_contract_without_values"
       ],
@@ -12260,6 +12262,7 @@
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_whose_governor_journal_is_unreadable_is_unproven",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_of_another_repository_is_proved_in_a_recorded_checkout_of_it",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_recorded_checkout_of_another_repository_is_never_used",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_removed_checkouts_sorting_first_never_exhaust_the_candidates",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_whose_repository_changes_between_passes_holds_as_changing",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_rebound_to_an_existing_checkout_between_passes_holds_as_changing",
         "tests.test_window_continuation.DiscoveryTests.test_a_closed_peer_whose_worktree_was_removed_no_longer_holds_the_run"
@@ -12313,6 +12316,36 @@
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selected_absent_branch_stays_absent_and_refuses_once_it_returns",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selected_branch_or_remote_head_returning_before_the_stash_read_refuses",
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selected_checkout_returning_before_the_stash_read_refuses"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1025",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governor_evidence.MergeOutcomeTests.test_missing_target_defers_then_integrated_candidate_allows_and_true_merge_passes",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1026",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_governor_evidence.MergeOutcomeTests.test_same_tree_target_commit_still_requires_containment",
+        "tests.test_governor_evidence.MergeOutcomeTests.test_a_merge_pass_keeps_its_verified_merge_commit_and_says_fetch_first"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1027",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_governor_evidence.MergeOutcomeTests.test_unavailable_containment_proof_defers_in_observe_mode",
+        "tests.test_governor_evidence.MergeReadinessGuidanceTests.test_guidance_requires_current_target_and_affected_scope_review"
       ],
       "status": "NOT_RUN"
     },
