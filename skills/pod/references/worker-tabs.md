@@ -187,6 +187,8 @@ liveness. Pod never infers a physical event from Orca's user-ownership mark.
 - If the authority read reports a changed runtime, the tab stays unknown with
   that code. The next Pod write rebinds when continuity is proven, or the owner
   decides when it is ambiguous; repeating worker-show cannot repair continuity.
+  On a closed objective nothing rebinds and nothing needs reopening: the row's
+  `tab_intent` names the keep or let-go write for that tab.
 - For a finished user-owned or external tab of this objective, after its report
   is recorded, run the exact close command Pod supplies under the owner's
   worker-tab standing close authorization. This never applies to active, coordinator, setup,
@@ -234,7 +236,7 @@ false. The last matching active instruction decides; this changes no map
 revision or frozen packet. Ordinary constraint revocation cannot revoke a keep
 without recording that instruction. A keep binds to this objective, Dispatch
 and terminal until revoked, reused for a later Dispatch or disconnected.
-Ownership changes do not end it. Keep and revocation instructions can still be recorded after ordinary coordinator closure without changing its map or closure report; an evidence-closed objective accepts no further Pod write. Leave owner-kept tabs open even after Orca
+Ownership changes do not end it. Keep and revocation instructions can still be recorded after ordinary coordinator closure without changing its map or closure report, even after Orca's runtime changed: that write never rebinds. On a closed objective it is accepted from the recorded coordinator, the person's direct decision, or an honest agent decision from any caller; an agent keep shows `kept_by: agent` and an agent may revoke it, but revoking the person's keep still needs the person. An agent's tab intent on an open objective is refused. An evidence-closed objective accepts no further Pod write. Leave owner-kept tabs open even after Orca
 marks them user-owned; no close command applies. For an owned tab the release
 command is available when the owner lets it go. Name each kept tab and its
 instruction, and Orca's reason for any unowned tab, in the final report.
