@@ -609,7 +609,7 @@
   "tests.test_delivery_retry.DeliveryTests.test_an_interrupted_retry_recovers_one_attempt": 1.2,
   "tests.test_derived_projection.DerivedProjectionTests.test_six_hundred_adoptions_close_with_a_bounded_report": 1.4,
   "tests.test_discovery_bound.BoundTests.test_discovery_writes_no_file_cache_or_temporary_and_takes_no_file_lock": 1.0,
-  "tests.test_display.DisplayAckTests.test_admission_title_rename_worker_reason_and_own_worktree_first_then_later": 1.0,
+  "tests.test_display.DisplayAckTests.test_admission_title_note_worker_reason_and_own_worktree_first_then_later": 1.0,
   "tests.test_display.DisplayAckTests.test_checkpoint_display_validation_persistence_and_whole_replacement": 1.1,
   "tests.test_display.DisplayAckTests.test_naming_sends_no_worker_input_and_keeps_release_decisions": 2.0,
   "tests.test_document_roles.ContainmentTests.test_cancellation_remains_available_after_source_changes_or_failed_reads": 5.8,

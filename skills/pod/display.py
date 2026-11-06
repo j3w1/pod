@@ -20,8 +20,10 @@ LIVE_STATES = ("reserved", "unresolved", "bound", "closed")
 CODEX_REASON = ("Codex thread naming is interactive; the row relies on Orca's custom tab title "
                 "(stablyai/orca#30037)")
 WORKER_REASON = ("Pod sends no input to a worker tab: Orca marks a tab that receives input user-owned, which stops "
-                 "its release or reuse; the row relies on the Task display name and Orca's custom tab title "
-                 "(stablyai/orca#30037)")
+                 "its release or reuse; the row relies on the Task display name")
+TITLE_NOTE = ("The Task display name labels this worker's Orca row; Orca cannot change it after task-create, so "
+              "this title is data only. Pod offers no terminal rename or other input for a worker tab: Orca marks "
+              "such a tab user-owned, which stops its release and reuse.")
 HOST_SENDER = ("the host or another terminal sends it at the coordinator's idle prompt; "
                "the coordinator never types into its own tab")
 LIMITATION = ("Orca shows CLI titles in the desktop row only from the release containing stablyai/orca#30037; "
@@ -231,6 +233,7 @@ def worker_title(state: dict, row: dict) -> str:
 
 
 def rename(value: str, handle: str | None) -> list[str] | None:
+    """The coordinator tab's title argv; worker tabs never get one (TITLE_NOTE)."""
     return ["orca", "terminal", "rename", "--terminal", handle, "--title", value, "--json"] if handle else None
 
 
@@ -331,18 +334,15 @@ def worktree_command(state: dict, row: dict, *, first=False) -> dict:
 
 
 def admission_output(state: dict, row: dict) -> dict:
-    from .worker_tabs import rename as naming
     started = row.get("state") == "bound"
     handle = (row.get("native_binding") or {}).get("terminalHandle") if started else None
     title = worker_title(state, row)
     prior = [r for r in ordered(state) if placement(r) == placement(row) and (r.get("display") or {}).get("worktree_name")]
-    output = {**naming(title, handle, started=started),
+    output = {"title": title, "title_note": TITLE_NOTE,
               **session_rename(title, handle, (row.get("request") or {}).get("agent")),
               **worktree_command(state, row, first=bool(prior and prior[0]["admission_id"] == row["admission_id"]))}
     if not started:
         output["worktree_command"] = None
-    if row.get("state") in ("reserved", "unresolved"):
-        output["rename_reason"] = "worker start is not verified"
     return output
 
 
@@ -515,23 +515,27 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         if terminals is not None and (terminal is None or terminal.get("connected") is False):
             continue
         title = worker_title(state, row)
+        # Observation only: a worker tab gets no rename, re-read or drift (TITLE_NOTE).
         add("worker_tab", "pod", handle, {"title": title},
             {"title": terminal["title"]} if terminal and terminal.get("connected") is True and "title" in terminal else None,
-            rename(title, handle), repeat_terminal,
+            None, repeat_terminal,
             session=session_rename(title, handle, (row.get("request") or {}).get("agent")))
+        rows[-1].pop("read_command", None)
+        rows[-1]["reason"] = TITLE_NOTE
 
     version = (version_read or {}).get("version")
     parsed = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", version or "")
     limitation = LIMITATION if parsed and tuple(map(int, parsed.groups())) <= (1, 4, 229) else None
     if parsed is None:
         limitation = "Orca version unreadable; repeat orca --version"
-    drift = any(row["owner"] == "pod" and row["verdict"] in ("differs", "unreadable") for row in rows)
+    drift = any(row["owner"] == "pod" and row["layer"] != "worker_tab" and row["verdict"] in ("differs", "unreadable")
+                for row in rows)
     verdict = "drift" if drift else "orca_limitation" if limitation else "backend_matches"
     actions = []
     for row in rows:
         if row["command"]:
             actions.append({"command": row["command"]})
-        elif row["verdict"] == "unreadable":
+        elif row["verdict"] == "unreadable" and row["layer"] != "worker_tab":
             actions.append({"command": row["read_command"], "reason": row["reason"]})
         # Only the coordinator row can carry a provider rename; its host sends it at an idle prompt.
         if (row.get("session_rename") and row["layer"] == "coordinator_tab" and row["owner"] == "pod"
