@@ -78,6 +78,9 @@ def parse(data: Any) -> tuple[str, dict[str, str]] | None:
 
 def _parse(data: bytes) -> tuple[str, dict[str, str]] | None:
     document = json.loads(data.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
+    # Every member name and value, keys included, must have an exact UTF-8 canonical form; an escaped lone
+    # surrogate or a nonfinite number anywhere raises here and the file is no index.
+    json.dumps(document, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if not isinstance(document, dict) or not isinstance(document.get("schema"), str) \
             or document["schema"] not in KINDS:
         return None

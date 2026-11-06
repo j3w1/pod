@@ -69,6 +69,10 @@ class ParseTests(unittest.TestCase):
             "an array schema": b'{"schema": []}',
             "an overflowing number": dump(lanes({})).replace(b'"durations": {}', b'"durations": {"t": 1e400}'),
             "a lone surrogate": dump(BASE).replace(b'"NOT_RUN"', b'"\\ud800"', 1),
+            "a lone high surrogate key": b'{"schema": "suite-lanes/v1", "durations": {"base": 1, "\\ud800": 2}}',
+            "a lone low surrogate key": b'{"schema": "suite-lanes/v1", "durations": {"\\udc00": 2}}',
+            "a lone surrogate member name": dump(BASE).replace(b'"note"', b'"\\ud800"', 1),
+            "a lone surrogate row id": dump(BASE).replace(b'"A2"', b'"\\udfff"', 1),
             "nesting too deep": b'{"schema": "suite-lanes/v1", "budgets": ' + b"[" * 100000 + b"]" * 100000 + b"}",
         }
         for label, data in cases.items():
@@ -147,6 +151,18 @@ class BindingTests(unittest.TestCase):
                 ("an override for a prefix", {**now, "overrides": {"tests.b": {"lane": "serial"}}}, False)):
             with self.subTest(label):
                 self.assertIs(current(bound, dump(later)), holds)
+
+    def test_a_surrogate_key_elsewhere_invalidates_and_valid_non_ascii_keys_bind(self):
+        base, now = lanes({"base": 1.0}), lanes({"base": 1.0, "own": 2.0})
+        bound = binding(entry(dump(now), "tests/suite_lanes.json"), dump(now), dump(base))
+        later = dump(now).replace(b'"base"', b'"\\ud800"', 1)
+        self.assertIsNone(parse(later))
+        self.assertFalse(current(bound, later))
+        self.assertNotIn("index", binding(entry(later, "tests/suite_lanes.json"), later, dump(base)))
+        named = lanes({"base": 1.0, "tests.é.T.test_ü": 2.0})
+        rows = binding(entry(dump(named), "tests/suite_lanes.json"), dump(named), dump(base))["index"]["rows"]
+        self.assertEqual(list(rows), ['["durations","tests.é.T.test_ü"]'])
+        json.dumps(rows, ensure_ascii=False).encode("utf-8")
 
     def test_lane_rows_bind_by_test_id(self):
         base = lanes({"tests.a.T.test_x": 1.5})
@@ -262,6 +278,12 @@ class ReviewCarryTests(KernelCase):
     def test_an_unparseable_index_invalidates(self):
         self.reviewed()
         self.later(b"{ not json\n")
+        self.refused_carry()
+
+    def test_a_lone_surrogate_elsewhere_invalidates(self):
+        self.reviewed()
+        self.target(coverage(("A0", "NOT_RUN"), *BASE_ROWS, ("A3", "NOT_RUN"), ("A4", "NOT_RUN")))
+        self.later((self.project / COVERAGE).read_bytes().replace(b'"A0"', b'"\\ud800"', 1))
         self.refused_carry()
 
     def test_a_duplicate_key_invalidates(self):
