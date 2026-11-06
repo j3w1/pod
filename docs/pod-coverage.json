@@ -2267,6 +2267,8 @@
       "offline_test": [
         "tests.test_input_refusals.OperationFieldRefusalTests.test_every_operation_names_operation_record_and_both_fields_without_values",
         "tests.test_input_refusals.OperationFieldRefusalTests.test_non_object_names_only_the_expected_type",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_first_checkpoint_missing_map_fields_refuses_without_writing",
+        "tests.test_checkpoint_required_fields.CheckpointRequiredFieldsTests.test_valid_mapless_and_mapped_checkpoints_keep_working",
         "tests.test_input_refusals.ExactRefusalTests.test_constant_shape_names_are_complete_through_both_refusal_paths",
         "tests.test_request_contract.DiscoveryTests.test_shape_and_text_refusals_give_whole_constant_contract_without_values"
       ],
@@ -12074,6 +12076,35 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1032",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.UnverifiedStopTests.test_three_unverified_answers_stop_after_the_first_round",
+        "tests.test_admission_host_exit_stop.UnverifiedStopTests.test_a_verified_answer_keeps_every_later_round",
+        "tests.test_admission_host_exit_stop.UnverifiedStopTests.test_a_fault_in_the_stopping_round_names_the_fault",
+        "tests.test_admission_host_exit_stop.UnverifiedFleetTests.test_three_unverified_answers_stop_the_batch_and_hold_the_rest_unverified"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1033",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_transient_unverified_answer_then_a_verified_one_counts",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_request_is_asked_again_once_and_two_unverified_answers_hold",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_reask_never_displaces_a_planned_request_or_exceeds_r",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_a_reask_runs_under_the_deadline_test",
+        "tests.test_admission_host_exit_stop.ReaskTests.test_the_stop_counts_answers_after_their_reask"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A902",
       "required_evidence": [
         "unit",
@@ -12202,7 +12233,6 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_whose_worktree_is_missing_names_that_reason",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_whose_proof_refuses_names_only_the_code",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_worktree_path_that_is_no_directory_is_unreadable",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_with_no_binding_outside_its_own_directory_is_unavailable",
@@ -12211,6 +12241,47 @@
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_open_and_unproven_peers_are_named_apart",
         "tests.test_handoff_scope.UnprovenReasonTests.test_reasons_never_carry_exception_text",
         "tests.test_window_continuation.DiscoveryTests.test_run_shared_names_open_peers_and_unproven_closures_apart"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A955",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_whose_worktree_was_removed_is_proved_from_its_records",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_a_damaged_closure_still_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_an_empty_closure_report_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_an_active_row_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_a_damaged_settlement_projection_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_keeps_the_retained_history_hold",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_no_closure_record_is_open",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_outside_its_bound_directory_is_unproven",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_whose_settled_work_changed_is_unproven",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_whose_governor_journal_is_unreadable_is_unproven",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_of_another_repository_is_proved_in_a_recorded_checkout_of_it",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_recorded_checkout_of_another_repository_is_never_used",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_whose_repository_changes_between_passes_holds_as_changing",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_rebound_to_an_existing_checkout_between_passes_holds_as_changing",
+        "tests.test_window_continuation.DiscoveryTests.test_a_closed_peer_whose_worktree_was_removed_no_longer_holds_the_run"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A956",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_of_another_repository_with_no_checkout_is_unproven",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_an_open_peer_is_named_open",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_open_and_unproven_peers_are_named_apart",
+        "tests.test_handoff_scope.PeerLabelTests.test_peers_carry_their_repository",
+        "tests.test_window_continuation.DiscoveryTests.test_run_shared_names_open_peers_and_unproven_closures_apart",
+        "tests.test_owner_handoff.DetectionTableTests.test_owner_hold_for_unverifiable_original_reuse_scope"
       ],
       "status": "NOT_RUN"
     },
@@ -12320,6 +12391,27 @@
       "offline_test": [
         "tests.test_admission_batch.WalkReReadTests.test_a1000_a_malformed_run_identity_answers_as_the_single_query_and_never_crashes"
       ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1004",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_consumed_keep_open_guidance_preserves_native_action",
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_report_status_and_finalization_relay_labelled_guidance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1005",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": "tests.test_worker_tabs.ReleaseGuidanceTests.test_guidance_exclusions",
       "status": "NOT_RUN"
     }
   ],

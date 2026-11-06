@@ -167,11 +167,12 @@ class FaultTests(HostExitCase):
                 self.log.unlink(missing_ok=True)
                 self.assertEqual(exit_codes(self.faulted(mode)), {"a": "host_exit_malformed", "b": "host_exit_malformed"})
                 self.assertEqual(self.asked(), ["a"])
-        with self.subTest("unverified"):  # an answer under the contract: the next request is still asked
+        with self.subTest("unverified"):  # an answer under the contract: the next request is still asked, and the
+            # unverified one once more beside it (pod#275), which answers unverified again
             self.log.unlink(missing_ok=True)
             self.assertEqual(exit_codes(self.faulted("unverified")),
                              {"a": "host_exit_unverified", "b": "host_exit_query_uncovered"})
-            self.assertEqual(self.asked(), ["a", "b"])
+            self.assertEqual(sorted(self.asked()), ["a", "a", "b"])
         for mode in ("repeated", "reordered"):  # two ids in one request: every id of it holds
             with self.subTest(mode):
                 self.answer(mode=mode)

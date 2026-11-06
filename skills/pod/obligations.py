@@ -615,6 +615,7 @@ def _write_governance(prior_map: dict | None, value: dict, ctx: dict,
     # Governance: declared at intake, read at the base, refreshed only by an explicit revision.
     observed = ctx.get("governance")
     if prior_map is None:
+        _exact(value, MAP_INPUT, {"governance", "obligations"}, "map")
         # A round-tripped stamped base is ignored: Pod binds the base it reads itself.
         declared = _exact(value.get("governance"), {"base_ref", "selection", "exclude", "base"},
                           {"base_ref"}, "governance")
@@ -1293,7 +1294,8 @@ def _accept_write(prior: dict | None, value: dict, ctx: dict, *, triaged: frozen
     if value.get("obligations") is None:
         if prior_map is not None:
             raise refuse("obligation_unaccounted", "missing_state", "an obligation map cannot be removed", record='obligation map')
-        if set(value) - {"seq"}:
+        if value:
+            _exact(value, MAP_INPUT, {"governance", "obligations"}, "map")
             raise refuse("obligation_invalid", "malformed", "map fields need an obligation list", record='obligation map')
         return {}
     if "reopen" in value and (value["reopen"] is not True or not closed):

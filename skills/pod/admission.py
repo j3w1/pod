@@ -1235,10 +1235,11 @@ def _host_exit_requests(ids, hosts: dict) -> list:
             for index in range(0, len(group), process_exit.K)]
 
 
-def _host_exit_rounds(plan: list) -> list:
-    """The first request alone (pod#219), then the rest in plan order, at most IN_FLIGHT per round (pod#227)."""
-    return [plan[:1], *(plan[index:index + process_exit.IN_FLIGHT]
-                        for index in range(1, len(plan), process_exit.IN_FLIGHT))] if plan else []
+def _host_exit_round(reask: list, unsent: list, first: bool) -> list:
+    """The next round's plan indexes: the first request alone (pod#219), then at most IN_FLIGHT (pod#227), taking the
+    pending re-asks (pod#275) and then the unsent requests. Every re-ask comes from a request already sent, so this is
+    plan order."""
+    return (reask + unsent)[:1 if first else process_exit.IN_FLIGHT]
 
 
 def _host_exit_prefetch(discovery, budget, project: Path) -> None:
@@ -1310,7 +1311,8 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
                 asked |= wanted
     plan = _host_exit_requests(asked, hosts) if command else []
     answers = {}
-    stopped = None  # the stopping round's first transport or contract fault, which every candidate not asked holds with
+    stopped = None  # the code every candidate not asked holds with: the stopping round's first transport or contract
+    # fault, or `host_exit_unverified` once UNVERIFIED_STOP unverified answers stand with none verified (pod#275)
     if not command:
         answers = {dispatch: (process_exit.UNAVAILABLE, None, None) for dispatch in asked}
     elif plan:
@@ -1323,19 +1325,30 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
         stamps = [discovery.finished_at.get(name) for name in ("fleet", "terminals")]
         native = (max(stamps) - discovery.started) if None not in stamps and discovery.started is not None else 0.0
         reserve = max(process_exit.RESERVE_S, process_exit.RESERVE_SCALE * native)
-        sent, start = [], 0
+        sent, unsent, reask, reasked = [], list(range(len(plan))), [], set()
+        unverified, verified = 0, False  # unverified answers that stand (after their one re-ask), any verified answer
         # The first request in plan order runs alone; the rest follow in rounds of at most IN_FLIGHT, each starting
         # only after every request of the previous round answered, under the same deadline test, and only while no
-        # request has met a transport or contract fault (pod#219, pod#227). A fault ends the call's requests after its
-        # own round, whose other requests were already in flight and keep their own outcomes.
-        for group in _host_exit_rounds(plan):
+        # request has met a transport or contract fault (pod#219, pod#227) and UNVERIFIED_STOP unverified answers have
+        # not stood without one verified answer (pod#275). A request answering unverified is asked once more, in plan
+        # order in a later round, only while every unsent request still fits R beside it, so a re-ask never displaces a
+        # planned request and the call never exceeds R; its answer replaces the first. A stop ends the call's requests
+        # after its own round, whose other requests were already in flight and keep their own outcomes; a re-ask not
+        # yet sent keeps its first answer.
+        while unsent or reask:
             if budget.remaining() < process_exit.TIMEOUT_S + reserve:
-                answers.update({dispatch: (process_exit.DEADLINE, None, None) for _, ids in plan[start:] for dispatch in ids})
+                answers.update({dispatch: (process_exit.DEADLINE, None, None) for index in unsent
+                                for dispatch in plan[index][1]})
                 break
-            futures = [discovery.submit(("host-exit", start + index), lambda ids=ids: process_exit.ask(command, ids))
-                       for index, (_, ids) in enumerate(group)]
+            group = _host_exit_round(reask, unsent, not sent)
+            reask = [index for index in reask if index not in group]
+            unsent = [index for index in unsent if index not in group]
+            futures = [discovery.submit(("host-exit", len(sent) + offset),
+                                        lambda ids=plan[index][1]: process_exit.ask(command, ids))
+                       for offset, index in enumerate(group)]
             sent.extend(group)
-            for (host, ids), future in zip(group, futures):
+            for index, future in zip(group, futures):
+                host, ids = plan[index]
                 try:
                     answer = future.result()
                     code = process_exit.judge(answer, host=host, runtime=runtime)
@@ -1348,16 +1361,27 @@ def _host_exit_prefetch(discovery, budget, project: Path) -> None:
                     answers[dispatch] = (code, entries.get(dispatch), facts)
                 if stopped is None and code in process_exit.STOPPING:
                     stopped = code  # the first in plan order
-            start += len(group)
+                if code == process_exit.UNVERIFIED:
+                    if index not in reasked and len(sent) + len(reask) + len(unsent) < process_exit.R:
+                        reask = sorted({*reask, index})
+                        reasked.add(index)
+                    else:
+                        unverified += 1
+                elif code not in process_exit.STOPPING:
+                    verified = True  # a `verified: true` answer, usable or not, keeps every later round
+            if stopped is None and not verified and unverified >= process_exit.UNVERIFIED_STOP:
+                stopped = process_exit.UNVERIFIED
             if stopped is not None:
                 break
-        discovery.host_exit_summary.update(requests=len(sent), asked=sum(len(ids) for _, ids in sent))
+        discovery.host_exit_summary.update(requests=len(sent), asked=sum(len(plan[index][1]) for index in set(sent)))
+        if len(sent) > len(set(sent)):  # re-asks sent, present only when any was, so the summary shape stays as before
+            discovery.host_exit_summary["reasked"] = len(sent) - len(set(sent))
     counted, not_asked = set(), set()
     for slot in asking:
         covered = all(dispatch in answers and answers[dispatch][0] is None for dispatch in slot.candidates)
-        # After a stop, in any round, a candidate not asked holds with the stopping fault, as its single query meets a
-        # fault that does not depend on the ids on its own first request; only a set too large to be asked alone keeps
-        # `host_exit_call_limit`, as its single query.
+        # After a stop, in any round, a candidate not asked holds with the stopping code, as its single query meets a
+        # fault or unverified answers that do not depend on the ids on its own first requests; only a set too large to
+        # be asked alone keeps `host_exit_call_limit`, as its single query.
         unasked = (stopped if stopped is not None
                    and len(_host_exit_requests(slot.candidates, hosts)) <= process_exit.R else process_exit.CALL_LIMIT)
         for dispatch, facts in slot.candidates.items():
