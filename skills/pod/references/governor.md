@@ -78,6 +78,19 @@ An ancestor inside the refreshed candidate is not itself a merged head. Missing
 proof, recorded execution evidence and carried rows retain their existing rules;
 an actual merge of the earlier head still settles PASS.
 
+A validation row (workflow dispatch or validation rerun) that `governor-reconcile`
+keeps holding because GitHub no longer lists its run may settle by
+`governor-outcome` with `outcome: UNKNOWN` and `settlement: provider_unretained`,
+with no provider receipt or detail. Pod reads GitHub itself: the workflow file and
+the commit must exist, and then the row's bound run must answer 404, or, with no
+bound run, the workflow's run list on that commit must be empty. "Not retained"
+means deleted, expired or never created; it never says a run existed. The row
+stays UNKNOWN with that proof recorded. Any listed or retained run refuses:
+reconcile it instead. Merge, push, pull-request update, diagnostic, cancellation,
+release and deploy rows never settle this way. An objective whose chain records
+no delivery may then close with those rows preserved UNKNOWN; the closing write
+repeats the reads, and a delivered objective keeps the ordinary rules.
+
 For an earlier merge row lacking `target_binding.commit`, retry the supported
 `governor-outcome PASS` with its exact provider `merge_commit` after fetching.
 Pod first checks its original policy base. It can recover the earlier parent

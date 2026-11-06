@@ -1243,6 +1243,9 @@ def closure_preservation(project: Path, objective: str, state: dict, journal: di
     """
     from .governor import finalization
     rows = [row for row in journal["actions"] if row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")]
+    unretained = _unretained_preservation(project, state, journal, rows, remote=remote, now=now)
+    if unretained is not None:
+        return unretained
     if not rows or any(row["action"]["kind"] != "workflow_dispatch" or not isinstance(row.get("derived_from"), str)
                        for row in rows):
         return None
@@ -1298,6 +1301,73 @@ def closure_preservation(project: Path, objective: str, state: dict, journal: di
         out["preserved"].append({"record": row["record_id"], "kind": "workflow_dispatch", "recorded": row["outcome"],
                                  "outcome": "UNKNOWN", "reason": SUPERSEDED, "pr": superseded[0],
                                  "merged_head": superseded[1]})
+    return out
+
+
+UNRETAINED = "provider_unretained"
+
+
+def _delivery_claimed(project: Path, state: dict, journal: dict) -> bool | None:
+    """Whether the objective or any predecessor it continues records a delivery (R252), read from the records only.
+
+    A delivery record, or an allowed merge row recorded PASS, is a claim. None when the succession chain cannot be
+    read whole or a predecessor's journal cannot be read: an unread member may hold the delivery."""
+    from .governor import _read_journal
+
+    def merged(rows: dict) -> bool:
+        return any(row["decision"] == "ALLOW" and row["action"]["kind"] == "merge" and row["outcome"] == "PASS"
+                   for row in rows["actions"])
+    if (state.get("checkpoint") or {}).get("delivery") is not None or merged(journal):
+        return True
+    lineage, problem = _lineage(project, state)
+    if problem is not None:
+        return None
+    for member in lineage:
+        if (member["raw"].get("checkpoint") or {}).get("delivery") is not None:
+            return True
+        path = member["root"] / "governor.json"
+        try:
+            if path.exists() and merged(_read_journal(path)):
+                return True
+        except (PodError, OSError):
+            return None
+    return False
+
+
+def _unretained_preservation(project: Path, state: dict, journal: dict, rows: list[dict], *, remote=None,
+                             now: datetime | None = None) -> dict | None:
+    """R252 at a closing write: an objective that claims no delivery is not held by its validation rows settled
+    `provider_unretained`, when Pod's reads at that write still prove GitHub retains no run for each.
+
+    None (the C11 rule and today's refusal, unchanged) unless every unsettled row is an UNKNOWN validation row with
+    that settlement, finalization names only validation readbacks and closure, and the objective and its whole
+    succession chain record no delivery. Otherwise the shape of C11's answer: `proof` states the no-delivery fact,
+    `preserved` names each row kept UNKNOWN, and `held` each row a read no longer proves or could not make.
+    """
+    from .governor import finalization
+    from .governor_effects import unretained_proof
+    if not rows or any(row["outcome"] != "UNKNOWN" or not isinstance(row.get("unretained"), dict) for row in rows):
+        return None
+    if any(name not in ("validation_readback", "closure") for name in finalization(state, journal)["remaining"]):
+        return None
+    if _delivery_claimed(project, state, journal) is not False:
+        return None
+    remote = remote if isinstance(remote, _Remote) else _Remote(project, remote)
+    moment = now or datetime.now(timezone.utc)
+    out = {"proof": {"status": "proved", "conditions": [], "basis": "no_delivery_claimed"},
+           "preserved": [], "settles": [], "held": []}
+    for row in rows:
+        try:
+            found = unretained_proof(remote.get(), row, journal, now=moment)
+        except PodError as exc:
+            found = {"reason": f"the provider did not answer ({exc.code})"}
+        if "marker" not in found or found["marker"]["commit"] != row["unretained"]["commit"]:
+            out["held"].append({"record": row["record_id"], "reason": _clip(found.get("reason")
+                                                                            or "its proof names another commit")})
+            continue
+        out["preserved"].append({"record": row["record_id"], "kind": row["action"]["kind"], "recorded": "UNKNOWN",
+                                 "outcome": "UNKNOWN", "reason": UNRETAINED, "workflow": row["action"]["target"],
+                                 "commit": row["unretained"]["commit"]})
     return out
 
 
