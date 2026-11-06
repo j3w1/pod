@@ -10,9 +10,10 @@ from .errors import PodError
 from .util import digest
 
 
-def _source_entries(value: Any, name: str, *, obligation: str | None = None) -> list[dict]:
+def _source_entries(value: Any, name: str, *, obligation: str | None = None,
+                   record: str = "map evidence") -> list[dict]:
     from .obligations import _exact, _path, refuse
-    if not isinstance(value, list) or len(value) > bound("map evidence", "sources", "max_items"):
+    if not isinstance(value, list) or len(value) > bound(record, "sources", "max_items"):
         raise refuse("obligation_invalid", "malformed", f"{name} sources are a bounded list", record='source entries',
                      **({"obligation": obligation} if obligation is not None else {}))
     rows = []
@@ -86,7 +87,7 @@ def _persisted_review_binding(value: Any, ob: dict) -> dict | None:
     for field in ("policy_revision", "environment", "governance"):
         if binding[field] is not None:
             _text(binding[field], field, obligation=ob["id"])
-    _source_entries(binding["sources"], "binding", obligation=ob["id"])
+    _source_entries(binding["sources"], "binding", obligation=ob["id"], record="assurance binding")
     _dependencies(binding["dependencies"], "binding", obligation=ob["id"])
     if not isinstance(binding["definitions"], dict) or not all(isinstance(key, str) and _sha256(value) for key, value in binding["definitions"].items()):
         raise refuse("obligation_invalid", "malformed", "receipt definitions are bound identities", obligation=ob["id"])
