@@ -32,6 +32,9 @@ _INPUT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}=[^\n\r\x00]{0,512}\Z")
 RUN_FIELDS = "databaseId,status,conclusion,createdAt,updatedAt,headSha,url,event,workflowName,attempt,startedAt"
 # A run list asks for one more run than it reads, so a full list says whether it was cut short.
 RUN_LIST_LIMIT = 20
+# A branch's update list reads the same way: one update past the limit says the newest were not all of them.
+UPDATE_LIST_LIMIT = 20
+_SHA1 = re.compile(r"[0-9a-f]{40}\Z")
 # A mutation that has not answered within this many seconds has ended; a read is bounded by half.
 MUTATION_TIMEOUT_S = 120
 PR_FIELDS = "number,url,headRefOid,state,isDraft"
@@ -233,6 +236,14 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
     if (len(argv) == 5 and argv[:2] == ["run", "view"] and _RUN_ID.fullmatch(argv[2])
             and argv[3:] == ["--json", RUN_FIELDS]):
         return True
+    if len(argv) == 2 and argv[0] == "api" and isinstance(argv[1], str):
+        # GitHub's repository activity for one branch, newest first; gh fills the repository from the checkout.
+        prefix = "repos/{owner}/{repo}/activity?ref=refs/heads/"
+        suffix = f"&direction=desc&per_page={UPDATE_LIST_LIMIT + 1}"
+        if argv[1].startswith(prefix) and argv[1].endswith(suffix):
+            branch = argv[1][len(prefix):len(argv[1]) - len(suffix)]
+            return _name(branch) and "&" not in branch and "?" not in branch
+        return False
     if (len(argv) == 7 and argv[:2] == ["run", "view"] and _RUN_ID.fullmatch(argv[2])
             and argv[3] == "--attempt" and _ATTEMPT.fullmatch(argv[4]) and argv[5:] == ["--json", RUN_FIELDS]):
         return True
@@ -905,6 +916,7 @@ class GhPort:
         completed = self._git(argv, mutation=True)
         rejected = None
         pushed = False
+        moved = False
         for line in completed.stdout.splitlines():
             if "\t" not in line:
                 continue
@@ -913,11 +925,13 @@ class GhPort:
                 rejected = line.strip()
             elif flag in " +*=":
                 pushed = True
+                # '=' is "up to date": the remote already held the commit, so this push moved no ref.
+                moved = moved or flag != "="
         if rejected is not None:
             return {"status": "rejected", "detail": rejected[:256], "remote_head": None}
         if completed.returncode or not pushed:
             raise PodError("remote_effect_uncertain", "The push reported neither success nor rejection")
-        return {"status": "pushed", "remote_head": commit}
+        return {"status": "pushed", "remote_head": commit, "ref_changed": moved}
 
     def pull_request(self, *, head: str, base: str) -> dict | None:
         rows = self._gh_json(["pr", "list", "--head", head, "--base", base, "--state", "open",
@@ -979,6 +993,28 @@ class GhPort:
         if not isinstance(rows, list):
             raise PodError("gh_contract", "gh run list returned an unsupported shape")
         return [_normalise_run(row) for row in rows if isinstance(row, dict)]
+
+    def branch_updates(self, *, branch: str) -> list[dict]:
+        """This branch's updates, newest first, from GitHub's repository activity: at most UPDATE_LIST_LIMIT + 1.
+
+        Each row keeps `before` and `after` only as full 40-hex commit ids (None otherwise), its ref, its
+        whole-second timestamp and its activity type. gh fills the repository from the checkout.
+        """
+        if not _name(branch):
+            raise PodError("unsupported_gh_operation", "The GitHub port accepts only known gh operations")
+        rows = self._gh_json(["api", f"repos/{{owner}}/{{repo}}/activity?ref=refs/heads/{branch}"
+                                     f"&direction=desc&per_page={UPDATE_LIST_LIMIT + 1}"])
+        if not isinstance(rows, list):
+            raise PodError("gh_contract", "gh api activity returned an unsupported shape")
+
+        def sha(value: object) -> str | None:
+            return value if isinstance(value, str) and _SHA1.fullmatch(value) else None
+
+        return [{"before": sha(row.get("before")), "after": sha(row.get("after")),
+                 "ref": row.get("ref") if isinstance(row.get("ref"), str) else None,
+                 "timestamp": row.get("timestamp") if isinstance(row.get("timestamp"), str) else None,
+                 "activity_type": row.get("activity_type") if isinstance(row.get("activity_type"), str) else None}
+                for row in rows if isinstance(row, dict)]
 
     def run(self, *, run_id: str, attempt: int | None = None) -> dict:
         """One run, as its latest attempt or exactly the attempt named."""

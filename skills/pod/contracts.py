@@ -254,6 +254,17 @@ TABLE["map evidence"] = definition({
     **{key: text() for key in ("candidate", "policy_revision", "environment", "check", "command", "result", "timestamp", "reference")},
     "sources": items(64, record("source")), "dependencies": items(64, text()),
 }, required=TABLE["evidence"]["required"] | {"definition"})
+# A review binding joins the packet's sources with its source and instruction context
+# entries, so its bound is both packet bounds together (R227). Admission and the review
+# receipt read this one bound; ordinary evidence keeps the map evidence bound above.
+TABLE["assurance binding"] = definition({
+    **{key: {**text(), "nullable": True} for key in ("policy_revision", "environment", "governance")},
+    "dependencies": items(64, text()),
+    "sources": items(TABLE["packet"]["fields"]["sources"]["max_items"]
+                     + TABLE["packet"]["fields"]["context"]["max_items"], record("source")),
+    "definitions": {"type": "object", "form": "served obligation ids mapped to bound definition identities"},
+}, ("policy_revision", "environment", "dependencies", "sources", "governance", "definitions"), stored_only=True,
+   form="stored by admission and copied into a completed review's receipt; never caller input")
 TABLE["acceptance request"] = definition({"obligation": ident(), **TABLE["acceptance"]["fields"]},
                                          ("obligation", *TABLE["acceptance"]["required"]))
 TABLE["verification"] = definition({"dependencies": {**items(64, text()), "unique": True},

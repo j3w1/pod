@@ -220,6 +220,18 @@ class AllowlistTests(unittest.TestCase):
             with self.subTest(refused=refused[:4]):
                 self.assertFalse(gh_allowed(refused))
 
+    def test_branch_activity_shape_is_exact(self):
+        activity = "repos/{owner}/{repo}/activity?ref=refs/heads/%s&direction=desc&per_page=21"
+        self.assertTrue(gh_allowed(["api", activity % "agent/x"]))
+        for refused in (["api", activity % "agent/x", "--paginate"], ["api", activity % "agent/../x"],
+                        ["api", activity % "agent/x&per_page=100"], ["api", activity % "-x"],
+                        ["api", activity.replace("per_page=21", "per_page=20") % "agent/x"],
+                        ["api", activity.replace("desc", "asc") % "agent/x"],
+                        ["api", activity.replace("{owner}/{repo}", "acme/widgets") % "agent/x"],
+                        ["api", "--method", "POST", activity % "agent/x"]):
+            with self.subTest(refused=refused):
+                self.assertFalse(gh_allowed(refused))
+
     def test_no_process_starts_for_a_refused_shape(self):
         port = GhPort(Path("."))
         with patch("pod.github.subprocess.run", side_effect=AssertionError("process started")), \
@@ -251,8 +263,12 @@ class PortReadingTests(unittest.TestCase):
     def test_push_is_read_from_porcelain_output(self):
         with self.run_with([completed(f" \t{COMMIT}:refs/heads/agent/x\t{OLD[:7]}..{COMMIT[:7]}\nDone\n")]):
             self.assertEqual(self.port.push(remote="origin", branch="agent/x", commit=COMMIT, expected=OLD),
-                             {"status": "pushed", "remote_head": COMMIT})
+                             {"status": "pushed", "remote_head": COMMIT, "ref_changed": True})
         self.assertEqual(self.commands[-1][2], f"--force-with-lease=refs/heads/agent/x:{OLD}")
+        # '=' is up to date: the remote already held the commit, so the push moved no ref (R115).
+        with self.run_with([completed(f"=\t{COMMIT}:refs/heads/agent/x\t[up to date]\nDone\n")]):
+            self.assertEqual(self.port.push(remote="origin", branch="agent/x", commit=COMMIT, expected=None),
+                             {"status": "pushed", "remote_head": COMMIT, "ref_changed": False})
         with self.run_with([completed(f"!\t{COMMIT}:refs/heads/agent/x\t[rejected] (stale info)\nDone\n", 1)]):
             self.assertEqual(self.port.push(remote="origin", branch="agent/x", commit=COMMIT, expected=None)["status"],
                              "rejected")
@@ -263,6 +279,29 @@ class PortReadingTests(unittest.TestCase):
         with self.run_with([PodError("remote_effect_uncertain", "timeout")]):
             with self.assertRaises(PodError):
                 self.port.push(remote="origin", branch="agent/x", commit=COMMIT, expected=None)
+
+    def test_branch_updates_are_read_from_repository_activity(self):
+        rows = json.dumps([{"before": OLD, "after": COMMIT, "ref": "refs/heads/agent/x", "id": 1,
+                            "timestamp": "2026-09-21T00:00:00Z", "activity_type": "push"},
+                           {"before": "0" * 40, "after": "short", "ref": "refs/heads/agent/x",
+                            "timestamp": 7, "activity_type": "branch_creation"}, "not a row"])
+        with self.run_with([completed(rows)]):
+            updates = self.port.branch_updates(branch="agent/x")
+        self.assertEqual(self.commands[-1],
+                         ["api", "repos/{owner}/{repo}/activity?ref=refs/heads/agent/x&direction=desc&per_page=21"])
+        self.assertEqual(updates, [
+            {"before": OLD, "after": COMMIT, "ref": "refs/heads/agent/x", "timestamp": "2026-09-21T00:00:00Z",
+             "activity_type": "push"},
+            {"before": "0" * 40, "after": None, "ref": "refs/heads/agent/x", "timestamp": None,
+             "activity_type": "branch_creation"}])
+        with self.run_with([completed('{"message": "Not Found"}')]):
+            with self.assertRaises(PodError) as shape:
+                self.port.branch_updates(branch="agent/x")
+            self.assertEqual(shape.exception.code, "gh_contract")
+        with self.run_with([completed("", 1)]):
+            with self.assertRaises(PodError) as unread:
+                self.port.branch_updates(branch="agent/x")
+            self.assertEqual(unread.exception.code, "remote_read_failed")
 
     def test_branch_head_and_pull_requests(self):
         with self.run_with([completed(f"{COMMIT}\trefs/heads/agent/x\n")]):

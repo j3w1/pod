@@ -158,9 +158,10 @@ class NoCrossRunCompositionTests(ProofCase):
     def test_the_github_port_gains_no_job_level_read(self):
         members = {name for name, value in vars(GitHubPort).items()
                    if inspect.isfunction(value) and not name.startswith("_")}
-        # R118 adds one read, pull_requests, for carried rows' pull-request readback; still no job-level read.
+        # R118 adds one read, pull_requests, for carried rows' pull-request readback, and R115 one read of branch
+        # activity, branch_updates, for a publication that moved no ref; still no job-level read.
         self.assertEqual(members, {"branch_head", "push", "pull_request", "pull_requests", "open_pull_request",
-                                   "dispatch", "runs", "run", "rerun", "cancel"})
+                                   "dispatch", "runs", "run", "rerun", "cancel", "branch_updates"})
         self.assertFalse([name for name in dir(GhPort) if "job" in name.lower()])
         from pod.github import RUN_FIELDS
         self.assertNotIn("jobs", RUN_FIELDS.split(","))

@@ -418,6 +418,7 @@ class DetectionTableTests(HandoffCase):
                         before = case.snapshot(); calls = len(case.mutations)
                         verdict = case.status()["owner_handoff"]
                         self.assertEqual(verdict["unverifiable_peers"], ["hold-peer"])
+                        self.assertIn("for peer hold-peer in acme/example.", verdict["message"])  # pod#251
                         self.assertIn("hold-peer", case.status(text=True))
                         self.assertNotIn("run-use --id", case.status(text=True))
                         decision = case.decision()
