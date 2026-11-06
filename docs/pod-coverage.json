@@ -11905,6 +11905,31 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A969",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_a_target_effects_or_other_branch_query_never_asks_about_it",
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_its_recorded_branch_still_asks_and_holds_until_counted",
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_an_unrecovered_location_stays_a_candidate_and_holds",
+        "tests.test_admission_host_exit_scope.FactTests.test_a_recorded_placement_is_judged_exactly"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A970",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_another_records_binding_read_first_never_replaces_its_placement"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A899",
       "required_evidence": [
         "unit",
