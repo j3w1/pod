@@ -12461,6 +12461,82 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1039",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_merge_pass_settles_legacy_pending_and_closure_proceeds_without_provider",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_fast_forward_replacement_keeps_candidate_ancestry_distinct_from_target_heads",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_squash_replacement_settles_earlier_unexecuted_merge"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1040",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_merge_supersedence.MergeSupersedenceTests.test_actual_earlier_head_merge_remains_pass",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1041",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_new_merge_defers_with_settlement_next_action_then_allows",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_unknown_prior_names_failed_and_exact_request",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_carried_pending_prior_keeps_existing_admission_rule"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1042",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_merge_supersedence.MergeSupersedenceTests.test_legacy_unknown_settles_without_erasing_original_detail",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1043",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_explicit_superseded_outcome_is_idempotent",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_reconcile_uses_local_replacement_proof_and_repeats_without_effect",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_explicit_superseded_preserves_recorded_detail_and_evidence"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1044",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_other_pr_is_not_a_replacement",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_recorded_execution_evidence_holds",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_carried_row_keeps_its_readback_rule",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_unverified_result_holds",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_no_newer_verified_merge_cannot_be_superseded",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_earlier_merged_head_in_target_history_holds",
+        "tests.test_merge_supersedence.MergeSupersedenceTests.test_malformed_superseded_replacement_is_not_readable"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1045",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_merge_supersedence.MergeSupersedenceTests.test_guidance_explains_refresh_and_recovery",
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A1053",
       "required_evidence": [
         "unit"
