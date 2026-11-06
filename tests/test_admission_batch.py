@@ -381,6 +381,11 @@ class WorkerFactTests(BatchCase):
         rows.append(abandoned)
         for row in rows:
             row["terminalState"] = "retained"
+        context = base.ReviewCorrectionTests.writer(self, dispatch="context-only")  # a settled context-only Dispatch
+        context.update(workerState="unsupervised", dispatchStatus="completed", resource=None, terminalState="released")
+        context["projection"].update(workspace=None, stage={"worker": "unsupervised", "dispatch": "completed"},
+                                     outcome="succeeded")
+        rows.append(context)
         self.native.fleet = fleet_model(rows)
         shapes = [{"worktree": str(self.project)}, {"branch": "main"}, {}, {"effects": ["deploy:target"]}]
         derived = []

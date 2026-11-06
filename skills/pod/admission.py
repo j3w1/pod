@@ -3026,7 +3026,7 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             shown = workers.get(dispatch, skipped.get(dispatch))
             if shown is None and dispatch in context_only:
                 try:
-                    shown = _worker_fact(context_only[dispatch])
+                    shown = _shown(context_only[dispatch])
                 except PodError:
                     shown = {"run": context_only[dispatch].get("runId"), "worktree": None}
             if shown is None or shown["run"] not in run_sources:
