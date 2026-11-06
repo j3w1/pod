@@ -56,6 +56,23 @@ bound files against the delivered candidate's Git tree, so
 later work in a shared worktree does not invalidate it; keep the checkpoint candidate on the delivered one
 and leave the worktree where it is.
 
+Before taking a merge decision after refreshing a candidate, settle an earlier
+unexecuted ALLOW for the same PR while the PR is still open: record
+`governor-outcome CANCELED` with detail explaining that it was never executed, or
+FAILED when its existing checks support that outcome. A new decision for another
+head of that PR defers with `prior_merge_unsettled` until this is done.
+
+For earlier histories that already contain both decisions, recording the newer
+merge PASS also settles an earlier unexecuted decision as `superseded`. The row
+names its replacement decision and merged result in `superseded_by`; it is no
+longer pending and does not hold closure. `governor-outcome superseded` and
+`governor-reconcile` also recover such a row without provider readback, using the
+later verified PASS for the same PR and target and local Git proof that the old
+head was never the merge head. Fetch first so the target shows that result.
+An ancestor inside the refreshed candidate is not itself a merged head. Missing
+proof, recorded execution evidence and carried rows retain their existing rules;
+an actual merge of the earlier head still settles PASS.
+
 For an earlier merge row lacking `target_binding.commit`, retry the supported
 `governor-outcome PASS` with its exact provider `merge_commit` after fetching.
 Pod first checks its original policy base. It can recover the earlier parent

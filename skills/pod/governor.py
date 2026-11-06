@@ -44,7 +44,7 @@ EXECUTABLE_KINDS = ("push", "pr_update", "workflow_dispatch", "validation_rerun"
 # The kinds a successor's claim may carry from a lost coordinator (R118): each one Pod can read back.
 CARRIED_KINDS = (*EXECUTABLE_KINDS, "merge")
 DECISIONS = ("ALLOW", "REUSE", "DEFER")
-OUTCOMES = ("pending", "PASS", "FAILED", "UNKNOWN", "CANCELED")
+OUTCOMES = ("pending", "PASS", "FAILED", "UNKNOWN", "CANCELED", "superseded")
 CLASSES = ("authorization", "correctness", "efficiency")
 FAILURE_CLASSES = ("code_defect", "remote_only", "transient", "external")
 PREFLIGHT_STATUSES = ("PASS", "FAILED", "UNAVAILABLE")
@@ -92,6 +92,10 @@ NEXT_ACTIONS = {
     "repeat_diagnostic": "this probe already ran unchanged; change the check or record the answer",
     "publication_unsettled": "record or reconcile the pending publication before requesting this validation",
     "exception_grant_required": "bind the exception to a current personal efficiency_exception grant",
+    "prior_merge_unsettled": ("before taking a new merge decision, settle the earlier decision while the PR is open: "
+                              "record governor-outcome CANCELED with detail that it was never executed, or FAILED "
+                              "when supported; if a newer decision already merged, record superseded on the earlier "
+                              "row or call governor-reconcile"),
     "carried_row": "read the carried row back with governor-reconcile; a carried row is never cancelled",
 }
 
@@ -1172,6 +1176,17 @@ def _check_unresolved(action: dict, journal: dict, logical_key: str,
                       project: Path | None, binding: dict | None,
                       reasons: list[dict], warnings: list[dict]) -> tuple[list[str], str]:
     # 4. Supersedence and unresolved prior effects in this unit.
+    if kind == "merge" and type(action.get("pr")) is int:
+        prior = next((row for row in journal["actions"]
+                      if row["decision"] == "ALLOW" and row["action"]["kind"] == "merge"
+                      and row["outcome"] in ("pending", "UNKNOWN")
+                      and row["action"].get("pr") == action["pr"]
+                      and row["action"]["target"] == action["target"]
+                      and row.get("commit") != (binding or {}).get("commit")), None)
+        if prior is not None:
+            _reason(reasons, "correctness", "prior_merge_unsettled",
+                    f"earlier merge decision {prior['record_id']} for PR #{action['pr']} is unsettled; "
+                    + NEXT_ACTIONS["prior_merge_unsettled"])
     for row in journal["actions"]:
         if (row["action"]["unit"] == action["unit"] and row["decision"] == "ALLOW"
                 and row["outcome"] == "UNKNOWN" and row["logical_key"] != logical_key
@@ -1637,7 +1652,7 @@ def _validate_provider(value: object, *, nested: bool = True) -> dict | None:
 
 def _settle(journal: dict, row: dict, *, outcome: str, provider: dict | None, evidence: list[str],
             detail: str | None, moment: str) -> None:
-    # pending and UNKNOWN are open states; PASS, FAILED and CANCELED are final and exact.
+    # pending and UNKNOWN are open states; every other outcome is final and exact.
     if row["outcome"] not in ("pending", "UNKNOWN") and row["outcome"] != outcome:
         raise PodError("outcome_conflict", "A different outcome was already recorded")
     if row["outcome"] in ("pending", "UNKNOWN") and row["outcome"] != outcome:
@@ -1904,6 +1919,72 @@ def _fetch_first(row: dict) -> str:
     return f"fetch first (git fetch {remote} {base}) so the target ref shows the merge"
 
 
+def _superseding_merge(project: Path, state: dict, journal: dict, row: dict) -> dict | None:
+    """Local proof that a later decision, rather than this head, merged this objective's PR."""
+    from .governance import verify_merge_result, MAX_RESULT_SCAN
+    from .ledger import map_of
+    action = row["action"]
+    if (action["kind"] != "merge" or row["decision"] != "ALLOW"
+            or row["outcome"] not in ("pending", "UNKNOWN")
+            or type(action.get("pr")) is not int or isinstance(row.get("carried_from"), dict)
+            or _execution_signs(row, journal)):
+        return None
+    mapped = map_of(state)
+    if mapped is None:
+        return None
+    seen = False
+    for newer in journal["actions"]:
+        if newer["record_id"] == row["record_id"]:
+            seen = True
+            continue
+        if (not seen or newer["decision"] != "ALLOW" or newer["outcome"] != "PASS"
+                or newer["action"]["kind"] != "merge" or isinstance(newer.get("carried_from"), dict)
+                or newer["action"].get("pr") != action["pr"]
+                or newer["action"]["target"] != action["target"]
+                or newer.get("commit") == row.get("commit")
+                or not (newer["receipt"].get("provider") or {}).get("merge_commit")):
+            continue
+        old_target, target = row.get("target_binding") or {}, newer.get("target_binding") or {}
+        if (not old_target or any(old_target.get(key) != target.get(key) for key in ("remote", "base", "ref"))):
+            continue
+        try:
+            verified = verify_merge_result(project, newer, journal["units"].get(newer["action"]["unit"]),
+                                           mapped["governance"])
+        except PodError:
+            continue
+        old_head = row.get("commit")
+        parent = target.get("commit")
+        old_parent = old_target.get("commit") or (row.get("governance_binding") or {}).get("base")
+        if (not old_head or not parent or not old_parent
+                or gitio.is_ancestor(project, old_parent, parent) is not True
+                or gitio.is_ancestor(project, old_head, parent) is not False):
+            continue
+        # Scan only target history: A being an ancestor inside B is expected after a refresh.
+        # A first-parent commit or an actual merge head in that history proves A did execute.
+        history = gitio.read(project, ["rev-list", "--first-parent", "--parents",
+                                      f"--max-count={MAX_RESULT_SCAN + 1}", verified["result"], "^" + old_parent])
+        lines = history.stdout.splitlines() if history is not None and history.returncode == 0 else []
+        if (not lines or len(lines) > MAX_RESULT_SCAN
+                or any(old_head == words[0] or old_head in words[2:]
+                       for line in lines if (words := line.split()))):
+            continue
+        return {"record_id": newer["record_id"], "merge_commit": verified["result"]}
+    return None
+
+
+def _settle_superseded_merges(project: Path, state: dict, journal: dict, *, moment: str) -> list[dict]:
+    """Settle earlier unexecuted merge rows without a provider call; retain their original receipts."""
+    settled = []
+    for row in journal["actions"]:
+        replacement = _superseding_merge(project, state, journal, row)
+        if replacement is not None:
+            row["superseded_by"] = replacement
+            _settle(journal, row, outcome="superseded", provider=None, evidence=[], detail=None, moment=moment)
+            settled.append({"record_id": row["record_id"], "status": "superseded", "action": "superseded",
+                            "superseded_by": dict(replacement)})
+    return settled
+
+
 def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome: str, *,
                    provider: dict | None, evidence: list[str], detail: str | None, now: datetime) -> str | None:
     """Refuse an outcome its evidence does not support; return the provider read it still needs, if any.
@@ -1916,6 +1997,15 @@ def _check_outcome(project: Path, state: dict, journal: dict, row: dict, outcome
     """
     record_id = row["record_id"]
     cls = _outcome_class(row)
+    if outcome == "superseded":
+        replacement = _superseding_merge(project, state, journal, row)
+        if replacement is None or provider is not None:
+            raise _outcome_refusal("supersedence_unverified", "No later verified merge proves this decision was "
+                                   "superseded without executing its head", "settle the newer same-PR merge PASS "
+                                   "first; retain uncertain or executed rows under their existing settlement rules",
+                                   record_id)
+        row["superseded_by"] = replacement
+        return None
     if outcome == "UNKNOWN":
         if provider is not None and cls in ("performed", "reservation"):
             raise _outcome_refusal("receipt_from_readback", "This row's provider receipt comes only from Pod's own "
@@ -2063,7 +2153,7 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
     bounded_text(owner, name="owner")
     bounded_text(record_id, name="record_id", limit=128)
     if outcome not in OUTCOMES or outcome == "pending":
-        raise PodError("invalid_outcome", "Outcome must be PASS, FAILED, UNKNOWN or CANCELED")
+        raise PodError("invalid_outcome", "Outcome must be PASS, FAILED, UNKNOWN, CANCELED or superseded")
     provider_record = _validate_provider(provider)
     references = list(evidence or [])
     if len(references) > 16:
@@ -2117,6 +2207,8 @@ def record_outcome(project: Path, objective: str, *, owner: str, record_id: str,
             snapshot = deepcopy(row)
         answer = _readback_answer(project, snapshot, journal, outcome, port, clock)
     result = {"status": "recorded", "record_id": record_id, "outcome": row["outcome"], "receipt": row["receipt"]}
+    if "superseded_by" in row:
+        result["superseded_by"] = deepcopy(row["superseded_by"])
     if "parent_basis" in row:
         result["parent_basis"] = deepcopy(row["parent_basis"])
     if row["action"]["kind"] == "merge" and row["outcome"] == "PASS":
@@ -2129,12 +2221,17 @@ def _merged_readback(project: Path, objective: str, *, owner: str, row: dict, po
                      now: datetime) -> list[dict]:
     """Read back every unsettled effect of a merged unit; a read that fails is kept as that attempt."""
     from .governor_effects import _note_readback, _port, reconcile
-    journal = _read_journal(_record_path(project, objective))
+    with _lock(_path(project, objective)):
+        state = _owned_state(project, objective, owner, _path(project, objective))
+        journal = _read_journal(_record_path(project, objective))
+        superseded = _settle_superseded_merges(project, state, journal, moment=now.isoformat())
+        if superseded:
+            _write_journal(_record_path(project, objective), journal)
     rows = [other for other in journal["actions"]
             if other["action"]["unit"] == row["action"]["unit"] and other["decision"] == "ALLOW"
             and other["outcome"] in ("pending", "UNKNOWN") and other["action"]["kind"] in EXECUTABLE_KINDS]
     remote = port
-    attempts = []
+    attempts = list(superseded)
     for other in rows:
         try:
             remote = remote or _port(project)
