@@ -12084,6 +12084,33 @@
         "tests.test_window_continuation.DiscoveryTests.test_run_shared_names_open_peers_and_unproven_closures_apart"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A976",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_cleanup_plan.CleanupReflogScaleTests.test_stale_auto_merge_is_a_recovery_root_and_plans_normally",
+        "tests.test_cleanup_plan.CleanupReflogScaleTests.test_auto_merge_tree_outside_every_surviving_ref_is_unique",
+        "tests.test_cleanup_plan.CleanupReflogScaleTests.test_merge_head_with_auto_merge_stays_protected_and_names_the_merge",
+        "tests.test_cleanup_plan.CleanupReflogScaleTests.test_every_operation_in_progress_is_named",
+        "tests.test_cleanup_plan.CleanupReflogScaleTests.test_unknown_administrative_entry_is_still_held"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A977",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_removed_worker_resources_read_absent",
+        "tests.test_cleanup_plan.CleanupWorkerTests.test_removed_worker_checkout_still_listed_by_orca_or_git_is_not_absent"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

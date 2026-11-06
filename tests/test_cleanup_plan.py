@@ -926,20 +926,76 @@ class CleanupReflogScaleTests(unittest.TestCase):
                          {key: value for key, value in after["identity"]["git"].items() if key != "sha256"})
         self.assertNotIn("fixture subject", repr(resources))
 
-    def unsupported_admin(self, name):
+    def admin_entry(self, name, value=None, *, directory=False):
         file = self.admin / name
-        file.write_text(self.case.base + "\n")
-        self.addCleanup(file.unlink)
-        row = self.row()
+        if directory:
+            file.mkdir()
+            self.addCleanup(file.rmdir)
+        else:
+            file.write_text((value or self.case.base) + "\n")
+            self.addCleanup(file.unlink)
+        return self.row()
+
+    def test_unknown_administrative_entry_is_still_held(self):
+        row = self.admin_entry("UNKNOWN_HEAD")
         self.assertIsNone(row["delete_argv"])
         self.assertFalse(row["identity"]["git"]["complete"])
-        self.assertIn("unsupported administrative roots", " ".join(row["reasons"]))
+        self.assertIn("Resource has unsupported administrative roots", row["reasons"])
 
-    def test_unknown_rebase_head_is_still_held(self):
-        self.unsupported_admin("REBASE_HEAD")
+    def test_stale_auto_merge_is_a_recovery_root_and_plans_normally(self):
+        # pod#125 PoD#1: a completed operation's AUTO_MERGE (here the candidate's own tree) holds nothing.
+        tree = git(self.case.child, "rev-parse", "HEAD^{tree}")
+        captured, diagnostic = [], cleanup_archives.material_diagnostic
+        def inspect(facts):
+            captured.append(deepcopy(facts))
+            return diagnostic(facts)
+        with patch.object(cleanup_archives, "material_diagnostic", side_effect=inspect):
+            row = self.admin_entry("AUTO_MERGE", tree)
+        self.assertEqual(row["class"], "integrated", row["reasons"])
+        self.assertTrue(row["identity"]["git"]["complete"])
+        self.assertIsNotNone(row["delete_argv"])
+        self.assertEqual(row["reasons"], [])
+        facts = next(item for item in captured if item.get("kind") == "worktree")
+        self.assertEqual(facts["observed_roots"]["AUTO_MERGE:0"], tree)
+        self.assertIn("AUTO_MERGE", facts["metadata"])
+        self.assertEqual(facts["additional_roots"], [])
 
-    def test_unknown_auto_merge_is_still_held(self):
-        self.unsupported_admin("AUTO_MERGE")
+    def test_auto_merge_tree_outside_every_surviving_ref_is_unique(self):
+        # A tree with one blob no commit reaches: a conflicted merge's unrecorded result.
+        blob = subprocess.run(["git", "-C", str(self.case.child), "hash-object", "-w", "--stdin"],
+                              input="conflict-only result\n", capture_output=True, text=True, check=True).stdout.strip()
+        tree = subprocess.run(["git", "-C", str(self.case.child), "mktree"], input=f"100644 blob {blob}\tx\n",
+                              capture_output=True, text=True, check=True).stdout.strip()
+        row = self.admin_entry("AUTO_MERGE", tree)
+        self.assertEqual(row["class"], "unique")
+        self.assertIn("worktree has additional local recovery roots", row["reasons"])
+
+    def test_merge_head_with_auto_merge_stays_protected_and_names_the_merge(self):
+        # pod#125 PoD#1: a merge in progress leaves AUTO_MERGE too; MERGE_HEAD still protects the worktree.
+        (self.admin / "AUTO_MERGE").write_text(git(self.case.child, "rev-parse", "HEAD^{tree}") + "\n")
+        self.addCleanup((self.admin / "AUTO_MERGE").unlink)
+        row = self.admin_entry("MERGE_HEAD")
+        self.assertEqual(row["class"], "protected")
+        self.assertIsNone(row["delete_argv"])
+        self.assertFalse(row["identity"]["git"]["complete"])
+        self.assertIn("Resource has an operation in progress: MERGE_HEAD", row["reasons"])
+
+    def test_every_operation_in_progress_is_named(self):
+        repository = cleanup_archives.repository_observation(self.case.project)
+        ref = "refs/heads/objective"
+        tip = git(self.case.project, "rev-parse", ref)
+        for name, directory in (("REBASE_HEAD", False), ("CHERRY_PICK_HEAD", False), ("REVERT_HEAD", False),
+                                ("BISECT_LOG", False), ("MERGE_MSG", False), ("rebase-merge", True),
+                                ("rebase-apply", True), ("sequencer", True)):
+            with self.subTest(name=name):
+                entry = self.admin / name
+                entry.mkdir() if directory else entry.write_text(self.case.base + "\n")
+                try:
+                    facts = cleanup_archives.resource_observation(self.case.child, ref, tip, repository)
+                finally:
+                    entry.rmdir() if directory else entry.unlink()
+                self.assertFalse(facts["complete"])
+                self.assertEqual(facts["holds"], ["Resource has an operation in progress: " + name])
 
 
 
@@ -1175,6 +1231,65 @@ class CleanupWorkerTests(KernelCase):
     def selected_entry(self, **request):
         return cleanup_entry(self, worker={"dispatch": self.dispatch},
                              observe={"kind": "worktree", "name": str(self.child)}, **request)
+
+    def ordinary(self, *, listed=False):
+        """The objective's whole plan with Orca answering as it does for a removed or a kept worktree."""
+        def read(argv, **kwargs):
+            if argv[:2] == ["worktree", "show"] and not Path(argv[3].removeprefix("path:")).exists() and not listed:
+                raise PodError("orca_read_failed", "Orca read did not succeed", {"native_code": "selector_not_found"})
+            return self.orca_read(argv, **kwargs)
+        with repository_reads():
+            return plan(self.project, "objective", orca_reader=read, native_port=self.port)
+
+    def remove_worker(self, *, branches=True):
+        git(self.project, "worktree", "remove", "--force", str(self.child))
+        if branches:
+            git(self.project, "update-ref", "-d", "refs/heads/worker")
+            git(self.project, "update-ref", "-d", "refs/remotes/origin/worker")
+            git(self.root / "origin.git", "update-ref", "-d", "refs/heads/worker")
+
+    def test_removed_worker_resources_read_absent(self):
+        # pod#125 PoD#2: what the coordinator already removed is absent, with no argv and no protection reason.
+        self.remove_worker()
+        result = self.ordinary()
+        for name, current in ((f"worktree:{self.child}", {"status": "absent", "path": str(self.child),
+                                                           "ref": None, "oid": None}),
+                              ("local_branch:refs/heads/worker", {"status": "absent", "path": None,
+                                                                  "ref": "refs/heads/worker", "oid": None}),
+                              ("remote_branch:origin/worker", {"status": "absent", "path": None,
+                                                               "ref": "refs/heads/worker", "oid": None})):
+            with self.subTest(resource=name):
+                row = next(row for row in result["resources"] if row["id"] == name)
+                self.assertEqual((row["class"], row["reasons"], row["delete_argv"], row["archive_argv"]),
+                                 ("absent", [], None, None))
+                self.assertEqual(row["identity"]["current"], current)
+                self.assertNotIn(name, result["standing_authorization"]["asks"])
+                self.assertNotIn(name, result["standing_authorization"]["covers"])
+        branch = next(row for row in result["resources"] if row["id"] == "local_branch:refs/heads/worker")
+        self.assertEqual(branch["identity"]["ref_storage"]["current"]["status"], "absent")
+        main = next(row for row in result["resources"] if row["id"] == f"worktree:{self.project}")
+        self.assertEqual(main["class"], "protected")
+
+    def test_removed_worker_checkout_still_listed_by_orca_or_git_is_not_absent(self):
+        self.remove_worker(branches=False)
+        listed = self.ordinary(listed=True)
+        row = next(row for row in listed["resources"] if row["id"] == f"worktree:{self.child}")
+        self.assertEqual(row["class"], "protected")
+        self.assertIsNone(row["delete_argv"])
+        self.assertIn("the Git checkout is gone but Orca still lists this worktree", row["reasons"])
+        # The branch the removal kept is a real resource and keeps its existing classification.
+        kept = next(row for row in listed["resources"] if row["id"] == "local_branch:refs/heads/worker")
+        self.assertEqual(kept["class"], "protected")
+        self.assertIn("creation by this objective is unproven", kept["reasons"])
+        # A checkout Git still registers (missing directory, not pruned) is no absence either.
+        git(self.project, "worktree", "add", "-q", str(self.child), "worker")
+        self.addCleanup(git, self.project, "worktree", "prune")
+        for path in sorted(self.child.rglob("*"), reverse=True):
+            path.rmdir() if path.is_dir() and not path.is_symlink() else path.unlink()
+        self.child.rmdir()
+        registered = next(row for row in self.ordinary()["resources"] if row["id"] == f"worktree:{self.child}")
+        self.assertEqual(registered["class"], "protected")
+        self.assertIn("worktree binding is unavailable or foreign", registered["reasons"])
 
     def test_reported_released_worker_unforced_entry_preserves_unrelated_real_stash(self):
         self.stash()

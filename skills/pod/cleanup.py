@@ -449,6 +449,44 @@ def _remaining_local_ref(project: Path, objective: str, state: dict, ref: str,
         return facts
 
 
+def _absent_worktree(path_text: str, orca_reader) -> tuple[dict | None, str | None]:
+    """R94/pod#125: a recorded checkout that Git no longer registers (the caller's complete inventory),
+    whose path is positively missing and that Orca no longer lists is absent. Any other answer is no absence.
+    Returns the current fact when absent, else a hold reason when Orca alone still lists it."""
+    from .cleanup_observations import reliable, slot
+    path = Path(path_text)
+    if not path.is_absolute() or str(path) != path_text or ".." in path.parts or path == path.parent:
+        return None, None
+    fact, _ = slot(path, path.parent, directory=True)
+    if (fact["status"] != "absent" or not fact["ancestors"]
+            or not all(reliable(value) for value in fact["ancestors"])):
+        return None, None
+    try:
+        shown = orca_reader(["worktree", "show", "--worktree", "path:" + path_text, "--json"])
+    except PodError as exc:
+        if exc.code == "orca_read_failed" and (exc.detail or {}).get("native_code") == "selector_not_found":
+            return {"status": "absent", "path": path_text, "ref": None, "oid": None}, None
+        return None, None
+    native = ((shown or {}).get("result") or {}).get("worktree") if isinstance(shown, dict) else None
+    if isinstance(native, dict) and native.get("path") == path_text:
+        return None, "the Git checkout is gone but Orca still lists this worktree"
+    return None, None
+
+
+def _absent_ref(project: Path, ref: str, repository: dict) -> dict | None:
+    """A recorded local branch whose logical ref is positively and stably absent in files storage."""
+    from .cleanup_observations import ref_storage
+    if not cleanup_archives._ref(ref) or not repository.get("complete"):
+        return None
+    storage = ref_storage(project, ref, repository)
+    current = storage["current"]
+    if (storage["status"] != "observed" or storage["freshness"]["stable"] is not True
+            or current["status"] != "absent" or current["oid"] is not None or current["symref"]
+            or storage["loose"]["status"] != "absent" or storage["reflog"]["status"] != "absent"):
+        return None
+    return storage
+
+
 def _resource(kind: str, name: str, identity: dict, classification: str, reasons: list[str],
               *, delete_argv: list[str] | None = None, archive_argv: list[str] | None = None,
               archive_verified: bool = False, archive_observations: list[dict] | None = None) -> dict:
@@ -560,6 +598,9 @@ def _expect_change(expect: object, resources: list[dict], target: dict) -> tuple
 def _authorization(state: dict, resources: list[dict], *, completed: bool) -> dict:
     from .standing import cleanup_projection
     result = cleanup_projection(state, resources)
+    # An absent resource needs no deletion, so it is neither covered nor asked about (pod#125).
+    result["asks"] = [name for name in result["asks"]
+                      if not any(row["id"] == name and row["class"] == "absent" for row in resources)]
     if completed:
         # This default is independent of yolo. Its exclusions/decision stay unchanged;
         # protected facts still hold and only an actually guarded command is covered.
@@ -812,7 +853,13 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         shared = sorted(other for other in checkouts.get(branch_ref, []) if other != path_text)
         git_facts = git_resources[path_text]
         reasons, classification = [], "integrated"
-        if not path.is_absolute() or path.is_symlink() or row is None or not path.is_dir():
+        current, listed = _absent_worktree(path_text, orca_reader) if row is None else (None, None)
+        if current is not None:
+            # Recorded, unregistered and positively missing: nothing remains to protect or remove.
+            classification = "absent"
+        elif listed is not None:
+            classification, reasons = "protected", [listed]
+        elif not path.is_absolute() or path.is_symlink() or row is None or not path.is_dir():
             classification, reasons = "protected", ["worktree binding is unavailable or foreign"]
         elif successor is not None and (successor_paths is None or path_text in successor_paths):
             classification, reasons = "protected", [f"recorded by successor objective {successor}"]
@@ -848,7 +895,7 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                 classification, reasons = "unique", ["branch has commits outside the observed target"]
             elif git_facts["additional_roots"]:
                 classification, reasons = "unique", ["worktree has additional local recovery roots"]
-        if worker_holds:
+        if worker_holds and classification != "absent":
             classification, reasons = "protected", reasons + worker_holds
         ref = branch_ref if isinstance(branch_ref, str) else None
         observed_archives = archive_facts(ref, git_facts)
@@ -865,7 +912,8 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         resources.append(_resource("worktree", path_text,
                                    {"path": path_text, "branch": branch_ref, "tip": tip,
                                     "terminals": terminals, "shared_with": shared, "git": git_facts,
-                                    **({"worker": worker_facts} if selected is not None else {})}, classification, reasons,
+                                    **({"worker": worker_facts} if selected is not None else {}),
+                                    **({"current": current} if current is not None else {})}, classification, reasons,
                                    delete_argv=((worktree_argv(project, path_text, completed=completed)
                                                  if completed or known_worker else
                                                  ["orca", "worktree", "rm", "--worktree", "path:" + path_text, "--json"])
@@ -884,13 +932,19 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         checked_out = sorted(checkouts.get(ref, []))
         # The completed-only default selects current recorded branch bindings;
         # ordinary/worker admission still requires the present associated worktree.
-        remaining = completed and selected is None and not associated
+        guarded = branch in ("main", default_branch) or ref == target_ref or ref in target_branches
+        # A recorded branch that is gone from Git, with no checkout, is absent (pod#125).
+        absent = (_absent_ref(project, ref, repository)
+                  if tip is None and not checked_out and not associated and not guarded else None)
+        remaining = completed and selected is None and not associated and absent is None
         association = (_remaining_local_ref(project, objective, state, ref, by_path, repository, orca_reader)
                        if remaining else None)
         recorded = association is not None and association["status"] == "observed"
         reasons, classification = [], "integrated"
-        if branch in ("main", default_branch) or ref == target_ref or ref in target_branches:
+        if guarded:
             classification, reasons = "protected", ["main, default or target branch"]
+        elif absent is not None:
+            classification = "absent"
         elif not associated and not recorded:
             classification, reasons = "protected", ["current recorded branch association is unavailable or ambiguous"
                                                      if remaining else "creation by this objective is unproven"]
@@ -930,7 +984,10 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
                                                         **({"provenance": association["provenance"],
                                                             "current": {"status": "present", "path": None, "ref": ref, "oid": tip},
                                                             "ref_storage": association["ref_storage"]}
-                                                           if recorded else {})},
+                                                           if recorded else {}),
+                                                        **({"current": {"status": "absent", "path": None, "ref": ref,
+                                                                        "oid": None},
+                                                            "ref_storage": absent} if absent is not None else {})},
                                    classification,
                                    reasons + (["Orca also removes the merged local branch"]
                                               if removed_with_worktree else []),
@@ -947,8 +1004,12 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         tip = next((parts[0] for parts in rows if len(parts) == 2 and parts[1] == ref
                     and OBJECT_ID.fullmatch(parts[0])), None)
         classification, reasons = "merged_remote_head", []
+        # The remote answered and lists no such head: the recorded remote branch is absent (pod#125).
+        absent = output is not None and not output.strip()
         if branch in ("main", default_branch) or target_ref == f"refs/remotes/{remote}/{branch}":
             classification, reasons = "protected", ["default or target remote branch"]
+        elif absent:
+            classification = "absent"
         elif output is None or len(rows) != 1 or tip is None or target is None or moved:
             classification, reasons = "protected", ["remote tip or target is uncertain"]
         elif tip not in merged and is_ancestor(project, tip, target) is not True:
@@ -957,13 +1018,18 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         git_facts = cleanup_archives.reference_observation(project, archive_ref, tip, repository)
         observed_archives = archive_facts(archive_ref, git_facts)
         verified = any(row["verified"] and row["covers_resource"] for row in observed_archives)
-        if selected is not None:
+        if selected is not None and classification != "absent":
             held = [row for row in resources if row["kind"] == "worktree" and row["delete_argv"] is None]
             if held:
+                # An absent worker worktree still holds its remote branch, as an unavailable one did.
                 classification = "protected"
-                reasons += sorted({reason for row in held for reason in row["reasons"]})
+                reasons += sorted({reason for row in held for reason in row["reasons"]}
+                                  | ({"worker worktree is absent", *worker_holds}
+                                     if any(row["class"] == "absent" for row in held) else set()))
         resources.append(_resource("remote_branch", remote + "/" + branch,
-                                   {"remote": remote, "ref": ref, "tip": tip, "git": git_facts}, classification, reasons,
+                                   {"remote": remote, "ref": ref, "tip": tip, "git": git_facts,
+                                    **({"current": {"status": "absent", "path": None, "ref": ref, "oid": None}}
+                                       if classification == "absent" else {})}, classification, reasons,
                                    delete_argv=(["git", "push", "--force-with-lease=" + ref + ":" + tip,
                                                 remote, ":" + ref]
                                                 if classification == "merged_remote_head"
@@ -983,6 +1049,10 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
         snapshot = cleanup_stashes.snapshot(project, repository)
         observations = cleanup_stashes.observe_many(project, resources, repository, snapshot, orca_reader=orca_reader)
         for row, observation in zip(resources, observations):
+            if row["class"] == "absent":
+                # Nothing remains to remove, so the stash facts are recorded and hold nothing.
+                row["stash_observation"] = observation
+                continue
             tip = row["identity"].get("tip")
             integrated = bool(tip and target and (tip in merged or is_ancestor(project, tip, target) is True))
             cleanup_stashes.apply(row, observation, branch_integrated=integrated)
