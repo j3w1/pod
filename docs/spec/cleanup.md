@@ -55,8 +55,10 @@ remote branch whose successful `ls-remote` lists nothing. Its row has no argv or
 reasons, carries `identity.current` with `status: absent` (and for a branch its
 `ref_storage`), keeps its stash observation without applying it, and is in neither
 `covers` nor `asks`. A failed, partial or contradictory read is never absence; a
-checkout Orca still lists is protected with that reason. A selected observation keeps
-its own current-status rules. Known UNIQUE work stays UNIQUE
+checkout Orca still lists is protected with that reason. Every absence is read again
+after the rest of the observation, and a resource that came back or became unreadable
+refuses `cleanup_changed`. A selected observation keeps an absent ordinary row absent
+only while its own current read is absent, and refuses `cleanup_changed` otherwise. Known UNIQUE work stays UNIQUE
 when an independent hold prevents removal. Top-level `archive_verified` requires
 verified **and covering** evidence; a narrower valid per-archive proof is separate.
 

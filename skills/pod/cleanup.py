@@ -487,6 +487,29 @@ def _absent_ref(project: Path, ref: str, repository: dict) -> dict | None:
     return storage
 
 
+def _recheck_absent(project: Path, resources: list[dict], repository: dict, orca_reader) -> None:
+    """Read every absence again after the rest of the observation; a resource that came back refuses.
+
+    Absence is current only while every later read agrees, so contradictory facts never leave a stale absent row."""
+    for row in resources:
+        if row["class"] != "absent":
+            continue
+        identity = row["identity"]
+        if row["kind"] == "worktree":
+            registered, _, _ = _objective_worktrees(project, {identity["path"]}, set())
+            still = not registered and _absent_worktree(identity["path"], orca_reader)[0] is not None
+        elif row["kind"] == "local_branch":
+            _, checkouts, _ = _objective_worktrees(project, set(), {identity["ref"]})
+            still = not checkouts.get(identity["ref"]) and _absent_ref(project, identity["ref"], repository) is not None
+        else:
+            output = _git(project, ["ls-remote", identity["remote"], identity["ref"]])
+            still = output is not None and not output.strip()
+        if not still:
+            raise PodError("cleanup_changed", "A resource read absent is present or unreadable now; reread the plan",
+                           {"detail": "cleanup_changed", "changed": [row["id"]], "added": [], "removed": [],
+                            "next_action": "rerun cleanup-plan and review the changed resources"})
+
+
 def _resource(kind: str, name: str, identity: dict, classification: str, reasons: list[str],
               *, delete_argv: list[str] | None = None, archive_argv: list[str] | None = None,
               archive_verified: bool = False, archive_observations: list[dict] | None = None) -> dict:
@@ -1074,6 +1097,7 @@ def _objective_plan(project: Path, objective: str, *, expect=None, archives=None
     if stash_observations and selected is not None and any(row["kind"] == "worktree" and row["delete_argv"]
                                      and row["delete_argv"][0] == "git" for row in resources):
         _recheck_worker(project, objective, state, selected, worker_facts, reuse_reason, orca_reader, port)
+    _recheck_absent(project, resources, repository, orca_reader)
     plan_hash, fingerprints = _expect_change(expect, resources, observed_target)
     for row in resources:
         row["fingerprint"] = fingerprints[row["id"]]

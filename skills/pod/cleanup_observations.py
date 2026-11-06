@@ -411,7 +411,9 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
         elif kind == "remote_branch":
             identity = (base or {}).get("identity", {})
             remote, ref, tip = identity.get("remote"), identity.get("ref"), identity.get("tip")
-            current.update(status="present" if tip else "unavailable", ref=ref, oid=tip)
+            # The ordinary plan in this same call has just read an absent remote head; it rechecks it last.
+            current.update(status="present" if tip else "absent" if (base or {}).get("class") == "absent"
+                           else "unavailable", ref=ref, oid=tip)
             row["identity"] = {"remote": remote, "ref": ref, "tip": tip, "git": git,
                                "worker": identity.get("worker"), "provenance": None, "current": current}
         elif kind == "cache":
@@ -462,7 +464,13 @@ def _current_row(project: Path, observe: dict, repository: dict, *, base: dict |
         row["identity"]["git"]["objective_completion"] = completion
     if association is not None and isinstance(row["identity"].get("git"), dict):
         row["identity"]["git"]["recorded_association"] = association
-    if current["status"] != "present":
+    if row["class"] == "absent":
+        # pod#125: an absent base stays absent only while this current read agrees.
+        if current["status"] != "absent":
+            raise PodError("cleanup_changed", "A resource the plan read absent is present or unreadable now; reread the plan")
+        row["delete_argv"] = row["archive_argv"] = None
+        row["reasons"] = []
+    elif current["status"] != "present":
         row["class"] = "unique" if row["class"] == "unique" else "protected"
         row["delete_argv"] = row["archive_argv"] = None
         row["reasons"].append("resource_absent" if current["status"] == "absent" else "resource_identity_unavailable")
@@ -539,7 +547,10 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
     target = (ordinary or {}).get("target", {"ref": None, "commit": None, "moved_after_delivery": False})
     tip = row["identity"].get("tip")
     integrated = bool(tip and target["commit"] and cleanup.is_ancestor(project, tip, target["commit"]) is True)
-    cleanup_stashes.apply(row, observation, branch_integrated=integrated)
+    if row["class"] == "absent":
+        row["stash_observation"] = observation  # Nothing remains to remove; the facts hold nothing.
+    else:
+        cleanup_stashes.apply(row, observation, branch_integrated=integrated)
     cleanup._guard_remaining_ref(project, row)
     if observe["kind"] in {"cache", "native"} or objective is None:
         row["delete_argv"] = row["archive_argv"] = None

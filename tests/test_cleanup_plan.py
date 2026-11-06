@@ -1270,7 +1270,7 @@ class CleanupWorkerTests(KernelCase):
         main = next(row for row in result["resources"] if row["id"] == f"worktree:{self.project}")
         self.assertEqual(main["class"], "protected")
 
-    def test_removed_worker_checkout_still_listed_by_orca_or_git_is_not_absent(self):
+    def test_a_checkout_orca_still_lists_is_not_absent(self):
         self.remove_worker(branches=False)
         listed = self.ordinary(listed=True)
         row = next(row for row in listed["resources"] if row["id"] == f"worktree:{self.child}")
@@ -1281,7 +1281,10 @@ class CleanupWorkerTests(KernelCase):
         kept = next(row for row in listed["resources"] if row["id"] == "local_branch:refs/heads/worker")
         self.assertEqual(kept["class"], "protected")
         self.assertIn("creation by this objective is unproven", kept["reasons"])
-        # A checkout Git still registers (missing directory, not pruned) is no absence either.
+
+    def test_a_checkout_git_still_registers_is_not_absent(self):
+        # A checkout Git still registers (missing directory, not pruned) is no absence.
+        self.remove_worker(branches=False)
         git(self.project, "worktree", "add", "-q", str(self.child), "worker")
         self.addCleanup(git, self.project, "worktree", "prune")
         for path in sorted(self.child.rglob("*"), reverse=True):
@@ -1290,6 +1293,60 @@ class CleanupWorkerTests(KernelCase):
         registered = next(row for row in self.ordinary()["resources"] if row["id"] == f"worktree:{self.child}")
         self.assertEqual(registered["class"], "protected")
         self.assertIn("worktree binding is unavailable or foreign", registered["reasons"])
+
+    def absent_reader(self, argv, **kwargs):
+        if argv[:2] == ["worktree", "show"] and not Path(argv[3].removeprefix("path:")).exists():
+            raise PodError("orca_read_failed", "Orca read did not succeed", {"native_code": "selector_not_found"})
+        return self.orca_read(argv, **kwargs)
+
+    def test_a_checkout_that_reappears_during_observation_refuses(self):
+        # Review F1: the absence read first is read again last; a path that came back is no absence.
+        self.remove_worker(branches=False)
+        def reappearing(argv, **kwargs):
+            if argv[:2] == ["worktree", "show"] and not self.child.exists():
+                self.child.mkdir()
+                (self.child / "late.txt").write_text("recreated\n")
+                raise PodError("orca_read_failed", "Orca read did not succeed", {"native_code": "selector_not_found"})
+            return self.absent_reader(argv, **kwargs)
+        self.addCleanup(lambda: self.child.exists() and (
+            (self.child / "late.txt").unlink(missing_ok=True), self.child.rmdir()))
+        with repository_reads(), self.assertRaises(PodError) as caught:
+            plan(self.project, "objective", orca_reader=reappearing, native_port=self.port)
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+        self.assertEqual(caught.exception.detail["changed"], [f"worktree:{self.child}"])
+
+    def test_a_branch_that_reappears_during_observation_refuses(self):
+        self.remove_worker()
+        original = cleanup_archives.reference_observation
+        def recreate(project, ref, tip, repository):
+            if ref == "refs/heads/worker":
+                git(self.project, "update-ref", "refs/heads/worker", self.base)
+            return original(project, ref, tip, repository)
+        with repository_reads(), patch.object(cleanup_archives, "reference_observation", side_effect=recreate), \
+                self.assertRaises(PodError) as caught:
+            plan(self.project, "objective", orca_reader=self.absent_reader, native_port=self.port)
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+        self.assertEqual(caught.exception.detail["changed"], ["local_branch:refs/heads/worker"])
+
+    def test_selected_absent_branch_stays_absent_and_refuses_once_it_returns(self):
+        # Review F2: the selected reader keeps absent only while its own current read agrees.
+        from pod import cleanup
+        self.remove_worker()
+        observe = {"kind": "local_branch", "name": "refs/heads/worker"}
+        with patch.object(self, "orca_read", side_effect=self.absent_reader):
+            row = cleanup_entry(self, observe=observe)["resources"][0]
+            self.assertEqual((row["class"], row["reasons"], row["delete_argv"], row["archive_argv"]),
+                             ("absent", [], None, None))
+            self.assertEqual(row["identity"]["current"]["status"], "absent")
+            ordinary = cleanup._objective_plan
+            def then_recreate(*args, **kwargs):
+                result = ordinary(*args, **kwargs)
+                git(self.project, "update-ref", "refs/heads/worker", self.base)
+                return result
+            with patch.object(cleanup, "_objective_plan", side_effect=then_recreate), \
+                    self.assertRaises(PodError) as caught:
+                cleanup_entry(self, observe=observe)
+        self.assertEqual(caught.exception.code, "cleanup_changed")
 
     def test_reported_released_worker_unforced_entry_preserves_unrelated_real_stash(self):
         self.stash()
