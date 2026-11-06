@@ -130,14 +130,12 @@ WORKTREE_MISSING = "recorded worktree missing"
 WORKTREE_UNREADABLE = "recorded worktree unreadable"
 CLOSED_MALFORMED = "closed record malformed"
 FORMAT_UNSUPPORTED = "record format unsupported"
-# With the recorded worktree gone, the closure is proved from the peer's own records; each names the record fact that
-# failed (pod#251).
+# With the recorded worktree gone, the unchanged closure proof runs in another checkout of the peer's recorded repository,
+# found in Pod's own records and confirmed by its repository key (pod#251).
+MAX_CHECKOUTS = 8
+MISSING = object()  # No checkout of the peer's repository was found.
+NO_CHECKOUT = WORKTREE_MISSING + "; no other checkout of its recorded repository found"
 RECORD_UNBOUND = WORKTREE_MISSING + "; record not where its recorded repository and objective place it"
-RECORD_CLOSURE_MALFORMED = WORKTREE_MISSING + "; closure record malformed"
-RECORD_SETTLEMENT_CHANGED = WORKTREE_MISSING + "; settled work changed since closure"
-RECORD_WORK_UNSETTLED = WORKTREE_MISSING + "; recorded work unsettled"
-RECORD_GOVERNOR_UNREADABLE = WORKTREE_MISSING + "; Governor journal unreadable"
-RECORD_GOVERNOR_PENDING = WORKTREE_MISSING + "; Governor effect pending"
 
 
 def _unproven_reason(exc: BaseException) -> str:
@@ -156,63 +154,6 @@ class _Unproven(Exception):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
-
-
-def _recorded_closure(directory: Path, raw: dict, checkpoint: dict, workspace: dict, check) -> str | None:
-    """A closed peer whose recorded worktree is gone, proved closed from its own records alone (pod#251).
-
-    The record must sit in the directory Pod derives from its recorded repository key and objective, so it is that
-    objective's own record; its closure must match its map's sequence and revision; the work it settled must still
-    reproduce the closure's settled set (or, for a closure recorded before that set, every admission must carry its
-    durable settlement record); and its Governor journal beside it may hold no unsettled effect apart from rows the
-    closure preserved. Evidence is not judged again: that needs the worktree's Git and governance. Returns None when
-    proved, else the fixed reason naming the first fact that failed."""
-    from .governor import _read_journal
-    from .ledger import _outstanding_ids, record_name, settlement_facts
-    from .obligations import _closure_record, validate_map_record
-    objective = checkpoint["objective"]
-    if record_name(Path(workspace["path"]), {"repo_key": workspace["repo_key"]}, objective) != directory.name:
-        return RECORD_UNBOUND
-    check()
-    try:
-        validate_map_record(checkpoint)
-        closure = _closure_record(checkpoint["closure"])
-        if any(closure[key] != checkpoint[key] for key in ("seq", "revision")):
-            return RECORD_CLOSURE_MALFORMED
-        history = (checkpoint.get("continuity") or {}).get("history", [])
-        runtimes = {entry[field] for entry in history for field in ("from_runtime", "to_runtime")}
-        check()
-        if "settlement_digest" in closure:
-            if settlement_facts(raw["admissions"], runtimes=runtimes, seq=checkpoint["seq"])[0] \
-                    != closure["settlement_digest"]:
-                return RECORD_SETTLEMENT_CHANGED
-        elif _outstanding_ids(raw, None, recorded={"runtimes": runtimes, "seq": checkpoint["seq"],
-                                                    "is_ancestor": None}):
-            # Without Git an ancestry-validated disposition stays unproven, as the replay leaves anything unprovable.
-            return RECORD_WORK_UNSETTLED
-    except (PodError, KeyError, TypeError, ValueError, AttributeError) as exc:
-        if isinstance(exc, PodError) and exc.code == _deadline():
-            raise
-        return RECORD_CLOSURE_MALFORMED
-    check()
-    try:
-        journal = _read_journal(directory / "governor.json")
-    except PodError as exc:
-        if exc.code == _deadline():
-            raise
-        return RECORD_GOVERNOR_UNREADABLE
-    except OSError:
-        return RECORD_GOVERNOR_UNREADABLE
-    preserved = {row.get("record") for row in closure.get("preserved") or [] if isinstance(row, dict)}
-    if any(row["decision"] == "ALLOW" and row["outcome"] in ("pending", "UNKNOWN")
-           and row["record_id"] not in preserved for row in journal["actions"]):
-        return RECORD_GOVERNOR_PENDING
-    return None
-
-
-def _deadline() -> str:
-    from .orca import DEADLINE_SPENT
-    return DEADLINE_SPENT
 
 
 def peer_label(row) -> str:
@@ -264,7 +205,10 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     `objectives` is every blocking peer; `open` and `closure_unproven` split it into peers with no closure and closed
     peers whose closure proof failed or cannot run, each with a fixed reason (pod#250). Their rows, and
     `unverifiable_rows` and `closure_unchecked_rows` beside the name lists, carry each peer's recorded repository; a
-    closed peer whose recorded worktree is gone is proved from its own records instead (pod#251).
+    closed peer whose recorded worktree is gone runs the same closure proof in another checkout of its recorded
+    repository: this project when it is one, else the first existing checkout another record binds (at most
+    MAX_CHECKOUTS tried), each confirmed by its repository key, so the record's own Governor journal and Git history
+    are read; with none the peer stays unproven (pod#251).
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
                          _run_references, objective_root, state_root, closed_snapshot_context)
@@ -337,9 +281,12 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
             paths.extend(Path(entry.path) for entry in entries if entry.name == "context.json")
         except OSError:
             unknown += 1
-    def classify(path):
+    checkouts = {}  # repo_key -> the worktree paths readable records bind (pod#251)
+
+    def classify(path, substitute=None):
         """One record's whole read: what it says about this Run, or None when it holds nothing. A failure to load the
-        record is marked, so its hold is narrowed by membership as before; every other record-local fault holds."""
+        record is marked, so its hold is narrowed by membership as before; every other record-local fault holds.
+        `substitute` is the checkout of the peer's repository its closure proof runs in when its worktree is gone."""
         try:
             raw = load_context(path, validate=False)
         except PodError as exc:
@@ -350,6 +297,9 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         # Every lazy read of this record stays inside its own boundary: a missing page makes its membership
         # unknown, which holds this Run, and never aborts the scan of other records (R206).
         checkpoint = raw.get("checkpoint")
+        bound = checkpoint.get("worktree") if isinstance(checkpoint, dict) else None
+        if isinstance(bound, dict) and isinstance(bound.get("repo_key"), str) and isinstance(bound.get("path"), str):
+            checkouts.setdefault(bound["repo_key"], set()).add(bound["path"])
         admissions = raw.get("admissions")
         refs = checkpoint.get("native_refs") if isinstance(checkpoint, dict) else [] if checkpoint is None else None
         readable = (isinstance(refs, list) and isinstance(admissions, dict)
@@ -386,26 +336,40 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                     if peer_project is None:
                         raise _Unproven(BINDING_UNAVAILABLE)
                     check()
+                    gone = False
                     try:
                         found = peer_project.stat()
                     except FileNotFoundError:
                         if workspace is None:
                             raise _Unproven(WORKTREE_MISSING) from None
-                        # Normal completion cleanup removed the worktree: prove the closure from its records (pod#251).
-                        gone = _recorded_closure(path.parent, raw, checkpoint, workspace, check)
-                        if gone is not None:
-                            raise _Unproven(gone) from None
-                        return None
+                        if substitute is None:
+                            # Normal completion cleanup removed the worktree: the proof runs after the scan, in another
+                            # checkout of the same repository (pod#251).
+                            name = checkpoint["objective"]
+                            return ("gone", name if isinstance(name, str) and 0 < len(name) <= 256
+                                    else "unnamed objective", repository, workspace["repo_key"])
+                        if substitute is MISSING:
+                            raise _Unproven(NO_CHECKOUT) from None
+                        gone, peer_project = True, substitute
                     except OSError:
                         raise _Unproven(WORKTREE_UNREADABLE) from None
-                    if not stat.S_ISDIR(found.st_mode):
-                        raise _Unproven(WORKTREE_UNREADABLE)
-                    check()
-                    validate_checkpoint_snapshot(peer_project, raw)
-                    check()
-                    ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
-                    check()
-                    unproven = validate_closed_snapshot(checkpoint, ctx)
+                    else:
+                        if not stat.S_ISDIR(found.st_mode):
+                            raise _Unproven(WORKTREE_UNREADABLE)
+                    try:
+                        # The checkout must place this record where it lies, so its own journal is the one read.
+                        if gone and objective_root(peer_project, checkpoint["objective"]) != path.parent:
+                            raise _Unproven(RECORD_UNBOUND)
+                        check()
+                        validate_checkpoint_snapshot(peer_project, raw)
+                        check()
+                        ctx = closed_snapshot_context(peer_project, checkpoint["objective"], raw)
+                        check()
+                        unproven = validate_closed_snapshot(checkpoint, ctx)
+                    except (PodError, KeyError, TypeError, ValueError, OSError) as exc:
+                        if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT or not gone:
+                            raise
+                        raise _Unproven(WORKTREE_MISSING + "; " + _unproven_reason(exc)) from None
                 except _Unproven as exc:
                     reason = exc.reason
                 except (PodError, KeyError, TypeError, ValueError, OSError) as exc:
@@ -431,13 +395,13 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         return None
 
     changing = 0
-    for path in paths:
-        check()
-        if path == own:
-            continue
+    gone = []
+
+    def take(path, substitute=None):
+        nonlocal changing, unknown
         try:
             # The record's read and its classification, classified by revision (R206).
-            outcome = scan_read(path, lambda path=path: classify(path))
+            outcome = scan_read(path, lambda: classify(path, substitute))
         except PodError as exc:
             if exc.code == DEADLINE_SPENT:
                 raise
@@ -449,14 +413,16 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                 unknown += record_mentions(path.parent, run_id, check)
             else:
                 unknown += 1
-            continue
+            return
         except (KeyError, TypeError, ValueError, AttributeError, RecursionError):
             unknown += 1
-            continue
+            return
         if outcome is None:
-            continue
+            return
         kind, name = outcome[:2]
-        if kind == "mentions":
+        if kind == "gone":
+            gone.append((path, outcome[3]))
+        elif kind == "mentions":
             unknown += record_mentions(path.parent, run_id, check)
         elif kind == "unknown":
             unknown += 1
@@ -468,6 +434,33 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                 closed.append((name, outcome[3] or "", outcome[2]))
         else:
             {"unchecked": unchecked, "unverifiable": unverifiable}[kind].append((name, outcome[2] or ""))
+
+    for path in paths:
+        check()
+        if path != own:
+            take(path)
+    found_keys = {}
+
+    def same_repository(place, key):
+        """Whether an existing directory is a checkout of the repository with this key, read from Git."""
+        if place not in found_keys:
+            check()
+            try:
+                from .github import repository_context
+                found_keys[place] = repository_context(place)["repo_key"] if place.is_dir() else None
+            except (PodError, OSError, KeyError, TypeError, ValueError) as exc:
+                if isinstance(exc, PodError) and exc.code == DEADLINE_SPENT:
+                    raise
+                found_keys[place] = None
+        return found_keys[place] == key
+    for path, key in gone:
+        # This project first, then the other checkouts records bind, in a fixed order; the first that is a checkout
+        # of the same repository is the one the proof runs in, never a search for one where it passes.
+        places = [Path(project)] + [Path(place) for place in sorted(checkouts.get(key, ())) if Path(place) != Path(project)]
+        # A binding without a repository key (a plain directory) has no other checkout.
+        chosen = next((place for place in places[:MAX_CHECKOUTS + 1] if same_repository(place, key)),
+                      MISSING) if isinstance(key, str) else MISSING
+        take(path, chosen)
     check()
 
     def rows(found):

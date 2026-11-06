@@ -1,14 +1,16 @@
 """Records outside the documented layouts hold handoff scope only when they could name the Run (R206)."""
 import json
 import shutil
+import subprocess
 import unittest
-from unittest import mock
 
 from pod.errors import PodError
 from pod.handoff import _unproven_reason, peer_label, run_scope, shared_detail
 from pod.internal import run
-from pod.ledger import objective_root
+from pod.github import repository_context
+from pod.ledger import objective_root, read
 from tests.common import GroupedTable, assert_grouped_table
+from tests.kernel_support import git
 from tests.test_owner_handoff import HandoffCase, SENTINEL, logical_fixture
 from tests.test_window_continuation import WindowCase
 
@@ -153,10 +155,77 @@ class UnprovenClosureScopeTests(WindowCase):
     def test_a_removed_worktree_peer_with_a_damaged_closure_still_refuses(self):
         self.peers()
         self.rewrite(lambda raw: (self.gone(raw), raw["checkpoint"]["closure"].update(seq=SENTINEL)))
-        unproven = self.unproven("recorded worktree missing; closure record malformed")
+        unproven = self.unproven("recorded worktree missing; closure proof refused (obligation_invalid)")
         self.scope(["closure-peer"], [], unproven)
         self.refusal("closed with unproven closure: closure-peer in acme/example (recorded worktree missing; "
-                     "closure record malformed)", objectives=["closure-peer"], opened=[], unproven=unproven)
+                     "closure proof refused (obligation_invalid))", objectives=["closure-peer"], opened=[],
+                     unproven=unproven)
+
+    def integrity(self, change):
+        """Review F1: with the worktree removed, a damaged closure refuses exactly as with the worktree present."""
+        self.peers()
+        self.rewrite(lambda raw: (self.gone(raw), change(raw["checkpoint"])))
+        scope = run_scope(self.project, "objective", "run")
+        self.assertEqual(scope["objectives"], ["closure-peer"])
+        self.assertRegex(scope["closure_unproven"][0]["reason"],
+                         r"^recorded worktree missing; closure proof refused \([a-z][a-z0-9_]*\)$")
+        self.lose()
+        calls = len(self.mutations)
+        self.assertEqual(self.status()["window_continuation"]["condition"], "run_shared")
+        self.assertEqual(len(self.mutations), calls)
+
+    def test_a_removed_worktree_peer_with_an_empty_closure_report_refuses(self):
+        self.integrity(lambda checkpoint: checkpoint["closure"].update(report={}))
+
+    def test_a_removed_worktree_peer_with_an_active_row_refuses(self):
+        self.integrity(lambda checkpoint: checkpoint["obligations"][0].update(state="active", executor="coordinator"))
+
+    def test_a_removed_worktree_peer_with_a_damaged_settlement_projection_refuses(self):
+        self.integrity(lambda checkpoint: checkpoint["closure"]["settlement_admissions"].update(
+            {key: "0" * 16 for key in checkpoint["closure"]["settlement_admissions"]}))
+
+    def test_a_removed_worktree_keeps_the_retained_history_hold(self):
+        """Review F2: a closed peer whose retained REUSE of a changed definition cannot be verified still holds
+        peer_history_unverifiable once its worktree is gone, named with its repository."""
+        self.peers(closed=False)
+
+        def checkpoint(rows=None, **extra):
+            value = self.core(governance={"base_ref": "refs/remotes/origin/target"}, **extra)
+            if rows is not None:
+                value["obligations"] = rows
+            return run("checkpoint", {"project": str(self.project), "objective": "hold-peer", "owner": "owner",
+                                      "value": value})
+        checkpoint([self.criterion("satisfied", proof_scope=["src"], evidence=[
+            {"check": "criterion", "command": "unit", "result": "passed", "reference": "original-proof"}])],
+            close=True)
+        original = self.candidate
+        (self.project / "docs").mkdir()
+        (self.project / "docs/extra.txt").write_text("outside original verified scope\n")
+        git(self.project, "add", ".")
+        git(self.project, "commit", "-qm", "unaffected original proof")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        authority = {"provenance": "user_direct", "instruction": "Revise the disposable definition"}
+        rows = json.loads(json.dumps(read(self.project, "hold-peer")["checkpoint"]["obligations"]))
+        rows[0]["reuse"] = {"from": original}
+        checkpoint(rows, reopen=True, close=True, revision_authority=authority)
+        rows = json.loads(json.dumps(read(self.project, "hold-peer")["checkpoint"]["obligations"]))
+        rows[0].pop("evidence"); rows[0].pop("reuse")
+        rows[0].update(state="withdrawn", proof_scope=["elsewhere"],
+                       withdrawal={"by": "user_direct", "reason": "authorized definition revision"})
+        checkpoint(rows, reopen=True, close=True, revision_authority=authority)
+        self.rewrite(self.gone, objective="hold-peer")
+        scope = run_scope(self.project, "objective", "run")
+        self.assertEqual((scope["objectives"], scope["unverifiable"], scope["unverifiable_rows"]),
+                         ([], ["hold-peer"], [{"objective": "hold-peer", "repository": REPOSITORY}]))
+        self.lose()
+        calls = len(self.mutations)
+        verdict = self.status()["owner_handoff"]
+        self.assertEqual(verdict["condition"], "peer_history_unverifiable")
+        self.assertIn("for peer hold-peer in acme/example.", verdict["message"])
+        window = self.status()["window_continuation"]
+        self.assertEqual(window["condition"], "peer_history_unverifiable")
+        self.assertIn("hold-peer in acme/example", window["message"])
+        self.assertEqual(len(self.mutations), calls)
 
     def test_a_removed_worktree_peer_with_no_closure_record_is_open(self):
         self.peers()
@@ -180,35 +249,81 @@ class UnprovenClosureScopeTests(WindowCase):
             self.assertIn("settlement_digest", raw["checkpoint"]["closure"])
             next(iter(raw["admissions"].values()))["plan_revision"] = "another-plan"
         self.rewrite(change)
-        self.scope(["closure-peer"], [], self.unproven("recorded worktree missing; settled work changed since closure"))
+        self.scope(["closure-peer"], [], self.unproven(
+            "recorded worktree missing; closure proof refused (obligation_unaccounted)"))
 
     def test_a_removed_worktree_peer_whose_governor_journal_is_unreadable_is_unproven(self):
         self.peers()
         path = self.rewrite(self.gone)
         (path.parent / "governor.json").write_text(SENTINEL)
-        self.scope(["closure-peer"], [], self.unproven("recorded worktree missing; Governor journal unreadable"))
+        scope = run_scope(self.project, "objective", "run")
+        self.assertEqual(scope["objectives"], ["closure-peer"])
+        self.assertRegex(scope["closure_unproven"][0]["reason"], r"^recorded worktree missing; closure proof refused")
+        self.assertNotIn(SENTINEL, json.dumps(scope))
 
-    def test_a_removed_worktree_peer_with_a_pending_governor_effect_is_unproven(self):
-        self.peers()
-        self.rewrite(self.gone)
-        pending = {"actions": [{"decision": "ALLOW", "outcome": "UNKNOWN", "record_id": "r1"}]}
-        with mock.patch("pod.governor._read_journal", return_value=pending):
-            self.scope(["closure-peer"], [], self.unproven("recorded worktree missing; Governor effect pending"))
-
-    def test_a_same_named_peer_of_another_repository_is_named_with_it(self):
-        """The live pod#251 case: a peer named like this objective, in a consumer repository."""
+    def test_a_peer_of_another_repository_with_no_checkout_is_unproven(self):
+        """The live pod#251 case without any recorded checkout of the consumer repository."""
         self.peers()
         from pod.ledger import record_name
         key = "f" * 64
         path = self.rewrite(lambda raw: (self.gone(raw), raw["checkpoint"].update(objective="objective"),
-                                         raw["checkpoint"]["worktree"].update(repo_key=key, repository=CONSUMER),
-                                         raw["checkpoint"]["closure"].update(seq=SENTINEL)))
+                                         raw["checkpoint"]["worktree"].update(repo_key=key, repository=CONSUMER)))
         moved = path.parent.with_name(record_name(self.project, {"repo_key": key}, "objective"))
         shutil.move(str(path.parent), str(moved))
-        unproven = self.unproven("recorded worktree missing; closure record malformed", "objective", CONSUMER)
+        unproven = self.unproven("recorded worktree missing; no other checkout of its recorded repository found",
+                                 "objective", CONSUMER)
         self.scope(["objective"], [], unproven)
-        self.refusal("closed with unproven closure: objective in acme/consumer (recorded worktree missing; "
-                     "closure record malformed)", objectives=["objective"], opened=[], unproven=unproven)
+        self.refusal("closed with unproven closure: objective in acme/consumer (recorded worktree missing; no other "
+                     "checkout of its recorded repository found)", objectives=["objective"], opened=[],
+                     unproven=unproven)
+
+    def consumer_peer(self):
+        """The live pod#251 shape: a closed peer named like this objective in a consumer repository, written through
+        the checkpoint boundary in a linked worktree that completion cleanup then removes, while another record of
+        that repository binds its main checkout and names no Run."""
+        consumer, removed = self.root / "consumer", self.root / "consumer-peer"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(self.project), str(consumer)], check=True)
+        git(consumer, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/target")  # As in this project.
+        git(consumer, "worktree", "add", "-q", "-b", "peer", str(removed))
+        original, placement = self.project, dict(self.port.placement)
+        try:
+            self.project = removed
+            context = repository_context(removed)
+            self.port.placement = {**placement, "repository": context["repository"], "repo_key": context["repo_key"],
+                                   "path": context["worktree"],
+                                   "branch": context["branch"]}
+            self.closed_review_peer(objective="objective")
+            self.project = consumer
+            run("checkpoint", {"project": str(consumer), "objective": "consumer-work", "owner": "owner",
+                               "value": self.core(obligations=[self.criterion()],
+                                                  governance={"base_ref": "refs/remotes/origin/target"})})
+        finally:
+            self.project, self.port.placement = original, placement
+        other = objective_root(consumer, "consumer-work") / "context.json"
+        raw = logical_fixture(other)
+        raw["checkpoint"]["native_refs"] = []  # It records no Run, so only its binding counts.
+        other.write_text(json.dumps(raw))
+        shutil.rmtree(removed)
+        return consumer, other
+
+    def test_a_peer_of_another_repository_is_proved_in_a_recorded_checkout_of_it(self):
+        self.peers(closed=False)
+        self.consumer_peer()
+        self.scope([], [], [])
+        self.lose()
+        self.assertNotEqual(self.status()["owner_handoff"].get("condition"), "run_shared")
+
+    def test_a_recorded_checkout_of_another_repository_is_never_used(self):
+        self.peers(closed=False)
+        _, other = self.consumer_peer()
+        stranger = self.root / "stranger"
+        subprocess.run(["git", "clone", "-q", "--no-local", str(self.project), str(stranger)], check=True)
+        raw = logical_fixture(other)
+        raw["checkpoint"]["worktree"]["path"] = str(stranger)  # Its key still names the consumer repository.
+        other.write_text(json.dumps(raw))
+        reason = "recorded worktree missing; no other checkout of its recorded repository found"
+        repository = logical_fixture(other)["checkpoint"]["worktree"]["repository"]
+        self.scope(["objective"], [], self.unproven(reason, "objective", repository))
 
     def test_a_closed_peer_whose_proof_refuses_names_only_the_code(self):
         self.peers()

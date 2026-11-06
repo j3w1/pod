@@ -12054,11 +12054,16 @@
       "offline_test": [
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_closed_peer_whose_worktree_was_removed_is_proved_from_its_records",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_a_damaged_closure_still_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_an_empty_closure_report_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_an_active_row_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_a_damaged_settlement_projection_refuses",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_keeps_the_retained_history_hold",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_no_closure_record_is_open",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_outside_its_bound_directory_is_unproven",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_whose_settled_work_changed_is_unproven",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_whose_governor_journal_is_unreadable_is_unproven",
-        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_removed_worktree_peer_with_a_pending_governor_effect_is_unproven",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_of_another_repository_is_proved_in_a_recorded_checkout_of_it",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_recorded_checkout_of_another_repository_is_never_used",
         "tests.test_window_continuation.DiscoveryTests.test_a_closed_peer_whose_worktree_was_removed_no_longer_holds_the_run"
       ],
       "status": "NOT_RUN"
@@ -12070,7 +12075,7 @@
         "independent_review"
       ],
       "offline_test": [
-        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_same_named_peer_of_another_repository_is_named_with_it",
+        "tests.test_handoff_scope.UnprovenClosureScopeTests.test_a_peer_of_another_repository_with_no_checkout_is_unproven",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_an_open_peer_is_named_open",
         "tests.test_handoff_scope.UnprovenClosureScopeTests.test_open_and_unproven_peers_are_named_apart",
         "tests.test_handoff_scope.PeerLabelTests.test_peers_carry_their_repository",

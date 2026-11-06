@@ -1041,9 +1041,9 @@ class DiscoveryTests(WindowCase):
         peer.write_text(json.dumps(raw))
         self.lose()
         detail = ("open: open-peer in acme/example; closed with unproven closure: closure-peer in acme/example "
-                  "(recorded worktree missing; closure record malformed)")
+                  "(recorded worktree missing; closure proof refused (obligation_invalid))")
         unproven = [{"objective": "closure-peer", "repository": "acme/example",
-                     "reason": "recorded worktree missing; closure record malformed"}]
+                     "reason": "recorded worktree missing; closure proof refused (obligation_invalid)"}]
         opened = [{"objective": "open-peer", "repository": "acme/example"}]
         error = self.assert_lead_refusal("run_shared")
         block = self.status()["window_continuation"]
