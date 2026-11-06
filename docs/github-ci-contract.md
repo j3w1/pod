@@ -50,10 +50,16 @@ request, `pull_request` or `pull_request_target` runs, so a row derived from a p
 only those; a requested dispatch or diagnostic binds only a `workflow_dispatch` run. A recorded
 push that moved no ref (Git reports it up to date, or an older row names no `ref_changed`) starts no
 run, so its derived row reads the branch with
-`gh api repos/{owner}/{repo}/activity?ref=refs/heads/BRANCH&direction=desc&per_page=21`: only when
-the newest update at or before the submission set the branch to the row's exact head does the floor
-move back to that update's time. Any other answer keeps the submission, and the row says which time
-it used (`created_after` basis `remote_update` or `publication`). Every row
+`gh api repos/{owner}/{repo}/activity?ref=refs/heads/BRANCH&direction=desc&per_page=21`. The floor
+moves to the time of the newest listed update that set the branch to the row's exact head (never a
+deletion), over the whole list, since GitHub's clock may lead the host's and the branch may move
+during the push, and only when that update's whole second is complete and agrees: another commit or
+a deletion in that second, or a truncated list whose extra update shares it, keeps the submission.
+For an older row without `ref_changed`, that update in or after the submission's second may be the
+push's own, so the submission stays. A `remote_update` floor Pod's own readback recorded is reused,
+and the derived row keeps the publication's branch and `ref_changed` so a successor that carried it
+without the publication applies the same rule. Any other answer keeps the submission, and the row
+says which time it used (`created_after` basis `remote_update` or `publication`). Every row
 binds its run's first attempt, except a rerun. Before rerunning, the governor records the run, its
 latest attempt and the submission start, and right after GitHub accepts the call it records that
 acceptance; one rule binds the rerun's attempt on every path. The count proves it: with the

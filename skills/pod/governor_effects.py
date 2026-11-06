@@ -148,64 +148,92 @@ def publication_floor(port: GitHubPort, row: dict, unit: dict, journal: dict) ->
 
     A publication that moved the branch keeps the submission as the floor. One that moved no ref (Pod recorded
     `ref_changed: false`), or whose row predates that fact, may have found the remote already at the head, so
-    nothing it did started a run. Then GitHub's repository activity decides: when the branch's newest update at or
-    before the submission's second set it to this row's exact commit, the remote already held the head and its runs
-    count from that update. Every other answer (another commit, a deletion, no update at or before the submission,
-    a truncated or unreadable list) keeps the submission, and `note` says why. Only positive proof relaxes the floor.
+    nothing it did started a run. A floor Pod's own earlier readback proved from the remote's update is reused
+    first, since that history never changes. Otherwise GitHub's repository activity decides. Its newest listed
+    update that set the branch to this row's exact commit, never a deletion, is never older than the update the
+    push found, whatever the clock skew or movement during or after the push; the floor is its time when its whole
+    second is complete and agrees. For a row without `ref_changed`, that update in or after the submission's second
+    may be the publication's own, so the submission stays. The publication's facts come from its row in this
+    journal or, where that is absent (a successor carried only the validation), from the facts the validation
+    recorded or its carried marker kept. Every other answer keeps the submission, and `note` says why: only
+    positive proof relaxes the floor.
     """
     from .github import UPDATE_LIST_LIMIT
-    from .governor import pushed_branch
+    from .governor import publication_facts, valid_publication_facts
     since = row["receipt"]["started_at"]
 
     def submission(note: str | None) -> dict:
         return {"at": since, "basis": "publication", "note": note}
     publication = next((other for other in reversed(journal["actions"])
                         if other["record_id"] == row.get("derived_from")), None)
-    if publication is None:
-        return submission("the publication row is not in this journal, so the remote's own update is not read")
-    if (publication["receipt"].get("provider") or {}).get("ref_changed") is True:
+    if publication is not None:
+        facts = publication_facts(publication, unit)
+    else:
+        marker = row.get("carried_from")
+        kept = marker.get("publication") if isinstance(marker, dict) else None
+        facts = next((value for value in (kept, row.get("publication")) if valid_publication_facts(value)), None)
+    if facts is not None and facts.get("ref_changed") is True:
         return submission(None)
-    branch = pushed_branch(publication, unit)
-    started = _stamp(since)
-    commit = row.get("commit")
     recorded = (row["receipt"].get("provider") or {}).get("created_after")
-    if (isinstance(recorded, dict) and recorded.get("basis") == "remote_update" and started is not None
-            and (stamp := _stamp(recorded.get("at"))) is not None and stamp <= started.replace(microsecond=0)):
-        # Pod's own earlier readback proved the remote's update; that history never changes, so a later list that
-        # no longer shows it (truncated or unreadable) never rejects the run bound from it.
+    if (isinstance(recorded, dict) and recorded.get("basis") == "remote_update"
+            and (stamp := _stamp(recorded.get("at"))) is not None):
+        # Pod's own earlier readback proved the remote's update; that history never changes, so neither a later
+        # list that no longer shows it (truncated or unreadable) nor a successor without the publication rejects
+        # the run bound from it.
         return {"at": stamp.isoformat(), "basis": "remote_update", "note": None}
+    if facts is None:
+        return submission("the publication row is not in this journal and the row records none of its facts, so "
+                          "the remote's own update is not read")
+    branch, started, commit = facts["branch"], _stamp(since), row.get("commit")
     if branch is None or started is None or commit is None:
         return submission("the publication names no branch, start or commit to read the remote's update for")
+    name = branch["branch"]
     try:
-        updates = port.branch_updates(branch=branch["branch"])
+        updates = port.branch_updates(branch=name)
     except PodError as exc:
-        return submission(f"the activity of branch {branch['branch']} is not readable ({exc.code})")
+        return submission(f"the activity of branch {name} is not readable ({exc.code})")
     if not isinstance(updates, list):
-        return submission(f"the activity of branch {branch['branch']} answered in an unsupported shape")
+        return submission(f"the activity of branch {name} answered in an unsupported shape")
     listed = [update for update in updates[:UPDATE_LIST_LIMIT] if isinstance(update, dict)
-              and update.get("ref") in ("refs/heads/" + branch["branch"], branch["branch"])]
-    second = started.replace(microsecond=0)
+              and update.get("ref") in ("refs/heads/" + name, name)]
+    # The update past the limit, whatever it names, says whether a second the listed ones reach goes on beyond them.
+    past = updates[UPDATE_LIST_LIMIT] if len(updates) > UPDATE_LIST_LIMIT else None
     times = [_stamp(update.get("timestamp")) for update in listed]
-    if any(stamp is None for stamp in times):
-        return submission(f"an update of branch {branch['branch']} reports no readable time")
-    earlier = [(stamp, update) for stamp, update in zip(times, listed) if stamp <= second]
-    if not earlier:
-        scope = f"{min(len(updates), UPDATE_LIST_LIMIT)} listed, limit {UPDATE_LIST_LIMIT}"
-        return submission(f"the listed updates of branch {branch['branch']} were truncated ({scope}) and none is at "
-                          f"or before the submission" if len(updates) > UPDATE_LIST_LIMIT else
-                          f"no update of branch {branch['branch']} at or before the submission is listed ({scope})")
-    newest = max(stamp for stamp, _ in earlier)
-    last = [update for stamp, update in earlier if stamp == newest]
-    if any(update.get("after") != commit or update.get("activity_type") == "branch_deletion" for update in last):
-        return submission(f"the remote's update of branch {branch['branch']} at {newest.isoformat()}, the newest at "
-                          f"or before the submission, does not show it set to {commit[:12]}")
-    return {"at": newest.isoformat(), "basis": "remote_update", "note": None}
+    past_time = _stamp(past.get("timestamp")) if isinstance(past, dict) else None
+    if any(stamp is None for stamp in times) or (past is not None and past_time is None):
+        return submission(f"an update of branch {name} reports no readable time")
+    ordered = times + ([past_time] if past is not None else [])
+    if any(later > earlier for earlier, later in zip(ordered, ordered[1:])):
+        return submission(f"the listed updates of branch {name} are not newest first")
+
+    def sets_head(update: dict) -> bool:
+        return update.get("after") == commit and update.get("activity_type") != "branch_deletion"
+    newest = next((stamp for stamp, update in zip(times, listed) if sets_head(update)), None)
+    scope = f"{min(len(updates), UPDATE_LIST_LIMIT)} listed, limit {UPDATE_LIST_LIMIT}"
+    if newest is None:
+        return submission(f"the listed updates of branch {name} were truncated ({scope}) and none sets it to "
+                          f"{commit[:12]}" if past is not None else
+                          f"no listed update of branch {name} sets it to {commit[:12]} ({scope})")
+    second = newest.replace(microsecond=0)
+    group = [update for stamp, update in zip(times, listed) if stamp.replace(microsecond=0) == second]
+    continues = past is not None and past_time.replace(microsecond=0) == second
+    named = f"{second.isoformat()}, the second of its newest update to {commit[:12]}"
+    if any(not sets_head(update) for update in group + ([past] if continues else [])):
+        return submission(f"the updates of branch {name} at {named}, do not all set it to {commit[:12]}")
+    if continues:
+        return submission(f"the listed updates of branch {name} were truncated ({scope}) within {named}, so that "
+                          f"second's updates may go on past the response")
+    if facts.get("ref_changed") is not False and second >= started.replace(microsecond=0):
+        # A row without the fact: this update may be the publication's own, which keeps the submission.
+        return submission(f"the newest update of branch {name} to {commit[:12]}, at {second.isoformat()}, is not "
+                          f"before the submission's second, so it may be this publication's own")
+    return {"at": second.isoformat(), "basis": "remote_update", "note": None}
 
 
 def _floor_text(floor: dict) -> str:
     """The floor's time and which time it is, as every readback path states it."""
     if floor["basis"] == "remote_update":
-        return f"{floor['at']} (the remote's update of the branch to the head; the publication moved no ref)"
+        return f"{floor['at']} (the remote's newest update of the branch to the head)"
     return f"{floor['at']} (the submission" + (f"; {floor['note']})" if floor.get("note") else ")")
 
 
@@ -874,8 +902,8 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
         return answer
     if kind in DISPATCH_KINDS or kind == "validation_rerun":
         events = _row_events(row)
-        # A publication-derived row's floor is the submission, or the remote's own update of the branch to the head
-        # when the publication moved no ref; every other row keeps its submission (R115).
+        # A publication-derived row's floor is the submission, or the remote's newest update of the branch to the
+        # head when the publication moved no ref or predates that fact; every other row keeps its submission (R115).
         floor = (publication_floor(port, row, unit, journal)
                  if kind == "workflow_dispatch" and row.get("derived_from") is not None else None)
         if floor is not None:
