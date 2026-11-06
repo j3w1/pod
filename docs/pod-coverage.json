@@ -12668,7 +12668,9 @@
         "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_landed_run_use_stays_pending_then_completes_once",
         "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_an_unreadable_run_after_a_refused_run_use_stays_pending",
         "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_landed_unlinked_handoff_never_completes_outside_the_recorded_worktree",
-        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_wrong_place_caller_never_ends_a_lost_holders_attempt"
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_wrong_place_caller_never_ends_a_lost_holders_attempt",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_marked_pending_handoff_on_another_run_outside_never_aborts",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_replacing_caller_on_another_run_outside_never_aborts_a_marked_entry"
       ],
       "status": "NOT_RUN"
     },
@@ -12685,7 +12687,10 @@
         "tests.test_handoff_unlinked.RecoveryRouteTests.test_an_unreadable_recorded_worktree_reads_unverified",
         "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_pending_resume_stays_available_to_its_holder",
         "tests.test_handoff_unlinked.NoRecordedWorktreeRouteTests.test_an_unrecorded_worktree_reads_blocked",
-        "tests.test_handoff_unlinked.NoRecordedWorktreeTests.test_no_recorded_worktree_names_the_successor_claim"
+        "tests.test_handoff_unlinked.NoRecordedWorktreeTests.test_no_recorded_worktree_names_the_successor_claim",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_marked_pending_resume_with_a_changed_branch_reads_blocked",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_marked_pending_resume_with_a_missing_worktree_reads_blocked",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_marked_pending_resume_with_an_unreadable_worktree_reads_unverified"
       ],
       "status": "NOT_RUN"
     }

@@ -661,6 +661,12 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     run = first["run"]
     if own["runtime"] != first["runtime"]:
         return fail("caller_not_linked", "The caller has no stable current Run binding at its live runtime.")
+    if pending and pending["state"] == "pending" and pending["verified"].get("unlinked") is True:
+        # A handoff begun without a current Run is finished, replayed or replaced only from its recorded worktree,
+        # checked before any caller-relative refusal could read as a definite loss (pod#292).
+        place = recorded_place(project, checkpoint)
+        if place is not None:
+            return fail(place["condition"], place["message"], action=place.get("action"))
     shown = None
     if run is None:
         # A new terminal has no current Run (pod#292). It may bind the recorded Run inside the handoff itself, as the
@@ -690,11 +696,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
           and all(pending["decision"][key] == facts[key] for key in FACTS - {"ambiguity", "current_runtime"})):
         branch = "resume"
         if pending["verified"].get("unlinked") is True:
-            # A handoff begun without a current Run finishes, or replays, only where it began (pod#292).
-            place = recorded_place(project, checkpoint)
-            if place is not None:
-                return fail(place["condition"], place["message"], action=place.get("action"))
-            result["unlinked"] = True
+            result["unlinked"] = True  # Its recorded-worktree fence was checked above.
         if generation is not None and run["consumer_generation"] <= generation:
             return fail("generation_changed", "The rebound Run has no generation above the recorded one.", definitive=True,
                         action="Continue in a successor or recovery objective; do not run orca orchestration run-use by hand.")

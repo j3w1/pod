@@ -187,6 +187,31 @@ class UnlinkedTransitionTests(UnlinkedCase):
         self.take(decision)  # Back in the recorded worktree it completes, still with one run-use.
         self.assertEqual((self.entry()["state"], len(self.mutations)), ("done", 1))
 
+    def test_a_marked_pending_handoff_on_another_run_outside_never_aborts(self):
+        decision = self.assert_outcome("lost", "pending")
+        self.current = {"id": "other", "coordinator_handle": "next", "consumer_generation": 1}
+        other = self.elsewhere(); before = self.snapshot()
+        with self.inside(other):
+            error = self.refused(lambda: self.handoff(decision), code="owner_handoff_refused")
+        verdict = error.detail["owner_handoff"]
+        self.assertEqual((verdict["condition"], verdict["definitive"]), ("worktree_changed", False))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.entry()["state"], len(self.mutations)), ("pending", 1))
+
+    def test_a_replacing_caller_on_another_run_outside_never_aborts_a_marked_entry(self):
+        self.assert_outcome("lost", "pending")
+        self.terminals["next"] = "stale"; os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        self.current = {"id": "other", "coordinator_handle": "third", "consumer_generation": 1}
+        other = self.elsewhere()
+        decision = {**self.verdict()["facts"], "provenance": "user_direct", "instruction": "Make this terminal the coordinator"}
+        before = self.snapshot()
+        with self.inside(other):
+            error = self.refused(lambda: self.handoff(decision), code="owner_handoff_refused")
+        verdict = error.detail["owner_handoff"]
+        self.assertEqual((verdict["condition"], verdict["definitive"]), ("worktree_changed", False))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.entry()["state"], self.entry()["decision"]["to_owner"]), ("pending", "next"))
+
     def test_a_wrong_place_caller_never_ends_a_lost_holders_attempt(self):
         self.assert_outcome("lost", "pending")
         self.current = None  # The replacing terminal is bound to no Run; the lost holder's run-use never landed.
@@ -249,6 +274,30 @@ class RecoveryRouteTests(UnlinkedCase):
 
     def test_an_unreadable_recorded_worktree_reads_unverified(self):
         self.unlink()
+        with patch("pod.window._worktree_directory", side_effect=PodError("worktree_unreadable", SENTINEL)):
+            route = self.route()
+        self.assertEqual((route["status"], route["condition"]), ("unverified", "worktree_unreadable"))
+
+    def marked_pending(self):
+        self.unlink(); self.mode = "lost"; self.refused(lambda: self.take(self.decision()))
+        self.assertTrue(self.entry()["verified"]["unlinked"])
+
+    def test_a_marked_pending_resume_with_a_changed_branch_reads_blocked(self):
+        self.marked_pending()
+        git(self.project, "checkout", "-q", "-b", "moved")
+        route = self.route()
+        self.assertEqual((route["status"], route["condition"]), ("blocked", "worktree_changed"))
+        with self.inside():  # The pending holder itself cannot finish there.
+            self.assertEqual(self.verdict()["condition"], "worktree_changed")
+
+    def test_a_marked_pending_resume_with_a_missing_worktree_reads_blocked(self):
+        self.marked_pending()
+        with patch("pod.window._worktree_directory", return_value=False):
+            route = self.route()
+        self.assertEqual((route["status"], route["condition"]), ("blocked", "worktree_changed"))
+
+    def test_a_marked_pending_resume_with_an_unreadable_worktree_reads_unverified(self):
+        self.marked_pending()
         with patch("pod.window._worktree_directory", side_effect=PodError("worktree_unreadable", SENTINEL)):
             route = self.route()
         self.assertEqual((route["status"], route["condition"]), ("unverified", "worktree_unreadable"))

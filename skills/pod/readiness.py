@@ -283,8 +283,9 @@ def _handoff_route(state: dict, facts: dict) -> dict:
                 "message": "the Run was rebound outside a pending handoff"}
     workspace = (state.get("checkpoint") or {}).get("worktree")
     path = workspace.get("path") if isinstance(workspace, dict) else None
-    if condition == "fresh":
-        # A new terminal takes the handoff only in the recorded worktree, as it is recorded (pod#292).
+    if condition == "fresh" or pending["verified"].get("unlinked") is True:
+        # A new terminal takes the handoff, and finishes one it began without a current Run, only in the recorded
+        # worktree as it is recorded (pod#292).
         from .handoff import recorded_place
         place = recorded_place(None, state.get("checkpoint") or {}, caller=False)
         if place is not None:
