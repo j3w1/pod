@@ -12900,6 +12900,41 @@
         "tests.test_admission_view.AdmissionViewCorrectionTests.test_objective_is_bounded_and_every_response_stays_within_the_limit"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1109",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_closed_tab_intent.AfterRuntimeChangeTests.test_person_revocation_records_without_continuity_and_settlement_stays_byte_identical",
+        "tests.test_closed_tab_intent.AfterRuntimeChangeTests.test_person_keep_and_another_callers_decision_are_accepted",
+        "tests.test_closed_tab_intent.AfterRuntimeChangeTests.test_status_names_the_tab_intent_write_and_never_reopening",
+        "tests.test_closed_tab_intent.AfterRuntimeChangeTests.test_open_objective_keeps_the_rebind_wording"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1110",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_closed_tab_intent.AgentIntentTests.test_agent_keep_on_a_closed_objective_is_kept_by_agent_and_an_agent_may_revoke_it",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_every_kept_tab_carries_its_keeps_retention_reason_whatever_its_ownership",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_an_agent_cannot_revoke_the_persons_keep",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_an_intervening_agent_keep_never_downgrades_the_persons_keep",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_a_person_keep_stays_deciding_over_an_earlier_recorded_agent_row",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_an_agent_intent_on_an_open_objective_is_refused",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_the_closure_gate_counts_only_the_persons_keeps",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_observed_runtime_is_never_caller_input",
+        "tests.test_closed_tab_intent.AgentIntentTests.test_observed_runtime_is_refused_on_every_other_constraint_kind"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
