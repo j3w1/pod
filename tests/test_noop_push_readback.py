@@ -1,10 +1,11 @@
 """R115: a recorded push that moved no remote ref binds its validation from the remote's own update of the head.
 
-A push already on the remote leaves nothing to start a run, so a publication-derived row may bind a push or
-pull-request run on the exact head created at or after GitHub's newest recorded update of the branch to that head.
-Only that positive proof relaxes the floor, from a complete and agreeing second; every other answer keeps the
-submission, and Pod says which time it used. The validation keeps its publication's facts, so a successor that
-carried only the validation keeps the same floor.
+A push already on the remote leaves nothing to start a run, so a publication-derived row binds no run at execution
+and later binds a push or pull-request run on the exact head created at or after GitHub's newest recorded update of
+the branch to that head. This host's clock may lag GitHub's, so once readable activity shows that update the floor is
+never below it: its second when complete and agreeing, else the next whole second. Readable activity that does not
+show it holds the row; only without activity information does the submission stay, and Pod says which time it used.
+The validation keeps its publication's facts, so a successor that carried only the validation keeps the same floor.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ from unittest.mock import patch
 
 from pod.governor import (_read_journal, _record_path, _write_journal, carry_into, execute, observe_candidate,
                           prepare_candidate, reconcile, status)
-from pod.governor_effects import publication_floor
+from pod.governor_effects import _triggered_runs, publication_floor
 from pod.internal import acknowledge, run as internal_run
 from tests.kernel_support import (NOW, BRANCH, COMMIT, COMMIT2, KernelCase, GovernorFakePort as FakePort, action,
                                   authorization, dispatch, git)
@@ -73,6 +74,22 @@ class NoopPushCase(GovernorCase):
         return reconcile(self.project, "objective", owner="owner", record_id=record_id, port=port or self.port,
                          now=NOW)
 
+    def row(self, record_id):
+        return next(row for row in _read_journal(_record_path(self.project, "objective"))["actions"]
+                    if row["record_id"] == record_id)
+
+    def bound_while_unreadable(self, *, seconds):
+        """A no-op push whose activity is unreadable at first: the submission stays and binds a running run created
+        `seconds` after it. Returns the derived row and that run."""
+        self.port.unreadable.add("activity")
+        derived = self.derived(self.push(landed=True)["record_id"])
+        run = self.ci_run(seconds=seconds, conclusion=None)
+        bound = self.reconcile(derived)
+        self.assertEqual((bound["status"], bound["receipt"]["provider"]["run_id"]), ("pending", run["id"]))
+        self.assertEqual(bound["receipt"]["provider"]["created_after"], {"at": NOW.isoformat(), "basis": "publication"})
+        self.port.unreadable.discard("activity")
+        return derived, run
+
 
 class NoopPushTests(NoopPushCase):
     """PoD#1 — a no-op push settles from a run created after the remote's own update of the head."""
@@ -117,27 +134,55 @@ class NoopPushTests(NoopPushCase):
         self.assertIn(f"run {stale['id']} was not created at or after", held["reason"])
         self.assertIn("the remote's newest update of the branch to the head", held["reason"])
 
+    def test_a_push_that_moved_no_ref_binds_no_triggered_run(self):
+        # A passing run on the head, created after the submission on this host's clock, is already listed.
+        self.port.updates[BRANCH_NAME] = HISTORY
+        run = self.ci_run(seconds=1, event="push")
+        pushed = self.push(landed=True)
+        provider = pushed["receipt"]["provider"]
+        self.assertEqual((provider["ref_changed"], provider["triggered"]), (False, {}))
+        derived = self.derived(pushed["record_id"])
+        row = self.row(derived)
+        self.assertIsNone(row["receipt"]["provider"])
+        self.assertIn("moved no ref, so it started no run", row["receipt"]["detail"])
+        # The same lookup binds that run for a push that moved the ref; the row's recorded fact says this one did not.
+        publication = self.row(pushed["record_id"])
+        self.assertEqual(_triggered_runs(self.port, publication, COMMIT), {})
+        self.assertEqual(_triggered_runs(self.port, publication, COMMIT, ref_changed=True)["ci.yml"]["id"], run["id"])
+        # The derived row binds only by readback, under its floor.
+        settled = self.reconcile(derived)
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", run["id"]))
+        self.assertEqual(settled["receipt"]["provider"]["created_after"],
+                         {"at": floor_at(-10), "basis": "remote_update"})
+
 
 class NewestUpdateTests(NoopPushCase):
-    """PoD#1 and PoD#3 — the floor is the newest update that set the head, never an older interval.
+    """PoD#1 and PoD#3 — the floor is never below the newest update that set the head, never an older interval.
 
     GitHub's times may lead this host's clock, and the branch may move while the push is in flight, so updates
-    stamped after the submission may already be what the no-op push found.
+    stamped after the submission may already be what the no-op push found. A second the update shares with another
+    commit, a deletion or a possibly unlisted update floors at the next whole second, never the submission.
     """
 
-    def assert_floor(self, updates, *, floor, stale, fresh, basis="remote_update"):
-        """A run created at `stale` (seconds from the submission) never binds; one at `fresh` settles the row."""
+    def assert_floor(self, updates, *, floor, stale, fresh, note=None):
+        """A passing run created at `stale` (seconds from the submission), already listed when the push is recorded,
+        never binds; one created at `fresh` settles the row with `floor` as the remote's update."""
         self.port.updates[BRANCH_NAME] = updates
-        derived = self.derived(self.push(landed=True)["record_id"])
         old = self.ci_run(seconds=stale)
+        pushed = self.push(landed=True)
+        self.assertEqual(pushed["receipt"]["provider"]["triggered"], {})
+        derived = self.derived(pushed["record_id"])
         held = self.reconcile(derived)
         self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
-        self.assertIn(f"created at or after {floor}", held["reason"])
+        self.assertIn(f"created at or after {floor} (the remote's newest update of the branch to the head",
+                      held["reason"])
+        if note is not None:
+            self.assertIn(note, held["reason"])
         self.assertNotIn(old["id"], str(held["receipt"].get("provider")))
         new = self.ci_run(seconds=fresh)
         settled = self.reconcile(derived)
         self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", new["id"]))
-        self.assertEqual(settled["receipt"]["provider"]["created_after"], {"at": floor, "basis": basis})
+        self.assertEqual(settled["receipt"]["provider"]["created_after"], {"at": floor, "basis": "remote_update"})
         return held
 
     def test_a_slow_host_clock_binds_only_after_the_newest_update_of_the_head(self):
@@ -146,12 +191,47 @@ class NewestUpdateTests(NoopPushCase):
                            update(COMMIT2, seconds=1, before=COMMIT, kind="force_push"), update(COMMIT, -10)],
                           floor=floor_at(seconds=2), stale=-300, fresh=3)
 
-    def test_movement_during_the_push_within_its_second_keeps_the_submission(self):
-        # Moved away and back within one second: that second's updates disagree, so nothing is proved.
-        held = self.assert_floor([update(COMMIT, kind="force_push"), update(COMMIT2, before=COMMIT, kind="force_push"),
-                                  update(COMMIT, -10)], floor=NOW.isoformat(), stale=-300, fresh=1,
-                                 basis="publication")
-        self.assertIn("do not all set it to " + COMMIT[:12], held["reason"])
+    def test_an_ambiguous_second_ahead_of_the_host_clock_binds_only_from_the_next_second(self):
+        # This host is 3 s behind GitHub. The head was set at T-10m, a run on it was created at T+1s, the branch
+        # moved away and back within T+2s, and the push found the head at T+3s.
+        self.assert_floor([update(COMMIT, seconds=2, kind="force_push"),
+                           update(COMMIT2, seconds=2, before=COMMIT, kind="force_push"), update(COMMIT, -10)],
+                          floor=floor_at(seconds=3), stale=1, fresh=3,
+                          note=f"at {floor_at(seconds=2)}, the second of its newest update to {COMMIT[:12]}, "
+                               f"do not all set it to {COMMIT[:12]}, so the floor is the start of the next")
+
+    def test_an_incomplete_second_ahead_of_the_host_clock_binds_only_from_the_next_second(self):
+        # The same, but the update past the limit shares that second, so its updates may go on past the response.
+        self.assert_floor(LATER + [update(COMMIT, seconds=2, kind="force_push"),
+                                   update(COMMIT, seconds=2, kind="force_push")],
+                          floor=floor_at(seconds=3), stale=1, fresh=3,
+                          note=f"truncated (20 listed, limit 20) within {floor_at(seconds=2)}, the second of its "
+                               "newest update")
+
+    def test_a_run_bound_before_a_later_complete_update_of_the_head_is_rejected(self):
+        # Unreadable activity left the submission, which bound a run created after it on this host's clock.
+        derived, early = self.bound_while_unreadable(seconds=2)
+        # Readable activity then shows the head set in a later second that is complete and agrees: the run, though
+        # it passed, predates that update and is rejected, and nothing else is listed after it.
+        self.port.updates[BRANCH_NAME] = [update(COMMIT, seconds=5, kind="force_push"),
+                                          update(COMMIT2, -1, before=COMMIT, kind="force_push"), update(COMMIT, -10)]
+        self.port.complete(early["id"], "success")
+        held = self.reconcile(derived)
+        self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+        self.assertIn(f"run {early['id']} was not created at or after {floor_at(seconds=5)} (the remote's newest "
+                      "update of the branch to the head); it is not this row's run", held["reason"])
+        self.assertEqual(self.row(derived)["rejected_run"]["run_id"], early["id"])
+        fresh = self.ci_run(seconds=6)
+        settled = self.reconcile(derived)
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", fresh["id"]))
+        self.assertEqual(settled["receipt"]["provider"]["created_after"],
+                         {"at": floor_at(seconds=5), "basis": "remote_update"})
+
+    def test_movement_during_the_push_within_its_second_binds_only_from_the_next_second(self):
+        # Moved away and back within the submission's second: that second disagrees, so it is never the floor.
+        self.assert_floor([update(COMMIT, kind="force_push"), update(COMMIT2, before=COMMIT, kind="force_push"),
+                           update(COMMIT, -10)], floor=floor_at(seconds=1), stale=-300, fresh=1,
+                          note="do not all set it to " + COMMIT[:12])
 
     def test_deletion_and_recreation_during_the_push_bind_only_from_the_new_branch(self):
         self.assert_floor([update(COMMIT, seconds=2, before=ABSENT, kind="branch_creation"),
@@ -365,11 +445,28 @@ class RefChangingPushTests(NoopPushCase):
         self.assert_submission_rule(self.derived(pushed["record_id"]))
         self.assertEqual(self.port.update_reads, [])
 
-    def test_an_older_row_whose_activity_shows_the_push_set_the_head_keeps_the_submission(self):
-        # The newest update of the head, three seconds after the submission, may be this push's own.
+    def test_an_older_row_floors_at_its_newest_update_of_the_head_after_the_submission(self):
+        derived = self.older_row()
+        earlier = self.ci_run(-5)
+        # Unreadable activity leaves the submission, which binds a running run created after it.
+        self.port.unreadable.add("activity")
+        between = self.ci_run(seconds=1, conclusion=None)
+        self.assertEqual(self.reconcile(derived)["receipt"]["provider"]["run_id"], between["id"])
+        self.port.unreadable.discard("activity")
+        self.port.complete(between["id"], "success")
+        # Without the fact, the newest update of the head, three seconds after the submission, may be this push's own
+        # or one stamped later by a clock ahead of this host's; either way no run created before it binds.
         self.port.updates[BRANCH_NAME] = [update(COMMIT, seconds=3), update(COMMIT2, -20, before=COMMIT)]
-        self.assert_submission_rule(self.older_row(), note="is not before the submission's second, so it may be "
-                                                           "this publication's own")
+        held = self.reconcile(derived)
+        self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+        self.assertIn(f"run {between['id']} was not created at or after {floor_at(seconds=3)} (the remote's newest "
+                      "update of the branch to the head)", held["reason"])
+        self.assertNotIn(earlier["id"], str(held["receipt"].get("provider")))
+        later = self.ci_run(1)
+        settled = self.reconcile(derived)
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", later["id"]))
+        self.assertEqual(settled["receipt"]["provider"]["created_after"],
+                         {"at": floor_at(seconds=3), "basis": "remote_update"})
 
     def test_an_older_row_binds_after_an_earlier_newest_update_of_the_head(self):
         self.port.updates[BRANCH_NAME] = HISTORY
@@ -383,56 +480,114 @@ class RefChangingPushTests(NoopPushCase):
 
 
 class FallbackTests(NoopPushCase):
-    """A no-op push without positive proof of the remote's earlier update keeps the submission, saying why."""
+    """A no-op push's floor when its activity proves no complete, agreeing second of the head (R115).
 
-    def test_every_unproved_activity_keeps_the_submission(self):
-        pushed = self.push(landed=True)
-        derived = self.derived(pushed["record_id"])
+    Without activity information the submission stays, saying why. Readable activity that lists no update setting
+    the head holds the row: no floor, nothing binds and a bound run is neither accepted nor rejected. An ambiguous or
+    incomplete second of the newest update of the head floors at the next whole second.
+    """
+
+    def port_with(self, updates):
+        """A port sharing this case's runs and heads whose activity is `updates`: None is unreadable, and a mapping
+        is an answer in an unsupported shape."""
+        port = FakePort()
+        port.runs_by, port.run_status = self.port.runs_by, self.port.run_status
+        port.heads = dict(self.port.heads)
+        if updates is None:
+            port.unreadable.add("activity")
+        elif isinstance(updates, dict):
+            port.branch_updates = lambda *, branch: dict(updates)
+        else:
+            port.updates[BRANCH_NAME] = updates
+        return port
+
+    def held(self, cases, *, expect, runs):
+        """Each case's activity holds the row, its reason naming the floor used (`expect`) and the case's own."""
+        for name, updates, reason in cases:
+            with self.subTest(name):
+                held = self.reconcile(self.derived_row, self.port_with(updates))
+                self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+                self.assertIn(expect, held["reason"])
+                self.assertIn(reason, held["reason"])
+                for run in runs:
+                    self.assertNotIn(run["id"], str(held["receipt"].get("provider")))
+
+    def test_without_activity_information_the_submission_stays(self):
+        self.derived_row = self.derived(self.push(landed=True)["record_id"])
         earlier = self.ci_run(-5)
-        other = [update(COMMIT2, 21 - index, before=COMMIT) for index in range(21)]
-        named = f"{floor_at(-10)}, the second of its newest update to {COMMIT[:12]}"
-        cases = (
+        self.held((
             ("unreadable", None, "is not readable (remote_read_failed)"),
-            ("empty", [], f"no listed update of branch agent/release sets it to {COMMIT[:12]} (0 listed"),
-            ("truncated", other, "were truncated (20 listed, limit 20) and none sets it to " + COMMIT[:12]),
-            ("other commit", [update(COMMIT2, -10)], "no listed update of branch agent/release sets it to"),
-            ("deleted", [update(COMMIT, -10, kind="branch_deletion")], "no listed update of branch agent/release"),
-            ("same second disagrees", [update(COMMIT, -10), update(COMMIT2, -10)],
-             f"the updates of branch agent/release at {named}, do not all set it to {COMMIT[:12]}"),
-            ("deleted in the same second", [update(COMMIT, -10), update(ABSENT, -10, kind="branch_deletion")],
-             "do not all set it to"),
-            ("other ref", [update(COMMIT, -10, ref="refs/heads/other")], "no listed update of branch agent/release"),
+            ("unsupported shape", {"activity": []}, "answered in an unsupported shape"),
+            ("empty", [], "the activity of branch agent/release lists no update"),
             ("unreadable time", [{**update(COMMIT, -10), "timestamp": None}], "reports no readable time"),
             ("not newest first", [update(COMMIT2, -20), update(COMMIT, -10)], "are not newest first"),
-            # The update past the limit shares the head's second: it disagrees, or that second may go on unlisted.
-            ("disagreeing update past the limit", LATER + [update(COMMIT, -10), update(COMMIT2, -10)],
-             f"the updates of branch agent/release at {named}, do not all set it to"),
-            ("agreeing update past the limit", LATER + [update(COMMIT, -10), update(COMMIT, -10)],
-             f"were truncated (20 listed, limit 20) within {named}, so that second's updates may go on past"),
             ("update past the limit without a time", LATER + [update(COMMIT, -10),
                                                               {**update(COMMIT2, -30), "timestamp": None}],
              "reports no readable time"),
-        )
-        for name, updates, reason in cases:
-            with self.subTest(name):
-                port = FakePort()
-                port.runs_by, port.run_status = self.port.runs_by, self.port.run_status
-                port.heads = dict(self.port.heads)
-                if updates is None:
-                    port.unreadable.add("activity")
-                else:
-                    port.updates[BRANCH_NAME] = updates
-                held = self.reconcile(derived, port)
-                self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
-                self.assertIn(f"created at or after {NOW.isoformat()} (the submission", held["reason"])
-                self.assertIn(reason, held["reason"])
-                self.assertNotIn(earlier["id"], str(held["receipt"].get("provider")))
-        # The same row settles from the earlier run once the remote's own update is proved, also when the update past
-        # the limit is in an earlier second.
-        self.port.updates[BRANCH_NAME] = LATER + [update(COMMIT, -10), update(COMMIT2, -20, before=COMMIT)]
+        ), expect=f"created at or after {NOW.isoformat()} (the submission", runs=[earlier])
+        # A limitation: without activity information a run created after the submission binds from it.
+        later = self.ci_run(1)
+        settled = self.reconcile(self.derived_row, self.port_with(None))
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", later["id"]))
+        self.assertEqual(settled["receipt"]["provider"]["created_after"],
+                         {"at": NOW.isoformat(), "basis": "publication"})
+
+    def test_activity_that_lists_no_update_of_the_head_holds_without_a_floor(self):
+        self.derived_row = self.derived(self.push(landed=True)["record_id"])
+        earlier, later = self.ci_run(-5), self.ci_run(1)
+        listed = f"no listed update of branch agent/release sets it to {COMMIT[:12]} (1 listed, limit 20)"
+        self.held((
+            ("truncated", [update(COMMIT2, 21 - index, before=COMMIT) for index in range(21)],
+             "were truncated (20 listed, limit 20) and none sets it to " + COMMIT[:12]),
+            ("other commit", [update(COMMIT2, -10)], listed),
+            ("deleted", [update(COMMIT, -10, kind="branch_deletion")], listed),
+            ("other ref", [update(COMMIT, -10, ref="refs/heads/other")], listed),
+        ), expect="the submission is no safe floor, and no run is bound, accepted or rejected", runs=[earlier, later])
+        # The next readback settles it once the activity lists the update that set the head.
+        self.port.updates[BRANCH_NAME] = HISTORY
+        settled = self.reconcile(self.derived_row)
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", later["id"]))
+        self.assertEqual(settled["receipt"]["provider"]["created_after"],
+                         {"at": floor_at(-10), "basis": "remote_update"})
+
+    def test_a_held_floor_neither_accepts_nor_rejects_a_bound_run(self):
+        derived, run = self.bound_while_unreadable(seconds=1)
+        self.port.updates[BRANCH_NAME] = [update(COMMIT2, -1, before=COMMIT)]
+        self.port.complete(run["id"], "success")
+        held = self.reconcile(derived)
+        self.assertEqual((held["status"], held["action"]), ("pending", "hold"))
+        self.assertIn(f"no listed update of branch agent/release sets it to {COMMIT[:12]}", held["reason"])
+        self.assertNotIn("created at or after", held["reason"])
+        row = self.row(derived)
+        self.assertEqual((row["receipt"]["provider"]["run_id"], row.get("rejected_run")), (run["id"], None))
+        # Once the activity shows the head set, the bound run is verified against that update and settles the row.
+        self.port.updates[BRANCH_NAME] = [update(COMMIT, kind="force_push"), update(COMMIT2, -1, before=COMMIT)]
         settled = self.reconcile(derived)
-        self.assertEqual((settled["status"], settled["receipt"]["provider"]["created_after"]),
-                         ("PASS", {"at": floor_at(-10), "basis": "remote_update"}))
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", run["id"]))
+        self.assertEqual(settled["receipt"]["provider"]["created_after"],
+                         {"at": NOW.isoformat(), "basis": "remote_update"})
+
+    def test_an_ambiguous_or_incomplete_second_floors_at_the_next_second(self):
+        self.derived_row = self.derived(self.push(landed=True)["record_id"])
+        in_second = self.ci_run(-10)
+        named = f"{floor_at(-10)}, the second of its newest update to {COMMIT[:12]}"
+        disagrees = f"the updates of branch agent/release at {named}, do not all set it to {COMMIT[:12]}"
+        self.held((
+            ("same second disagrees", [update(COMMIT, -10), update(COMMIT2, -10)], disagrees),
+            ("deleted in the same second", [update(COMMIT, -10), update(ABSENT, -10, kind="branch_deletion")],
+             disagrees),
+            # The update past the limit shares the head's second: it disagrees, or that second may go on unlisted.
+            ("disagreeing update past the limit", LATER + [update(COMMIT, -10), update(COMMIT2, -10)], disagrees),
+            ("agreeing update past the limit", LATER + [update(COMMIT, -10), update(COMMIT, -10)],
+             f"were truncated (20 listed, limit 20) within {named}, so that second's updates may go on past"),
+        ), expect=(f"created at or after {floor_at(-10, seconds=1)} (the remote's newest update of the branch to the "
+                   "head; "), runs=[in_second])
+        # The run in that second binds once the update past the limit is in an earlier second, completing it.
+        self.port.updates[BRANCH_NAME] = LATER + [update(COMMIT, -10), update(COMMIT2, -20, before=COMMIT)]
+        settled = self.reconcile(self.derived_row)
+        self.assertEqual((settled["status"], settled["receipt"]["provider"]["run_id"]), ("PASS", in_second["id"]))
+        self.assertEqual(settled["receipt"]["provider"]["created_after"],
+                         {"at": floor_at(-10), "basis": "remote_update"})
 
     def test_a_requested_dispatch_keeps_its_own_rule(self):
         self.push(landed=True)

@@ -1659,7 +1659,8 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
     The run exists whether or not anyone dispatched it. It shares the logical key a dispatch
     would use, so failure gating and de-duplication see it, but it records its run's read-back
     event and is never proof for a dispatch. The executor supplies the run identities it read
-    back; a manual outcome leaves them for readback. Each row also records the publication's own facts its readback
+    back; a manual outcome leaves them for readback, and a push that moved no ref started none, so its rows bind
+    only by readback under their floor (R115). Each row also records the publication's own facts its readback
     floor needs (`publication`: the branch pushed and, when known, `ref_changed`), so it keeps that floor where the
     settled publication row is absent, as in a successor that carried only the validation (R115, R118).
     """
@@ -1680,7 +1681,9 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
                for other in journal["actions"]):
             continue
         _compact(journal)
-        run = triggered.get(workflow)
+        # A push that moved no ref started no run, so its validation binds one only by readback under its floor.
+        noop = facts.get("ref_changed") is False
+        run = None if noop else triggered.get(workflow)
         journal["actions"].append({
             "record_id": digest({"derived": row["record_id"], "workflow": workflow}),
             "logical_key": key, "attempt": 1, "action": action, "candidate_id": row["candidate_id"],
@@ -1690,7 +1693,9 @@ def _derive_validation(journal: dict, row: dict, moment: str) -> None:
             "cancel_safe": True, "effects": [effect], "run_event": run.get("event") if run else None,
             "receipt": {"started_at": row["receipt"]["started_at"], "finished_at": None,
                         "observed_elapsed_s": None, "provider": _provider_run(run) if run else None,
-                        "evidence": [], "detail": None if run else "started by the publication; run not read back yet"},
+                        "evidence": [], "detail": None if run else (
+                            "the publication moved no ref, so it started no run; one binds by readback under its floor"
+                            if noop else "started by the publication; run not read back yet")},
             "classification": None, "classifications": [], "derived_from": row["record_id"],
             "publication": deepcopy(facts)})
 

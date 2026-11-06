@@ -3793,6 +3793,10 @@
       "offline_test": [
         "tests.test_noop_push_readback.NoopPushTests.test_a_noop_push_binds_a_run_created_after_the_remote_update",
         "tests.test_noop_push_readback.NoopPushTests.test_a_bound_run_from_before_the_remote_update_is_rejected",
+        "tests.test_noop_push_readback.NoopPushTests.test_a_push_that_moved_no_ref_binds_no_triggered_run",
+        "tests.test_noop_push_readback.NewestUpdateTests.test_an_ambiguous_second_ahead_of_the_host_clock_binds_only_from_the_next_second",
+        "tests.test_noop_push_readback.NewestUpdateTests.test_an_incomplete_second_ahead_of_the_host_clock_binds_only_from_the_next_second",
+        "tests.test_noop_push_readback.NewestUpdateTests.test_a_run_bound_before_a_later_complete_update_of_the_head_is_rejected",
         "tests.test_noop_push_readback.NewestUpdateTests.test_a_slow_host_clock_binds_only_after_the_newest_update_of_the_head",
         "tests.test_noop_push_readback.NewestUpdateTests.test_deletion_and_recreation_during_the_push_bind_only_from_the_new_branch",
         "tests.test_noop_push_readback.NewestUpdateTests.test_deletion_and_recreation_before_the_push_bind_only_from_the_new_branch",
@@ -3821,10 +3825,13 @@
       ],
       "offline_test": [
         "tests.test_noop_push_readback.RefChangingPushTests.test_a_push_that_moved_the_ref_keeps_the_submission",
-        "tests.test_noop_push_readback.RefChangingPushTests.test_an_older_row_whose_activity_shows_the_push_set_the_head_keeps_the_submission",
+        "tests.test_noop_push_readback.RefChangingPushTests.test_an_older_row_floors_at_its_newest_update_of_the_head_after_the_submission",
         "tests.test_noop_push_readback.RefChangingPushTests.test_an_older_row_binds_after_an_earlier_newest_update_of_the_head",
-        "tests.test_noop_push_readback.NewestUpdateTests.test_movement_during_the_push_within_its_second_keeps_the_submission",
-        "tests.test_noop_push_readback.FallbackTests.test_every_unproved_activity_keeps_the_submission",
+        "tests.test_noop_push_readback.NewestUpdateTests.test_movement_during_the_push_within_its_second_binds_only_from_the_next_second",
+        "tests.test_noop_push_readback.FallbackTests.test_without_activity_information_the_submission_stays",
+        "tests.test_noop_push_readback.FallbackTests.test_activity_that_lists_no_update_of_the_head_holds_without_a_floor",
+        "tests.test_noop_push_readback.FallbackTests.test_a_held_floor_neither_accepts_nor_rejects_a_bound_run",
+        "tests.test_noop_push_readback.FallbackTests.test_an_ambiguous_or_incomplete_second_floors_at_the_next_second",
         "tests.test_noop_push_readback.FallbackTests.test_a_requested_dispatch_keeps_its_own_rule",
         "tests.test_governor.DecisionTests.test_a_dispatch_needs_the_candidate_on_the_branch_first",
         "tests.test_noop_push_readback.GuidanceTests.test_the_governor_reference_names_governor_publication"
