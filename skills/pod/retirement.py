@@ -148,7 +148,7 @@ OLDER_RECOVERY = {"checkpoint_binding": READ, "placement_binding": READ, "failed
 OLDER_CHECKPOINT_BINDING = {"worktree": READ, "candidate": str, "criteria": [str],
                             "objective_source": (None, OLDER_SOURCE), "plan_revision": str,
                             "policy_revision": str}
-OLDER_WORKTREE = {"path": READ, "branch": str, "repo_key": (None, str), "repository": (None, str)}
+OLDER_WORKTREE = {"path": READ, "branch": (None, str), "repo_key": (None, str), "repository": (None, str)}
 OLDER_REF = {"runId": READ, "runtime": str}
 OLDER_BINDING = ("dispatchId", "runId", "taskId", "workerId", "worktreeId", "terminalHandle")
 

@@ -459,6 +459,24 @@ class SupersededDescriptiveTests(unittest.TestCase):
                     target = target[part]
                 target[path[-1]] = value
                 self.assertIsNotNone(older_scope(changed, "objective")[1])
+        raw = self.shape_record()
+        cases = ((('constraints', 0, 'kind'), 7, 'constraints[0].kind'),
+                 (('constraints', 0, 'kind'), 'unsupported', 'constraints[0].kind'),
+                 (('constraints', 0, 'value'), None, 'constraints[0].value'),
+                 (('checkpoint', 'candidate'), None, 'checkpoint.candidate'),
+                 (('checkpoint', 'candidate'), 'lone\ud800surrogate', 'checkpoint.candidate'))
+        for path, value, expected in cases:
+            with self.subTest(path=path, value=repr(value)):
+                changed = deepcopy(raw)
+                target = changed
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = value
+                found = older_scope(changed, "objective")[1]
+                self.assertEqual(found, expected)
+        changed = deepcopy(raw)
+        del changed["constraints"][0]["value"]
+        self.assertEqual(older_scope(changed, "objective")[1], "constraints[0].value")
 
     def test_descriptive_maps_require_their_documented_members(self):
         raw = self.shape_record()
@@ -486,6 +504,20 @@ class SupersededDescriptiveTests(unittest.TestCase):
         _admission(raw)["effective_evidence"] = {}
         _admission(raw)["route_decision"]["constraint_refs"] = [None, "ceiling"]
         self.assertEqual(older_scope(raw, "objective"), (["run"], None))
+
+    def test_null_branch_remains_end_to_end_eligible(self):
+        raw = self.shape_record()
+        recovery = _admission(raw)["recovery"]
+        raw["checkpoint"]["worktree"]["branch"] = None
+        recovery["placement_binding"]["branch"] = None
+        recovery["checkpoint_binding"]["worktree"] = deepcopy(raw["checkpoint"]["worktree"])
+        recovery["checkpoint_binding"]["worktree"]["branch"] = None
+        self.case.record_path().write_text(json.dumps(raw))
+        before, journal = self.case.record_path().read_bytes(), self.case.journal()
+        verdict = self.case.retire()["objectives"][0]
+        self.assertEqual((verdict["status"], verdict["record_class"]), ("eligible", "older"), verdict)
+        self.assertEqual((self.case.record_path().read_bytes(), self.case.journal()), (before, journal))
+        self.assertFalse(self.case.sidecar().exists())
 
     def test_sanitized_historical_shapes_remain_eligible(self):
         raw = self.shape_record()

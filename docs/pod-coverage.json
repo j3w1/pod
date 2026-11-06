@@ -10214,6 +10214,7 @@
         "tests.test_retirement_superseded.SupersededDescriptiveTests.test_scalar_types_and_list_containers_are_exact",
         "tests.test_retirement_superseded.SupersededDescriptiveTests.test_descriptive_maps_require_their_documented_members",
         "tests.test_retirement_superseded.SupersededDescriptiveTests.test_other_historical_constraint_and_nullable_shapes_remain_supported",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_null_branch_remains_end_to_end_eligible",
         "tests.test_retirement_superseded.SupersededDescriptiveTests.test_sanitized_historical_shapes_remain_eligible"
       ],
       "status": "NOT_RUN"
