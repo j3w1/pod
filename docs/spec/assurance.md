@@ -178,6 +178,14 @@ A checkpoint's `verification_gaps` is a list of at most 64 nonempty text items, 
 
 - <a id="a609"></a>**A609** — A sentence, number, mapping, null or malformed item given as `verification_gaps` refuses precisely and writes nothing; genuine gap lists and `[]` are kept exactly as given; a previously stored sentence or other non-list value, including null, false, zero, empty text and an empty mapping, is one unresolved gap in a release reason or push warning, not hundreds and not none.
 
+### R219 — Say where an unverified item belongs
+
+Type: B,H · Scenarios: [A934](#a934)
+
+The installed delivery guidance says, in plain words, that a checkpoint's `verification_gaps` are gaps in verifying the merge unit itself, such as a check not run on the candidate, and that they hold the merge; that an item that can only happen after the merge or needs the owner's own acceptance is an obligation, `blocked_external` or waiting, which does not hold the merge; and that a criterion needing such an item stays open, honestly, after the merge. When the Governor defers a merge, release or deploy on `verification_gaps`, its reason detail says each gap holds the merge and a post-merge or owner-acceptance item belongs in an obligation, and its next action names both homes. The gate is unchanged: any remaining gap still defers those requests, and a push still only warns. The text follows the R71 documentation contract.
+
+- <a id="a934"></a>**A934** — A merge request on a candidate whose only gap is a post-merge owner acceptance check still defers on `verification_gaps` alone, with a reason detail and next action that name the merge-unit gap and the obligation homes and say the criterion stays open after the merge; the installed delivery reference names both homes.
+
 ### R175 — Allocate requirement and scenario identifiers uniquely, not contiguously
 
 Type: B · Scenarios: [A610](#a610)
