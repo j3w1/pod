@@ -1458,6 +1458,22 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
                     _reason(verdict["reasons"], "correctness", "assurance_unbound",
                             "required project-policy audit lacks current candidate proof: "
                             + ", ".join(gap["obligation"] + ": " + gap["gap"] for gap in gaps))
+        target_binding = None
+        merge_readiness = None
+        if proposal["kind"] == "merge":
+            from .governance import merge_admission_target
+            target_binding = merge_admission_target(project, map_of(state), merge_target(verdict["unit"]))
+            target_commit = (target_binding or {}).get("commit")
+            if target_commit is not None and verdict["commit"] is not None:
+                contains = gitio.is_ancestor(project, target_commit, verdict["commit"])
+                if contains is not True:
+                    merge_readiness = (
+                        f"Merge or rebase {target_binding['ref']} at {target_commit} into the candidate, "
+                        "then re-review the affected scope under the existing rules and prepare the new candidate.")
+                    _reason(verdict["reasons"], "correctness", "candidate_missing_target",
+                            f"Candidate {verdict['commit']} "
+                            + ("does not contain" if contains is False else "cannot be proved to contain")
+                            + f" the bound target {target_binding['ref']} at {target_commit}. " + merge_readiness)
         exception_record = _exception_grant(governor_policy, supplied, action=proposal, objective=objective,
                                             candidate_ids=verdict["candidate_ids"], now=now)
         decision, exception_result = _resolve(verdict, exception_record, governor_policy.get("mode", "enforce"))
@@ -1470,10 +1486,8 @@ def _admit(project: Path, objective: str, *, owner: str, action: dict, exception
             next_action = " ".join(reason["detail"] for reason in route_reasons)
         elif missing is not None:
             next_action = missing["detail"]
-        target_binding = None
-        if proposal["kind"] == "merge":
-            from .governance import merge_admission_target
-            target_binding = merge_admission_target(project, map_of(state), merge_target(verdict["unit"]))
+        if merge_readiness is not None:
+            next_action = merge_readiness
         capability = current_decision()
         if capability is not None and capability.kind in ("authorization", "governor_exception") and not capability.reused:
             capability.finalize(proposal)

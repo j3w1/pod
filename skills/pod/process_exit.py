@@ -59,8 +59,18 @@ MISMATCH, UNVERIFIED = "host_exit_mismatch", "host_exit_unverified"
 FOREIGN_HOST, FOREIGN_RUNTIME, STALE = "host_exit_foreign_host", "host_exit_foreign_runtime", "host_exit_stale"
 # Transport and contract faults: the verifier did not answer this action at all, whatever ids it was given, so the
 # call starts no further round (pod#219, pod#227). The other request-level codes are answers under the contract that
-# depend on the group's host or the request's own time, and never stop a call.
+# depend on the group's host or the request's own time, and never stop a call on their own.
 STOPPING = frozenset({FAILED, TIMEOUT, MALFORMED, MISMATCH})
+# The verifier can fail one request transiently (a per-request deadline or exception late in its lookup, about a
+# quarter of requests when several overlap) while the next verifies. So a request answering `verified: false` is asked
+# once more, never twice, in a later round and only while every unsent request still fits R beside it: a re-ask never
+# displaces a planned request and the call never exceeds R (pod#275). Its answer replaces the first.
+# Unverified answers that stop a call (pod#275): once this many requests stand unverified (after their re-ask, or
+# with no room for one) and no request has answered `verified: true`, the call starts no further round. Three is the
+# lone first request and both requests of the round after it when no re-ask fits; one or two never stop a call, three
+# with nothing verified read as a verifier that is not verifying now, and still save 11 of the 14 requests a full call
+# sends. Any verified answer, usable or not (foreign host, foreign runtime, stale), keeps every later round.
+UNVERIFIED_STOP = 3
 # Entry-level codes: only that id holds.
 HOST_UNKNOWN, IDENTITY_MISMATCH = "host_exit_host_unknown", "host_exit_identity_mismatch"
 PRESENT, PARTIAL = "host_exit_present", "host_exit_partial"
