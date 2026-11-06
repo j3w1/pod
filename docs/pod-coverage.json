@@ -10255,7 +10255,24 @@
         "tests.test_retirement_superseded.SupersededScopeTests.test_a_native_reference_in_assignments_refuses",
         "tests.test_retirement_superseded.SupersededScopeTests.test_a_start_request_held_only_in_recovery_refuses",
         "tests.test_retirement_superseded.SupersededScopeTests.test_a_first_format_record_with_effects_refuses",
-        "tests.test_retirement_superseded.SupersededScopeTests.test_an_unknown_key_refuses"
+        "tests.test_retirement_superseded.SupersededScopeTests.test_an_unknown_key_refuses",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_context_and_constraint_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_checkpoint_scalar_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_checkpoint_list_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_admission_scalar_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_request_and_effective_evidence_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_effective_evidence_route_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_effective_route_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_route_decision_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_route_decision_flags_and_containers_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_route_decision_effective_and_reference_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_checkpoint_binding_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_checkpoint_binding_source_shapes_refuse_hidden_content",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_scalar_types_and_list_containers_are_exact",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_descriptive_maps_require_their_documented_members",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_other_historical_constraint_and_nullable_shapes_remain_supported",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_null_branch_remains_end_to_end_eligible",
+        "tests.test_retirement_superseded.SupersededDescriptiveTests.test_sanitized_historical_shapes_remain_eligible"
       ],
       "status": "NOT_RUN"
     },
@@ -11188,6 +11205,22 @@
       "offline_test": [
         "tests.test_review_report_files.ConsumedReviewTests.test_selecting_a_review_consumed_with_listed_files_names_the_cause",
         "tests.test_review_report_files.ConsumedReviewTests.test_a_changed_scope_names_its_own_deviation"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A990",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_binding_source_bound.BindingSourceBoundTests.test_bound_is_both_packet_bounds_together",
+        "tests.test_binding_source_bound.BindingSourceBoundTests.test_review_over_64_and_at_the_bound_records_its_receipt",
+        "tests.test_binding_source_bound.BindingSourceBoundTests.test_binding_over_the_bound_refuses_before_any_work",
+        "tests.test_binding_source_bound.BindingSourceBoundTests.test_success_refused_by_the_old_receipt_bound_records_without_a_new_review",
+        "tests.test_binding_source_bound.BindingSourceBoundTests.test_record_at_the_bound_stays_within_the_record_byte_cap",
+        "tests.test_binding_source_bound.BindingSourceBoundTests.test_accumulated_receipts_at_the_bound_page_out_of_the_root"
       ],
       "status": "NOT_RUN"
     },
