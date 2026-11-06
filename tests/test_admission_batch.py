@@ -281,6 +281,152 @@ class SharedReadTests(BatchCase):
         self.assertTrue(answer["responses"][0]["result"]["conflicts"])
 
 
+class ClaimDemandTests(BatchCase):
+    """A1018: an abandoned Dispatch's current claim is read only when some query's answer can use it, and every
+    result equals both its single query and the result of reading every abandoned row's claim."""
+
+    def rows(self):
+        here = base.ReviewCorrectionTests.writer(self, dispatch="here")
+        away = base.ReviewCorrectionTests.writer(self, path=self.root / "elsewhere", dispatch="away")
+        plain = base.ReviewCorrectionTests.writer(self, path=self.root / "elsewhere", dispatch="plain")
+        here["workerState"] = away["workerState"] = "abandoned"
+        return [here, away, plain]
+
+    def answer(self, queries, demanded=None):
+        rows, read = self.rows(), []
+        claim = {"process": "live", "effects": []}
+        def reader(source, runtime):
+            read.append(source["dispatchId"])
+            return claim
+        with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": rows}), \
+             patch("pod.admission._native_claim", side_effect=reader), \
+             patch("pod.admission._claim_demanded", side_effect=demanded or admission._claim_demanded):
+            answer = self.batch(*queries)
+            singles = [self.query(**query) for query in queries]
+        return answer, singles, set(read)
+
+    def test_claims_are_read_only_where_an_answer_can_use_them_with_unchanged_results(self):
+        self.intake(worktree=self.place)
+        everything = lambda slot, source, places: (source.get("workerState") == "abandoned"
+                                                   or source.get("dispatchId") in slot.abandoned)
+        shapes = {"worktree only": [{"worktree": str(self.project)}], "branch": [{"branch": "main"}],
+                  "effects": [{"effects": ["deploy:target"]}],
+                  "mixed": [{"worktree": str(self.project)}, {"branch": "main"}, {"effects": ["deploy:target"]}]}
+        for label, queries in shapes.items():
+            with self.subTest(label):
+                answer, singles, read = self.answer(queries)
+                previous, _, all_read = self.answer(queries, everything)
+                self.assertEqual(all_read, {"here", "away"})  # what every call read before
+                self.assertNotIn("plain", read)
+                if label == "worktree only":
+                    self.assertEqual(read, {"here"})  # the other worktree's abandoned row cannot be relevant
+                else:
+                    self.assertIn("away", read)  # a branch nothing records for it may be the requested one
+                for row, before, single in zip(answer["responses"], previous["responses"], singles):
+                    self.assertEqual(row["result"], before["result"])
+                    self.assertEqual(without_census(row["result"]), without_census(single))
+
+    def test_a_record_accounted_abandoned_row_is_judged_like_a_native_one(self):
+        self.intake(worktree=self.place)
+        rows = self.rows()
+        accounted = []
+        real = admission._claim_demanded
+        def spy(slot, source, places):
+            value = real(slot, source, places)
+            accounted.append((source["dispatchId"], source["dispatchId"] in slot.abandoned, value))
+            return value
+        with patch("pod.admission._fleet", return_value={"runtime": "runtime", "complete": True, "workers": rows}), \
+             patch("pod.admission._native_claim", return_value={"process": "live", "effects": []}), \
+             patch("pod.admission._claim_demanded", side_effect=spy):
+            self.batch({"worktree": str(self.project)})
+        self.assertIn(("here", False, True), accounted)
+        self.assertIn(("away", False, False), accounted)
+        slot = admission._HostExitSlot(self.project.resolve(), {"worktree": None, "branch": "main", "target": None,
+                                                                 "effects": []}, set(), set(), set(), {"plain"},
+                                       scope={"repo_key": "key"}, owed={}, owners=None, unreadable=None)
+        self.assertTrue(admission._claim_demanded(slot, rows[2], {}))  # accounted abandoned by this query's records
+        self.assertFalse(admission._claim_demanded(slot, {**rows[2], "projection": None}, {}))  # refused as malformed
+        effects = admission._HostExitSlot(self.project.resolve(), {"worktree": None, "branch": None, "target": None,
+                                                                    "effects": ["deploy:target"]}, set(), set(), set(),
+                                          set(), scope={"repo_key": "key"}, owed={}, owners=None, unreadable=None)
+        self.assertTrue(admission._claim_demanded(effects, rows[0], {}))
+        self.assertFalse(admission._claim_demanded(effects, {**rows[0], "projection": None}, {}))  # checked first
+
+    def test_a_fault_judging_demand_stays_the_querys_scoped_unknown(self):
+        """A fault while judging a row's demand reads the claim, and each query meets the fault where it reads the same
+        fact, as when every abandoned row's claim was read; the batch never fails."""
+        self.intake(worktree=self.place)
+        queries = [{}, {"branch": "main"}]
+        everything = lambda slot, source, places: True
+        with patch("pod.admission._workspace", side_effect=OSError("unreadable workspace")):
+            answer, _, read = self.answer(queries)
+            previous, _, all_read = self.answer(queries, everything)
+        self.assertEqual(read, all_read)
+        for row, before in zip(answer["responses"], previous["responses"]):
+            self.assertEqual(row["result"], before["result"])
+            self.assertEqual(row["result"]["status"], "unknown")
+
+
+class WorkerFactTests(BatchCase):
+    """A1020: each fleet row's worker facts are derived once per call, through real partitioned discovery and every
+    query's projection; each query receives its own copy, and every result still equals its single query."""
+
+    def test_worker_facts_are_derived_once_per_call(self):
+        self.intake(worktree=self.place)
+        rows = [base.ReviewCorrectionTests.writer(self, path=self.root / f"w{index}", dispatch=f"d{index}", verdict="live")
+                for index in range(5)]
+        rows.append(base.ReviewCorrectionTests.writer(self, dispatch="mine", verdict="live"))
+        abandoned = base.ReviewCorrectionTests.writer(self, path=self.root / "gone", dispatch="lost")
+        abandoned["workerState"] = "abandoned"
+        rows.append(abandoned)
+        for row in rows:
+            row["terminalState"] = "retained"
+        context = base.ReviewCorrectionTests.writer(self, dispatch="context-only")  # a settled context-only Dispatch
+        context.update(workerState="unsupervised", dispatchStatus="completed", resource=None, terminalState="released")
+        context["projection"].update(workspace=None, stage={"worker": "unsupervised", "dispatch": "completed"},
+                                     outcome="succeeded")
+        rows.append(context)
+        self.native.fleet = fleet_model(rows)
+        shapes = [{"worktree": str(self.project)}, {"branch": "main"}, {}, {"effects": ["deploy:target"]}]
+        derived = []
+        real = admission._worker_fact
+        def counted(row):
+            derived.append(row.get("dispatchId"))
+            return real(row)
+        with patch("pod.admission._fleet", side_effect=self._real_fleet), \
+             patch("pod.admission._terminals", side_effect=self._real_terminals), \
+             patch("pod.admission._native_claim", return_value={"process": "exited", "effects": []}):
+            singles = [self.query(**shape) for shape in shapes]
+            with patch("pod.admission._worker_fact", side_effect=counted):
+                answer = self.batch(*shapes)
+                once = sorted(derived)
+                again = self.batch(*shapes)
+        self.assertEqual(answer["discovery"]["fleet_read"], "partitioned")
+        self.assertEqual(once, sorted(row["dispatchId"] for row in rows))  # once each, partition check included
+        self.assertEqual(sorted(derived), sorted(once * 2))  # and afresh in the next call
+        for row, single, repeated in zip(answer["responses"], singles, again["responses"]):
+            self.assertEqual(without_census(row["result"]), without_census(single))
+            self.assertEqual(row["result"], repeated["result"])
+
+    def test_each_caller_receives_its_own_copy(self):
+        rows = [base.ReviewCorrectionTests.writer(self, dispatch="d0", verdict="live")]
+        discovery = admission._Discovery()
+        token = admission._SHARED.set(discovery)
+        try:
+            first, second = admission._shown(rows[0]), admission._shown(rows[0])
+            first["liveness"], first["resource"]["id"] = "exited", "changed"
+            self.assertEqual((second["liveness"], second["resource"]["id"]), ("live", None))
+            self.assertEqual(admission._shown(rows[0]), admission._worker_fact(rows[0]))
+            malformed = {**rows[0], "projection": None}
+            for _ in range(2):  # the kept refusal is raised again to every asker
+                with self.assertRaises(PodError) as raised:
+                    admission._shown(malformed)
+                self.assertEqual(raised.exception.code, "orca_contract")
+        finally:
+            admission._SHARED.reset(token)
+            discovery.close()
+
+
 class EarlyStartTests(BatchCase):
     """R207 (A861): in a batch the Run list starts once the terminal inventory is known, and each Run owner read once
     a record pass names it, while discovery's walk still runs."""
@@ -597,7 +743,8 @@ class FleetFenceTests(FencedCase):
             "unreleased": 3, "unreleased_sha256": canonical("runtime", unreleased),
             "released": 120, "released_sha256": canonical("runtime", released),
             "newest": 100, "newest_sha256": canonical("runtime", newest),
-            "pages": 2, "pages_sha256": canonical("runtime", [[page["ids"], page["more"]] for page in walk_pages(self.rows)]),
+            "pages": 2, "pages_sha256": canonical("runtime", [[page["ids"], page["more"], None, False]
+                                                             for page in walk_pages(self.rows)]),
             "claims_read": 1, "claims_sha256": canonical("runtime", [{"dispatch": "t2", **LIVE_CLAIM}]),
             "host_exit": 0, "host_exit_sha256": canonical("runtime", [])})  # R212: nothing counted exited
         self.assertEqual(fence["fleet_end"], fence["fleet_start"])
@@ -926,19 +1073,117 @@ class FleetReadTests(base.AdmissionQueryCase):
         return {"active": [worker("a1", "active")], "retained": [worker(f"t{i}", "retained") for i in range(130)],
                 "released": [worker(f"r{i}", "released") for i in range(250)]}
 
-    def test_discovery_reads_only_the_sequential_walk_and_starts_the_fence_from_it(self):
+    def test_discovery_reads_the_partitions_in_a_bracket_and_starts_the_fence_from_them(self):
+        """A1019: the opening newest page, the six partitions in parallel, then the closing newest page; the union is
+        the fleet, in partition order, and every page read is the fence's start."""
         rows = self.fleet()
         order = [*rows["released"][:50], *rows["retained"], *rows["active"], *rows["released"][50:]]
         double = FleetDouble(rows, sequential=order)
         fleet, discovery = self.read(double)
-        self.assertEqual(discovery.fleet_read, "sequential")
-        self.assertEqual([row["dispatchId"] for row in fleet["workers"]], [row["dispatchId"] for row in order])
-        self.assertEqual([call for call in double.calls if "--terminal-state" in call], [])  # no partition read
-        self.assertEqual(len(double.calls), 4)  # 381 rows, 100 a page
-        self.assertEqual(discovery.fleet_start["page"], double([*LIST, "--limit", "100"]))  # the walk's first page
+        self.assertEqual(discovery.fleet_read, "partitioned")
+        by_state = [row["dispatchId"] for state in admission.TERMINAL_STATES for row in rows.get(state, [])]
+        self.assertEqual([row["dispatchId"] for row in fleet["workers"]], by_state)
+        unfiltered = [call for call in double.calls if "--terminal-state" not in call]
+        self.assertEqual(unfiltered, [[*LIST, "--limit", "100"]] * 2)  # the bracket: opening and closing pages
+        partitions = sorted(call[call.index("--terminal-state") + 1:] for call in double.calls if "--terminal-state" in call)
+        self.assertEqual(partitions, sorted([["active"], ["reclaimable"], ["release_pending"], ["release_unknown"],
+                                             ["retained"], ["retained", "--cursor", "c1"], ["released"],
+                                             ["released", "--cursor", "c1"], ["released", "--cursor", "c2"]]))
+        self.assertEqual(discovery.fleet_start["page"], double([*LIST, "--limit", "100"]))  # the opening page
+        pages = discovery.fleet_start["pages"]
+        self.assertEqual(pages[0], {"cursor": None, "state": None, "bracket": True, "ids": [row["dispatchId"] for row in order[:100]],
+                                    "more": True})
+        self.assertEqual([(page["state"], page["cursor"], len(page["ids"]), page["more"]) for page in pages[1:]],
+                         [("active", None, 1, False), ("reclaimable", None, 0, False), ("retained", None, 100, True),
+                          ("retained", "c1", 30, False), ("release_pending", None, 0, False),
+                          ("release_unknown", None, 0, False), ("released", None, 100, True), ("released", "c1", 100, True),
+                          ("released", "c2", 50, False)])
         side = admission._fleet_side(discovery.fleet_start, {})
-        self.assertEqual((side["total"], side["counts"], side["unreleased"], side["newest"]),
-                         (381, {"active": 1, "retained": 130, "released": 250}, 131, 100))
+        self.assertEqual((side["total"], side["counts"], side["unreleased"], side["released"], side["newest"]),
+                         (381, {"active": 1, "retained": 130, "released": 250}, 131, 250, 100))
+
+    def test_an_unproved_partition_read_falls_back_to_the_sequential_walk(self):
+        """A1019: anything the bracket cannot prove whole reads the newest-first walk instead, which lists the fleet."""
+        rows = self.fleet()
+        order = [*rows["retained"], *rows["active"], *rows["released"]]
+        moved = dict(rows["retained"][5], terminalState="released")
+        page = FleetDouble(rows).page(rows["retained"], 1, 130)
+        retained2 = tuple([*LIST, "--limit", "100", "--terminal-state", "retained", "--cursor", "c1"])
+
+        class Closing(FleetDouble):
+            """The closing newest page shows one more Dispatch than the opening page did."""
+            def __call__(inner, argv):
+                answer = FleetDouble.__call__(inner, argv)
+                if "--terminal-state" not in argv and "--cursor" not in argv:
+                    with inner.lock:
+                        inner.unfiltered = getattr(inner, "unfiltered", 0) + 1
+                        if inner.unfiltered == 2:
+                            answer = {**answer, "result": {**answer["result"], "page": {**answer["result"]["page"],
+                                                                                         "total": 382}}}
+                return answer
+        cases = {
+            "a Dispatch in two partitions": FleetDouble({**rows, "released": [*rows["released"], moved]},
+                                                        counts={"active": 1, "retained": 130, "released": 251},
+                                                        sequential=order),
+            "a count differs from its partition": FleetDouble(rows, counts={"active": 1, "retained": 129, "released": 251},
+                                                              sequential=order),
+            "a total differs from the union": FleetDouble(rows, total=382, sequential=order),
+            "a row outside its partition": FleetDouble(rows, sequential=order, overrides={retained2: {
+                **page, "result": {**page["result"], "workers": [moved, *page["result"]["workers"][1:]]}}}),
+            "a partition total changes between pages": FleetDouble(rows, sequential=order, overrides={retained2: {
+                **page, "result": {**page["result"], "page": {**page["result"]["page"], "total": 131}}}}),
+            "a malformed row": FleetDouble({**rows, "active": [worker("a1", "active", projection=None)]},
+                                           sequential=[*rows["retained"], worker("a1", "active", projection=None),
+                                                       *rows["released"]]),
+            "a newest row differs from its partition's": FleetDouble(rows, sequential=[
+                dict(order[0], dispatchStatus="running"), *order[1:]]),
+            "the closing page differs": Closing(rows, sequential=order),
+        }
+        for label, double in cases.items():
+            with self.subTest(label):
+                fleet, discovery = self.read(double)
+                self.assertEqual(discovery.fleet_read, "sequential")
+                walk = [call for call in double.calls if "--cursor" in call and "--terminal-state" not in call]
+                self.assertTrue(walk, "the sequential walk is read")
+                self.assertEqual([row["dispatchId"] for row in fleet["workers"]],
+                                 [row["dispatchId"] for row in double.sequential])
+                self.assertIsNone(discovery.fleet_start["pages"][0].get("state"))
+                self.assertNotIn("bracket", discovery.fleet_start["pages"][0])
+
+    def test_every_partition_settles_and_a_spent_budget_is_reported_first(self):
+        """A1019: discovery waits for every partition; a spent budget is its fault before any other read fault, and a
+        programming fault is never hidden behind one, whichever partition fails first."""
+        budget, ordinary = PodError(DEADLINE_SPENT, "spent"), PodError("orca_read_failed", "no")
+        bug = RuntimeError("programming fault")
+        def failing(first, second):
+            def partition(state, runtime, discovery):
+                if state == "active":
+                    raise first
+                if state == "released":
+                    raise second
+                return {"total": 0, "rows": [], "pages": [{"cursor": None, "state": state, "ids": [], "more": False}]}
+            return partition
+        cases = {"read fault, then budget": (ordinary, budget, budget), "budget, then read fault": (budget, ordinary, budget),
+                 "read fault, then a bug": (ordinary, bug, bug), "a bug, then read fault": (bug, ordinary, bug)}
+        for label, (first, second, expected) in cases.items():
+            with self.subTest(label), patch("pod.admission._discovery_partition", side_effect=failing(first, second)):
+                value, _ = self.read(FleetDouble({}), lambda discovery: self._partitioned(discovery))
+                self.assertIs(value, expected)
+
+    def _partitioned(self, discovery):
+        try:
+            return admission._fleet_partitioned(discovery)
+        except RuntimeError as exc:
+            return exc
+
+    def test_a_failed_partition_read_raises_as_the_walk_would(self):
+        rows = self.fleet()
+        failed = tuple([*LIST, "--limit", "100", "--terminal-state", "released", "--cursor", "c1"])
+        for label, fault in {"read failed": PodError("orca_read_failed", "no"), "unreadable": OSError("failed")}.items():
+            with self.subTest(label):
+                value, discovery = self.read(FleetDouble(rows, overrides={failed: fault}))
+                self.assertIs(value, fault)
+                self.assertIsNone(discovery.fleet_start)
 
     def test_a_bound_first_page_answers_none_with_one_read(self):
         bound = {"runtime": "runtime", "result": {"scope": {"source": "bound", "run": "run"}}}
@@ -949,18 +1194,34 @@ class FleetReadTests(base.AdmissionQueryCase):
         self.assertEqual(len(double.calls), 1)
         self.assertEqual(admission._fleet_side(discovery.fleet_start, {})["code"], "native_inventory_scope")
 
-    def test_abandoned_rows_start_their_claim_reads_during_the_walk(self):
-        rows = self.fleet()
-        rows["active"] = [worker("a1", "active", workerState="abandoned",
-                                 projection={"id": "w", "dispatchId": "a1", "runId": "run", "taskId": "task"})]
-        shown = {"runtime": "runtime", "result": {"dispatch": {"id": "a1", "runId": "run", "taskId": "task"},
-                 "worker": {}, "projection": {"id": "w"}}}
-        double = FleetDouble(rows, overrides={tuple(["orchestration", "worker-show", "--dispatch", "a1", "--json", "--full"]): shown})
+    def test_a_demanded_abandoned_row_starts_its_claim_read_while_discovery_lists_it(self):
+        """A1018: once every record pass is done, a listed abandoned row starts its claim read when a query can use
+        it; an abandoned row no query can use starts none."""
+        here, elsewhere = str(self.project.resolve()), str(self.root / "elsewhere")
+        def abandoned(dispatch, path):
+            return worker(dispatch, "retained", workerState="abandoned", resource={"worktreeId": "wt::" + path},
+                          projection={"id": "w" + dispatch, "dispatchId": dispatch, "runId": "run", "taskId": "task",
+                                      "workspace": {"id": "wt::" + path}})
+        rows = {"retained": [abandoned("a1", here), abandoned("a2", elsewhere)]}
+        def show(dispatch):
+            return {"runtime": "runtime", "result": {"dispatch": {"id": dispatch, "runId": "run", "taskId": "task"},
+                    "worker": {}, "projection": {"id": "w" + dispatch}}}
+        double = FleetDouble(rows, overrides={
+            tuple(["orchestration", "worker-show", "--dispatch", key, "--json", "--full"]): show(key) for key in ("a1", "a2")})
+        slot = admission._HostExitSlot(self.project.resolve(), {"worktree": here, "branch": None, "target": None,
+                                                                 "effects": []}, set(), set(), set(), set(),
+                                       scope={"repo_key": "key"}, owed={}, owners=None, unreadable=None)
+        def ready(discovery):
+            discovery.host_exit_slots.append(slot)
+            discovery.memo(("places", str(self.project.resolve())), lambda: {}, stage="first")
+            discovery.judge_claims()  # every record pass is done before the fleet is listed
+            return self._real_fleet()
         with patch("pod.abandoned.is_abandoned", return_value=True), \
              patch("pod.abandoned.current_claim", return_value={"process": "exited", "effects": []}):
-            fleet, discovery = self.read(double)
-        self.assertEqual(discovery.fleet_read, "sequential")
-        self.assertIn(["orchestration", "worker-show", "--dispatch", "a1", "--json", "--full"], double.calls)
+            fleet, discovery = self.read(double, ready)
+        self.assertEqual(discovery.fleet_read, "partitioned")
+        shows = [call[3] for call in double.calls if call[:2] == ["orchestration", "worker-show"]]
+        self.assertEqual(shows, ["a1"])
         self.assertEqual(discovery.done(("claim", "a1", "runtime")), {"process": "exited", "effects": []})
 
     def test_a_listed_workspace_starts_its_identity_read_during_the_walk(self):
@@ -978,14 +1239,15 @@ class FleetReadTests(base.AdmissionQueryCase):
 
     def test_the_end_fence_reads_the_walk_again_from_its_own_cursors_and_refuses_any_race(self):
         rows = self.fleet()
-        _, start = self.read(FleetDouble(rows))
+        _, start = self.read(FleetDouble(rows), admission._fleet_sequential)
         pages = start.fleet_start["pages"]
         self.assertEqual([(page["cursor"], len(page["ids"]), page["more"]) for page in pages],
                          [(None, 100, True), ("c1", 100, True), ("c2", 100, True), ("c3", 81, False)])
         double = FleetDouble(rows)
         observed, _ = self.read(double, lambda discovery: admission._fleet_end(discovery, pages))
         self.assertEqual(len(observed["rows"]), 381)
-        self.assertEqual(observed["pages"], [{"ids": page["ids"], "more": page["more"]} for page in pages])
+        self.assertEqual(observed["pages"], [{"ids": page["ids"], "more": page["more"], "state": None, "bracket": False}
+                                             for page in pages])
         walk = [*LIST, "--limit", "100"]
         self.assertEqual(sorted(double.calls), sorted([walk, *([*walk, "--cursor", f"c{index}"] for index in (1, 2, 3))]))
         everything = [row for state in rows.values() for row in state]
@@ -1010,6 +1272,34 @@ class FleetReadTests(base.AdmissionQueryCase):
                 self.assertFalse(admission._fleet_side(observed, {})["complete"])
         observed, _ = self.read(FleetDouble(rows), lambda discovery: admission._fleet_end(discovery, None))
         self.assertEqual(observed.code, "native_fence_unavailable")
+
+    def test_the_end_fence_reads_each_partition_page_again_and_a_move_changes_a_page(self):
+        """A1019: the end reads every page of a partitioned discovery again from its own partition and cursor; the
+        bracket page is the end's newest page and adds no rows; a Dispatch that moved between partitions changes a
+        page's Dispatches even with every total and count kept."""
+        rows = self.fleet()
+        _, start = self.read(FleetDouble(rows))
+        self.assertEqual(start.fleet_read, "partitioned")
+        pages = start.fleet_start["pages"]
+        double = FleetDouble(rows)
+        observed, _ = self.read(double, lambda discovery: admission._fleet_end(discovery, pages))
+        self.assertEqual(len(observed["rows"]), 381)
+        self.assertEqual(observed["pages"], [{"ids": page["ids"], "more": page["more"], "state": page["state"],
+                                              "bracket": bool(page.get("bracket"))} for page in pages])
+        expected = [[*LIST, "--limit", "100", *(["--terminal-state", page["state"]] if page["state"] else []),
+                     *(["--cursor", page["cursor"]] if page["cursor"] else [])] for page in pages]
+        self.assertEqual(sorted(double.calls), sorted(expected))
+        same = admission._fleet_side(start.fleet_start, {})
+        self.assertEqual(admission._fleet_side(observed, {}), same)
+        # A balanced move: retained t5 settles into released while released r0 is deleted.
+        settled = dict(rows["retained"][5], terminalState="released")
+        moved = {"active": rows["active"], "retained": [row for row in rows["retained"] if row["dispatchId"] != "t5"],
+                 "released": [settled, *rows["released"][1:]]}
+        observed, _ = self.read(FleetDouble(moved, counts={"active": 1, "retained": 129, "released": 250}),
+                                lambda discovery: admission._fleet_end(discovery, pages))
+        side = admission._fleet_side(observed, {})
+        self.assertNotEqual(side["pages_sha256"], same["pages_sha256"])
+        self.assertNotEqual(side["unreleased_sha256"], same["unreleased_sha256"])
 
     def test_the_allowlist_accepts_exactly_the_walk_and_partition_reads(self):
         from pod.orca import _read_allowed
@@ -1079,7 +1369,7 @@ class CorrectionRoundTests(BatchCase):
                 answer = self.batch({"branch": "main"})
                 result = answer["responses"][0]["result"]
                 claimed = "C" in [claim.get("dispatch") for claim in result["claims"]]
-                self.assertEqual(answer["discovery"]["fleet_read"], "sequential")
+                self.assertEqual(answer["discovery"]["fleet_read"], "partitioned")
                 self.assertTrue(claimed or not answer["native_fence"]["stable"])
                 self.assertEqual(claimed, label == "C already listed")
 
@@ -1254,7 +1544,7 @@ class DiscoveryRaceTests(BatchCase):
 
     def outcome(self, query=None):
         answer = self.batch(query or {})
-        self.assertEqual(answer["discovery"]["fleet_read"], "sequential")
+        self.assertEqual(answer["discovery"]["fleet_read"], "partitioned")
         return answer, answer["responses"][0]["result"]
 
     def test_an_old_abandoned_dispatch_settling_beside_a_deletion_and_a_creation(self):
