@@ -105,6 +105,8 @@ class GitHubPort(Protocol):
     def pull_request(self, *, head: str, base: str) -> dict | None: ...
     def pull_requests(self, *, head: str, base: str) -> list[dict]: ...
     def open_pull_request(self, *, head: str, base: str, title: str, body: str) -> dict: ...
+    def pull_request_text(self, *, number: int) -> dict: ...
+    def edit_pull_request(self, *, number: int, title: str | None = None, body: str | None = None) -> dict: ...
     def dispatch(self, *, workflow: str, ref: str, inputs: dict) -> dict: ...
     def runs(self, *, workflow: str, commit: str) -> list[dict]: ...
     def branch_updates(self, *, branch: str) -> list[dict]: ...
@@ -534,16 +536,31 @@ def validate_execution_inputs(action: dict, policy: dict, pull_request: object =
         raise PodError("invalid_workflow", "Workflow targets use a bare file name, for example ci.yml")
     if pull_request is not None:
         try:
-            exact(pull_request, {"title", "body"}, name="pull_request")
+            exact(pull_request, {"title", "body", "replace_edited"}, name="pull_request")
         except PodError as exc:
-            exc.args = (str(exc) + "; pull_request supports only title and body",)
+            exc.args = (str(exc) + "; pull_request supports only title, body and replace_edited",)
             raise
+        if "replace_edited" in pull_request:
+            # The lead's decision to overwrite another writer's text names exactly the text it saw (R240).
+            replace = pull_request["replace_edited"]
+            if (action["kind"] != "pr_update" or not isinstance(replace, dict)
+                    or set(replace) != {"title_sha256", "body_sha256"}
+                    or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                               for value in replace.values())):
+                raise PodError("invalid_pull_request", "pull_request.replace_edited names the title_sha256 and "
+                                                       "body_sha256 a pr_update conflict recorded as pr_text.before")
     if action["kind"] == "pr_update":
         title = (pull_request or {}).get("title") or action["reason"]
         body = (pull_request or {}).get("body") or ""
         bounded_text(title, name="title", limit=256)
         if not isinstance(body, str) or len(body) > 16 * 1024 or "\x00" in body:
             raise PodError("invalid_pull_request", "Pull request body must be text of at most 16384 characters")
+        try:
+            title.encode("utf-8")
+            body.encode("utf-8")
+        except UnicodeEncodeError:
+            # GitHub stores UTF-8 and Pod digests it (R240): a lone surrogate is refused before any record or effect.
+            raise PodError("invalid_pull_request", "Pull request title and body must be valid Unicode text") from None
 
 
 def _logical_key(action: dict, candidate_id: str | None) -> str:
