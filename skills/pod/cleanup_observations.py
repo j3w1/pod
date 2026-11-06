@@ -575,6 +575,8 @@ def selected_plan(project: Path, objective: str | None, value: object, *, expect
                     project, objective, fresh_state, row["identity"]["ref"], current_paths,
                     repository, orca_reader) != association):
                 raise PodError("cleanup_changed", "Current recorded branch association changed during selected observation")
+    # pod#125: after every later read of this selected call, its absence must still hold.
+    cleanup._recheck_absent(project, [row], repository, orca_reader)
     cleanup._compact_material([row])
     plan_hash, fingerprints = cleanup._expect_change(expect, [row], target)
     row["fingerprint"] = fingerprints[row["id"]]

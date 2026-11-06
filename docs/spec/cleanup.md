@@ -51,14 +51,18 @@ recorded resource `absent` only on positive current absence: a worktree with no 
 the complete Git inventory, a no-follow `absent` slot with reliable parent identity and
 Orca's `selector_not_found` for its path; a local branch with no checkout whose
 `ref_storage` is stably observed with an absent logical ref, loose slot and log; or a
-remote branch whose successful `ls-remote` lists nothing. Its row has no argv or
+remote branch whose successful `ls-remote` lists nothing. A worktree's path and parent
+identity are read before and again after Orca's answer, and its Git registration again
+after both. Its row has no argv or
 reasons, carries `identity.current` with `status: absent` (and for a branch its
 `ref_storage`), keeps its stash observation without applying it, and is in neither
 `covers` nor `asks`. A failed, partial or contradictory read is never absence; a
 checkout Orca still lists is protected with that reason. Every absence is read again
 after the rest of the observation, and a resource that came back or became unreadable
 refuses `cleanup_changed`. A selected observation keeps an absent ordinary row absent
-only while its own current read is absent, and refuses `cleanup_changed` otherwise. Known UNIQUE work stays UNIQUE
+only while its own current read is absent, rechecks the absence after its own later
+reads, and refuses `cleanup_changed` otherwise. These are bounded reads, not an atomic
+snapshot across Git, the filesystem and Orca. Known UNIQUE work stays UNIQUE
 when an independent hold prevents removal. Top-level `archive_verified` requires
 verified **and covering** evidence; a narrower valid per-archive proof is separate.
 

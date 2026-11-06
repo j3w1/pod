@@ -1299,8 +1299,8 @@ class CleanupWorkerTests(KernelCase):
             raise PodError("orca_read_failed", "Orca read did not succeed", {"native_code": "selector_not_found"})
         return self.orca_read(argv, **kwargs)
 
-    def test_a_checkout_that_reappears_during_observation_refuses(self):
-        # Review F1: the absence read first is read again last; a path that came back is no absence.
+    def test_a_checkout_that_reappears_during_its_native_read_is_not_absent(self):
+        # Review F1: the path is read again after Orca's answer; a checkout that came back meanwhile is no absence.
         self.remove_worker(branches=False)
         def reappearing(argv, **kwargs):
             if argv[:2] == ["worktree", "show"] and not self.child.exists():
@@ -1310,10 +1310,12 @@ class CleanupWorkerTests(KernelCase):
             return self.absent_reader(argv, **kwargs)
         self.addCleanup(lambda: self.child.exists() and (
             (self.child / "late.txt").unlink(missing_ok=True), self.child.rmdir()))
-        with repository_reads(), self.assertRaises(PodError) as caught:
-            plan(self.project, "objective", orca_reader=reappearing, native_port=self.port)
-        self.assertEqual(caught.exception.code, "cleanup_changed")
-        self.assertEqual(caught.exception.detail["changed"], [f"worktree:{self.child}"])
+        with repository_reads():
+            result = plan(self.project, "objective", orca_reader=reappearing, native_port=self.port)
+        row = next(row for row in result["resources"] if row["id"] == f"worktree:{self.child}")
+        self.assertEqual(row["class"], "protected")
+        self.assertIsNone(row["delete_argv"])
+        self.assertNotIn("current", row["identity"])
 
     def test_a_branch_that_reappears_during_observation_refuses(self):
         self.remove_worker()
@@ -1327,6 +1329,52 @@ class CleanupWorkerTests(KernelCase):
             plan(self.project, "objective", orca_reader=self.absent_reader, native_port=self.port)
         self.assertEqual(caught.exception.code, "cleanup_changed")
         self.assertEqual(caught.exception.detail["changed"], ["local_branch:refs/heads/worker"])
+
+    def test_a_checkout_recreated_during_the_final_native_read_refuses(self):
+        # Delta review F1: the final recheck reads the path again after Orca's answer.
+        self.remove_worker()
+        reads = []
+        def final_recreate(argv, **kwargs):
+            if argv[:2] == ["worktree", "show"] and argv[3] == "path:" + str(self.child):
+                reads.append(argv)
+                if len(reads) == 2:
+                    self.child.mkdir()
+                    (self.child / "late.txt").write_text("recreated\n")
+            if argv[:2] == ["worktree", "show"] and argv[3] == "path:" + str(self.child):
+                raise PodError("orca_read_failed", "Orca read did not succeed", {"native_code": "selector_not_found"})
+            return self.absent_reader(argv, **kwargs)
+        self.addCleanup(lambda: self.child.exists() and (
+            (self.child / "late.txt").unlink(missing_ok=True), self.child.rmdir()))
+        with repository_reads(), self.assertRaises(PodError) as caught:
+            plan(self.project, "objective", orca_reader=final_recreate, native_port=self.port)
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+        self.assertEqual(caught.exception.detail["changed"], [f"worktree:{self.child}"])
+
+    def selected_returning(self, observe, recreate):
+        """A selected absent resource that comes back just before the selected call's own stash read."""
+        original = cleanup_stashes.observe
+        def then_read(*args, **kwargs):
+            recreate()
+            return original(*args, **kwargs)
+        with patch.object(self, "orca_read", side_effect=self.absent_reader), \
+                patch.object(cleanup_stashes, "observe", side_effect=then_read), self.assertRaises(PodError) as caught:
+            cleanup_entry(self, observe=observe)
+        self.assertEqual(caught.exception.code, "cleanup_changed")
+
+    def test_selected_branch_or_remote_head_returning_before_the_stash_read_refuses(self):
+        # Delta review F3: the selected call rechecks absence after its own later reads.
+        self.remove_worker()
+        self.selected_returning({"kind": "local_branch", "name": "refs/heads/worker"},
+                                lambda: git(self.project, "update-ref", "refs/heads/worker", self.base))
+        git(self.project, "update-ref", "-d", "refs/heads/worker")
+        self.selected_returning({"kind": "remote_branch", "name": "origin/worker"},
+                                lambda: git(self.root / "origin.git", "update-ref", "refs/heads/worker", self.base))
+
+    def test_selected_checkout_returning_before_the_stash_read_refuses(self):
+        self.remove_worker()
+        self.addCleanup(lambda: self.child.exists() and self.child.rmdir())
+        self.selected_returning({"kind": "worktree", "name": str(self.child)}, self.child.mkdir)
 
     def test_selected_absent_branch_stays_absent_and_refuses_once_it_returns(self):
         # Review F2: the selected reader keeps absent only while its own current read agrees.

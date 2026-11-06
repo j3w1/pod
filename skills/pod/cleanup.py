@@ -457,20 +457,31 @@ def _absent_worktree(path_text: str, orca_reader) -> tuple[dict | None, str | No
     path = Path(path_text)
     if not path.is_absolute() or str(path) != path_text or ".." in path.parts or path == path.parent:
         return None, None
-    fact, _ = slot(path, path.parent, directory=True)
-    if (fact["status"] != "absent" or not fact["ancestors"]
-            or not all(reliable(value) for value in fact["ancestors"])):
+    def missing():
+        fact, _ = slot(path, path.parent, directory=True)
+        if (fact["status"] != "absent" or not fact["ancestors"]
+                or not all(reliable(value) for value in fact["ancestors"])):
+            return None
+        return [{key: value[key] for key in _STABLE_IDENTITY} for value in fact["ancestors"]]
+    before = missing()
+    if before is None:
         return None, None
     try:
         shown = orca_reader(["worktree", "show", "--worktree", "path:" + path_text, "--json"])
     except PodError as exc:
-        if exc.code == "orca_read_failed" and (exc.detail or {}).get("native_code") == "selector_not_found":
+        # The path is read again after Orca's answer, so a checkout recreated meanwhile is no absence.
+        if (exc.code == "orca_read_failed" and (exc.detail or {}).get("native_code") == "selector_not_found"
+                and missing() == before):
             return {"status": "absent", "path": path_text, "ref": None, "oid": None}, None
         return None, None
     native = ((shown or {}).get("result") or {}).get("worktree") if isinstance(shown, dict) else None
     if isinstance(native, dict) and native.get("path") == path_text:
         return None, "the Git checkout is gone but Orca still lists this worktree"
     return None, None
+
+
+# Parent identity that unrelated sibling activity cannot change.
+_STABLE_IDENTITY = ("path", "device", "inode", "mode", "mount_id", "incarnation")
 
 
 def _absent_ref(project: Path, ref: str, repository: dict) -> dict | None:
@@ -498,6 +509,9 @@ def _recheck_absent(project: Path, resources: list[dict], repository: dict, orca
         if row["kind"] == "worktree":
             registered, _, _ = _objective_worktrees(project, {identity["path"]}, set())
             still = not registered and _absent_worktree(identity["path"], orca_reader)[0] is not None
+            if still:
+                registered, _, _ = _objective_worktrees(project, {identity["path"]}, set())
+                still = not registered
         elif row["kind"] == "local_branch":
             _, checkouts, _ = _objective_worktrees(project, set(), {identity["ref"]})
             still = not checkouts.get(identity["ref"]) and _absent_ref(project, identity["ref"], repository) is not None
