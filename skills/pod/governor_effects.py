@@ -90,7 +90,9 @@ def _stamp(value: object) -> datetime | None:
 
 
 def _created_since(run: dict, since: str) -> bool:
-    """Whether the run reports a creation at or after the submission; GitHub reports it to the second."""
+    """Whether the run reports a creation at or after the floor (the submission, or for a publication that moved
+    no ref the second of the remote's own update of the branch to the head, or the next one when that second is
+    ambiguous or incomplete); GitHub reports it to the second."""
     floor = _stamp(since)
     stamp = _stamp(run.get("created_at"))
     return floor is not None and stamp is not None and stamp >= floor.replace(microsecond=0)
@@ -128,7 +130,9 @@ def _history(port: GitHubPort, *, workflow: str, commit: str) -> tuple[list[dict
 
 
 def _unlisted(read: dict, *, events: tuple[str, ...] | None, since: str, outcome: str) -> str:
-    """Why a lookup bound nothing: missing or partial history is never a failure or a proof of no effect."""
+    """Why a lookup bound nothing: missing or partial history is never a failure or a proof of no effect.
+
+    `since` names the floor; for a publication-derived row it also says which time that is."""
     wanted = " or ".join(events) if events else "any event"
     if read["truncated"]:
         # A truncated list may hide the row's own run, so even a visible match is not bound from it.
@@ -138,6 +142,112 @@ def _unlisted(read: dict, *, events: tuple[str, ...] | None, since: str, outcome
         reason = (f"no {wanted} run created at or after {since} is among the listed {read['scope']} "
                   f"({read['listed']} listed, limit {read['limit']})")
     return f"{reason}; {RETENTION}; the row stays {outcome}"
+
+
+def publication_floor(port: GitHubPort, row: dict, unit: dict, journal: dict) -> dict:
+    """When a publication-derived validation row's run must have been created, and why that time (R115).
+
+    A publication that moved the branch keeps the submission as the floor. One that moved no ref (Pod recorded
+    `ref_changed: false`), or whose row predates that fact, may have found the remote already at the head, so
+    nothing it did started a run. A floor Pod's own earlier readback proved from the remote's update is reused
+    first, since that history never changes. Otherwise GitHub's repository activity decides. Its newest listed
+    update that set the branch to this row's exact commit, never a deletion, is never older than the update the
+    push found, whatever the clock skew or movement during or after the push. This host's clock may lag GitHub's,
+    so once readable activity shows that update the floor is never below it: its second when that whole second is
+    complete and agrees, otherwise the start of the next whole second, with `note` naming the ambiguous second.
+    Readable activity that lists no such update gives no floor (`at` None, basis `held`): the row holds, since the
+    submission may then lie before the update. Only without activity information (an unreadable read, an
+    unsupported shape, an empty list, updates not newest first, an unreadable time, or no recorded facts) does the
+    submission stay, with `note` saying why. The publication's facts come from its row in this journal or, where
+    that is absent (a successor carried only the validation), from the facts the validation recorded or its
+    carried marker kept.
+    """
+    from .github import UPDATE_LIST_LIMIT
+    from .governor import publication_facts, valid_publication_facts
+    since = row["receipt"]["started_at"]
+
+    def submission(note: str | None) -> dict:
+        return {"at": since, "basis": "publication", "note": note}
+
+    def remote_update(at: datetime, note: str | None = None) -> dict:
+        return {"at": at.isoformat(), "basis": "remote_update", "note": note}
+    publication = next((other for other in reversed(journal["actions"])
+                        if other["record_id"] == row.get("derived_from")), None)
+    if publication is not None:
+        facts = publication_facts(publication, unit)
+    else:
+        marker = row.get("carried_from")
+        kept = marker.get("publication") if isinstance(marker, dict) else None
+        facts = next((value for value in (kept, row.get("publication")) if valid_publication_facts(value)), None)
+    if facts is not None and facts.get("ref_changed") is True:
+        return submission(None)
+    recorded = (row["receipt"].get("provider") or {}).get("created_after")
+    if (isinstance(recorded, dict) and recorded.get("basis") == "remote_update"
+            and (stamp := _stamp(recorded.get("at"))) is not None):
+        # Pod's own earlier readback proved the remote's update; that history never changes, so neither a later
+        # list that no longer shows it (truncated or unreadable) nor a successor without the publication rejects
+        # the run bound from it.
+        return {"at": stamp.isoformat(), "basis": "remote_update", "note": None}
+    if facts is None:
+        return submission("the publication row is not in this journal and the row records none of its facts, so "
+                          "the remote's own update is not read")
+    branch, started, commit = facts["branch"], _stamp(since), row.get("commit")
+    if branch is None or started is None or commit is None:
+        return submission("the publication names no branch, start or commit to read the remote's update for")
+    name = branch["branch"]
+    try:
+        updates = port.branch_updates(branch=name)
+    except PodError as exc:
+        return submission(f"the activity of branch {name} is not readable ({exc.code})")
+    if not isinstance(updates, list):
+        return submission(f"the activity of branch {name} answered in an unsupported shape")
+    if not updates:
+        return submission(f"the activity of branch {name} lists no update")
+    listed = [update for update in updates[:UPDATE_LIST_LIMIT] if isinstance(update, dict)
+              and update.get("ref") in ("refs/heads/" + name, name)]
+    # The update past the limit, whatever it names, says whether a second the listed ones reach goes on beyond them.
+    past = updates[UPDATE_LIST_LIMIT] if len(updates) > UPDATE_LIST_LIMIT else None
+    times = [_stamp(update.get("timestamp")) for update in listed]
+    past_time = _stamp(past.get("timestamp")) if isinstance(past, dict) else None
+    if any(stamp is None for stamp in times) or (past is not None and past_time is None):
+        return submission(f"an update of branch {name} reports no readable time")
+    ordered = times + ([past_time] if past is not None else [])
+    if any(later > earlier for earlier, later in zip(ordered, ordered[1:])):
+        return submission(f"the listed updates of branch {name} are not newest first")
+
+    def sets_head(update: dict) -> bool:
+        return update.get("after") == commit and update.get("activity_type") != "branch_deletion"
+    newest = next((stamp for stamp, update in zip(times, listed) if sets_head(update)), None)
+    scope = f"{min(len(updates), UPDATE_LIST_LIMIT)} listed, limit {UPDATE_LIST_LIMIT}"
+    if newest is None:
+        # Readable activity that does not show the head being set proves no floor, and the submission is no safe
+        # one: the update the push found may be stamped after it on GitHub's clock. The next readback may settle it.
+        return {"at": None, "basis": "held",
+                "note": f"the listed updates of branch {name} were truncated ({scope}) and none sets it to "
+                        f"{commit[:12]}" if past is not None else
+                        f"no listed update of branch {name} sets it to {commit[:12]} ({scope})"}
+    second = newest.replace(microsecond=0)
+    group = [update for stamp, update in zip(times, listed) if stamp.replace(microsecond=0) == second]
+    continues = past is not None and past_time.replace(microsecond=0) == second
+    named = f"{second.isoformat()}, the second of its newest update to {commit[:12]}"
+    # The head may have been set last anywhere in an ambiguous or incomplete second, so only the next whole second
+    # is never below that update, whatever the submission's time.
+    after = second + timedelta(seconds=1)
+    if any(not sets_head(update) for update in group + ([past] if continues else [])):
+        return remote_update(after, f"the updates of branch {name} at {named}, do not all set it to {commit[:12]}, "
+                                    "so the floor is the start of the next whole second")
+    if continues:
+        return remote_update(after, f"the listed updates of branch {name} were truncated ({scope}) within {named}, "
+                                    "so that second's updates may go on past the response and the floor is the start "
+                                    "of the next whole second")
+    return remote_update(second)
+
+
+def _floor_text(floor: dict) -> str:
+    """The floor's time and which time it is, as every readback path states it."""
+    what = ("the remote's newest update of the branch to the head" if floor["basis"] == "remote_update"
+            else "the submission")
+    return f"{floor['at']} ({what}" + (f"; {floor['note']})" if floor.get("note") else ")")
 
 
 def _original_attempt(port: GitHubPort, run: dict) -> dict | None:
@@ -173,8 +283,13 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_reques
         if pushed.get("status") != "pushed":
             return "FAILED", {"remote_head": pushed.get("remote_head")}, "branch_moved: the remote branch was not at the expected commit"
         provider = {"remote_head": commit, "branch": target}
+        if isinstance(pushed.get("ref_changed"), bool):
+            # Whether the push moved the remote ref; one that did not leaves its validation's floor to the
+            # remote's own update of that head (R115).
+            provider["ref_changed"] = pushed["ref_changed"]
         unread = []
-        provider["triggered"] = _triggered_runs(port, row, commit, unread=unread)
+        provider["triggered"] = _triggered_runs(port, row, commit, unread=unread,
+                                                ref_changed=provider.get("ref_changed"))
         observation_detail = "push landed; triggered runs unreadable for: " + ", ".join(unread) if unread else None
         if kind == "push":
             return "PASS", provider, observation_detail
@@ -292,12 +407,18 @@ def _bound_run_id(row: dict) -> str | None:
     return (row["receipt"].get("provider") or {}).get("run_id")
 
 
-def _triggered_runs(port: GitHubPort, row: dict, commit: str, *, unread: list | None = None) -> dict:
+def _triggered_runs(port: GitHubPort, row: dict, commit: str, *, unread: list | None = None,
+                    ref_changed: bool | None = None) -> dict:
     """The runs a landed publication started, by workflow, as far as a readback can see them.
 
     Only a publication event's run on the published commit, created at or after the publication and read
-    at its first attempt, is one of them.
+    at its first attempt, is one of them. A push whose porcelain says it moved no ref (`ref_changed` False, as
+    given or as the row recorded it) started none, so none is bound here: its derived rows bind only by readback
+    under their floor (R115).
     """
+    moved = ref_changed if ref_changed is not None else (row["receipt"].get("provider") or {}).get("ref_changed")
+    if moved is False:
+        return {}
     triggered = {}
     for effect in row.get("effects") or []:
         if not effect.startswith("workflow:"):
@@ -801,6 +922,21 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
         return answer
     if kind in DISPATCH_KINDS or kind == "validation_rerun":
         events = _row_events(row)
+        # A publication-derived row's floor is the submission, or the remote's newest update of the branch to the
+        # head when the publication moved no ref or predates that fact; every other row keeps its submission (R115).
+        # One floor serves both paths below, a bound run's verification and a new selection.
+        floor = (publication_floor(port, row, unit, journal)
+                 if kind == "workflow_dispatch" and row.get("derived_from") is not None else None)
+        if floor is not None and floor["at"] is None:
+            # Readable activity that does not show the head being set holds both paths: a bound run is neither
+            # accepted nor rejected and nothing new binds.
+            answer["hold"] = (f"{floor['note']}; GitHub's clock may lead this host's, so the submission is no safe "
+                              "floor, and no run is bound, accepted or rejected until the branch's activity shows the "
+                              f"update that set the head; the row stays {row['outcome']}")
+            return answer
+        if floor is not None:
+            since = floor["at"]
+        when = _floor_text(floor) if floor is not None else since
         rejected = row.get("rejected_run")
         lookup = provider.get("ref_commit") or commit
         run_id = provider.get("run_id") if rejected is None else None
@@ -835,7 +971,8 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
                                     "head_sha": head if isinstance(head, str) else None}
             elif not _created_since(run, since):
                 answer["reject"] = {"run_id": str(run_id), "event": event,
-                                    "reason": f"was not created at or after the submission at {since}"}
+                                    "reason": f"was not created at or after {when}" if floor is not None else
+                                              f"was not created at or after the submission at {since}"}
             elif run.get("attempt") != 1:
                 answer["hold"] = f"run {run_id} did not answer for its first attempt"
                 return answer
@@ -849,7 +986,7 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
                 answer["provider_read"] = read
                 if read["truncated"]:
                     # A truncated list settles nothing, even with the bound run visible in it.
-                    answer["hold"] = _unlisted(read, events=events, since=since, outcome=row["outcome"])
+                    answer["hold"] = _unlisted(read, events=events, since=when, outcome=row["outcome"])
                     return answer
                 if not any(str(item.get("id")) == str(run_id) for item in runs):
                     answer["reject"] = {"run_id": str(run_id), "event": event,
@@ -863,7 +1000,7 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
             runs, read = _history(port, workflow=row["action"]["target"], commit=lookup)
             answer["provider_read"] = read
             if read["truncated"]:
-                answer["hold"] = _unlisted(read, events=events, since=since, outcome=row["outcome"])
+                answer["hold"] = _unlisted(read, events=events, since=when, outcome=row["outcome"])
                 return answer
             run = _pick_run(runs, since=since, events=events, commit=lookup)
             if run is not None:
@@ -872,14 +1009,17 @@ def _read_back(port: GitHubPort, row: dict, unit: dict, journal: dict, *, projec
                     answer["hold"] = "the matching run did not answer for its first attempt"
                     return answer
             elif rejected is not None:
-                answer["hold"] = _rejected_reason(rejected, events)
+                answer["hold"] = _rejected_reason(rejected, events) + (
+                    f"; no other run created at or after {when} is listed" if floor is not None else "")
                 return answer
             else:
-                answer["hold"] = _unlisted(read, events=events, since=since, outcome=row["outcome"])
+                answer["hold"] = _unlisted(read, events=events, since=when, outcome=row["outcome"])
                 return answer
         outcome, detail = _outcome_from_run(run)
         answer.update(outcome=outcome, detail=detail, seen=True,
-                      provider={**({"ref_commit": lookup} if lookup else {}), **_provider_run(run)})
+                      provider={**({"ref_commit": lookup} if lookup else {}), **_provider_run(run),
+                                **({"created_after": {"at": floor["at"], "basis": floor["basis"]}}
+                                   if floor is not None else {})})
         return answer
     if kind == "cancel_validation":
         run_id = provider.get("run_id") or (row.get("carried_from") or {}).get("run_id")

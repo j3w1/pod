@@ -9,12 +9,13 @@ from copy import deepcopy
 import hashlib
 import json
 import os
+import unittest
 from unittest.mock import patch
 
 from pod import config, evidence_closure
 from pod.installer import STATE_SCHEMAS
 from pod.ledger import objective_root, state_root
-from pod.retirement import SIDECAR, SIDECAR_SCHEMA
+from pod.retirement import SIDECAR, SIDECAR_SCHEMA, older_scope
 from pod.util import digest
 from tests.common import logical_json
 from tests.decision_policy_support import PERSON
@@ -57,6 +58,11 @@ def _older_layout(raw: dict, checkpoint: str, admission: str) -> dict:
         kept = {name: row[name] for name in ADMISSION_KEYS if name in row}
         kept["recovery"] = {name: row["recovery"][name] for name in RECOVERY_KEYS if name in row["recovery"]}
         kept["schema"] = admission
+        # Current writers have additional route policy fields; this fixture models only the earlier writer.
+        kept["route_decision"] = {name: row["route_decision"][name] for name in
+            ("agent", "model", "requested_effort", "requested_context", "reason", "preference_revision",
+             "policy_revision", "constraint_refs", "pod_version", "effective", "route_mismatch", "effective_unknown")}
+        kept["route_decision"]["mode"] = "fixture-mode"
         older["admissions"][key] = kept
     return older
 
@@ -304,6 +310,228 @@ class SupersededScopeTests(SupersededCase):
     def test_an_unknown_key_refuses(self):
         self.superseded(lambda raw: raw["checkpoint"].update(coordinator_slot={"run": "other-run"}))
         self.refusal(field="checkpoint.coordinator_slot")
+
+
+class SupersededDescriptiveTests(unittest.TestCase):
+    """Sanitized shape controls, derived from the earlier writer and genuine-record shape inspection."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.case = SupersededCase()
+        cls.case.setUp()
+        cls.addClassCleanup(cls.case.doCleanups)
+        cls.baseline = json.loads(cls.case.superseded())
+
+    def shape_record(self):
+        raw = deepcopy(self.baseline)
+        raw["constraints"] = [{"id": "ceiling", "kind": "max_workers", "provenance": "repository", "value": 2,
+                               "active": True},
+                              {"id": "agents", "kind": "only_agents", "provenance": "repository",
+                               "value": ["codex"], "role": "worker", "saved_state": "enabled",
+                               "mode": "fixture-mode", "file_stamp": "fixture-stamp"}]
+        raw["checkpoint"].update(remaining_gates=["review"], verification_gaps=["native proof"])
+        row = _admission(raw)
+        row["effective_evidence"] = {"requested": deepcopy(row["request"]),
+                                     "effective": deepcopy(row["route_decision"]["effective"])}
+        row["recovery"]["checkpoint_binding"]["objective_source"] = {
+            "schema": "pod-issue-source/v1", "repository": "acme/example", "number": 1,
+            "locator": "https://github.com/acme/example/issues/1", "body_sha256": "a" * 64,
+            "amendments": [{"locator": "https://github.com/acme/example/issues/1#issuecomment-2",
+                            "sha256": "b" * 64}]}
+        return raw
+
+    def admission_path(self, raw):
+        return ("admissions", next(iter(raw["admissions"])))
+
+    def reject_fields(self, raw, parent, fields):
+        """Each field gets hidden native content; the production boundary must refuse before reading Orca."""
+        for field in fields:
+            with self.subTest(parent=parent, field=field):
+                changed = deepcopy(raw)
+                target = changed
+                for part in parent:
+                    target = target[part]
+                previous = target[field] if isinstance(target, list) else target.get(field)
+                target[field] = {"runId": "hidden-run", "dispatchId": "hidden-dispatch"}
+                self.case.record_path().write_text(json.dumps(changed))
+                before, journal, starts = self.case.record_path().read_bytes(), self.case.journal(), deepcopy(self.case.port.starts)
+                parts = (*parent, field)
+                path = "".join(f"[{part}]" if isinstance(part, int) else ("." if i else "") + part
+                               for i, part in enumerate(parts))
+                # Admission prefixes follow the existing diagnostic format.
+                path = path.replace(parts[1], parts[1][:12], 1) if parts[0] == "admissions" else path
+                if isinstance(previous, dict):
+                    path += ".runId"
+                self.case.native_calls.clear()
+                self.case.refusal(field=path)
+                self.assertEqual(self.case.native_calls, [])
+                self.assertEqual((self.case.record_path().read_bytes(), self.case.journal(), self.case.port.starts),
+                                 (before, journal, starts))
+                self.assertEqual(self.case.mutations, [])
+
+    def test_context_and_constraint_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        self.reject_fields(raw, (), ("revision", "constraints"))
+        self.reject_fields(raw, ("constraints", 0), ("id", "kind", "provenance", "value", "active", "runId"))
+        self.reject_fields(raw, ("constraints", 1), ("role", "saved_state", "mode", "file_stamp"))
+        self.reject_fields(raw, ("constraints", 1, "value"), (0,))
+
+    def test_checkpoint_scalar_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        self.reject_fields(raw, ("checkpoint",), ("candidate", "plan_revision", "policy_revision", "bundle_digest",
+                                                 "pod_version", "next_safe_action"))
+        self.reject_fields(raw, ("checkpoint", "native_refs", 0), ("runtime",))
+        self.reject_fields(raw, ("checkpoint", "worktree"), ("branch", "repo_key", "repository"))
+
+    def test_checkpoint_list_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        self.reject_fields(raw, ("checkpoint",), ("criteria", "verification_gaps", "remaining_gates"))
+        for field in ("criteria", "verification_gaps", "remaining_gates"):
+            self.reject_fields(raw, ("checkpoint", field), (0,))
+
+    def test_admission_scalar_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        self.reject_fields(raw, self.admission_path(raw), ("runtime", "plan_revision", "packet_id",
+                                                          "created_at", "updated_at"))
+
+    def test_request_and_effective_evidence_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = self.admission_path(raw)
+        self.reject_fields(raw, parent, ("request", "effective_evidence"))
+        self.reject_fields(raw, (*parent, "request"), ("agent", "model", "effort", "context", "reason", "runId"))
+
+    def test_effective_evidence_route_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = self.admission_path(raw)
+        self.reject_fields(raw, (*parent, "effective_evidence", "requested"),
+                           ("agent", "model", "effort", "context", "reason", "runId"))
+
+    def test_effective_route_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = self.admission_path(raw)
+        self.reject_fields(raw, (*parent, "effective_evidence", "effective"),
+                           ("agent", "model", "effort", "context", "runId"))
+        self.reject_fields(raw, (*parent, "effective_evidence"), ("runId",))
+
+    def test_route_decision_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = self.admission_path(raw)
+        self.reject_fields(raw, parent, ("route_decision",))
+        parent = (*parent, "route_decision")
+        self.reject_fields(raw, parent, ("agent", "model", "requested_effort", "requested_context", "reason",
+                                        "preference_revision", "policy_revision", "mode", "pod_version"))
+
+    def test_route_decision_flags_and_containers_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = (*self.admission_path(raw), "route_decision")
+        self.reject_fields(raw, parent, ("route_mismatch", "effective_unknown", "constraint_refs", "effective", "runId"))
+
+    def test_route_decision_effective_and_reference_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = (*self.admission_path(raw), "route_decision")
+        _admission(raw)["route_decision"]["constraint_refs"] = ["ceiling"]
+        self.reject_fields(raw, (*parent, "constraint_refs"), (0,))
+        self.reject_fields(raw, (*parent, "effective"), ("agent", "model", "effort", "context", "runId"))
+
+    def test_checkpoint_binding_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = (*self.admission_path(raw), "recovery", "checkpoint_binding")
+        self.reject_fields(raw, parent, ("candidate", "criteria", "plan_revision", "policy_revision",
+                                        "objective_source"))
+        self.reject_fields(raw, (*parent, "criteria"), (0,))
+
+    def test_checkpoint_binding_source_shapes_refuse_hidden_content(self):
+        raw = self.shape_record()
+        parent = (*self.admission_path(raw), "recovery", "checkpoint_binding")
+        self.reject_fields(raw, (*parent, "objective_source"), ("schema", "repository", "number", "locator",
+                                                             "body_sha256", "amendments", "runId"))
+        self.reject_fields(raw, (*parent, "objective_source", "amendments", 0), ("locator", "sha256", "runId"))
+
+    def test_scalar_types_and_list_containers_are_exact(self):
+        raw = self.shape_record()
+        for path, value in ((('revision',), True), (('checkpoint', 'candidate'), []),
+                            (('checkpoint', 'criteria'), 'text'), (('constraints',), {}),
+                            (('constraints', 0, 'value'), True), (('constraints', 1, 'value'), 'codex')):
+            with self.subTest(path=path):
+                changed = deepcopy(raw)
+                target = changed
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = value
+                self.assertIsNotNone(older_scope(changed, "objective")[1])
+        raw = self.shape_record()
+        cases = ((('constraints', 0, 'kind'), 7, 'constraints[0].kind'),
+                 (('constraints', 0, 'kind'), 'unsupported', 'constraints[0].kind'),
+                 (('constraints', 0, 'value'), None, 'constraints[0].value'),
+                 (('checkpoint', 'candidate'), None, 'checkpoint.candidate'),
+                 (('checkpoint', 'candidate'), 'lone\ud800surrogate', 'checkpoint.candidate'))
+        for path, value, expected in cases:
+            with self.subTest(path=path, value=repr(value)):
+                changed = deepcopy(raw)
+                target = changed
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = value
+                found = older_scope(changed, "objective")[1]
+                self.assertEqual(found, expected)
+        changed = deepcopy(raw)
+        del changed["constraints"][0]["value"]
+        self.assertEqual(older_scope(changed, "objective")[1], "constraints[0].value")
+
+    def test_descriptive_maps_require_their_documented_members(self):
+        raw = self.shape_record()
+        for field, member in (("request", "reason"), ("route_decision", "route_mismatch"),
+                              ("effective_evidence", "effective")):
+            with self.subTest(field=field):
+                changed = deepcopy(raw)
+                del _admission(changed)[field][member]
+                key = next(iter(raw["admissions"]))[:12]
+                self.assertEqual(older_scope(changed, "objective")[1], f"admissions.{key}.{field}.{member}")
+
+    def test_other_historical_constraint_and_nullable_shapes_remain_supported(self):
+        raw = self.shape_record()
+        for kind, value in (("only_models", ["fixture-model"]), ("exclude_models", ["fixture-model"]),
+                            ("role_model", "fixture-model"), ("allow_disabled", "fixture-model"),
+                            ("allow_delegation", True)):
+            with self.subTest(kind=kind):
+                raw["constraints"] = [{"kind": kind, "value": value, "provenance": "user_direct"}]
+                self.assertEqual(older_scope(raw, "objective"), (["run"], None))
+        recovery = _admission(raw)["recovery"]
+        for place in (raw["checkpoint"]["worktree"], recovery["placement_binding"],
+                      recovery["checkpoint_binding"]["worktree"]):
+            if place is not None:
+                place.update(repo_key=None, repository=None)
+        _admission(raw)["effective_evidence"] = {}
+        _admission(raw)["route_decision"]["constraint_refs"] = [None, "ceiling"]
+        self.assertEqual(older_scope(raw, "objective"), (["run"], None))
+
+    def test_null_branch_remains_end_to_end_eligible(self):
+        raw = self.shape_record()
+        recovery = _admission(raw)["recovery"]
+        raw["checkpoint"]["worktree"]["branch"] = None
+        recovery["placement_binding"]["branch"] = None
+        recovery["checkpoint_binding"]["worktree"] = deepcopy(raw["checkpoint"]["worktree"])
+        recovery["checkpoint_binding"]["worktree"]["branch"] = None
+        self.case.record_path().write_text(json.dumps(raw))
+        before, journal = self.case.record_path().read_bytes(), self.case.journal()
+        verdict = self.case.retire()["objectives"][0]
+        self.assertEqual((verdict["status"], verdict["record_class"]), ("eligible", "older"), verdict)
+        self.assertEqual((self.case.record_path().read_bytes(), self.case.journal()), (before, journal))
+        self.assertFalse(self.case.sidecar().exists())
+
+    def test_sanitized_historical_shapes_remain_eligible(self):
+        raw = self.shape_record()
+        self.assertEqual(older_scope(raw, "objective"), (["run"], None))
+        for source in (None, _admission(raw)["recovery"]["checkpoint_binding"]["objective_source"]):
+            with self.subTest(source_is_null=source is None):
+                changed = deepcopy(raw)
+                _admission(changed)["recovery"]["checkpoint_binding"]["objective_source"] = source
+                self.case.record_path().write_text(json.dumps(changed))
+                before, journal = self.case.record_path().read_bytes(), self.case.journal()
+                verdict = self.case.retire()["objectives"][0]
+                self.assertEqual((verdict["status"], verdict["record_class"]), ("eligible", "older"), verdict)
+                self.assertEqual((self.case.record_path().read_bytes(), self.case.journal()), (before, journal))
+                self.assertFalse(self.case.sidecar().exists())
 
 
 class SupersededEntryTests(SupersededCase):

@@ -417,6 +417,9 @@ class DecisionTests(GovernorCase):
         self.preflight(binding["id"])
         early = self.decide(dispatch(candidate=binding["id"]))
         self.assertEqual(self.codes(early), ["candidate_unpublished"])
+        # The deferral names Governor publication as the route, never plain git (R115).
+        self.assertIn("through governor-execute (push or pr_update), never plain git", early["next_action"])
+        self.assertIn("a push made with plain git is not one of them", early["reasons"][0]["detail"])
         pushed = self.decide(action(candidate=binding["id"]))
         self.performed(pushed["record_id"])
         # A3: the push's own ci.yml run is not proof for an explicit dispatch, so both are admitted.
