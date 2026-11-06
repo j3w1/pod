@@ -179,6 +179,10 @@ class RequiredAuditTests(ks.KernelCase):
         rows = self.stored(); rows[1].pop('wait')
         rows[1].update(state='withdrawn',withdrawal={'by':'project_policy','reason':'trusted source gone'})
         self.write(rows)
+        # Audit withdrawal permits merge once the candidate contains the current target.
+        ks.git(self.project,'merge','--no-edit','target')
+        self.candidate = ks.git(self.project,'rev-parse','HEAD')
+        self.write(self.stored())
         self.assertEqual(self.delivery_decision(self.prepare_delivery())['decision'],'ALLOW')
 
     def test_governor_current_receipt_with_changed_source_is_invalidated(self):

@@ -12261,7 +12261,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_governor_evidence.MergeOutcomeTests.test_same_tree_target_commit_still_requires_containment",
+      "offline_test": [
+        "tests.test_governor_evidence.MergeOutcomeTests.test_same_tree_target_commit_still_requires_containment",
+        "tests.test_governor_evidence.MergeOutcomeTests.test_a_merge_pass_keeps_its_verified_merge_commit_and_says_fetch_first"
+      ],
       "status": "NOT_RUN"
     },
     {
@@ -12269,7 +12272,10 @@
       "required_evidence": [
         "unit"
       ],
-      "offline_test": "tests.test_governor_evidence.MergeOutcomeTests.test_unavailable_containment_proof_defers_in_observe_mode",
+      "offline_test": [
+        "tests.test_governor_evidence.MergeOutcomeTests.test_unavailable_containment_proof_defers_in_observe_mode",
+        "tests.test_governor_evidence.MergeReadinessGuidanceTests.test_guidance_requires_current_target_and_affected_scope_review"
+      ],
       "status": "NOT_RUN"
     }
   ],

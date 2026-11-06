@@ -859,6 +859,7 @@ class MergeOutcomeTests(KernelCase):
         self.write(self.stored())
         with patch("pod.governor.gitio.is_ancestor", return_value=None):
             decided = self.assert_target_deferred(self.base)
+        self.assertEqual(decided["mode"], "observe")
         self.assertIn("cannot be proved to contain", decided["explanation"])
 
     def test_failed_or_canceled_only_when_the_target_lacks_the_result(self):
@@ -907,6 +908,16 @@ class MergeOutcomeTests(KernelCase):
         git(self.project, "commit", "-qm", "squash")
         git(self.project, "update-ref", "refs/remotes/origin/target", git(self.project, "rev-parse", "HEAD"))
         self.refused("target_contains_result", decided, "FAILED")
+
+
+class MergeReadinessGuidanceTests(unittest.TestCase):
+    def test_guidance_requires_current_target_and_affected_scope_review(self):
+        guidance = (Path(__file__).resolve().parents[1] / "skills/pod/references/governor.md").read_text()
+        text = " ".join(guidance.split())
+        self.assertIn("A merge request is ready only when the PR head contains the current target commit.", text)
+        self.assertIn("If containment is absent or cannot be proved, the Governor returns DEFER naming the bound target", text)
+        self.assertIn("merge or rebase that target into the candidate, then re-review the affected scope under the existing rules", text)
+        self.assertIn("The result tree must still equal the candidate tree.", text)
 
 
 class EarlierReaderTests(EvidenceCase):
