@@ -12646,6 +12646,53 @@
       ],
       "offline_test": "tests.test_project_path.ProjectPathTests.test_valid_directory_keeps_git_unavailable",
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1117",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_admission_view.AdmissionViewTests.test_validated_report_returns_every_documented_field",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1118",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_admission_view.AdmissionViewTests.test_reconciliation_required_report_reads_its_status",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1119",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_admission_view.AdmissionViewTests.test_admission_without_a_report_says_so",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1120",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_admission_view.AdmissionViewTests.test_unreadable_record_reads_unknown_with_a_reason",
+        "tests.test_admission_view.AdmissionViewEdgeTests.test_malformed_recorded_fact_reads_unknown_by_field"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1121",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_admission_view.AdmissionViewEdgeTests.test_unknown_admission_and_objective_and_malformed_id",
+        "tests.test_admission_view.AdmissionViewEdgeTests.test_admission_needs_one_objective_and_no_run_or_list",
+        "tests.test_admission_view.AdmissionViewTests.test_validated_report_returns_every_documented_field"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

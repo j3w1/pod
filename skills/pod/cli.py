@@ -72,6 +72,8 @@ def parser() -> argparse.ArgumentParser:
     scope.add_argument("--worktree", metavar="PATH", help="with --list: objectives that touch this worktree")
     status.add_argument("--delivered", action="store_true",
                         help="with --list: prove each open objective's delivery (reads Orca and GitHub)")
+    status.add_argument("--admission", metavar="ADMISSION",
+                        help="with --objective: this admission's packet and report-receipt facts (R250)")
     status.add_argument("--json", action="store_true")
     admission = sub.add_parser("admission", help="read current claims and exact candidate proof")
     for name in ("repository", "objective", "candidate", "worktree", "branch", "target", "target-commit", "expect"):
@@ -421,6 +423,9 @@ def execute(args: argparse.Namespace, project: Path) -> dict:
     if args.command == "continue":
         from .window import continue_command
         return continue_command(project, args.objective)
+    if args.command == "status" and args.admission is not None:
+        from .admission_view import view as admission_view
+        return admission_view(project, args.objective, args.admission)
     if args.command == "status":
         return _status(project, args.run, objective=args.objective,
                        current_run_fn=current_run, worker_rows_fn=worker_rows,
@@ -528,6 +533,9 @@ def main(argv: list[str] | None = None) -> int:
         command_parser.error("--repository and --worktree select the scope of --list")
     if args.command == "status" and args.delivered and not args.list_objectives:
         command_parser.error("--delivered adds delivery proofs to --list")
+    if args.command == "status" and args.admission is not None and (
+            not args.objective or args.run or args.list_objectives):
+        command_parser.error("--admission reads one admission of --objective ID; it takes no --run or --list")
     if args.command == "update":
         from .installer import main as installer_main
         return installer_main(["--update"])
@@ -658,6 +666,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "continue":
         from .window import render
         render(result)
+    elif args.command == "status" and args.admission is not None:
+        from .admission_view import render as render_admission
+        render_admission(result)
     elif args.command == "status":
         render_status(result)
     else:
