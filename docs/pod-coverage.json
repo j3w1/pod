@@ -6534,7 +6534,10 @@
         "tests.test_display.DisplayOpTests.test_actual_display_entry_reads_beyond_default_cap_and_at_fixed_bound",
         "tests.test_display.DisplayOpTests.test_claimed_complete_overbound_or_wrong_total_is_unreadable",
         "tests.test_display.DisplayOpTests.test_missing_or_incomplete_host_and_truncation_metadata_is_unreadable",
-        "tests.test_display.DisplayOpTests.test_duplicate_or_unplaceable_worktree_rows_are_not_filtered_away",
+        "tests.test_display.DisplayOpTests.test_unplaceable_worktree_rows_are_not_filtered_away",
+        "tests.test_display.DisplayOpTests.test_duplicates_refuse_only_what_the_objective_compares",
+        "tests.test_display.DisplayOpTests.test_duplicate_parent_identity_of_a_worker_row_is_unreadable_and_named",
+        "tests.test_display.DisplayOpTests.test_duplicates_outrank_host_naming_for_host_owned_worker_rows",
         "tests.test_orca_adapter.OrcaAdapterTests.test_display_worktree_limit_is_one_exact_read_shape",
         "tests.test_orca_adapter.OrcaAdapterTests.test_display_bounded_read_keeps_timeout_output_and_environment",
         "tests.test_display.DisplayOpTests.test_worker_layers_readback_status_and_session_steps"
@@ -10287,6 +10290,20 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A962",
+      "required_evidence": [
+        "unit",
+        "hosted_ci",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_obligations.GovernanceStalenessTests.test_refresh_after_an_earlier_delivery_reads_current",
+        "tests.test_obligations.GovernanceStalenessTests.test_delivery_result_stays_current_for_its_exact_base_and_target",
+        "tests.test_obligations.GovernanceStalenessTests.test_no_delivery_and_local_append_compare_the_bound_base"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A791",
       "required_evidence": [
         "unit",
@@ -11917,6 +11934,31 @@
       "offline_test": [
         "tests.test_admission_host_exit_scope.OrphanTests.test_each_removed_worktree_query_asks_only_its_own_row_and_counts_it",
         "tests.test_admission_host_exit_scope.OrphanTests.test_a_branch_query_never_takes_another_repositorys_rows"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A969",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_a_target_effects_or_other_branch_query_never_asks_about_it",
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_its_recorded_branch_still_asks_and_holds_until_counted",
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_an_unrecovered_location_stays_a_candidate_and_holds",
+        "tests.test_admission_host_exit_scope.FactTests.test_a_recorded_placement_is_judged_exactly"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A970",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_admission_host_exit_scope.RemovedPlacementTests.test_another_records_binding_read_first_never_replaces_its_placement"
       ],
       "status": "NOT_RUN"
     },

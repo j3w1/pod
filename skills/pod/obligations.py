@@ -2850,10 +2850,18 @@ def report_projection(state: dict, ctx: dict, *, standing_normal: bool = False) 
 
 
 def _currency_anchor(state: dict) -> str | None:
-    """The commit governance currency accepts: an R93 result, else the bound base (a local append's result is on the
-    host's train, never a currency exception, R209)."""
+    """The commit governance currency accepts: the newer governance basis (R93, R209).
+
+    A verified R93 delivery result is the basis only while governance still carries the base the delivery was
+    verified against. A later governance refresh changed the bound base, so that base is the newer basis; a local
+    append's result is on the host's train and never a currency exception (R209).
+    """
     from .local_append import remote
-    return (remote(state.get("delivery")) or {}).get("result", state["governance"]["base"])
+    governance, delivery = state["governance"], remote(state.get("delivery"))
+    if (delivery is not None and delivery.get("base") == governance["base"]
+            and delivery.get("target_ref") == governance.get("base_ref")):
+        return delivery.get("result", governance["base"])
+    return governance["base"]
 
 
 def observations(prior: dict | None, state: dict, ctx: dict) -> dict:

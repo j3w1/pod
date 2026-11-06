@@ -1070,7 +1070,7 @@ class _HostExitSlot:
     query's result."""
 
     def __init__(self, project: Path, request: dict, runs: set, own_runs: set, gaps: set, abandoned: set, *,
-                 scope: dict, owed: dict, owners, unreadable):
+                 scope: dict, owed: dict, owners, unreadable, placements: dict | None = None):
         # `runs`: every Run a record names (rule S scope); `own_runs`: those named by this repository's records whose
         # admissions the query reads, the only Runs on which its projection claims a row outside the repository.
         self.project, self.request, self.runs, self.own_runs = project, request, runs, own_runs
@@ -1078,6 +1078,10 @@ class _HostExitSlot:
         # What the records say about a row: the query's scope, this repository's owed-report holds by Dispatch, and
         # the shared readers of a Run's foreign owners and of whether a record naming a Run reads whole.
         self.scope, self.owed, self.owners, self.unreadable = scope, owed, owners, unreadable
+        # The placements this repository's records bind to their Dispatches, complete at the record-pass yield and
+        # never rewritten: the projection recovers a row's branch from them first (pod#243). None knows none, which
+        # keeps every such row.
+        self.placements = placements or {}
         # Every record the record clauses read for this query, by name: its recheck dependencies (R207), and the
         # records whose evidence closure a foreign-owner judgment they used consulted: its census dependencies (R213).
         self.dependencies: dict = {}  # record name -> (directory, generation)
@@ -1117,11 +1121,16 @@ def _host_exit_relevant(slot: _HostExitSlot, shown: dict, places) -> bool:
 
 
 def _host_exit_native(slot: _HostExitSlot, shown: dict, places) -> bool:
-    """S's judgment from the row's native location alone, before any record is read for it.
+    """S's judgment from the row's native location and the record pass's own placements, before any other record is
+    read for it.
 
     A record can give an unregistered row a branch and a repository key, which only narrow `_relevant` or match a
     requested branch; it never makes a path overlap. So a worktree-only request decides any located row by its path,
-    and a row in this repository's registered worktree has a complete location that is judged exactly."""
+    and a row in this repository's registered worktree has a complete location that is judged exactly. So does a row
+    outside the registry, such as one whose worktree was removed, when an admission of this repository's records binds
+    its exact native identity: the projection takes that admission's placement first (`_recovered`), so its writer
+    claim and process-liveness unknown carry exactly this location (pod#243). Any other such row keeps the
+    conservative answer, since a record read later may still give it a branch."""
     request = slot.request
     if not any(request.values()) or shown["dispatch"] in slot.gaps:
         return True
@@ -1134,7 +1143,11 @@ def _host_exit_native(slot: _HostExitSlot, shown: dict, places) -> bool:
     if request["worktree"] and not request["branch"]:
         return _overlap(request["worktree"], path)
     if registered is None:
-        return True  # A branch, target or effects request facing a branch only a record may know.
+        placement = _recovered(shown, slot.placements)
+        if placement is None:
+            return True  # A branch, target or effects request facing a branch only a later record read may know.
+        return _relevant({"repo_key": placement.get("repo_key"), "worktree": path, "branch": placement["branch"],
+                          "locations_complete": True}, request, slot.scope["repo_key"], _overlap, "process_liveness")
     return bool(request["worktree"] and _overlap(request["worktree"], path)
                 or request["branch"] and places.get(registered) == request["branch"])
 
@@ -1765,6 +1778,18 @@ def _placement_matches(binding: dict, shown: dict) -> bool:
         and listing._location(binding["worktreeId"]) == shown["worktree"])
 
 
+def _recovered(shown: dict, *tables) -> dict | None:
+    """The placement that gives a row outside the worktree registry its branch (pod#243): the first table, in the
+    order given, whose entry for its Dispatch is an admission binding that exact native identity. The record pass's
+    table comes first and is never rewritten afterwards, so a row it recovers keeps that placement whatever order
+    the worker loop reads other rows or other records in, and R212's superset can judge the row by it in advance."""
+    for table in tables:
+        binding, placement = table.get(shown["dispatch"], ({}, {}))
+        if _placement_matches(binding, shown):
+            return placement
+    return None
+
+
 def _canonical_target(project: Path | None, ref: str | None) -> str | None:
     if project is None or ref is None:
         return ref
@@ -1994,7 +2019,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
     record_scopes = {}
     own_records = set()  # this repository's records: the record pass judges their admissions itself
     owners, owner_reads = {}, {}
-    placements_by_dispatch = {}
+    # Placements bound to their Dispatches: this repository's records' (the record pass's alone, never rewritten
+    # afterwards, which R212's superset reads), and those the worker loop reads from records naming a row's Run.
+    placements_by_dispatch, run_placements = {}, {}
     scope_records_read, attribution_gaps = set(), []
     # Rule T (R206): gaps on another objective's terminal record, judged after the complete native inventories.
     terminal_gaps = []
@@ -2389,7 +2416,8 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
             host_slot = _HostExitSlot(project, {"worktree": physical(worktree) if worktree else None,
                                                 "branch": branch, "target": target, "effects": effects or []},
                                       {*runs, *run_sources}, set(runs), gap_dispatches, set(abandoned_dispatches),
-                                      scope=scope, owed=owed, owners=owners_of, unreadable=run_unreadable)
+                                      scope=scope, owed=owed, owners=owners_of, unreadable=run_unreadable,
+                                      placements=placements_by_dispatch)
             discovery.host_exit_slots.append(host_slot)
         yield "native"  # Every query's record pass runs while the native inventory is read.
         # Prefer the installed all-Run inventory for CE's unbound caller.
@@ -2544,9 +2572,9 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                     host_used.add(shown["dispatch"])
                     continue
                 branch_fact, branch_known = places.get(registered), registered is not None
-                binding, placement = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
-                if not branch_known and _placement_matches(binding, shown):
-                    branch_fact, branch_known = placement["branch"], True
+                recovered = _recovered(shown, placements_by_dispatch, run_placements)
+                if not branch_known and recovered is not None:
+                    branch_fact, branch_known = recovered["branch"], True
                 if path and not branch_known and not elsewhere(path):
                     # Native work in this repository may have been admitted by a
                     # different repository's objective. Inspect only that actual
@@ -2574,15 +2602,14 @@ def _query(project: Path, *, repository: str | None = None, objective: str | Non
                             binding = candidate_row.get("native_binding") or {}
                             placement = _placement(candidate_row)
                             if placement.get("path") == listing._location(binding.get("worktreeId")) and "branch" in placement:
-                                placements_by_dispatch[binding.get("dispatchId")] = (binding, placement)
-                        bound, placed = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
-                        if _placement_matches(bound, shown):
-                            branch_fact, branch_known = placed["branch"], True
+                                run_placements[binding.get("dispatchId")] = (binding, placement)
+                        recovered = _recovered(shown, run_placements)
+                        if recovered is not None:
+                            branch_fact, branch_known = recovered["branch"], True
                             break
                 native_effects = []
-                scope_binding, scope_placement = placements_by_dispatch.get(shown["dispatch"], ({}, {}))
                 actor_repo = context["repo_key"] if registered is not None else (
-                    scope_placement.get("repo_key") if _placement_matches(scope_binding, shown) else None)
+                    recovered.get("repo_key") if recovered is not None else None)
                 actor_scope = {"repo_key": actor_repo, "worktree": path, "branch": branch_fact,
                                "locations_complete": bool(path) and branch_known}
                 if (source.get("workerState") == "abandoned" or shown["dispatch"] in abandoned_dispatches) and (effects or relevant(actor_scope,
