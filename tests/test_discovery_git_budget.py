@@ -123,7 +123,7 @@ class LocalGitTests(GitBudgetChecks, unittest.TestCase):
     original_timeout = 20
 
     def invoke(self, **kwargs):
-        return github._local_git(Path("."), ["remote", "get-url", "origin"], **kwargs)
+        return github._local_git(Path.cwd(), ["remote", "get-url", "origin"], **kwargs)
 
     def assert_unavailable(self):
         with self.assertRaises(PodError) as refused:

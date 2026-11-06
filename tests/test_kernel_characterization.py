@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -20,11 +21,12 @@ class StatusProjectionTests(unittest.TestCase):
                        "pinned": "codex/gpt-6.1-sol/high", "max_active": 2, "refresh": "manual",
                        "errors": [], "setup": None}
         before = deepcopy(preferences)
-        with patch("pod.status.load_config", return_value=preferences), \
+        with tempfile.TemporaryDirectory() as directory, \
+             patch("pod.status.load_config", return_value=preferences), \
              patch("pod.status.running_identity", return_value={"version": "0.6.4", "bundle_digest": "d"}), \
              patch("pod.config.edit", side_effect=AssertionError("status wrote configuration")) as edit, \
              patch("pod.cli.current_run", return_value={"run": None}):
-            result = execute(parser().parse_args(["status", "--json"]), Path("/fixture"))
+            result = execute(parser().parse_args(["status", "--json"]), Path(directory))
         edit.assert_not_called()
         self.assertEqual(preferences, before)
         self.assertEqual(result, {

@@ -315,11 +315,14 @@ class BoundTests(CallerCase):
         body = self.raw_packet(context=[{"kind": "summary", "id": "summary", "binding_digest": "a" * 64}],
                                sources=[{"path": "src/old.py", "state": "present", "sha256": "a" * 64}],
                                worktree={"repository": None, "repo_key": "a" * 64, "path": "/fixture", "branch": "main"})
-        self.ok("packet", body)
-        for record, field, listed in (("packet_route", "route", False), ("context_reference", "context", True),
-                                      ("source", "sources", True), ("worktree_binding", "worktree", False)):
-            self.check_bounds(record, body[field][0] if listed else body[field], "packet",
-                              lambda value, field=field, listed=listed: {**body, field: [value] if listed else value})
+        # These are record-shape bounds, not live discovery of fabricated worktree paths.
+        snapshot = load(self.project)
+        with patch("pod.config.load", return_value=snapshot):
+            self.ok("packet", body)
+            for record, field, listed in (("packet_route", "route", False), ("context_reference", "context", True),
+                                          ("source", "sources", True), ("worktree_binding", "worktree", False)):
+                self.check_bounds(record, body[field][0] if listed else body[field], "packet",
+                                  lambda value, field=field, listed=listed: {**body, field: [value] if listed else value})
 
     def checkpoint_bounds(self, record, row, field=None):
         self.initial()

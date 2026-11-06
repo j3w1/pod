@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -75,8 +76,9 @@ class DeliveryAuthorizationTests(unittest.TestCase):
         row = {"decision": "ALLOW", "action": {"kind": "push", "candidate": COMMIT,
                                               "authorization": authorization(scope=("publish",))},
                "commit": COMMIT, "candidate_id": "candidate-id"}
-        with patch("pod.governor._read_journal", return_value={"actions": [row]}):
-            granted = _authorization_granted(Path("/fixture"), "objective")
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("pod.governor._read_journal", return_value={"actions": [row]}):
+            granted = _authorization_granted(Path(directory), "objective")
             self.assertTrue(granted("publish", COMMIT))
             self.assertFalse(granted("merge", COMMIT))
 

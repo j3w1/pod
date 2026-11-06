@@ -72,7 +72,7 @@ class MachinePolicyTests(MachineCase, unittest.TestCase):
         count = len(policy.CATEGORIES) - len(policy.PERSON_ONLY | policy.AUTOMATIC)
         choices = (["me", "trusted agents", "any agent"] * count)[:count] + ["yes"]
         with patch("sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=choices) as prompt:
-            execute(parser().parse_args(["policy", "custom", "--json"]), None)
+            execute(parser().parse_args(["policy", "custom", "--json"]), self.root)
         rendered = " ".join(str(call.args) for call in prompt.call_args_list)
         self.assertNotIn("trusted_agents", rendered)
         self.assertNotIn("any_agent", rendered)
@@ -331,7 +331,7 @@ class MachineToolTests(MachineCase, unittest.TestCase):
         from pod.cli import execute, parser
         before = config.personal_path().read_bytes()
         with self.assertRaises(PodError) as caught:
-            execute(parser().parse_args(["tool", "review", "--tool", "fixture-tool", "--category", "money", "--json"]), None)
+            execute(parser().parse_args(["tool", "review", "--tool", "fixture-tool", "--category", "money", "--json"]), self.root)
         self.assertEqual(caught.exception.code, "tool_review_money")
         self.assertIn("each new spending commitment", str(caught.exception))
         self.assertEqual(config.personal_path().read_bytes(), before)
@@ -364,10 +364,10 @@ class MachineToolTests(MachineCase, unittest.TestCase):
     def test_cli_policy_and_tool_questions_are_plain_and_config_is_sanitized(self):
         from pod.cli import execute, parser
         question = execute(parser().parse_args(["tool", "check", "--tool", "fixture-tool", "--category", "secrets",
-                                               "--operation", "private-operation-sentinel", "--json"]), None)
+                                               "--operation", "private-operation-sentinel", "--json"]), self.root)
         self.assertEqual(question["status"], "permission_question")
         self.assertFalse(question["execute"])
-        view = execute(parser().parse_args(["policy", "--json"]), None)
+        view = execute(parser().parse_args(["policy", "--json"]), self.root)
         self.assertNotIn("private-operation-sentinel", json.dumps(view))
         self.assertTrue(view["needs_you"])
         self.assertEqual(view["waiting_decisions"]["total"], 1)
