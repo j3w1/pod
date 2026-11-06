@@ -777,13 +777,15 @@ def execute(root: Path, stages: list[list[tuple[str, list[str]]]], manifest: dic
             item = run_pool(root, [("solo", [test_id], min(300.0, 3 * seconds + 30))], directory, 1)[0]
             events = _read_events(item["events"])
             item["events"].unlink(missing_ok=True)
-            accounted = account([test_id], events, name="solo", exit_note=item["note"], forbid_skips=forbid_skips,
+            # A skip alone is never a timing sample, whatever the share's own skip option.
+            accounted = account([test_id], events, name="solo", exit_note=item["note"], forbid_skips=True,
                                 exit_code=item["code"])
             stops = [event for event in events if event.get("event") == "stop"]
             if accounted["problems"] or not stops:
                 sys.stdout.write(_group(f"solo {test_id}", item["log_file"].read_text(encoding="utf-8",
                                                                                       errors="replace")))
                 solo_problems.extend(accounted["problems"] or [f"NOT RUN {test_id} alone: no completion recorded"])
+                outcome["clean"] = False  # The share's timing lines must not attest a clean run.
                 return float("inf")
             return stops[-1]["seconds"]
 

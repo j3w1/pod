@@ -354,7 +354,7 @@ class GateTests(unittest.TestCase):
                 if note:
                     self.assertIn(note, (problems + warnings)[0])
 
-    def execute_with(self, seconds, alone_events, *, strict=True, walls=None):
+    def execute_with(self, seconds, alone_events, *, strict=True, walls=None, forbid_skips=True):
         """Run `execute` over a fake pool: the first job reports `seconds`, a solo job replays `alone_events`."""
         test_id, scratch = "tests.m.C.test_a", tempfile.mkdtemp(prefix="suite-fake-")
         self.addCleanup(shutil.rmtree, scratch, True)
@@ -375,7 +375,7 @@ class GateTests(unittest.TestCase):
         clock = patch.object(sl.time, "monotonic", side_effect=walls) if walls else nullcontext()
         with patch.object(sl, "run_pool", fake_pool), clock, redirect_stdout(io.StringIO()):
             return sl.execute(Path(scratch), [[("parallel-1", [test_id])]], ONE_SHARD, strict=strict,
-                              forbid_skips=True, concurrency=1, target=180.0)
+                              forbid_skips=forbid_skips, concurrency=1, target=180.0)
 
     def test_an_alone_run_that_fails_or_never_finishes_fails_the_share(self):
         test_id = "tests.m.C.test_a"
@@ -384,14 +384,21 @@ class GateTests(unittest.TestCase):
         crashed = [{"event": "start", "id": test_id}]
         unclean = [{"event": "start", "id": test_id}, {"event": "stop", "id": test_id, "outcome": "success",
                                                        "seconds": 0.1}]
-        for name, events, expected in (("failed alone", failed, f"FAILURE {test_id}"),
-                                       ("crashed alone", crashed, f"IN FLIGHT {test_id}"),
-                                       ("unclean alone", unclean, "without a clean finish")):
+        skipped = [{"event": "start", "id": test_id}, {"event": "stop", "id": test_id, "outcome": "skip",
+                                                       "seconds": 0.1}, {"event": "done", "ok": True}]
+        for name, events, expected, forbid in (("failed alone", failed, f"FAILURE {test_id}", True),
+                                               ("crashed alone", crashed, f"IN FLIGHT {test_id}", True),
+                                               ("unclean alone", unclean, "without a clean finish", True),
+                                               ("skipped alone", skipped, "SKIPPED 1 test(s)", True),
+                                               ("skipped alone, skips allowed", skipped, "SKIPPED 1 test(s)", False)):
             with self.subTest(name):
-                outcome = self.execute_with(3.0, events)
+                outcome = self.execute_with(3.0, events, forbid_skips=forbid)
                 text = "\n".join(outcome["problems"])
                 self.assertIn(expected, text)
                 self.assertIn("alone run did not finish", text)
+                # The share's own accounting stays exact, but its timing lines may not attest a clean run.
+                self.assertFalse(outcome["clean"])
+                self.assertEqual(outcome["ran"], 1)
 
     def test_a_strict_share_between_two_and_four_times_its_target_stays_green(self):
         outcome = self.execute_with(0.01, None, walls=[0.0, 364.0, 365.0])  # PR 146: 364 s against 360 s.
