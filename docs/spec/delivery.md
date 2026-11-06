@@ -120,6 +120,15 @@ The text step never changes the row's outcome, its publication facts or derived 
 - <a id="a1080"></a>**A1080** — An unreadable pull request, one whose base changed, or provider text that is not valid Unicode is not written (`unread`); a lost edit, or one whose answer exceeds the output bound, is `uncertain`, and the next publication treats exactly both texts as Pod's own, so an older Pod text a person restores afterwards conflicts; an edit refused before submission is `failed`; a revoked standing authorization or a candidate prepared after the push holds the edit (`held`); a fault in the text step records `unread`; every such row stays PASS with its publication facts.
 - <a id="a1081"></a>**A1081** — A malformed `replace_edited`, one on another kind, a title or body with a lone surrogate, or another `pull_request` key refuses `invalid_pull_request` before any record or remote call; the port issues only the exact text read and edit argv, and the allowlist refuses other edit shapes. Installed Governor guidance explains the conflict and the lead's decision.
 
+### R244 — Refuse a delivery on a mapless checkpoint by name
+
+Type: B · Scenarios: [A1093](#a1093), [A1094](#a1094)
+
+A checkpoint carrying `delivery` while the objective has no stored obligation map refuses `delivery_unverified` with detail `map_missing` and the next action "record the delivery in a checkpoint that carries the obligation map", whether or not it carries `seq` or any other map field, and writes nothing: like a closing write, it defers a proven runtime-continuity rebind, so the refusal persists none. Pod refuses rather than records because an R93 or R209 delivery is verified against the bound map's sequence, governance and obligations, which a mapless write does not have. A request shape refusal from R209 keeps its precedence. A mapless checkpoint without `delivery` keeps its existing behaviour.
+
+- <a id="a1093"></a>**A1093** — With no stored map, a checkpoint carrying an R93 `{record}` or R209 `{local_append}` delivery and no map field, on the first write or after an accepted mapless write, including after a proven runtime change through the real authority join, refuses `delivery_unverified` `map_missing` with the next action naming the obligation map, and the objective's files and record are unchanged.
+- <a id="a1094"></a>**A1094** — A mapless checkpoint without `delivery` is accepted as before, stores no delivery or obligations, and a later mapless write replaces its core.
+
 ### R94 — Objective cleanup plan and consent
 
 Type: B,H · Scenarios: [A170](#a170), [A171](#a171), [A172](#a172), [A410](interface.md#a410), [A476](#a476), [A477](#a477), [A485](#a485), [A498](#a498), [A499](#a499), [A500](#a500), [A976](#a976), [A977](#a977)
