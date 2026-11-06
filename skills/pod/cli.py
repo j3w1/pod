@@ -534,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status" and args.delivered and not args.list_objectives:
         command_parser.error("--delivered adds delivery proofs to --list")
     if args.command == "status" and args.admission is not None and (
-            not args.objective or args.run or args.list_objectives):
+            args.objective is None or args.run or args.list_objectives):
         command_parser.error("--admission reads one admission of --objective ID; it takes no --run or --list")
     if args.command == "update":
         from .installer import main as installer_main

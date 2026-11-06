@@ -212,8 +212,9 @@ class AdmissionViewCorrectionTests(AdmissionViewCase):
         wide = "\u20ac" * admission_view.OBJECTIVE_LIMIT
         code, result = self.view("a" * 64, objective=wide)
         self.assertEqual((code, result["status"], result["admission_view"]["objective"]), (1, "blocked", wide))
-        code, text = self.pod("--objective", "bad\nname", "--admission", "a" * 64, "--json")
-        self.assertEqual(json.loads(text)["error"]["code"], "invalid_objective")
+        for name in ("bad\nname", ""):
+            code, text = self.pod("--objective", name, "--admission", "a" * 64, "--json")
+            self.assertEqual((code, json.loads(text)["error"]["code"]), (1, "invalid_objective"))
         oversized = {"schema": "pod-cli/v5", "status": "observed",
                      "admission_view": {"admission": "a" * 64, "padding": "y" * admission_view.VIEW_BYTES}}
         bounded = admission_view._bounded(oversized)
