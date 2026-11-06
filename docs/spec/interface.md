@@ -6,7 +6,7 @@
 
 Type: B · Scenarios: [A34](#a34), [A40](#a40), [A119](#a119), [A216](#a216), [A252](#a252), [A256](#a256)
 
-Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status` with `--list [--repository PATH | --worktree PATH] [--delivered]`, `pod sweep [--repository PATH]... [--objective NAME]... [--json]` (R148), `pod doctor`, `pod update`, `pod config`/`config edit`, `pod policy`, `pod tool check`/`tool review`/`tool answer`/`tool cancel` (R163–R164), and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output; the model read optionally restricts its rows with `--eligible-only`. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
+Expose `pod`, `pod models` with `models refresh [--check]` and `models status`, `pod status` with `--list [--repository PATH | --worktree PATH] [--delivered]` and `--objective ID --admission ADMISSION` (R250), `pod sweep [--repository PATH]... [--objective NAME]... [--json]` (R148), `pod doctor`, `pod update`, `pod config`/`config edit`, `pod policy`, `pod tool check`/`tool review`/`tool answer`/`tool cancel` (R163–R164), and `pod --version`. Model, config, doctor and status commands offer clean `--json` machine output; the model read optionally restricts its rows with `--eligible-only`. `pod update` updates software only; model data refreshes only through `pod models refresh` or the workspace. `pod internal` is hidden and structured; planning, execution and continuation stay skill behaviors.
 
 ### R04 — Maintain one canonical trigger-led skill router
 
@@ -521,6 +521,7 @@ These elaborate the requirements above; there is one command implementation in t
 | `pod config edit` | Opens the personal YAML in `$VISUAL` or `$EDITOR`, validates afterward, retains invalid edits and reports them. |
 | `pod status [--objective ID] [--run RUN] [--json]` | Select an objective; report source, worktree, assignments (active, settled, or unverified when the exact native read fails), runtime rebinds, succession, gates, progress, blockers and next action, and the `readiness` answer (R114) first. Shared Runs require explicit selection. |
 | `pod status --list [--repository PATH \| --worktree PATH] [--delivered] [--json]` | List every objective recorded for a repository or worktree (R108) from Pod's own state, without Orca, each with its record-only readiness label. `--delivered` adds read-only delivery proof for open rows (R148). Exit 0 for `listed` or `absent`. |
+| `pod status --objective ID --admission ADMISSION [--json]` | Read one admission's packet and report-receipt facts from Pod's own record, read-only and bounded, as the versioned `pod-admission-view/v1` contract (R250). Exit 0 for `observed` or `absent`. |
 | `pod admission --repository PATH [--objective ID --candidate SHA] [--json]` | Read current claims and exact candidate proof with scoped unknowns and effect-boundary recheck identity (R185). |
 | `pod admission --selected --objective ID --candidate SHA [--repository PATH] [--tree TREE] [--expect DIGEST] --json` | Read one objective's exact-candidate facts with no repository record scan and no fleet discovery (R208). |
 | `pod sweep [--repository PATH]... [--objective NAME]... [--json]` | Close every proved delivered open objective by evidence (R148); no terminal or Run binding needed. |
@@ -1859,3 +1860,38 @@ Every public command and internal helper accepting `project` validates the origi
 - <a id="a1053"></a>**A1053** — Bare names, relative paths, missing absolute paths, files and malformed values refuse `project_path_invalid` before subprocess execution, with the field, safe value kind and next action; absolute directories and directory symlinks pass validation.
 - <a id="a1054"></a>**A1054** — Every public command dispatch and internal operation carrying `project` validates before dispatch or external reads; issue-intake and public JSON diagnostics contain no private input contents. Git discovery rejects relative paths before resolution.
 - <a id="a1055"></a>**A1055** — Git launch and timeout failures in a valid existing absolute directory retain `git_unavailable`.
+
+### R250 — Prove report acceptance through one public read
+
+Type: B,I · Scenarios: [A1117](#a1117), [A1118](#a1118), [A1119](#a1119), [A1120](#a1120), [A1121](#a1121)
+
+`pod status --objective ID --admission ADMISSION --json` is the supported way for another tool to prove which packet an admission ran and whether Pod accepted that attempt's report, without reading Pod's records. It reads that one objective record of the current repository through the scan read (R206) and nothing else: no Orca, preference, provider or GitHub read, no live terminal, and no write, conversion or repair. It takes no record lock and never waits for or blocks a writer; its only lock is the shared, non-blocking history read pin every Pod record read holds while it reads immutable history. `--admission` takes the 64-character admission id that `pod status --objective ID --json` lists; it needs `--objective` and takes no `--run` or `--list`. A malformed id refuses `invalid_admission`, and an objective name that is empty, longer than 256 characters or not printable refuses `invalid_objective`; neither refusal echoes the value. The envelope is `pod-cli/v5` with `status` `observed`, `absent` when the record holds no such admission, `blocked` with `blocker: objective_unknown` when the repository has no record for the objective, or `unavailable` when the record cannot be read; exit 0 for `observed` or `absent`.
+
+Its `admission_view` object is the public contract `pod-admission-view/v1`. A later version changes `schema`; consumers ignore fields they do not know. Values are exactly as Pod recorded them:
+
+| Field | Meaning |
+| --- | --- |
+| `schema`, `objective`, `admission` | The contract and the requested names. |
+| `record` | `read`, `absent` or `unknown`. |
+| `found` | Whether the record holds this admission. |
+| `state`, `role` | The admission's recorded state and role. |
+| `packet_id` | The frozen packet's content digest the worker ran. |
+| `candidate` | The admission's recorded candidate. |
+| `assignment_digest` | The frozen packet's assignment digest, recorded at admission as `recovery.assignment`. |
+| `run_id`, `task_id`, `dispatch_id` | The native Run, Task and Dispatch; `dispatch_id` is null before a Dispatch is bound. |
+| `report` | `{consumed: false, reason}` when no report has been consumed; otherwise the receipt below. |
+| `report.status` | `validated_observation` or `reconciliation_required`. |
+| `report.settled` | `true`: Pod consumes a report only after its exact Dispatch settled natively. |
+| `report.outcome`, `report.assignment`, `report.attempt`, `report.candidate` | The outcome, and the packet, Dispatch and candidate the report was written for. |
+| `report.native_binding` | The admission's recorded `runtime` with the `runId`, `taskId`, `dispatchId` and `workerId` the receipt joins. |
+| `report.observation_digest`, `report.result_commit`, `report.consumed_at` | The receipt identity, the recorded result commit or null, and the consumption time. |
+| `report.ingestion` | `not_applicable` for a non-implementer; otherwise the Git ingestion outcome `recorded`, `over_limit` or `unknown`, with its `base` and `head` commits and `changed_path_count` and `boundary_exceeded_count`, never the paths. |
+| `unknown` | One `{field, reason}` per fact that reads `unknown`. |
+
+It carries only identifiers, digests, states, times and counts: never report bodies, findings, checks, packet text, instructions, transcripts, source content or any message derived from the record, and every response, early ones included, stays within 8 KiB. A recorded fact or count that is absent or not a bounded single-line identifier or count reads `unknown` and is named in `unknown` with `absent` or `unreadable`. When the record cannot be read, every fact reads `unknown` and `unknown` names `record` with Pod's refusal code and that code's fixed public `detail`, never the refusal's own message.
+
+- <a id="a1117"></a>**A1117** — For an implementer whose validated report was consumed, the view returns every documented field equal to the stored admission and receipt, including the result commit and ingestion counts, through the real CLI with Orca, preference reads, record locks and writes unavailable; the record's files are unchanged, and the only `flock` operations are the shared non-blocking read pin and its release.
+- <a id="a1118"></a>**A1118** — A consumed `reconciliation_required` report reads that status, `settled: true` and the packet it was written for, with no unknown fact.
+- <a id="a1119"></a>**A1119** — An admission with no consumed report reads `report: {consumed: false, reason}` with its packet and Dispatch, and the text output says no report has been consumed.
+- <a id="a1120"></a>**A1120** — An unreadable record reads `unavailable` with every fact `unknown` and `unknown` naming `record` with its code and fixed detail, and private text in its rejected field names or schema values appears nowhere in the output; a recorded fact that is malformed or unbounded reads `unknown` by field, an absent or malformed ingestion count names its field and reason, and a reserved admission reads a null Dispatch.
+- <a id="a1121"></a>**A1121** — Every projection, early responses and a 256-character multibyte objective included, stays within 8 KiB and carries no report or packet text, and an oversized projection is replaced by an `unavailable` `view_limit` one; an unknown admission reads `absent`, an unknown objective `blocked` `objective_unknown`, a malformed id refuses `invalid_admission`, an over-long or unprintable objective refuses `invalid_objective` without echoing it, and `--admission` without `--objective` or with `--run` or `--list` is a usage error.
