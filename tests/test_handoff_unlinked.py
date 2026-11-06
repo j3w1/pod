@@ -66,6 +66,12 @@ class UnlinkedCase(HandoffCase):
         finally:
             os.chdir(old)
 
+    def elsewhere(self):
+        other = self.root / "other"
+        if not other.exists():
+            git(self.project, "worktree", "add", "-q", "-b", "elsewhere", str(other))
+        return other
+
     def take(self, decision=None):
         with self.inside():
             return self.handoff(decision)
@@ -102,8 +108,7 @@ class UnlinkedHandoffTests(UnlinkedCase):
 
     def test_a_caller_outside_the_recorded_worktree_refuses_and_is_told_where(self):
         self.unlink()
-        other = self.root / "other"
-        git(self.project, "worktree", "add", "-q", "-b", "elsewhere", str(other))
+        other = self.elsewhere()
         decision = self.decision(); before = self.snapshot()
         with self.inside(other):
             error = self.refused(lambda: self.handoff(decision), code="owner_handoff_refused")
@@ -112,25 +117,28 @@ class UnlinkedHandoffTests(UnlinkedCase):
         self.assertIn("recorded worktree " + self.binding()["path"], verdict["next_action"])
         self.assertEqual(self.snapshot(), before); self.assertEqual(self.mutations, [])
 
-    def test_every_r105_check_still_applies_to_an_unlinked_caller(self):
-        rows = [
-            ("Run rebound to another", {"coordinator_handle": "third", "consumer_generation": 2}, "lineage_unproven"),
-            ("generation advanced", {"coordinator_handle": "owner", "consumer_generation": 8}, "generation_changed"),
-            ("Run unreadable", "fail", "run_unreadable"),
-            ("coordinator not shown", {"consumer_generation": 1}, "run_unreadable"),
-            ("caller already coordinates", {"coordinator_handle": "next", "consumer_generation": 2}, "binding_unstable"),
-        ]
-        for name, shown, condition in rows:
-            case = UnlinkedCase(); case.setUp()
-            try:
-                with self.subTest(row=name):
-                    case.unlink(); case.shown = shown; before = case.snapshot()
-                    self.assertEqual(case.verdict()["condition"], condition)
-                    facts = {**case.verdict()["facts"], "provenance": "user_direct", "instruction": "Make this terminal the coordinator"}
-                    case.refused(lambda: case.take(facts))
-                    self.assertEqual(case.snapshot(), before); self.assertEqual(case.mutations, [])
-            finally:
-                case.doCleanups()
+    def assert_run_row(self, shown, condition):
+        self.unlink(); self.shown = shown; before = self.snapshot()
+        self.assertEqual(self.verdict()["condition"], condition)
+        facts = {**self.verdict()["facts"], "provenance": "user_direct", "instruction": "Make this terminal the coordinator"}
+        self.refused(lambda: self.take(facts))
+        self.assertEqual(self.snapshot(), before); self.assertEqual(self.mutations, [])
+
+    # Every R105 check still applies to an unlinked caller, one Run shape per method.
+    def test_a_run_rebound_to_another_refuses(self):
+        self.assert_run_row({"coordinator_handle": "third", "consumer_generation": 2}, "lineage_unproven")
+
+    def test_an_advanced_generation_refuses(self):
+        self.assert_run_row({"coordinator_handle": "owner", "consumer_generation": 8}, "generation_changed")
+
+    def test_an_unreadable_run_refuses(self):
+        self.assert_run_row("fail", "run_unreadable")
+
+    def test_a_run_without_a_shown_coordinator_refuses(self):
+        self.assert_run_row({"consumer_generation": 1}, "run_unreadable")
+
+    def test_a_run_already_naming_the_caller_refuses(self):
+        self.assert_run_row({"coordinator_handle": "next", "consumer_generation": 2}, "binding_unstable")
 
     def test_a_worker_terminal_cannot_take_the_handoff_unlinked(self):
         self.unlink(); self.extra_workers = [{"dispatchId": "other-worker", "terminalHandle": "next"}]
@@ -147,21 +155,53 @@ class NoRecordedWorktreeTests(HandoffCase):
 
 
 class UnlinkedTransitionTests(UnlinkedCase):
-    def test_a_refused_run_use_aborts_only_on_the_run_readback(self):
-        for mode, expected in (("refused", "aborted"), ("error_unchanged", "aborted"), ("lost", "pending")):
-            case = UnlinkedCase(); case.setUp()
-            try:
-                with self.subTest(outcome=mode):
-                    case.unlink(); case.mode = mode; decision = case.decision()
-                    case.refused(lambda: case.take(decision))
-                    self.assertEqual(case.entry()["state"], expected)
-                    self.assertEqual(len(case.mutations), 1)
-                    if mode == "lost":
-                        # The landed rebind completes as Branch 2, with no second run-use.
-                        case.mode = "success"; case.take(decision)
-                        self.assertEqual((case.entry()["state"], len(case.mutations)), ("done", 1))
-            finally:
-                case.doCleanups()
+    def assert_outcome(self, mode, expected):
+        self.unlink(); self.mode = mode; decision = self.decision()
+        self.refused(lambda: self.take(decision))
+        self.assertEqual(self.entry()["state"], expected)
+        self.assertEqual(len(self.mutations), 1)
+        return decision
+
+    def test_a_refused_run_use_aborts_on_the_run_readback(self):
+        self.assert_outcome("refused", "aborted")
+
+    def test_an_unknown_run_use_with_an_unchanged_run_aborts(self):
+        self.assert_outcome("error_unchanged", "aborted")
+
+    def test_a_landed_run_use_stays_pending_then_completes_once(self):
+        decision = self.assert_outcome("lost", "pending")
+        # The landed rebind completes as Branch 2, with no second run-use.
+        self.mode = "success"; self.take(decision)
+        self.assertEqual((self.entry()["state"], len(self.mutations)), ("done", 1))
+
+    def test_a_landed_unlinked_handoff_never_completes_outside_the_recorded_worktree(self):
+        decision = self.assert_outcome("lost", "pending")
+        other = self.elsewhere(); before = self.snapshot()
+        self.mode = "success"
+        with self.inside(other):
+            error = self.refused(lambda: self.handoff(decision), code="owner_handoff_refused")
+        self.assertEqual(error.detail["owner_handoff"]["condition"], "worktree_changed")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.entry()["state"], len(self.mutations), self.state()["owner"]), ("pending", 1, "owner"))
+        self.assertTrue(self.entry()["verified"]["unlinked"])
+        self.take(decision)  # Back in the recorded worktree it completes, still with one run-use.
+        self.assertEqual((self.entry()["state"], len(self.mutations)), ("done", 1))
+
+    def test_a_wrong_place_caller_never_ends_a_lost_holders_attempt(self):
+        self.assert_outcome("lost", "pending")
+        self.current = None  # The replacing terminal is bound to no Run; the lost holder's run-use never landed.
+        self.terminals["next"] = "stale"; os.environ["ORCA_TERMINAL_HANDLE"] = "third"
+        other = self.elsewhere(); decision = self.decision(); before = self.snapshot()
+        with self.inside(other):
+            error = self.refused(lambda: self.handoff(decision), code="owner_handoff_refused")
+        self.assertEqual((error.detail["owner_handoff"]["condition"], error.detail["owner_handoff"]["definitive"]),
+                         ("worktree_changed", False))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.entry()["state"], self.entry()["decision"]["to_owner"]), ("pending", "next"))
+        # An eligible caller in the recorded worktree may still replace it.
+        self.mode = "success"; self.take(decision)
+        self.assertEqual((self.state()["owner"], self.entry()["state"]), ("third", "done"))
+        self.assertEqual(self.entry()["abort_reason"], "pending caller handle stale or gone")
 
     def test_an_unreadable_run_after_a_refused_run_use_stays_pending(self):
         self.unlink(); self.mode = "refused"; decision = self.decision()
@@ -176,42 +216,58 @@ class UnlinkedTransitionTests(UnlinkedCase):
         self.assertEqual(self.entry()["state"], "pending")
 
 
-class RecoveryRouteTests(unittest.TestCase):
+class RecoveryRouteTests(UnlinkedCase):
     """The status recovery list offers owner handoff only where a new terminal can take it."""
 
-    def route(self, worktree, shown=None):
+    def route(self):
         from pod.readiness import _handoff_route
-        state = {"checkpoint": {"continuity": {"binding": {"run": "run", "coordinator": "owner", "generation": 1}}}}
-        if worktree is not None:
-            state["checkpoint"]["worktree"] = {"path": worktree}
-        facts = {"handle": "owner", "run": "run", "generation": 1, "runtime": "runtime", "liveness": "lost"}
-        reply = {"runtime": "runtime", "run": "run", "coordinator_handle": "owner", "consumer_generation": 1,
-                 "coordinator_known": True, **(shown or {})}
-        with patch("pod.orca.run_show", return_value=reply):
-            return _handoff_route(state, facts)
+        facts = {"handle": "owner", "run": "run", "generation": 1, "runtime": self.port.runtime, "liveness": "lost"}
+        return _handoff_route(self.state(), facts)
 
     def test_available_names_the_recorded_worktree(self):
-        here = str(Path(__file__).resolve().parent)
-        route = self.route(here)
+        self.unlink()
+        route = self.route()
         self.assertEqual((route["status"], route["condition"]), ("available", "fresh"))
-        self.assertIn("recorded worktree " + here, route["message"])
+        self.assertIn("recorded worktree " + self.binding()["path"], route["message"])
         self.assertNotIn("on Run", route["message"])
 
-    def test_missing_or_unrecorded_worktree_reads_blocked(self):
-        for name, worktree, word in (("missing", "/nonexistent/pod-292-worktree", "missing"), ("unrecorded", None, "unrecorded")):
-            with self.subTest(worktree=name):
-                route = self.route(worktree)
-                self.assertEqual((route["status"], route["condition"]), ("blocked", "caller_not_linked"))
-                self.assertIn(word, route["message"])
-                self.assertIn("successor claim", route["message"])
+    def test_a_changed_branch_in_the_recorded_worktree_reads_blocked(self):
+        self.unlink()
+        git(self.project, "checkout", "-q", "-b", "moved")
+        route = self.route()
+        self.assertEqual((route["status"], route["condition"]), ("blocked", "worktree_changed"))
+        self.assertIn("successor claim", route["message"])
+        with self.inside():  # The handoff itself agrees: no terminal there can take it.
+            self.assertEqual(self.verdict()["condition"], "worktree_changed")
+
+    def test_a_missing_recorded_worktree_reads_blocked(self):
+        self.unlink()
+        with patch("pod.window._worktree_directory", return_value=False):
+            route = self.route()
+        self.assertEqual((route["status"], route["condition"]), ("blocked", "worktree_changed"))
+        self.assertIn("successor claim", route["message"])
+
+    def test_an_unreadable_recorded_worktree_reads_unverified(self):
+        self.unlink()
+        with patch("pod.window._worktree_directory", side_effect=PodError("worktree_unreadable", SENTINEL)):
+            route = self.route()
+        self.assertEqual((route["status"], route["condition"]), ("unverified", "worktree_unreadable"))
 
     def test_a_pending_resume_stays_available_to_its_holder(self):
-        from pod.readiness import _handoff_route
-        pending = {"provenance": "owner_handoff", "state": "pending", "decision": {"to_owner": "next"}}
-        with patch("pod.handoff.unfinished", return_value=pending):
-            route = self.route(None, {"coordinator_handle": "next", "consumer_generation": 2})
+        self.unlink(); self.mode = "lost"; self.refused(lambda: self.take(self.decision()))
+        route = self.route()
         self.assertEqual((route["status"], route["condition"]), ("available", "resume"))
         self.assertIn("pending handoff", route["message"])
+
+
+class NoRecordedWorktreeRouteTests(HandoffCase):
+    def test_an_unrecorded_worktree_reads_blocked(self):
+        from pod.readiness import _handoff_route
+        self.establish(); self.lose(); self.current = None
+        route = _handoff_route(self.state(), {"handle": "owner", "run": "run", "generation": 1,
+                                              "runtime": self.port.runtime, "liveness": "lost"})
+        self.assertEqual((route["status"], route["condition"]), ("blocked", "caller_not_linked"))
+        self.assertIn("unrecorded", route["message"]); self.assertIn("successor claim", route["message"])
 
 
 if __name__ == "__main__":

@@ -38,9 +38,10 @@ def validate_entry(row: dict) -> None:
         from .relay import validate_decision_record
         validate_decision_record(row["resolution"], kind="handoff")
     # Presentation and pane identities are never accepted as authority or stored evidence.
-    allowed = {"run", "coordinator", "generation", "admissions", "absent", "owner_code", "caller_runtime"}
+    allowed = {"run", "coordinator", "generation", "admissions", "absent", "owner_code", "caller_runtime", "unlinked"}
     completion = row["completion"]
     if (set(row["verified"]) - allowed or
+            any(part.get("unlinked", True) is not True for part in (row["verified"], completion) if isinstance(part, dict)) or
             (row["state"] == "done") != isinstance(completion, dict) or
             completion is not None and (not isinstance(completion, dict) or set(completion) - allowed)):
         raise PodError("state_unsupported", "Owner handoff evidence is unsupported")
@@ -518,19 +519,18 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
 SUCCESSOR = "Start a successor objective that claims this one; do not run orca orchestration run-use by hand."
 
 
-def _unlinked_run(project: Path, checkpoint: dict, run_id: str | None, runtime: str) -> dict:
-    """For a caller with no current Run: the recorded worktree, then the Run's coordinator by run show (pod#292)."""
+def recorded_place(project: Path | None, checkpoint: dict, *, caller: bool = True) -> dict | None:
+    """Where a new terminal takes the handoff (pod#292): None when the recorded worktree still holds its recorded
+    repository, key, path and branch and, with `caller`, this terminal runs there; else the failing condition.
+
+    Status asks without a caller, so it offers the route only where a terminal could take it."""
     from .operations import _check_worktree_binding
-    from .orca import run_show
     from .window import _cwd_toplevel, _worktree_directory
     workspace = checkpoint.get("worktree")
     if not isinstance(workspace, dict) or not isinstance(workspace.get("path"), str) or not workspace["path"]:
         return {"condition": "caller_not_linked", "action": SUCCESSOR,
                 "message": "The caller has no stable current Run binding, and the objective records no worktree "
                            "in which a new terminal could take the handoff."}
-    if run_id is None:
-        return {"condition": "caller_not_linked", "action": SUCCESSOR,
-                "message": "The caller has no stable current Run binding, and the objective records no single Run to bind."}
     recorded = Path(workspace["path"])
     here = ("Run the handoff from a live terminal in the recorded worktree " + workspace["path"]
             + ", or start a successor objective; do not run orca orchestration run-use by hand.")
@@ -541,9 +541,13 @@ def _unlinked_run(project: Path, checkpoint: dict, run_id: str | None, runtime: 
         _check_worktree_binding(recorded, workspace)
     except PodError as exc:
         if exc.code != "worktree_binding_changed":
-            return {"condition": "worktree_unreadable", "message": "The recorded worktree could not be read (" + exc.code + ")."}
+            return {"condition": "worktree_unreadable", "unverified": True,
+                    "message": "The recorded worktree could not be read (" + exc.code + ")."}
         return {"condition": "worktree_changed", "action": SUCCESSOR,
-                "message": "The recorded worktree's repository, key or branch differs from the record."}
+                "message": "The recorded worktree's repository, key or branch differs from the record, "
+                           "so no new terminal can take the handoff there."}
+    if not caller:
+        return None
     try:
         _check_worktree_binding(project, workspace)
     except PodError:
@@ -552,7 +556,20 @@ def _unlinked_run(project: Path, checkpoint: dict, run_id: str | None, runtime: 
     top = _cwd_toplevel()
     if top is None or Path(top).resolve() != recorded.resolve():
         return {"condition": "worktree_changed", "action": here,
-                "message": "The caller has no current Run binding and does not run in the recorded worktree."}
+                "message": "This terminal does not run in the recorded worktree, where a handoff without a "
+                           "current Run must run."}
+    return None
+
+
+def _unlinked_run(project: Path, checkpoint: dict, run_id: str | None, runtime: str) -> dict:
+    """For a caller with no current Run: the recorded worktree, then the Run's coordinator by run show (pod#292)."""
+    from .orca import run_show
+    place = recorded_place(project, checkpoint)
+    if place is not None:
+        return place
+    if run_id is None:
+        return {"condition": "caller_not_linked", "action": SUCCESSOR,
+                "message": "The caller has no stable current Run binding, and the objective records no single Run to bind."}
     try:
         shown = run_show(run_id)
     except PodError as exc:
@@ -672,6 +689,12 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
     elif (run["coordinator_handle"] == caller and pending and pending["state"] == "pending"
           and all(pending["decision"][key] == facts[key] for key in FACTS - {"ambiguity", "current_runtime"})):
         branch = "resume"
+        if pending["verified"].get("unlinked") is True:
+            # A handoff begun without a current Run finishes, or replays, only where it began (pod#292).
+            place = recorded_place(project, checkpoint)
+            if place is not None:
+                return fail(place["condition"], place["message"], action=place.get("action"))
+            result["unlinked"] = True
         if generation is not None and run["consumer_generation"] <= generation:
             return fail("generation_changed", "The rebound Run has no generation above the recorded one.", definitive=True,
                         action="Continue in a successor or recovery objective; do not run orca orchestration run-use by hand.")
@@ -745,7 +768,7 @@ def detect(project: Path, objective: str, state: dict, *, port, caller: str | No
                   next_action="Ask the Owner: " + question + " Only their exact user_direct confirmation permits internal owner-handoff using these fresh facts; do not run orca orchestration run-use by hand.",
                   verified={**work["verified"], "run": run_id, "coordinator": run["coordinator_handle"],
                             "generation": run["consumer_generation"], "owner_code": previous["code"],
-                            "caller_runtime": own["runtime"]})
+                            "caller_runtime": own["runtime"], **({"unlinked": True} if result.get("unlinked") else {})})
     return result
 
 
@@ -901,6 +924,9 @@ def owner_handoff(project: Path, objective: str, *, owner: str, decision: object
             holder = pending["decision"]["to_owner"]
             if holder != owner:
                 if terminal_identity(holder)["state"] != "lost":
+                    raise refusal(verdict)
+                if verdict["status"] != "handoff_available" and not verdict["definitive"]:
+                    # A caller in the wrong place, or one whose facts are unreadable, never ends another's attempt (pod#292).
                     raise refusal(verdict)
                 # Only the operation can terminate a definitely lost attempt.
                 abort(pending, "pending caller handle stale or gone", state)
