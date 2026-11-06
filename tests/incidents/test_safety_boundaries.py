@@ -29,9 +29,10 @@ class SafetyBoundaryIncidents(unittest.TestCase):
             self.assertTrue(validate_choice(snapshot,[],[],choice)['allowed'])
 
     def test_caller_json_cannot_claim_native_capability(self):
-        base={'project':'.','objective':'o','owner':'t','run':'r','task':'t',
-              'plan_revision':'p','packet':{}}
-        for forbidden in ('capabilities','assurance','establishment','account'):
-            with self.subTest(forbidden=forbidden), self.assertRaises(PodError) as caught:
-                run('admission',{**base,forbidden:{'launch_preferences_v1':True}})
-            self.assertEqual(caught.exception.code,'invalid_request')
+        with fixture() as root:
+            base={'project':str(root),'objective':'o','owner':'t','run':'r','task':'t',
+                  'plan_revision':'p','packet':{}}
+            for forbidden in ('capabilities','assurance','establishment','account'):
+                with self.subTest(forbidden=forbidden), self.assertRaises(PodError) as caught:
+                    run('admission',{**base,forbidden:{'launch_preferences_v1':True}})
+                self.assertEqual(caught.exception.code,'invalid_request')

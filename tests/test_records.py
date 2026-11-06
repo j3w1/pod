@@ -5,6 +5,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -45,6 +46,8 @@ def packet_body():
 
 class RecordTests(unittest.TestCase):
     def test_final_acceptance_rechecks_issue_source(self):
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
         source = {"schema": "pod-issue-source/v1", "repository": "acme/widgets",
                   "number": 7, "locator": "https://github.com/acme/widgets/issues/7",
                   "body_sha256": "b" * 64, "amendments": []}
@@ -53,7 +56,7 @@ class RecordTests(unittest.TestCase):
                     "environment": "fixture", "check": "unit", "command": "unit",
                     "result": "pass", "timestamp": "2026-09-20T00:00:00Z",
                     "status": "PASS", "reference": "artifact"}
-        request = {"project": "/fixture", "objective_source": source,
+        request = {"project": project.name, "objective_source": source,
                    "criteria": ["works"], "evidence_rows": [evidence], "candidate": "c",
                    "policy_revision": "p", "sources": [], "dependencies": [],
                    "environment": "fixture", "review_required": False,
