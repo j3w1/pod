@@ -594,7 +594,6 @@ class FleetFenceTests(FencedCase):
             "runtime": "runtime", "complete": True, "total": 123, "counts": {"active": 1, "retained": 2, "released": 120},
             "unreleased": 3, "unreleased_sha256": canonical("runtime", unreleased),
             "released": 120, "released_sha256": canonical("runtime", released),
-            "released_basis": "dependent", "released_compared": 120,  # `ready` released rows are all dependent
             "newest": 100, "newest_sha256": canonical("runtime", newest),
             "claims_read": 1, "claims_sha256": canonical("runtime", [{"dispatch": "t2", **LIVE_CLAIM}]),
             "host_exit": 0, "host_exit_sha256": canonical("runtime", [])})  # R212: nothing counted exited
@@ -602,10 +601,7 @@ class FleetFenceTests(FencedCase):
         self.assertTrue(answer["complete"])
         reads = self.native.calls
         self.assertIn([*LIST, "--limit", "100"], reads)
-        # Every unreleased partition is re-read, and the dependent released rows' Run partition in place of the all-Run one.
-        self.assertIn([*LIST, "--limit", "100", "--terminal-state", "retained"], reads)
-        self.assertIn([*LIST, "--limit", "100", "--terminal-state", "released", "--run", "other-run"], reads)
-        self.assertNotIn([*LIST, "--limit", "100", "--terminal-state", "released"], reads)
+        self.assertIn([*LIST, "--limit", "100", "--terminal-state", "released"], reads)  # every partition is re-read
 
     def test_each_fleet_change_between_discovery_and_the_end_is_unstable(self):
         stable = self.fenced()
@@ -673,7 +669,7 @@ class FleetFenceTests(FencedCase):
                 self.assert_unstable(answer, stable)
         self.assertTrue(self.fenced()["native_fence"]["stable"])  # unchanged stays stable
 
-    def test_a_released_circuit_broken_correction_outside_the_newest_page_is_compared_only_where_read(self):
+    def test_a_released_circuit_broken_correction_outside_the_newest_page_makes_the_fence_unstable(self):
         position = next(index for index, row in enumerate(self.rows) if row["dispatchId"] == "r110")
         self.assertGreaterEqual(position, 100)
         self.rows[position] = dict(self.rows[position], workerState="failed", dispatchStatus="circuit_broken")
@@ -681,12 +677,9 @@ class FleetFenceTests(FencedCase):
         self.assertTrue(stable["native_fence"]["stable"])
         corrected = [*self.rows[:position], dict(self.rows[position], workerState="succeeded", dispatchStatus="completed"),
                      *self.rows[position + 1:]]
-        # Orca's late-report correction can turn failed/circuit_broken into succeeded/completed, and Pod settles only the
-        # second pair, in rule S as in candidate proof (pod#213). Neither ran here, so no answer reads the pair of this
-        # exempt row and the fence stays stable (pod#267); ReleasedBasisTests covers the calls that compare it.
-        answer = self.fenced(fleet_end=fleet_model(corrected))
-        self.assertTrue(answer["native_fence"]["stable"])
-        self.assertEqual(answer["responses"], stable["responses"])
+        self.assert_unstable(self.fenced(fleet_end=fleet_model(corrected)), stable)
+        # Why released rows stay compared (pod#213): Orca's late-report correction can turn failed/circuit_broken into
+        # succeeded/completed, and Pod settles only the second pair, in rule S as in candidate proof.
         self.assertIn(("succeeded", "completed"), admission._SETTLED_WORKERS)
         self.assertNotIn(("failed", "circuit_broken"), admission._SETTLED_WORKERS)
 
@@ -710,148 +703,6 @@ class FleetFenceTests(FencedCase):
         self.assertEqual(answer["native_fence"]["fleet_start"],
                          {"runtime": None, "complete": False, "code": "native_inventory_scope"})
         self.assertFalse(answer["native_fence"]["stable"])
-
-
-class ReleasedBasisTests(FencedCase):
-    """R207's dependent basis: released rows an answer reads only as "settled, holds nothing" are not re-read (pod#267)."""
-
-    PAIRS = [("succeeded", "completed"), ("failed", "failed"), ("failed", "circuit_broken"), ("stopped", "failed")]
-
-    def setUp(self):
-        super().setUp()
-        for index, row in enumerate(self.rows):
-            if row["terminalState"] == "released":
-                row["workerState"], row["dispatchStatus"] = self.PAIRS[index % len(self.PAIRS)]
-        # One released abandoned row, outside the newest page, in its own Run: the one dependent released row.
-        dependent = self.row("d1", "released", workerState="abandoned", dispatchStatus="failed", runId="dep-run")
-        dependent["projection"]["runId"] = "dep-run"
-        self.rows.append(dependent)
-        self.exempt = next(index for index, row in enumerate(self.rows) if row["dispatchId"] == "r110")
-        self.assertGreaterEqual(self.exempt, 100)  # outside the newest page
-
-    def fenced(self, *args, claims=None, **fields):
-        return super().fenced(*args, claims=claims or {"t2": [LIVE_CLAIM], "d1": [LIVE_CLAIM]}, **fields)
-
-    def replaced(self, index, **fields):
-        return fleet_model([*self.rows[:index], dict(self.rows[index], **fields), *self.rows[index + 1:]])
-
-    def released_reads(self):
-        """The last call's end reads of released rows, first pages only."""
-        return [call for call in self.native.fleet.calls if "--terminal-state" in call and "--cursor" not in call
-                and call[call.index("--terminal-state") + 1] == "released"]
-
-    def test_a997_the_end_reads_only_the_dependent_rows_runs_and_digests_them(self):
-        answer = self.fenced()
-        fence = answer["native_fence"]
-        self.assertTrue(fence["stable"], fence)
-        self.assertEqual((fence["reason"], fence["released_all_reasons"]), (None, []))
-        self.assertEqual(self.released_reads(), [[*LIST, "--limit", "100", "--terminal-state", "released", "--run", "dep-run"]])
-        released = canonical("runtime", [identity(self.rows[-1])])
-        for side in ("fleet_start", "fleet_end"):
-            self.assertEqual({key: fence[side][key] for key in ("released", "released_sha256", "released_basis",
-                                                                 "released_compared")},
-                             {"released": 121, "released_sha256": released, "released_basis": "dependent",
-                              "released_compared": 1})
-        self.assertTrue(answer["complete"])
-
-    def test_a998_a_change_no_answer_reads_on_an_exempt_row_keeps_the_fence_stable(self):
-        stable = self.fenced()
-        for label, fields in {"late-report correction of failed/circuit_broken": {"workerState": "succeeded",
-                                                                                   "dispatchStatus": "completed"},
-                              "a delayed stage write of the terminal handle": {"agentTerminalHandle": "late"},
-                              "a delayed stage write of the worktree": {"resource": {"worktreeId": "/late"}}}.items():
-            with self.subTest(label):
-                answer = self.fenced(fleet_end=self.replaced(self.exempt, **fields))
-                self.assertTrue(answer["native_fence"]["stable"], label)
-                self.assertEqual(answer["responses"], stable["responses"])
-                self.assertEqual(len(self.released_reads()), 1)  # no full re-read of the released history
-
-    def test_a999_a_dependent_released_row_or_its_run_read_still_fences(self):
-        stable = self.fenced()
-        last = len(self.rows) - 1
-        page = [*LIST, "--limit", "100", "--terminal-state", "released", "--run", "dep-run"]
-        cases = {"identity change": (self.replaced(last, agentTerminalHandle="other"), None),
-                 "gone from its Run": (fleet_model(self.rows[:-1]), None),
-                 "changed claim": (None, {"t2": [LIVE_CLAIM], "d1": [LIVE_CLAIM, {"process": "exited", "effects": ["push:main"]}]}),
-                 "failed Run read": (fleet_model(self.rows, overrides={tuple(page): PodError("orca_read_failed", "no")}),
-                                     "orca_read_failed"),
-                 "unscoped Run read": (fleet_model(self.rows, overrides={tuple(page): fleet_model(self.rows)(
-                                       [*LIST, "--limit", "100", "--terminal-state", "released"])}),
-                                       "native_inventory_partition")}
-        for label, (fleet, extra) in cases.items():
-            with self.subTest(label):
-                claims = extra if isinstance(extra, dict) else None
-                answer = self.fenced(fleet_end=fleet, claims=claims)
-                self.assert_unstable(answer, stable)
-                if isinstance(extra, str):
-                    self.assertEqual(answer["native_fence"]["fleet_end"]["code"], extra)
-                    self.assertEqual(answer["native_fence"]["reason"], "incomplete")
-                else:
-                    self.assertEqual(answer["native_fence"]["reason"], "fleet_changed")
-
-    def test_a1000_candidate_proof_compares_every_released_row(self):
-        stable = self.fenced(query={"objective": "objective", "candidate": self.base})
-        fence = stable["native_fence"]
-        self.assertTrue(fence["stable"], fence)
-        self.assertEqual((fence["fleet_end"]["released_basis"], fence["released_all_reasons"]), ("all", ["candidate_proof"]))
-        self.assertIn([*LIST, "--limit", "100", "--terminal-state", "released"], self.released_reads())
-        corrected = self.replaced(self.exempt, workerState="succeeded", dispatchStatus="completed")
-        answer = self.fenced(fleet_end=corrected, query={"objective": "objective", "candidate": self.base})
-        self.assert_unstable(answer, stable)
-
-    def test_a1000_a_rule_s_later_owner_scan_upgrades_the_end_to_every_released_row(self):
-        judged = base.ReviewCorrectionTests.writer(self, path=self.project, verdict="unverifiable", dispatch="s1")
-        judged.update(terminalState="retained", workerState="succeeded", dispatchStatus="completed",
-                      agentTerminalHandle="a")  # terminal "a" is still listed, so rule S scans later owners
-        self.rows.insert(0, judged)
-        self.exempt += 1
-        stable = self.fenced(query={"worktree": str(self.project), "branch": "main"})
-        fence = stable["native_fence"]
-        self.assertTrue(fence["stable"], fence)
-        self.assertEqual((fence["fleet_end"]["released_basis"], fence["released_all_reasons"]),
-                         ("all", ["rule_s_later_owner"]))
-        self.assertIn([*LIST, "--limit", "100", "--terminal-state", "released"], self.released_reads())
-        corrected = self.replaced(self.exempt, workerState="succeeded", dispatchStatus="completed")
-        self.assert_unstable(self.fenced(fleet_end=corrected, query={"worktree": str(self.project), "branch": "main"}),
-                             stable)
-
-    def test_a1000_an_end_read_that_contradicts_a_released_fact_compares_every_released_row(self):
-        # An exempt row of the dependent row's Run reads abandoned at the end: Orca's lifecycle should forbid it.
-        self.rows[self.exempt] = dict(self.rows[self.exempt], runId="dep-run",
-                                      projection={**self.rows[self.exempt]["projection"], "runId": "dep-run"})
-        stable = self.fenced()
-        self.assertEqual(stable["native_fence"]["fleet_end"]["released_basis"], "dependent")
-        answer = self.fenced(fleet_end=self.replaced(self.exempt, workerState="abandoned"))
-        self.assertEqual(answer["native_fence"]["released_all_reasons"], ["released_fact_unheld"])
-        self.assertEqual(answer["native_fence"]["fleet_end"]["released_basis"], "all")
-        self.assert_unstable(answer, stable)
-
-    def test_a1000_dependent_rows_in_more_runs_than_the_bound_compare_every_released_row(self):
-        for index in range(admission.MAX_DEPENDENT_RUNS):
-            row = self.row(f"d{index + 2}", "released", workerState="abandoned", runId=f"dep-{index}")
-            row["projection"]["runId"] = f"dep-{index}"
-            self.rows.append(row)
-        claims = {"t2": [LIVE_CLAIM], **{row["dispatchId"]: [LIVE_CLAIM] for row in self.rows[-9:]}}
-        fence = self.fenced(claims=claims)["native_fence"]
-        self.assertTrue(fence["stable"], fence)
-        self.assertEqual((fence["fleet_end"]["released_basis"], fence["released_all_reasons"]), ("all", ["dependent_runs"]))
-        self.assertEqual(self.released_reads(), [[*LIST, "--limit", "100", "--terminal-state", "released"]])
-
-    def test_a1001_a_spent_budget_is_its_own_reason(self):
-        page = [*LIST, "--limit", "100", "--terminal-state", "retained"]
-        cases = {"spent during an end read": (fleet_model(self.rows, overrides={tuple(page): PodError(DEADLINE_SPENT, "spent")}),
-                                              "discovery_budget"),
-                 "another failed end read": (fleet_model(self.rows, overrides={tuple(page): PodError("orca_read_failed", "no")}),
-                                             "incomplete"),
-                 "a changed row": (self.replaced(0, dispatchStatus="failed"), "fleet_changed"),
-                 "a runtime change": (fleet_model(self.rows, runtime="other-runtime"), "runtime_changed")}
-        for label, (fleet, reason) in cases.items():
-            with self.subTest(label):
-                fence = self.fenced(fleet_end=fleet)["native_fence"]
-                self.assertFalse(fence["stable"])
-                self.assertEqual(fence["reason"], reason)
-        moved = [terminal("a", self.root / "other"), terminal("b", self.root / "other")]
-        self.assertEqual(self.fenced(end=terminal_page(moved))["native_fence"]["reason"], "terminals_changed")
 
 
 class FenceTests(FencedCase):
@@ -926,10 +777,10 @@ class FleetDouble:
         self.sequential = sequential
         self.calls, self.lock = [], threading.Lock()
 
-    def page(self, rows, index, total, scope=None):
+    def page(self, rows, index, total):
         chunk = rows[index * 100:(index + 1) * 100]
         more = (index + 1) * 100 < len(rows)
-        return {"runtime": self.runtime, "result": {"scope": scope or {"source": "all"}, "counts": dict(self.counts),
+        return {"runtime": self.runtime, "result": {"scope": {"source": "all"}, "counts": dict(self.counts),
                 "workers": chunk, "page": {"limit": 100, "total": total, "hasMore": more,
                                            "nextCursor": f"c{index + 1}" if more else None}}}
 
@@ -947,10 +798,6 @@ class FleetDouble:
         if "--terminal-state" in tail:
             state = tail[tail.index("--terminal-state") + 1]
             rows = self.partitions.get(state, [])
-            if "--run" in tail:  # One Run's partition, as Orca scopes it to that Run (R207's dependent basis).
-                run = tail[tail.index("--run") + 1]
-                rows = [row for row in rows if row.get("runId") == run]
-                return self.page(rows, index, len(rows), {"source": "flag", "run": run})
             return self.page(rows, index, len(rows))
         # Unfiltered pages: Orca's newest-first walk, carrying the fleet's total and counts.
         rows = self.sequential if self.sequential is not None else [row for rows in self.partitions.values() for row in rows]
@@ -1058,11 +905,6 @@ class FleetReadTests(base.AdmissionQueryCase):
         self.assertTrue(_read_allowed([*LIST, "--limit", "100", "--cursor", "c"]))
         self.assertTrue(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "released"]))
         self.assertTrue(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "released", "--cursor", "c"]))
-        self.assertTrue(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "released", "--run", "r"]))
-        self.assertTrue(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "released", "--run", "r",
-                                       "--cursor", "c"]))
-        self.assertFalse(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "released", "--run"]))
-        self.assertFalse(_read_allowed([*LIST, "--limit", "100", "--run", "r", "--terminal-state", "released"]))
         self.assertFalse(_read_allowed([*LIST, "--limit", "100", "--terminal-state", "paused"]))
         self.assertFalse(_read_allowed([*LIST, "--limit", "100", "--terminal-state"]))
         self.assertFalse(_read_allowed([*LIST, "--limit", "1"]))

@@ -369,10 +369,6 @@ def _worker_list_tail(tail: list[str]) -> bool:
             if len(tail) < 2 or tail[1] not in WORKER_TERMINAL_STATES:
                 return False
             tail = tail[2:]
-            if tail[:1] == ["--run"]:  # One Run's partition: the end fence's dependent released rows (R207).
-                if len(tail) < 2 or not _argument(tail[1]):
-                    return False
-                tail = tail[2:]
     if bounded and (not tail or len(tail) == 2 and tail[0] == "--cursor" and _argument(tail[1])):
         return True  # Admission verifies the returned all-Run scope on every page.
     if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
