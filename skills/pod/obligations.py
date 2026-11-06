@@ -2638,6 +2638,10 @@ def admission_binding(body: dict, ctx: dict, state: dict) -> dict:
                      sources=len(sources), limit=limit, record="assurance binding",
                      next_action=f"bind at most {limit} sources and source/instruction context entries together, "
                                  "for example by narrowing the review's scope or splitting it; no worker was started")
+    rows = ctx.get("index_binding")
+    if callable(rows):
+        # R239: a shared keyed index binds the rows the reviewed change edits and its schema.
+        sources = [rows(entry, ctx.get("candidate")) for entry in sources]
     return {"policy_revision": ctx.get("policy_revision"), "environment": verification.get("environment"),
             "dependencies": list(verification.get("dependencies", [])), "sources": sources,
             "governance": bound_governance_digest(state),

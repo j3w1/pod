@@ -610,7 +610,7 @@ def scope_resolver(project: Path, commits: list[str], *, links: bool = False):
 MAX_SOURCE_BYTES = 1_048_576  # source_identity's read limit
 
 
-def delivered_source_reader(project: Path, commit: str):
+def delivered_source_reader(project: Path, commit: str, *, content: bool = False):
     """R204: what a bound evidence source is in the delivered candidate's Git tree, read only.
 
     Returns a reader from a path to `{path, state: present, sha256}`, `{path, state: absent}`, or None when Pod
@@ -620,41 +620,42 @@ def delivered_source_reader(project: Path, commit: str):
     and R203's resolver refuses an opaque mode. The commit, every tree on the path and the blob are rehashed
     against their ids (`gitio.TreeView`), names compare exactly, and a partial clone is refused; `gitio.read` keeps
     ambient repository redirection, replacement refs, grafts, shallow boundaries and lazy fetching out. The
-    worktree, host paths and remotes are never read; trees and results are cached for one write.
+    worktree, host paths and remotes are never read; trees and results are cached for one write. With `content`,
+    the reader returns `(identity, bytes)`, the bytes being those hashed for a present source and else None (R239).
     """
     from hashlib import sha256
     from .records import _safe_relative
     view = gitio.TreeView(project, commit, reader=_git)
-    found: dict[str, dict | None] = {}
+    found: dict[str, tuple[dict | None, bytes | None]] = {}
 
     def read(path):
         if view.top() is None or not isinstance(path, str) or "\0" in path or not _safe_relative(path):
-            return None
+            return None, None
         parts = path.split("/")
         if any(part in ("", ".", "..") for part in parts):
-            return None
+            return None, None
         for depth in range(1, len(parts)):
             entry = view.entry("/".join(parts[:depth]))
             if entry == gitio.UNREADABLE:
-                return None
+                return None, None
             if entry is None:
-                return {"path": path, "state": "absent"}
+                return {"path": path, "state": "absent"}, None
             if entry[0] != "040000":
-                return None  # a symlink, gitlink or file as a parent is never followed
+                return None, None  # a symlink, gitlink or file as a parent is never followed
         entry = view.entry(path)
         if entry == gitio.UNREADABLE:
-            return None
+            return None, None
         if entry is None:
-            return {"path": path, "state": "absent"}
+            return {"path": path, "state": "absent"}, None
         if entry[0] not in ("100644", "100755"):
-            return None
+            return None, None
         data = gitio.blob(project, entry[2], limit=MAX_SOURCE_BYTES, reader=_git)
-        return None if data is None else {"path": path, "state": "present", "sha256": sha256(data).hexdigest()}
+        return (None, None) if data is None else ({"path": path, "state": "present", "sha256": sha256(data).hexdigest()}, data)
 
     def reader(path):
         if path not in found:
             found[path] = read(path)
-        return found[path]
+        return found[path] if content else found[path][0]
     return reader
 
 

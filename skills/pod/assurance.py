@@ -17,12 +17,20 @@ def _source_entries(value: Any, name: str, *, obligation: str | None = None,
         raise refuse("obligation_invalid", "malformed", f"{name} sources are a bounded list", record='source entries',
                      **({"obligation": obligation} if obligation is not None else {}))
     rows = []
+    # R239: only a stored binding carries a keyed index's bound rows; caller evidence never does.
+    accepted = {"path", "state", "sha256", *(("index",) if record == "assurance binding" else ())}
     for item in value:
-        entry = _exact(item, {"path", "state", "sha256"}, {"path", "state"}, "evidence source", obligation=obligation)
+        entry = _exact(item, accepted, {"path", "state"}, "evidence source", obligation=obligation)
         _path(entry["path"], code="obligation_invalid", obligation=obligation)
         if entry["state"] not in TABLE["source"]["fields"]["state"]["allowed"]:
             raise refuse("obligation_invalid", "malformed", "evidence source state allowed: present, absent, unavailable", record='source entries',
                          **({"obligation": obligation} if obligation is not None else {}))
+        if "index" in entry:
+            from .keyed_index import valid
+            if entry["state"] != "present" or "sha256" not in entry or not valid(entry["index"]):
+                raise refuse("obligation_invalid", "malformed", "a bound index source is present with its schema "
+                             "digest and bounded row digests", record="bound source",
+                             **({"obligation": obligation} if obligation is not None else {}))
         rows.append(dict(entry))
     return rows
 
@@ -189,7 +197,7 @@ def validate_receipts(ob: dict, ctx: dict, *, seq: int) -> tuple[str, ...]:
                 raise refuse("obligation_invalid", "receipt_conflict", "retained REUSE matches its readable source, target and recorded Git delta", obligation=ob["id"])
             from .obligations import definition_id
             if evidence["definition"] == definition_id(ob):
-                label, touched = _reuse_scope(ob, delta)
+                label, touched = _reuse_scope(ob, _index_untouched(ob, [evidence], reuse["to"], delta, ctx))
                 if label != "eligible":
                     raise refuse("obligation_invalid", "receipt_conflict", "retained REUSE preserves its original verified scope", obligation=ob["id"], paths=",".join(touched[:8]))
             else:
@@ -521,6 +529,28 @@ def _reuse_scope(ob: dict, delta: list[str], resolve=None) -> tuple[str, list[st
     return ("touched" if touched else "eligible"), touched
 
 
+def _index_untouched(ob: dict, evidence: list, target: Any, delta: list[str], ctx: dict) -> list[str]:
+    """R239: the delta without each keyed index path that every selected review bound by rows, and whose bound
+    rows and schema all still hold in the target's tree. Any other path stays in the delta."""
+    reader = ctx.get("source_current_at")
+    if ob["kind"] != "assurance" or not callable(reader) or not isinstance(target, str) or not evidence:
+        return delta
+    from .obligations import _admissions
+    bindings = [(_admissions(ctx).get(row.get("attempt")) or {}).get("binding") if isinstance(row, dict) else None
+                for row in evidence]
+    current = None
+    kept = []
+    for path in delta:
+        entries = [[entry for entry in (binding or {}).get("sources") or []
+                    if isinstance(entry, dict) and entry.get("path") == path] for binding in bindings]
+        if all(found and all("index" in entry for entry in found) for found in entries):
+            current = current or reader(target)
+            if all(current(entry) is True for found in entries for entry in found):
+                continue
+        kept.append(path)
+    return kept
+
+
 def reuse_eligibility(ob: dict, source: str, ctx: dict, *, target: str | None = None) -> tuple[str, list[str], list[str] | None]:
     """One read-only scope/delta check shared by binding, current proof and complete refusals.
 
@@ -536,7 +566,7 @@ def reuse_eligibility(ob: dict, source: str, ctx: dict, *, target: str | None = 
         return "delta unreadable", [], None
     factory = ctx.get("reuse_resolver")
     resolve = factory(source, current) if callable(factory) else (lambda path: [])
-    label, touched = _reuse_scope(ob, delta, resolve)
+    label, touched = _reuse_scope(ob, _index_untouched(ob, ob.get("evidence", []), current, delta, ctx), resolve)
     return label, touched, delta
 
 

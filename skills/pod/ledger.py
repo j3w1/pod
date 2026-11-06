@@ -1043,6 +1043,18 @@ def git_is_ancestor(project: Path, commit: str, candidate: str) -> bool | None:
     return gitio.is_ancestor(project, commit, candidate, resolve=_resolve_commit)
 
 
+def git_merge_base(project: Path, first: str, second: str) -> str | None:
+    """The one merge base of two commits; None when Git cannot prove exactly one (R239)."""
+    one, two = _resolve_commit(project, first), _resolve_commit(project, second)
+    if one is None or two is None:
+        return None
+    completed = _git(project, ["merge-base", "--all", one, two])
+    if completed is None or completed.returncode != 0:
+        return None
+    bases = completed.stdout.split()
+    return bases[0] if len(bases) == 1 and _OBJECT.fullmatch(bases[0]) else None
+
+
 def git_delta(project: Path, source: str, target: str) -> list[str] | None:
     """Paths changed between two candidate commits; None when Git cannot prove it."""
     first, second = _resolve_commit(project, source), _resolve_commit(project, target)
@@ -1297,10 +1309,12 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                    verification: dict | None = None) -> dict:
     """Objective-local facts the obligation kernel judges; read under the caller's lock."""
     from .config import effective, load
-    from .records import source_identity
+    from .records import source_content, source_identity
     from .selection import worker_ceiling
     from .governor import objective_delivery_reporting
     from .gitio import require_candidate
+    from .governance import delivered_source_reader
+    from . import keyed_index
     checkpoint_value = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
     snapshot = load(project)
     ceiling = worker_ceiling(snapshot, state.get("constraints", [])) if not snapshot["errors"] else 0
@@ -1316,14 +1330,44 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             return "rejected"
 
     def source_current(entry: dict) -> bool:
-        """A bound evidence source still has exactly its recorded identity."""
+        """A bound evidence source still has exactly its recorded identity, or, for a row-bound index entry,
+        its bound rows and schema (R239)."""
         try:
-            return entry.get("state") == "present" and source_identity(project, entry["path"]) == entry
+            if entry.get("state") != "present":
+                return False
+            if "index" not in entry:
+                return source_identity(project, entry["path"]) == entry
+            identity, data = source_content(project, entry["path"])
+            return identity == {key: entry[key] for key in ("path", "state", "sha256")} or keyed_index.current(entry, data)
         except (PodError, KeyError, TypeError):
             return False
 
+    bases: dict = {}
+
+    def index_binding(entry: dict, candidate: str | None = None) -> dict:
+        """R239: a bound source with the rows the reviewed candidate's change edits against its merge base with
+        the governed base, when it is an exact keyed index; any other entry unchanged."""
+        try:
+            identity, data = source_content(project, entry["path"])
+        except (PodError, KeyError, TypeError, AttributeError):
+            return entry
+        if identity != entry or keyed_index.parse(data) is None:
+            return entry
+        head = candidate if candidate is not None else context_candidate
+        if head not in bases:
+            merge = (git_merge_base(project, head, context_base)
+                     if isinstance(head, str) and isinstance(context_base, str) else None)
+            bases[head] = delivered_source_reader(project, merge, content=True) if merge else None
+        if bases[head] is None:
+            return entry
+        before, base_data = bases[head](entry["path"])
+        return keyed_index.binding(entry, data, base_data if (before or {}).get("state") == "present" else None)
+
     map_state = map_of(state)
     base_ref = (map_state or {}).get("governance", {}).get("base_ref")
+    context_candidate = candidate if candidate is not None else checkpoint_value.get("candidate")
+    context_base = ((governance or {}).get("current") if governance is not None
+                    else (_resolve_commit(project, base_ref) if base_ref else None))
     from .util import context_decisions
     from .governor import _read_journal, _record_path
     try:
@@ -1337,8 +1381,9 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
                   if isinstance(row.get("placement"), dict)}
     outstanding = _outstanding_ids(state, native)
     from .governance import scope_resolver
-    # Candidate commits are immutable object ids, so each pair is read once per context.
+    # Candidate commits are immutable object ids, so each pair and each tree is read once per context.
     pairs: dict[tuple, object] = {}
+    trees: dict[str, object] = {}
 
     def delta(source, target):
         if ("delta", source, target) not in pairs:
@@ -1371,15 +1416,16 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
             "ceiling": ceiling, "delegation": delegation,
             "constraints": state.get("constraints", []),
             "criteria": list(criteria if criteria is not None else checkpoint_value.get("criteria", [])),
-            "candidate": candidate if candidate is not None else checkpoint_value.get("candidate"),
+            "candidate": context_candidate,
             "governance": governance,
             "bound_governance": lambda bound: governance_observation(
                 project, bound["base_ref"], at=bound["base"], bound_ref=bound["base_ref"],
                 selection=bound["selection"]),
-            "governance_current": (governance or {}).get("current") if governance is not None
-            else (_resolve_commit(project, base_ref) if base_ref else None),
+            "governance_current": context_base,
             "source_state": source_state,
             "source_current": source_current,
+            "index_binding": index_binding,
+            "source_current_at": lambda commit: trees.setdefault(commit, tree_source_current(project, commit)),
             "policy_revision": effective(project)["revision"],
             "verification": verification if verification is not None else checkpoint_value.get("verification"),
             "authorization_granted": _authorization_granted(project, objective, context=state),
@@ -1930,13 +1976,21 @@ def _relied_on(row: dict, delivery_seq: int) -> bool:
 
 
 def tree_source_current(project: Path, commit: str):
-    """A bound evidence source still has exactly its recorded identity in `commit`'s Git tree, read only (R204)."""
+    """A bound evidence source still has exactly its recorded identity in `commit`'s Git tree, read only (R204),
+    or, for a row-bound index entry, its bound rows and schema there (R239)."""
     from .governance import delivered_source_reader
-    reader = delivered_source_reader(project, commit)
+    from . import keyed_index
+    reader = delivered_source_reader(project, commit, content=True)
 
     def current(entry: dict) -> bool:
         try:
-            return entry.get("state") == "present" and reader(entry["path"]) == entry
+            if entry.get("state") != "present":
+                return False
+            identity, data = reader(entry["path"])
+            if "index" not in entry:
+                return identity == entry
+            return (identity == {key: entry[key] for key in ("path", "state", "sha256")}
+                    or (identity or {}).get("state") == "present" and keyed_index.current(entry, data))
         except (KeyError, TypeError, AttributeError):
             return False
     return current
