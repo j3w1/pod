@@ -607,9 +607,12 @@ class RefusalTests(WindowCase):
 
     def test_moved_repository_and_changed_worktree(self):
         moved = self.root / "moved"
+        record = objective_root(self.project, "objective")
         os.rename(self.project, moved)
         try:
-            self.assert_lead_refusal("objective_unknown", lambda: self.resume(where=moved, project=moved))
+            # Snapshot the original record without rediscovering the now-absent project.
+            with patch("tests.test_owner_handoff.objective_root", return_value=record):
+                self.assert_lead_refusal("objective_unknown", lambda: self.resume(where=moved, project=moved))
             self.assertFalse(objective_root(moved, "objective").exists())
         finally:
             os.rename(moved, self.project)

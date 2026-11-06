@@ -12535,6 +12535,40 @@
       ],
       "offline_test": "tests.test_merge_supersedence.MergeSupersedenceTests.test_guidance_explains_refresh_and_recovery",
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1053",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_project_path.ProjectPathTests.test_validator_rejects_invalid_paths_without_subprocess",
+        "tests.test_project_path.ProjectPathTests.test_valid_absolute_directory_and_directory_symlink"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1054",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": [
+        "tests.test_project_path.ProjectPathTests.test_every_internal_operation_checks_before_dispatch",
+        "tests.test_project_path.ProjectPathTests.test_public_dispatch_checks_before_command_specific_reads",
+        "tests.test_project_path.ProjectPathTests.test_git_discovery_checks_before_resolve_or_subprocess",
+        "tests.test_project_path.ProjectPathTests.test_internal_issue_intake_prints_safe_refusal",
+        "tests.test_project_path.ProjectPathTests.test_public_main_prints_safe_refusal",
+        "tests.test_project_path.ProjectPathTests.test_interactive_main_checks_before_workspace_reads"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1055",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_project_path.ProjectPathTests.test_valid_directory_keeps_git_unavailable",
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

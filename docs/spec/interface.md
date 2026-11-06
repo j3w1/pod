@@ -1849,3 +1849,13 @@ of 10 seconds and maximum of 30, and every read spends it.
 - <a id="a802"></a>**A802** — The same facts give the same digest, recomputable from the returned answer without `digest`, `status`, `conflicts` and `next_action`; a changed plan revision or policy revision gives a new digest; `--expect` with a stale digest adds `digest_changed` and makes the answer `blocked` with exit 0 while returning the unchanged facts digest; a malformed `--expect` and the `--tree` mismatch refuse with exit 1.
 - <a id="a803"></a>**A803** — An exhausted deadline (during the proof, at the end of the last read, before the record is read, or once the answer is finished), a record changed during the read, a failed exact worker read and an answer over the projection bound each give `unknown` with exactly their code, never `ready` and never a refusal; the bound applies to the final printed answer, and the over-bound answer has a null digest and no snapshot, assurances or attempts.
 - <a id="a804"></a>**A804** — A ready proof whose reviewer attempt lacks its recorded effort stays `ready` with no top-level unknown; the gap is visible in that attempt's `unknowns`, and filling it changes the digest.
+
+### R236 — Validate project paths before external reads
+
+Type: B,I · Scenarios: [A1053](#a1053), [A1054](#a1054), [A1055](#a1055)
+
+Every public command and internal helper accepting `project` validates the original input before Git or native reads. It must name an absolute path to an existing directory; do not resolve a relative path into a valid input. Invalid input refuses `project_path_invalid`, naming `project`, the value's kind without its contents, and the next action `pass the absolute worktree path`. Git discovery applies the same check before path resolution. A valid directory retains `git_unavailable` for Git launch or timeout failures.
+
+- <a id="a1053"></a>**A1053** — Bare names, relative paths, missing absolute paths, files and malformed values refuse `project_path_invalid` before subprocess execution, with the field, safe value kind and next action; absolute directories and directory symlinks pass validation.
+- <a id="a1054"></a>**A1054** — Every public command dispatch and internal operation carrying `project` validates before dispatch or external reads; issue-intake and public JSON diagnostics contain no private input contents. Git discovery rejects relative paths before resolution.
+- <a id="a1055"></a>**A1055** — Git launch and timeout failures in a valid existing absolute directory retain `git_unavailable`.

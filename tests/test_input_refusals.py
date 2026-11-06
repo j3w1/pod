@@ -72,9 +72,13 @@ class OperationFieldRefusalTests(unittest.TestCase):
 
     def test_every_operation_names_operation_record_and_both_fields_without_values(self):
         self.assertEqual(set(REQUIRED), set(_OPERATIONS))
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
         for operation, required in REQUIRED.items():
             dropped = required[-1]
             request = {key: SENTINEL for key in required if key != dropped}
+            if "project" in request:
+                request["project"] = project.name
             request["unexpected_field"] = SENTINEL
             with self.subTest(operation=operation):
                 code, stdout, stderr = self.invoke(operation, request)

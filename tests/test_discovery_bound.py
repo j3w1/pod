@@ -339,7 +339,16 @@ class BoundTests(WindowCase):
         observed = []
 
         def stat(path, *args, **kwargs):
-            if (os.fspath(path) == str(self.project)
+            # Inject the continuation metadata fault after project input validation.
+            frame = sys._getframe(1)
+            validating = False
+            for _ in range(4):
+                if frame is None:
+                    break
+                validating |= (frame.f_code.co_name == "project_path"
+                               and frame.f_globals.get("__name__") == "pod.util")
+                frame = frame.f_back
+            if (not validating and os.fspath(path) == str(self.project)
                     and sys._getframe(1).f_code.co_name in ("isdir", "_worktree_directory")):
                 observed.append(failure.errno)
                 if len(observed) > skip:

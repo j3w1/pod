@@ -73,7 +73,7 @@ class ToolUseCases:
             arguments.extend(["--input", str(self.input)])
         if self.objective and args[0] == "tool":
             arguments.extend(["--objective", self.objective])
-        return execute(parser().parse_args([*arguments, "--json"]), self.project)
+        return execute(parser().parse_args([*arguments, "--json"]), self.project or self.root)
 
     def check(self, *, invocation=None, category="secrets", operation="read exact fixture", spending=None):
         args = ["tool", "check", "--tool", "fixture-tool", "--category", category, "--operation", operation]
