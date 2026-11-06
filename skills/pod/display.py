@@ -375,19 +375,25 @@ def _inventory(readback: dict | None, key: str) -> list[dict] | None:
                 or len(set(scope["hostIds"])) != len(scope["hostIds"])
                 or "local" not in scope["hostIds"] or scope.get("omittedHostIds") != []):
             return None
-        paths, identities = set(), set()
         for row in rows:
             path, identity = row.get("path"), row.get("id")
             if (not _passable(path) or not path or not Path(path).is_absolute()
                     or path.startswith("//") or str(Path(path)) != path or ".." in Path(path).parts
-                    or not _passable(identity) or not identity or path in paths or identity in identities):
+                    or not _passable(identity) or not identity):
                 return None
             git = row.get("git")
             if git is not None and (not isinstance(git, dict) or git.get("path") != path):
                 return None
-            paths.add(path)
-            identities.add(identity)
     return result[key]
+
+
+def _repeats(rows: list[dict] | None, field: str) -> set:
+    """Values of `field` that more than one row carries; the caller refuses only the ones it compares."""
+    seen, repeated = set(), set()
+    for row in rows or []:
+        value = row.get(field)
+        (repeated if value in seen else seen).add(value)
+    return repeated
 
 
 def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | None,
@@ -397,17 +403,35 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
     decisions = decision_view(state.get("decision_input"), state.get("checkpoint"), objective=True)
     worktrees = _inventory(worktrees_read, "worktrees")
     by_path = {row.get("path"): row for row in worktrees or []}
-    by_id = {row.get("id"): row.get("path") for row in worktrees or []}
+    # Orca can list one worktree twice. Only what this objective compares is refused: its own paths, and the
+    # identity of a parent one of its rows names.
+    repeated_paths, repeated_ids = _repeats(worktrees, "path"), _repeats(worktrees, "id")
+    by_id = {row.get("id"): row.get("path") for row in worktrees or [] if row.get("id") not in repeated_ids}
+
+    def row_at(path):
+        return None if path in repeated_paths else by_path.get(path)
+
+    def duplicate(path):
+        """Why the row at `path` cannot be compared, naming the repeated path or parent identity; else None."""
+        if path in repeated_paths:
+            return f"duplicate worktree path {path} in the native list; repeat the native read"
+        parent = (by_path.get(path) or {}).get("parentWorktreeId")
+        if parent in repeated_ids:
+            return f"duplicate worktree id {parent} (parent of {path}) in the native list; repeat the native read"
+        return None
     by_handle = {row.get("handle"): row for row in terminals or []}
     repeat_terminal = ["orca", "terminal", "list", "--json"]
     repeat_worktree = ["orca", *display_worktree_argv()]
     rows = []
 
-    def add(layer, owner, target, expected, observed, command, repeat, *, reason=None, session=None):
-        readable = observed is not None and all(key in observed for key in expected)
+    def add(layer, owner, target, expected, observed, command, repeat, *, reason=None, session=None, ambiguous=None):
+        # An ambiguous native list outranks host naming authority: the row cannot be compared at all.
+        reason = ambiguous or reason
+        readable = ambiguous is None and observed is not None and all(key in observed for key in expected)
         # A null link means Pod has no known link to set, rather than permission to clear one.
         compared = {key: value for key, value in expected.items() if value is not None}
-        verdict = ("host" if owner == "host" else "unreadable" if not readable or reason else
+        verdict = ("unreadable" if ambiguous else "host" if owner == "host" else
+                   "unreadable" if not readable or reason else
                    "matches" if all(observed[key] == value for key, value in compared.items()) else "differs")
         row = {"layer": layer, "owner": owner, "target": target, "expected": expected,
                "observed": observed, "verdict": verdict,
@@ -441,7 +465,7 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         return value
 
     path = task_path(state)
-    task = by_path.get(path)
+    task = row_at(path)
     mode = (task or {}).get("displayNameMode")
     filled = task_name(state, None)
     # A name Orca reports fixed is the host's unless it is exactly the name Pod fills in.
@@ -459,8 +483,8 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         command += ["--json"]
     else:
         command = None
-    reason = ("repeat the native read" if mode not in ("automatic", "fixed") else
-              "record display.task" if not name else None)
+    reason = (duplicate(path) or ("repeat the native read" if mode not in ("automatic", "fixed") else
+                                  "record display.task" if not name else None))
     add("task_worktree", owner, "path:" + path if path else None, expected,
         observed_worktree(task), command, repeat_worktree, reason=reason)
 
@@ -491,8 +515,9 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
     for worker_path in hosted:
         if worker_path in named or worktrees is not None and worker_path not in by_path:
             continue
-        add("worker_worktree", "host", "path:" + worker_path, {}, observed_worktree(by_path.get(worker_path)),
-            None, repeat_worktree)
+        add("worker_worktree", "host", "path:" + worker_path, {}, observed_worktree(row_at(worker_path)),
+            None, repeat_worktree,
+            ambiguous=duplicate(worker_path))
     for worker_path, row in named.items():
         # A complete inventory proves a removed worktree absent; it is not drift.
         if worktrees is not None and worker_path not in by_path:
@@ -501,8 +526,9 @@ def projection(state: dict, terminals_read: dict | None, worktrees_read: dict | 
         expected = {"name": facts(state, row)["worktree_name"], "parent": path,
                     "issue": number if not other else None, "pr": pr(state), "status": status, "comment": comment}
         add("worker_worktree", "pod", "path:" + worker_path, expected,
-            observed_worktree(by_path.get(worker_path)),
-            worktree_command(state, row, first=True)["worktree_command"], repeat_worktree)
+            observed_worktree(row_at(worker_path)),
+            worktree_command(state, row, first=True)["worktree_command"], repeat_worktree,
+            ambiguous=duplicate(worker_path))
 
     latest = {}
     for row in ordered(state):
