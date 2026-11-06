@@ -476,10 +476,20 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                     raise
                 found_keys[place] = None
         return found_keys[place] == key
+
+    def existing(place):
+        check()
+        try:
+            return place.is_dir()
+        except OSError:
+            return False
     for path, key in gone:
         # This project first, then the other checkouts records bind, in a fixed order; the first that is a checkout
         # of the same repository is the one the proof runs in, never a search for one where it passes.
-        places = [Path(project)] + [Path(place) for place in sorted(checkouts.get(key, ())) if Path(place) != Path(project)]
+        # Removed worktrees are dropped by a plain stat before the cap, so the cap counts only existing checkouts
+        # that Git is asked about (pod#251: most recorded paths of a busy repository are cleaned up).
+        places = [Path(project)] + [Path(place) for place in sorted(checkouts.get(key, ()))
+                                    if Path(place) != Path(project) and existing(Path(place))]
         # A binding without a repository key (a plain directory) has no other checkout.
         chosen = next((place for place in places[:MAX_CHECKOUTS + 1] if same_repository(place, key)),
                       MISSING) if isinstance(key, str) else MISSING
