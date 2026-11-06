@@ -10,7 +10,7 @@ import shlex
 
 from .contracts import bound
 from .errors import PodError
-from .display import _words, worker_title, worktree_command
+from .display import TITLE_NOTE, _words, worker_title, worktree_command
 
 TITLE_LIMIT = 96
 ROLE_LABEL_LIMIT = bound("packet", "role_label")
@@ -26,13 +26,6 @@ def title(body: dict) -> str:
     if len(purpose) > room:
         purpose = purpose[:room + 1].rsplit(" ", 1)[0] if " " in purpose[:room + 1] else purpose[:room]
     return f"{role}: {purpose}"
-
-
-def rename(title_value: str, handle: str | None, *, started: bool = True) -> dict:
-    argv = (["orca", "terminal", "rename", "--terminal", handle, "--title", title_value, "--json"]
-            if started and handle else None)
-    return {"title": title_value, "rename_command": argv,
-            "rename_reason": None if argv else "start has no terminal handle" if started else "worker not started"}
 
 
 def read_command(dispatch: str) -> list[str]:
@@ -222,7 +215,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                       if keep else f"Orca's release option: {next_step}.")
             wording = keep_now + decision + " " + option + cycle
         if reason:
-            fields["retained_title"] = rename(worker_title(state, admission), handle)
+            fields["retained_title"] = {"title": worker_title(state, admission), "title_note": TITLE_NOTE}
         return finish("owner_kept_owned" if keep else "retained_owned" if row["release_state"] == "retained" else "owned",
                       wording, **fields)
     row["state"] = "kept"

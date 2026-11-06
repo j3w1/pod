@@ -46,7 +46,7 @@ changes since the previous round; a fixer is an implementer serving a correction
 Pod counts review rounds per objective, and a fixer takes the round of the latest
 review admitted before it. Leave out round 1 while it is the only round: once a
 second review is admitted, the first reviewer's tab becomes
-`Reviewer · round 1`, and the display readback gives that rename. A worker on a
+`Reviewer · round 1`, and the display readback shows that title. A worker on a
 reused terminal, or one listed in `display.continued`, adds ` (continued)`.
 Retention alone adds nothing, and no worker title carries a status, route, id or prompt
 text.
@@ -87,23 +87,22 @@ and desktop rendering remain separate evidence.
 
 - Freezing a packet returns `title` and `task_display_name`. Pass them to
   `orca orchestration task-create` as `--task-title` and `--display-name`.
-  Orca cannot change a Task's display name later; the admission's `title` names
-  the tab.
+  The Task display name labels the worker's row. Orca cannot change it later, so
+  a later title, such as a new round, is data only; the admission's `title` and
+  `title_note` say so.
 - After each start, including reuse, run the admission acknowledgement's
-  `rename_command` and read the title back with `orca terminal show`. When it
-  supplies `worktree_command`, run it too: the first worker in a worktree sets its
+  `worktree_command` when it supplies one: the first worker in a worktree sets its
   name, parent, issue and pull request links, status and comment; a later one
-  updates status and comment. A failed command or a differing readback is a naming
-  gap to report: continue the worker and never retry its start. With no handle or
-  no start, report the naming gap.
+  updates status and comment. A failed command is a naming gap to report:
+  continue the worker and never retry its start.
 - When a report acknowledgement or a worker_tabs row carries `worktree_command`,
   run it with that row's release or close step so the finished worker's worktree
   is marked.
-- Never type into a worker tab, not even `/rename`: Orca marks a tab that
-  receives terminal input user-owned, which stops its release or reuse. Worker
-  names are metadata only (the tab rename, the Task display name and the worktree
-  command); `session_rename` is null for every worker tab and `session_reason`
-  says why.
+- Never rename a worker tab or type into it, not even `/rename`: Orca marks a
+  tab that is renamed or receives terminal input user-owned, which stops its
+  release or reuse. Worker names are metadata only (the Task display name and the
+  worktree command); `session_rename` is null for every worker tab and
+  `session_reason` says why.
 - Only a Claude coordinator tab gets a session rename, from the display readback's
   coordinator row, marked `sender` `host`; `next_action` offers it only when the
   coordinator title differs, for example after a relaunch or model switch. The
@@ -120,8 +119,9 @@ claim, a continuation or resume, each admission and each recorded report, and
 after a relaunch or model switch. It reads Orca and writes nothing. Each row names
 its layer, its owner (`pod` or `host`), the expected and observed names and a
 verdict. Run every `command` it gives, and pass a coordinator session rename in
-`next_action` to your host. A host row never has a command. For `unreadable`,
-repeat the named read. A worker worktree that was removed is simply absent.
+`next_action` to your host. A host row never has a command, and neither does a
+worker tab row: its title is data only and never drift. For an `unreadable`
+row that names a read, repeat that read. A worker worktree that was removed is simply absent.
 
 **Say only what the readback proves.** `backend_matches` proves Orca's backend
 names, not what the desktop shows; `desktop` stays NOT_VERIFIED until owner-visible
@@ -212,10 +212,10 @@ Retain only while required corrections or a delta review of that worker's result
 are pending, or on a recorded owner request. An implementer's cycle follows
 required findings from the review of its recorded integrated candidate, even
 when the assurance moves to the corrected candidate for delta review.
-The acknowledgement's `retained_title` supplies the title and its rename: the
-retained title is the plain role title. The reason, `corrections`, `delta review`
-or `owner request`, stays in `retention_reason` and the row's wording. Run the
-rename when retaining. Release when the correction
+The acknowledgement's `retained_title` supplies the title as data, with no
+rename: the retained title is the plain role title. The reason, `corrections`,
+`delta review` or `owner request`, stays in `retention_reason` and the row's
+wording. Release when the correction
 cycle ends: a retained-owned tab remains releasable, and holds closure.
 
 An owner-kept exception needs a recorded `user_direct` instruction through
