@@ -61,11 +61,12 @@ class TabCase(ProductionCase):
         worker = result["worker"]
         handle, worktree = worker["agentTerminalHandle"], worker["worktreeId"]
         ownership = "user_owned" if case == "user_owned" else "external" if case == "external" else "owned"
-        release = ("retained" if case in ("retained", "owner_request", "user_owned", "external") else
+        release = ("retained" if case in ("retained", "retained_no_command", "owner_request", "user_owned", "external") else
                    case if case in ("release_pending", "release_unknown") else "not_requested")
         resource = {"terminalHandle": handle, "worktreeId": worktree, "ownerDispatchId": dispatch,
                     "originDispatchId": dispatch, "ownershipState": ownership, "releaseState": release,
                     "retainedReason": "user_takeover" if case == "user_owned" else "owner_request" if case == "owner_request"
+                                      else "user_requested" if case == "retained_no_command"
                                       else "coordinator_request" if case == "retained" else None}
         terminal = {"handle": handle, "tabId": "synthetic-tab", "worktreeId": worktree,
                     "connected": case != "disconnected", "writable": True, "orphaned": False}
@@ -75,7 +76,7 @@ class TabCase(ProductionCase):
             "ownerDispatchId": dispatch, "terminalState": "reclaimable"},
             liveness={"verdict": self.live, "reason": "synthetic_observation"},
             nextAction={"kind": "release", "argv": list(self.release_argv)})
-        if case == "no_command":
+        if case in ("no_command", "retained_no_command"):
             projection["nextAction"] = {"kind": "none", "argv": []}
         if case == "unreadable":
             terminal.pop("connected")
@@ -495,7 +496,7 @@ class TableTests(TabCase):
                         self.assertEqual(row["native_next_action"], self.shown(admission["native_binding"]["dispatchId"])["result"]["projection"]["nextAction"])
                         if case in ("owned", "retained", "release_pending", "release_unknown"):
                             self.assertEqual(row["command"], ["orca", *self.release_argv])
-                        if case == "no_command":
+                        if case in ("no_command", "retained_no_command"):
                             self.assertIsNone(row["command"])
                             self.assertIn("Orca gives no next command", row["wording"])
                         text = view["readiness"]["summary"] + view["readiness"]["finalization"]["next_action"]
@@ -596,17 +597,55 @@ class ReleaseGuidanceTests(TabCase):
             row = project(state, admission, facts, settled=True, acknowledgement=ack)
             expected = ["orchestration", "worker-release", "--dispatch",
                         admission["native_binding"]["dispatchId"], "--json", "--full"]
-            self.assertEqual(row["next_action"], {"kind": "worker_release", "source": "pod_guidance", "argv": expected})
+            self.assertEqual(row["next_action"]["kind"], "worker_release")
+            self.assertEqual(row["next_action"]["source"], "pod_guidance")
+            self.assertEqual(row["next_action"]["argv"], expected)
+            self.assertEqual(row["command_source"], "pod_guidance")
+            self.assertIn("If a person asked to keep it, do not release it.", row["next_action"]["text"])
             self.assertEqual(row["native_next_action"], {"kind": "none", "argv": []})
             self.assertEqual(row["command"], ["orca", *expected])
             self.assertIn("Pod guidance: orca orchestration worker-release", row["wording"])
             self.assertNotIn("Orca's release option", row["wording"])
         self.assertEqual((state, admission, facts, self.calls), before)
 
+
+    def test_report_status_and_finalization_relay_labelled_guidance(self):
+        from pod.orca import V3_CAPABILITY_KEYS, orchestration_features
+        self.intake(self.sub("S"))
+        frozen = self.packet(["S"], role="investigate", resolves="one question", stop_condition="one answer")
+        capability = {**self.port.capability(),
+                      "orchestration_features": orchestration_features(list(V3_CAPABILITY_KEYS.values()))}
+        start = self.port.start_worker
+        def native_start(*, keep_open=False, **fields):
+            self.assertTrue(keep_open)
+            return start(**fields)
+        with patch.object(OrcaPort, "capability", return_value=capability), \
+             patch("pod.orca.contract", return_value=capability), \
+             patch.object(OrcaPort, "start_worker", side_effect=native_start):
+            admission = self.start("worker", frozen, keep_open=True)["admission"]
+        self.assertEqual(admission["keep_open"], "requested")
+        self.settle(admission)
+        self.tab_case = "retained_no_command"
+        before = len([c for c in self.calls if c[0] == "show"])
+        raw = self.report(admission, frozen, map={"obligations": self.waiting_rows()})
+        ack = self.ack("report", {"admission_id": admission["admission_id"]}, raw)
+        self.assertEqual(len([c for c in self.calls if c[0] == "show"]) - before, 2)
+        for row in (ack["worker_tab"], self.status()["worker_tabs"][0]):
+            self.assertEqual(row["next_action"]["kind"], "worker_release")
+            self.assertEqual(row["command_source"], "pod_guidance")
+            self.assertEqual(row["native_next_action"], {"kind": "none", "argv": []})
+            self.assertEqual(row["command"], ["orca", "orchestration", "worker-release", "--dispatch",
+                                              admission["native_binding"]["dispatchId"], "--json", "--full"])
+            self.assertIn("Pod guidance", row["wording"])
+        self.assertIn("Pod guidance", ack["finalization"]["next_action"])
+        self.assertIn("Pod guidance", self.status()["readiness"]["finalization"]["next_action"])
+
+
     def test_guidance_exclusions(self):
         project, baseline, original, native = self.guidance_fixture()
         for case in ("running", "unconsumed", "user_owned", "external", "pending", "unknown",
-                     "unreadable", "reserved", "unresolved", "not_requested", "not_advertised", "native_action", "owner_keep", "corrections", "delta_review"):
+                     "unreadable", "reserved", "unresolved", "not_requested", "not_advertised", "native_action", "owner_keep", "corrections", "delta_review",
+                     "owner_request", "user_takeover", "unknown_reason", "reused"):
             with self.subTest(case=case):
                 state, admission, facts = deepcopy((baseline, original, native))
                 settled = case != "running"
@@ -614,6 +653,9 @@ class ReleaseGuidanceTests(TabCase):
                 elif case in ("user_owned", "external"): facts["terminal_ownership"]["ownershipState"] = case
                 elif case in ("pending", "unknown"): facts["terminal_ownership"]["releaseState"] = "release_" + case
                 elif case == "unreadable": facts["terminal_readback"].pop("connected")
+                elif case in ("owner_request", "user_takeover", "unknown_reason"):
+                    facts["retained_reason"] = case
+                elif case == "reused": facts["terminal_ownership"]["ownerDispatchId"] = "later-dispatch"
                 elif case in ("reserved", "unresolved"):
                     state["admissions"]["later"] = {"reuse_of": admission["admission_id"], "state": case}
                 elif case in ("not_requested", "not_advertised"): admission["keep_open"] = case

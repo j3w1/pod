@@ -12167,7 +12167,10 @@
         "unit",
         "independent_review"
       ],
-      "offline_test": "tests.test_worker_tabs.ReleaseGuidanceTests.test_consumed_keep_open_guidance_preserves_native_action",
+      "offline_test": [
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_consumed_keep_open_guidance_preserves_native_action",
+        "tests.test_worker_tabs.ReleaseGuidanceTests.test_report_status_and_finalization_relay_labelled_guidance"
+      ],
       "status": "NOT_RUN"
     },
     {

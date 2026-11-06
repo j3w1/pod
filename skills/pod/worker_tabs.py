@@ -194,6 +194,7 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
                    ("id", "instruction", "channel", "relay") if key in keep})
     if (owned and row["release_state"] == "retained" and admission.get("keep_open") == "requested"
             and admission.get("report") is not None and reason is None
+            and facts.get("retained_reason") in (None, "coordinator_request", "user_requested")
             and action == {"kind": "none", "argv": []}
             and not any(other.get("reuse_of") == admission["admission_id"]
                         and other.get("state") in ("reserved", "unresolved", "bound")
@@ -202,8 +203,12 @@ def project(state: dict, admission: dict, facts: dict, *, settled: bool,
         # Identity, settlement, connection and ownership were checked above; Pod executes nothing.
         row["next_action"] = {"kind": "worker_release", "source": "pod_guidance",
                               "argv": ["orchestration", "worker-release", "--dispatch", dispatch, "--json", "--full"]}
+        row["next_action"]["text"] = ("Release is Pod's guidance because Pod asked to keep this worker open "
+                                      "and that reason has ended. If a person asked to keep it, do not release it.")
         row["command"] = ["orca", *row["next_action"]["argv"]]
-        next_step = "Pod guidance: " + shlex.join(row["command"])
+        row["command_source"] = "pod_guidance"
+        next_step = ("Pod guidance: " + shlex.join(row["command"]) + ". "
+                     + row["next_action"]["text"])
     if owned:
         debt = "Release still owed" if recorded_settlement else "Release owed"
         wording = (f"Owner-kept by instruction {keep['id']}; release available when the owner lets it go: {next_step}."
