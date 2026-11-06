@@ -3,6 +3,8 @@ import json
 import shutil
 import subprocess
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from pod.errors import PodError
 from pod.handoff import _unproven_reason, peer_label, run_scope, shared_detail
@@ -324,6 +326,30 @@ class UnprovenClosureScopeTests(WindowCase):
         reason = "recorded worktree missing; no other checkout of its recorded repository found"
         repository = logical_fixture(other)["checkpoint"]["worktree"]["repository"]
         self.scope(["objective"], [], self.unproven(reason, "objective", repository))
+
+    def test_a_peer_whose_repository_changes_between_passes_holds_as_changing(self):
+        """Delta review F3: the checkout chosen for the first read's repository key is never used once the reread
+        binding names another; the peer holds as a record changing while read, with no native mutation."""
+        from pod import history
+        self.peers()
+        path = self.rewrite(self.gone)
+        real, reads = history.load_context, []
+
+        def alternating(target, *args, **kwargs):
+            raw = real(target, *args, **kwargs)
+            if Path(target) == path:
+                reads.append(1)
+                if len(reads) % 2 == 0:  # Every second read, as the scan's second pass, names another repository.
+                    raw = json.loads(json.dumps(raw))
+                    raw["checkpoint"]["worktree"].update(repo_key="f" * 64, repository=CONSUMER)
+            return raw
+        with mock.patch("pod.history.load_context", side_effect=alternating):
+            scope = run_scope(self.project, "objective", "run")
+            self.assertEqual((scope["objectives"], scope["closure_unproven"], scope.get("changing")), ([], [], 1))
+            self.lose()
+            calls = len(self.mutations)
+            self.assert_lead_refusal("record_changed_during_read")
+            self.assertEqual(len(self.mutations), calls)
 
     def test_a_closed_peer_whose_proof_refuses_names_only_the_code(self):
         self.peers()

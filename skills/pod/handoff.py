@@ -148,6 +148,10 @@ def _unproven_reason(exc: BaseException) -> str:
     return CLOSED_MALFORMED
 
 
+class _BindingChanged(Exception):
+    """A removed-worktree peer whose recorded repository key changed after its checkout was chosen (pod#251)."""
+
+
 class _Unproven(Exception):
     """A closure proof that cannot run, carrying its fixed reason."""
 
@@ -211,7 +215,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     are read; with none the peer stays unproven (pod#251).
     """
     from .ledger import (CONTEXT_LIMIT, _validate_context, validate_checkpoint_snapshot,
-                         _run_references, objective_root, state_root, closed_snapshot_context)
+                         _run_references, objective_root, record_name, state_root, closed_snapshot_context)
     from .history import RECORD_CHANGED, load_context, scan_read
     from .orca import DEADLINE_SPENT
 
@@ -286,7 +290,8 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
     def classify(path, substitute=None):
         """One record's whole read: what it says about this Run, or None when it holds nothing. A failure to load the
         record is marked, so its hold is narrowed by membership as before; every other record-local fault holds.
-        `substitute` is the checkout of the peer's repository its closure proof runs in when its worktree is gone."""
+        `substitute` is (checkout, repository key it was chosen for): the checkout of the peer's repository its closure
+        proof runs in when its worktree is gone."""
         try:
             raw = load_context(path, validate=False)
         except PodError as exc:
@@ -348,17 +353,25 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
                             name = checkpoint["objective"]
                             return ("gone", name if isinstance(name, str) and 0 < len(name) <= 256
                                     else "unnamed objective", repository, workspace["repo_key"])
-                        if substitute is MISSING:
+                        place, chosen_for = substitute
+                        if workspace["repo_key"] != chosen_for:
+                            # The binding changed since the checkout was chosen for it: the record is being written,
+                            # so it holds with that transient cause and is never proved in the earlier checkout.
+                            raise _BindingChanged()
+                        if place is MISSING:
                             raise _Unproven(NO_CHECKOUT) from None
-                        gone, peer_project = True, substitute
+                        gone, peer_project = True, place
                     except OSError:
                         raise _Unproven(WORKTREE_UNREADABLE) from None
                     else:
                         if not stat.S_ISDIR(found.st_mode):
                             raise _Unproven(WORKTREE_UNREADABLE)
                     try:
-                        # The checkout must place this record where it lies, so its own journal is the one read.
-                        if gone and objective_root(peer_project, checkpoint["objective"]) != path.parent:
+                        # The fresh binding and the checkout must both place this record where it lies, so its own
+                        # journal is the one read.
+                        if gone and (record_name(Path(workspace["path"]), {"repo_key": workspace["repo_key"]},
+                                                 checkpoint["objective"]) != path.parent.name
+                                     or objective_root(peer_project, checkpoint["objective"]) != path.parent):
                             raise _Unproven(RECORD_UNBOUND)
                         check()
                         validate_checkpoint_snapshot(peer_project, raw)
@@ -402,6 +415,10 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         try:
             # The record's read and its classification, classified by revision (R206).
             outcome = scan_read(path, lambda: classify(path, substitute))
+        except _BindingChanged:
+            # Being written, not damaged: it holds like a record that changed while it was read, with a retry step.
+            changing += record_mentions(path.parent, run_id, check) or 1
+            return
         except PodError as exc:
             if exc.code == DEADLINE_SPENT:
                 raise
@@ -460,7 +477,7 @@ def run_scope(project: Path, objective: str, run_id: str, *, budget=None, prove_
         # A binding without a repository key (a plain directory) has no other checkout.
         chosen = next((place for place in places[:MAX_CHECKOUTS + 1] if same_repository(place, key)),
                       MISSING) if isinstance(key, str) else MISSING
-        take(path, chosen)
+        take(path, (chosen, key))
     check()
 
     def rows(found):
