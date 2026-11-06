@@ -12766,6 +12766,46 @@
         "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_marked_pending_resume_with_an_unreadable_worktree_reads_unverified"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1101",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_retires_with_withdrawn_coordinator_assurance_and_objective_closes",
+        "tests.test_withdrawn_corrections.LongIdentifierStatusTests.test_parent_reason_survives_the_status_bound_with_maximum_length_ids"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1102",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_open_parent_still_refuses_and_names_the_rule",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_follows_the_withdrawn_tip_of_a_renewed_assurance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1103",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_same_write_and_owner_withdrawn_parent_follow_the_same_rule",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_orphaned_correction_refusals_name_the_mechanical_step",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_follows_is_kernel_owned_and_persisted_record_revalidates",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_satisfied_correction_keeps_its_receipts",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_follows_the_withdrawn_tip_of_a_renewed_assurance",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_non_orphan_refusals_keep_their_own_next_action"
+      ],
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [
