@@ -9,7 +9,7 @@ import unittest
 
 from pod.errors import PodError
 from pod.obligations import (accept_write, admission_refusal, admit, disposition, evaluate_trace,
-                             label_qualification, overlap, report_projection, serialization_flags,
+                             label_qualification, observations, overlap, report_projection, serialization_flags,
                              status_projection, triage)
 from tests.common import VERIFICATION, proof as detailed_proof
 
@@ -1039,6 +1039,35 @@ class TraceTests(unittest.TestCase):
         self.assertFalse(native["evaluable"])
         self.assertEqual(set(native["checks"].values()), {"NOT_EVALUABLE"})
         self.assertEqual(native["observations"]["admissions"], "unknown")
+
+
+class GovernanceStalenessTests(unittest.TestCase):
+    """pod#120 R1: staleness compares current governance with the newest governance basis."""
+
+    def stale(self, base, current, delivery=None, **extra):
+        state = {"governance": {"base": base, "base_ref": "origin/main"}, "obligations": [], "revision": 1,
+                 "delivery": delivery, **extra}
+        return observations(None, state, ctx(governance_current=current))["governance_stale"]
+
+    def remote(self, base, result, target_ref="origin/main"):
+        return {"base": base, "result": result, "target_ref": target_ref}
+
+    def test_refresh_after_an_earlier_delivery_reads_current(self):
+        delivery = self.remote("a" * 40, "b" * 40)
+        self.assertFalse(self.stale("c" * 40, "c" * 40, delivery))
+        self.assertTrue(self.stale("c" * 40, "d" * 40, delivery))
+
+    def test_delivery_result_stays_current_for_its_exact_base_and_target(self):
+        delivery = self.remote("a" * 40, "b" * 40)
+        self.assertFalse(self.stale("a" * 40, "b" * 40, delivery))
+        self.assertTrue(self.stale("a" * 40, "d" * 40, delivery))
+        self.assertTrue(self.stale("a" * 40, "b" * 40, self.remote("a" * 40, "b" * 40, "origin/other")))
+
+    def test_no_delivery_and_local_append_compare_the_bound_base(self):
+        self.assertFalse(self.stale("a" * 40, "a" * 40))
+        self.assertTrue(self.stale("a" * 40, "b" * 40))
+        local = {"kind": "local_append", "base": "a" * 40, "result": "b" * 40}
+        self.assertTrue(self.stale("a" * 40, "b" * 40, local))
 
 
 if __name__ == "__main__":
