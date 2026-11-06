@@ -1347,9 +1347,10 @@ def kernel_context(project: Path, objective: str, state: dict, native: dict | No
         return list(found) if isinstance(found, list) else None
 
     def resolver(source, target):
-        # R173: REUSE resolves its scope through committed links in both candidates' trees with R203's resolver.
+        # R173: REUSE resolves its scope through committed links in both candidates' trees with R203's resolver,
+        # and also compares every committed link it traverses there.
         if ("scope", source, target) not in pairs:
-            pairs["scope", source, target] = scope_resolver(project, [source, target])
+            pairs["scope", source, target] = scope_resolver(project, [source, target], links=True)
         return pairs["scope", source, target]
     return {"admissions": state.get("admissions", {}),
             "report_runtimes": sorted({entry[field] for entry in (checkpoint_value.get("continuity") or {}).get("history", [])

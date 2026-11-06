@@ -491,11 +491,12 @@ UNRESOLVED = "unresolved scope path "  # the label continues with the path that 
 def _reuse_scope(ob: dict, delta: list[str], resolve=None) -> tuple[str, list[str]]:
     """Whether the Git delta touches the reviewed or declared scope.
 
-    `resolve` (R203's `scope_resolver` for the compared candidates' trees) gives what each
-    declared path names through committed links, parents included; a delta touching the
-    path as named or any name it resolves to touches the scope, and a path that does not
-    resolve is not provably untouched. Without it, paths compare as named: the retained
-    receipt check keeps the comparison each stored REUSE was verified under.
+    `resolve` (R203's `scope_resolver` for the compared candidates' trees, with `links`) gives
+    what each declared path names through committed links, parents included, and every link
+    traversed on the way; a delta touching the path as named or any of those names touches the
+    scope. A path that does not resolve is not provably untouched: its label names it, and the
+    returned paths carry it first, then any touched names. Without `resolve`, paths compare as
+    named: the retained receipt check keeps the comparison each stored REUSE was verified under.
 
     A bump of the root `VERSION` alone is not a change to the reviewed work: a scope
     that merely contains the repository root does not reopen for it. A scope naming
@@ -514,11 +515,9 @@ def _reuse_scope(ob: dict, delta: list[str], resolve=None) -> tuple[str, list[st
         names += [name for name in [path, *found] if name not in names]
     relevant = [path for path in delta if path not in VERSION_ALLOCATION or path in names]
     touched = overlap({"paths": relevant, "surfaces": []}, {"paths": names, "surfaces": []})["paths"]
-    if touched:
-        return "touched", touched
     if unresolved is not None:
-        return UNRESOLVED + unresolved, [unresolved]
-    return "eligible", []
+        return UNRESOLVED + unresolved, [unresolved, *[path for path in touched if path != unresolved]]
+    return ("touched" if touched else "eligible"), touched
 
 
 def reuse_eligibility(ob: dict, source: str, ctx: dict, *, target: str | None = None) -> tuple[str, list[str], list[str] | None]:
@@ -559,14 +558,17 @@ def _reuse_next_action(ob: dict, source: str | None, label: str, touched: list[s
               "no declared scope": "it declares no scope to compare against",
               "delta unreadable": "the Git delta between the candidates is unreadable"}.get(label, "its recorded proof cannot be reused")
     if label.startswith(UNRESOLVED):
-        detail = _unresolved_detail(label)
+        detail = _unresolved_detail(label, touched)
     return f"record fresh evidence for {ob['id']}; {detail}"
 
 
-def _unresolved_detail(label: str) -> str:
+def _unresolved_detail(label: str, paths: list[str]) -> str:
+    """The unresolved path's wording; `paths` is that path followed by any names the delta also touches."""
+    also = paths[1:]
     return (f"its scope path {label[len(UNRESOLVED):]} is unresolved through committed links in the compared candidate "
             "trees (a gitlink or another opaque mode, an unreadable tree, or an absolute, escaping, looping or over-long "
-            "link), so it is not provably untouched and never eligible")
+            "link), so it is not provably untouched and never eligible"
+            + (f"; the Git delta also touches its scope ({', '.join(also[:4])})" if also else ""))
 
 
 def _bind_reuse(ob: dict, prior: dict | None, ctx: dict) -> dict | None:
@@ -674,7 +676,7 @@ def invalidation(ob: dict, ctx: dict, gov: str, *, corrections: list[str] | None
     correction = (f"add reuse {{from: {source}}} to {ob['id']}" if label == "eligible"
                   else f"record fresh evidence for {ob['id']}" + (" after governance refresh/rebind" if classification == "governance change" else "")
                   + (f"; the Git delta from {source[:12]} touches its scope" if label == "touched" else "")
-                  + (f"; {_unresolved_detail(label)}" if label.startswith(UNRESOLVED) else ""))
+                  + (f"; {_unresolved_detail(label, touched)}" if label.startswith(UNRESOLVED) else ""))
     mismatch = _delivered_mismatch(ob, ctx) if classification == "binding change" else []
     if mismatch:
         touched = mismatch
