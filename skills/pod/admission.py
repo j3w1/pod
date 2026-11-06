@@ -607,6 +607,9 @@ def _fleet_side(observed, claims, counted=()) -> dict:
     this side digests too."""
     runtime = None
     try:
+        # A spent budget anywhere this side depends on is its code, before a failed or invalid fleet read (R207).
+        _raise_first([value for value in (observed, *claims.values())
+                      if isinstance(value, PodError) and value.code in BUDGET_CODES])
         if isinstance(observed, BaseException):
             raise observed
         if observed is None:

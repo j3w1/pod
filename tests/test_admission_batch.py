@@ -766,6 +766,17 @@ class WalkReReadTests(FencedCase):
         start = {"page": fleet_model(self.rows)(first), "rows": self.rows, "pages": walk_pages(self.rows)}
         for claims in ({"a": failed, "b": spent}, {"a": spent, "b": failed}):
             self.assertEqual(admission._fleet_side(start, claims)["code"], DEADLINE_SPENT)
+        invalid = {**start, "page": {**start["page"], "result": {**start["page"]["result"], "scope": {"source": "bound"}}}}
+        for label, observed in {"a failed walk page": failed, "an invalid walk page": invalid}.items():
+            with self.subTest(label):  # beside a spent claim read, in the side and through the whole batch
+                self.assertEqual(admission._fleet_side(observed, {"a": spent})["code"], DEADLINE_SPENT)
+        def claim(source, runtime):
+            if admission._FENCING.get():
+                raise spent
+            return LIVE_CLAIM
+        with patch("pod.admission._native_claim", side_effect=claim):
+            fence = self.fenced(fleet_end=fleet_model(self.rows, overrides={tuple(first): failed}))["native_fence"]
+        self.assertEqual((fence["fleet_end"]["code"], fence["reason"]), (DEADLINE_SPENT, "discovery_budget"))
         cases = {"a changed row": (fleet_model([dict(self.rows[0], dispatchStatus="failed"), *self.rows[1:]]), None,
                                    "fleet_changed"),
                  "a runtime change": (fleet_model(self.rows, runtime="other-runtime"), None, "runtime_changed"),
