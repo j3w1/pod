@@ -227,7 +227,8 @@ def _validate_route_references(state: dict) -> None:
     from .obligations import _route_later
     admissions = state["admissions"]
     checkpoint = state.get("checkpoint") or {}
-    obligations = {row["id"]: row for row in checkpoint.get("obligations", [])}
+    obligations = {row["id"]: row for row in checkpoint.get("obligations", [])
+                   if isinstance(row, dict) and isinstance(row.get("id"), str)}
     for row in admissions.values():
         for entry in row["route_decision"].get("settlements", []):
             if entry.get("seq", 1) > checkpoint.get("seq", 0):
@@ -286,9 +287,9 @@ def _validate_context(value: object, *, full_history=True) -> dict:
     checkpoint_value = state.get("checkpoint")
     if isinstance(checkpoint_value, dict):
         if checkpoint_value.get("obligations") is not None:
-            from .obligations import validate_map_record
+            from .obligations import row_bounds
             from .lineage import Lineage
-            validate_map_record(checkpoint_value)
+            row_bounds(checkpoint_value["obligations"])
             if any(isinstance(row, dict) and ("renews" in row or "renewal" in row or row.get("state") == "renewed")
                    for row in checkpoint_value["obligations"]):
                 Lineage(checkpoint_value["obligations"])
@@ -304,6 +305,10 @@ def _validate_context(value: object, *, full_history=True) -> dict:
             raise PodError("state_unsupported", "Issue revision history is missing")
         for row in revisions:
             validate_decision(row, checkpoint_value)
+        if state.get("decision_channels") == 4 or (state.get("decision_channels") == 5
+                                                  and checkpoint_value.get("obligations") is not None):
+            from .obligations import validate_map_record
+            validate_map_record(checkpoint_value)
         from .contracts import TOOL_QUESTION_SCHEMA
         questions = checkpoint_value.get("questions")
         if isinstance(questions, list) and any(isinstance(row, dict) and row.get("schema") == TOOL_QUESTION_SCHEMA for row in questions):
@@ -2520,7 +2525,11 @@ def checkpoint(project: Path, objective: str, *, owner: str, value: dict, native
                 decision_stack.enter_context(issue_revision.capability.scope())
             proposed = {**proposed, "revision_authority": issue_revision.authority}
         from .pod_ticks import refresh as refresh_ticks
-        prior_criteria = {row["id"] for row in (map_of(state) or {}).get("obligations", []) if row["kind"] == "criterion"}
+        prior_map = map_of(state)
+        if prior_map is not None:
+            from .obligations import validate_map_record
+            validate_map_record(prior_map)
+        prior_criteria = {row["id"] for row in (prior_map or {}).get("obligations", []) if row["kind"] == "criterion"}
         raw_obligations = proposed.get("obligations")
         introducing = isinstance(raw_obligations, list) and any(
             isinstance(row, dict) and row.get("kind") == "criterion"
