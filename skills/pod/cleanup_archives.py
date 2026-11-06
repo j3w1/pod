@@ -42,6 +42,14 @@ _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _REF = re.compile(r"refs/[A-Za-z0-9_./+@=-]{1,506}\Z")
 _PRIVATE = ("refs/bisect/", "refs/worktree/", "refs/rewritten/")
+# Linked-worktree administrative entries. A recovery root's object ids become archive roots.
+_RECOVERY_ROOTS = ("ORIG_HEAD", "FETCH_HEAD", "AUTO_MERGE")
+_ADMIN_ENTRIES = {"HEAD", "gitdir", "commondir", "index", "config.worktree", "logs", "refs",
+                  "COMMIT_EDITMSG", *_RECOVERY_ROOTS}
+# Markers of a merge, rebase, cherry-pick, revert, sequence or bisect still in progress
+# (any BISECT_* file counts as well).
+_OPERATIONS = {"MERGE_HEAD", "MERGE_MODE", "MERGE_MSG", "MERGE_AUTOSTASH", "rebase-merge", "rebase-apply",
+               "REBASE_HEAD", "sequencer", "CHERRY_PICK_HEAD", "REVERT_HEAD"}
 _TYPES = {"commit", "tree", "blob", "tag"}
 
 
@@ -613,17 +621,22 @@ def resource_observation(path: Path, ref: str | None, tip: str | None, repositor
             raise Unavailable("Resource refs exceed the archive observation bound")
         if admin == common:
             raise Unavailable("Main-repository administrative removal is unsupported")
-        allowed = {"HEAD", "gitdir", "commondir", "index", "config.worktree", "logs", "refs",
-                   "ORIG_HEAD", "FETCH_HEAD", "COMMIT_EDITMSG"}
         names = set(os.listdir(admin))
         result["admin_entries"] = sorted(names)
-        if len(names) > MAX_REFS or names - allowed:
-            raise Unavailable("Resource has unsupported administrative roots or an operation in progress")
+        if len(names) > MAX_REFS:
+            raise Unavailable("Resource has unsupported administrative roots")
+        # A real in-progress operation protects the worktree and is named; a completed
+        # operation's leftover AUTO_MERGE is a recovery root like ORIG_HEAD (pod#125).
+        operations = sorted(name for name in names if name in _OPERATIONS or name.startswith("BISECT_"))
+        if operations:
+            raise Unavailable("Resource has an operation in progress: " + ", ".join(operations[:8]))
+        if names - _ADMIN_ENTRIES:
+            raise Unavailable("Resource has unsupported administrative roots")
         metadata = {}
         for name in sorted(names - {"logs", "refs"}):
             value = _bytes(admin / name)
             metadata[name] = hashlib.sha256(value).hexdigest()
-            if name in ("ORIG_HEAD", "FETCH_HEAD"):
+            if name in _RECOVERY_ROOTS:
                 for index, line in enumerate(value.splitlines()):
                     roots[f"{name}:{index}"] = _oid(line.split(b"\t", 1)[0].decode("ascii"))
         result["metadata"] = metadata
