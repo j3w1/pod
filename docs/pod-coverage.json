@@ -12721,6 +12721,93 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1085",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_new_terminal_in_the_recorded_worktree_completes_the_handoff",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_live_old_coordinator_still_refuses",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_caller_outside_the_recorded_worktree_refuses_and_is_told_where",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_run_rebound_to_another_refuses",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_an_advanced_generation_refuses",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_an_unreadable_run_refuses",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_run_without_a_shown_coordinator_refuses",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_run_already_naming_the_caller_refuses",
+        "tests.test_handoff_unlinked.UnlinkedHandoffTests.test_a_worker_terminal_cannot_take_the_handoff_unlinked",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_refused_run_use_aborts_on_the_run_readback",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_an_unknown_run_use_with_an_unchanged_run_aborts",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_landed_run_use_stays_pending_then_completes_once",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_an_unreadable_run_after_a_refused_run_use_stays_pending",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_landed_unlinked_handoff_never_completes_outside_the_recorded_worktree",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_wrong_place_caller_never_ends_a_lost_holders_attempt",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_marked_pending_handoff_on_another_run_outside_never_aborts",
+        "tests.test_handoff_unlinked.UnlinkedTransitionTests.test_a_replacing_caller_on_another_run_outside_never_aborts_a_marked_entry"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1086",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_available_names_the_recorded_worktree",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_changed_branch_in_the_recorded_worktree_reads_blocked",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_missing_recorded_worktree_reads_blocked",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_an_unreadable_recorded_worktree_reads_unverified",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_pending_resume_stays_available_to_its_holder",
+        "tests.test_handoff_unlinked.NoRecordedWorktreeRouteTests.test_an_unrecorded_worktree_reads_blocked",
+        "tests.test_handoff_unlinked.NoRecordedWorktreeTests.test_no_recorded_worktree_names_the_successor_claim",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_marked_pending_resume_with_a_changed_branch_reads_blocked",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_marked_pending_resume_with_a_missing_worktree_reads_blocked",
+        "tests.test_handoff_unlinked.RecoveryRouteTests.test_a_marked_pending_resume_with_an_unreadable_worktree_reads_unverified"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1101",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_retires_with_withdrawn_coordinator_assurance_and_objective_closes",
+        "tests.test_withdrawn_corrections.LongIdentifierStatusTests.test_parent_reason_survives_the_status_bound_with_maximum_length_ids"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1102",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_open_parent_still_refuses_and_names_the_rule",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_follows_the_withdrawn_tip_of_a_renewed_assurance"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1103",
+      "required_evidence": [
+        "unit",
+        "independent_review"
+      ],
+      "offline_test": [
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_same_write_and_owner_withdrawn_parent_follow_the_same_rule",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_orphaned_correction_refusals_name_the_mechanical_step",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_follows_is_kernel_owned_and_persisted_record_revalidates",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_satisfied_correction_keeps_its_receipts",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_correction_follows_the_withdrawn_tip_of_a_renewed_assurance",
+        "tests.test_withdrawn_corrections.WithdrawnAssuranceCorrectionTests.test_non_orphan_refusals_keep_their_own_next_action"
+      ],
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A1117",
       "required_evidence": [
         "unit"
