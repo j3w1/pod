@@ -101,6 +101,7 @@ class GovernorFakePort:
         self.heads = {}
         self.prs = {}
         self.texts = {}
+        self.on_text_read = None
         # Pull requests in every state, as the readback of a carried row reads them (R118).
         self.pr_history = {}
         self.runs_by = {}
@@ -224,6 +225,9 @@ class GovernorFakePort:
 
     def pull_request_text(self, *, number):
         self.calls.append(("pr_text", number))
+        if self.on_text_read is not None:
+            # Something that happens while the text is read: another writer, or a new candidate prepared.
+            self.on_text_read()
         if "pr_text" in self.unreadable or number not in self.texts:
             raise PodError("remote_read_failed", "gh read did not succeed")
         return {"number": number, "url": f"https://example.invalid/pull/{number}", **self.texts[number]}

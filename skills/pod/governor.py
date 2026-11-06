@@ -555,6 +555,12 @@ def validate_execution_inputs(action: dict, policy: dict, pull_request: object =
         bounded_text(title, name="title", limit=256)
         if not isinstance(body, str) or len(body) > 16 * 1024 or "\x00" in body:
             raise PodError("invalid_pull_request", "Pull request body must be text of at most 16384 characters")
+        try:
+            title.encode("utf-8")
+            body.encode("utf-8")
+        except UnicodeEncodeError:
+            # GitHub stores UTF-8 and Pod digests it (R240): a lone surrogate is refused before any record or effect.
+            raise PodError("invalid_pull_request", "Pull request title and body must be valid Unicode text") from None
 
 
 def _logical_key(action: dict, candidate_id: str | None) -> str:

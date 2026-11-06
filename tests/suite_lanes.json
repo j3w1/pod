@@ -1000,6 +1000,7 @@
   "tests.test_merge_parent_binding.MergeParentTests.test_second_squash_uses_observed_parent": 1.1,
   "tests.test_merge_parent_binding.MergeParentTests.test_third_admission_with_unchanged_sources_needs_a_plain_checkpoint": 1.1,
   "tests.test_merge_parent_binding.RelayedMergeAdmissionTests.test_a_target_moving_during_admission_consumes_no_relayed_consent": 1.2,
+  "tests.test_merge_supersedence.MergeSupersedenceTests.test_merge_pass_settles_legacy_pending_and_closure_proceeds_without_provider": 2.6,
   "tests.test_native_retry.RetryAdmissionTests.test_authentication_refusal_blocks_same_task_across_routes_until_explicit_clear": 1.2,
   "tests.test_native_retry.RetryAdmissionTests.test_availability_failure_can_select_another_current_route_after_exit": 1.0,
   "tests.test_native_retry.RetryAdmissionTests.test_completed_request_recovery_binds_exact_child_without_another_start": 1.0,

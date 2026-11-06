@@ -265,13 +265,14 @@ _TEXT_NOTES = {
     "unread": "pull request text was not read, so it was not updated",
     "uncertain": "pull request text update was not confirmed; the next publication compares with both texts",
     "failed": "pull request text update was not submitted",
+    "held": "pull request text was not updated: its authorization or prepared candidate changed after the push",
 }
 
 
 def _text_digest(text: str) -> str:
-    """A pull request text's digest, ignoring line-ending style and surrounding whitespace GitHub may normalize."""
+    """A pull request text's digest. Only line-ending style is normalized: any other whitespace can carry meaning."""
     import hashlib
-    return hashlib.sha256(text.replace("\r\n", "\n").replace("\r", "\n").strip().encode("utf-8")).hexdigest()
+    return hashlib.sha256(text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")).hexdigest()
 
 
 def _text_digests(text: dict) -> dict:
@@ -314,17 +315,16 @@ def _pod_text(journal: dict, row: dict, number: object) -> dict:
                 if field + "_sha256" in after:
                     known[field] = {after[field + "_sha256"]}
         elif status == "uncertain":
-            # Either text may be on GitHub: the one read before the submission, or the one submitted.
+            # Either text may be on GitHub: the one read before the submission, or the one submitted. Nothing older
+            # is Pod's any more, so the possibilities replace the field's earlier baseline.
             for field in fields:
-                for side in ("before", "requested"):
-                    digest = (text.get(side) or {}).get(field + "_sha256")
-                    if digest:
-                        known.setdefault(field, set()).add(digest)
+                known[field] = {digest for digest in ((text.get(side) or {}).get(field + "_sha256")
+                                                      for side in ("before", "requested")) if digest}
     return known
 
 
 def _refresh_text(port: GitHubPort, row: dict, journal: dict, branch: dict, number: object,
-                  pull_request: dict | None) -> dict | None:
+                  pull_request: dict | None, recheck=None) -> dict | None:
     """Bring a reused pull request's title and body to the supplied text after the push (R240).
 
     Pod reads the text fresh before writing and overwrites only text it wrote itself, unless the lead's
@@ -344,7 +344,10 @@ def _refresh_text(port: GitHubPort, row: dict, journal: dict, branch: dict, numb
             or current.get("head") != branch["branch"] or current.get("base") != branch["base"]
             or not all(isinstance(current.get(field), str) for field in _TEXT_FIELDS)):
         return {"status": "unread", **record, "detail": "pull_request_changed"}
-    before = _text_digests(current)
+    try:
+        before = _text_digests(current)
+    except UnicodeError:
+        return {"status": "unread", **record, "detail": "unsupported_text"}
     record["before"] = before
     if all(before[field + "_sha256"] == record["requested"][field + "_sha256"] for field in fields):
         return {"status": "unchanged", **record, "after": before}
@@ -355,6 +358,12 @@ def _refresh_text(port: GitHubPort, row: dict, journal: dict, branch: dict, numb
     replace = (pull_request or {}).get("replace_edited")
     if edited and replace != before:
         return {"status": "conflict", **record, "edited": edited, "decision": "lead"}
+    if recheck is not None:
+        # The edit is a second mutation, so the row's authority and candidate are rechecked right before it.
+        try:
+            recheck()
+        except PodError as exc:
+            return {"status": "held", **record, "detail": exc.code}
     try:
         port.edit_pull_request(number=number, **requested)
     except PodError as exc:
@@ -364,7 +373,7 @@ def _refresh_text(port: GitHubPort, row: dict, journal: dict, branch: dict, numb
 
 
 def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_request: dict | None, *,
-             intent=None, clock=None) -> tuple[str, dict | None, str | None]:
+             intent=None, clock=None, recheck=None) -> tuple[str, dict | None, str | None]:
     """Perform the admitted action against the row's own bound commit. Returns outcome, provider, detail."""
     from .governor import DISPATCH_KINDS, PUBLICATION_KINDS, _WORKFLOW, _find_row
     kind = row["action"]["kind"]
@@ -416,7 +425,11 @@ def _perform(port: GitHubPort, row: dict, unit: dict, journal: dict, pull_reques
             return "UNKNOWN", provider, "pull request lookup or submission unreadable after the push: " + exc.code
         provider.update({"pr": found.get("number"), "pr_url": found.get("url")})
         if provider["pr_reused"]:
-            text = _refresh_text(port, row, journal, branch, found.get("number"), pull_request)
+            try:
+                text = _refresh_text(port, row, journal, branch, found.get("number"), pull_request, recheck)
+            except (PodError, UnicodeError, ValueError, TypeError, KeyError) as exc:
+                # The push and the reused pull request are proved; a text-step fault never takes them back.
+                text = {"status": "unread", "detail": getattr(exc, "code", type(exc).__name__)}
             if text is not None:
                 provider["pr_text"] = text
                 note = _TEXT_NOTES.get(text["status"])
@@ -723,7 +736,8 @@ def execute(project: Path, objective: str, *, owner: str, action: dict, exceptio
         outcome, provider, detail = _perform(
             remote, row, unit, journal, pull_request, clock=later,
             intent=lambda provider: _record_intent(project, objective, owner=owner, record_id=admitted["record_id"],
-                                                   provider=provider))
+                                                   provider=provider),
+            recheck=lambda: _recheck_text_write(project, objective, owner=owner, row=row, now=later()))
     except PodError as exc:
         try:
             _record_execution(project, objective, owner=owner, record_id=admitted["record_id"],
@@ -775,6 +789,27 @@ def _revalidate_standing(project: Path, objective: str, *, owner: str, row: dict
         require_governance_current(project, map_of(context))
         from .standing import require_current_decision
         require_current_decision(project, objective, context)
+
+
+def _recheck_text_write(project: Path, objective: str, *, owner: str, row: dict, now: datetime | None = None) -> None:
+    """Before a pull request's text is edited after the push: the row's authority and candidate still hold (R240).
+
+    A standing decision is revalidated in full. A relayed decision was verified and consumed for this row before the
+    push, so its single use is not consumed again; its candidate binding is rechecked, as an explicit consent's is.
+    """
+    _revalidate_standing(project, objective, owner=owner, row=row, now=now)
+    from .governor import _owned_state, _read_journal, _record_path
+    from .ledger import map_of, require_governance_current
+    consent = row["action"].get("authorization") or {}
+    with _lock(_path(project, objective)):
+        state = _owned_state(project, objective, owner, _path(project, objective), version=True)
+        require_governance_current(project, map_of(state))
+        current = _read_journal(_record_path(project, objective))["units"].get(row["action"]["unit"])
+        binding = current.get("candidate") if current else None
+        if (binding is None or binding["id"] != row.get("candidate_id") or binding.get("dirty_paths")
+                or ("candidate" in consent and binding["commit"] != consent["candidate"])
+                or ("tree" in consent and binding["tree"] != consent["tree"])):
+            raise PodError("candidate_moved", "The unit's prepared candidate changed after the push")
 
 
 def _revalidate_relay(project: Path, objective: str, *, owner: str, row: dict) -> None:

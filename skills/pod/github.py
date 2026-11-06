@@ -1004,7 +1004,15 @@ class GhPort:
             argv += ["--title", title]
         if body is not None:
             argv += ["--body", body]
-        completed = self._gh(argv, mutation=True)
+        if not gh_allowed(argv):
+            raise PodError("unsupported_gh_operation", "The GitHub port accepts only known gh operations")
+        try:
+            completed = self._gh(argv, mutation=True)
+        except PodError as exc:
+            if exc.code == "gh_contract":
+                # The edit ran; only its answer broke the contract, so it may have landed.
+                raise PodError("remote_effect_uncertain", "gh pr edit answered outside its contract") from exc
+            raise
         if completed.returncode:
             raise PodError("remote_effect_uncertain", "gh pr edit did not confirm the update")
         return {"status": "edited"}

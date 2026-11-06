@@ -29,7 +29,7 @@ SECOND = {"title": "Repair the release boundary and its guidance", "body": "Abou
 
 
 def digest(text):
-    return hashlib.sha256(text.replace("\r\n", "\n").replace("\r", "\n").strip().encode()).hexdigest()
+    return hashlib.sha256(text.replace("\r\n", "\n").replace("\r", "\n").encode()).hexdigest()
 
 
 def digests(title, body):
@@ -146,6 +146,26 @@ class ConflictTests(PullRequestTextCase):
         self.assertEqual((self.text(replaced)["status"], self.text(replaced)["replaced"]), ("updated", ["body"]))
         self.assertEqual(self.port.texts[7]["body"], SECOND["body"])
 
+    def test_a_whitespace_only_edit_is_a_persons_edit(self):
+        self.publish({"title": "t", "body": "code\n"})
+        self.port.texts[7]["body"] = "    code\n"
+        held = self.publish({"body": "replacement\n"}, commit=COMMIT2)
+        self.assertEqual((self.text(held)["status"], self.text(held)["edited"]), ("conflict", ["body"]))
+        self.assertEqual(self.port.texts[7]["body"], "    code\n")
+
+    def test_an_older_pod_text_restored_after_an_uncertain_replacement_conflicts(self):
+        self.publish(FIRST)
+        self.port.texts[7]["body"] = "A person's body\n"
+        held = self.publish(SECOND, commit=COMMIT2)
+        self.port.lost.add("pr_edit")
+        lost = self.publish({**SECOND, "replace_edited": self.text(held)["before"]}, commit=COMMIT3)
+        self.assertEqual(self.text(lost)["status"], "uncertain")
+        self.port.lost.clear()
+        self.port.texts[7]["body"] = FIRST["body"]
+        restored = self.publish({"body": "Next revision\n"}, commit=COMMIT4)
+        self.assertEqual((self.text(restored)["status"], self.text(restored)["edited"]), ("conflict", ["body"]))
+        self.assertEqual(self.port.texts[7]["body"], FIRST["body"])
+
     def test_text_pod_never_recorded_counts_as_another_writers(self):
         self.port.prs[("agent/release", "main")] = {"number": 9, "url": "https://example.invalid/pull/9",
                                                      "head_sha": None, "draft": False}
@@ -179,6 +199,44 @@ class UncertainTextTests(PullRequestTextCase):
         settled = self.publish(FIRST, commit=COMMIT3)
         self.assertEqual(self.text(settled)["status"], "updated")
 
+    def test_a_candidate_prepared_after_the_push_holds_the_edit(self):
+        self.publish(FIRST)
+        self.port.on_text_read = lambda: prepare_candidate(
+            self.project, "objective", owner="owner", unit="release",
+            observation=observation(commit=COMMIT3, tree=TREE3), now=NOW)
+        held = self.publish(SECOND, commit=COMMIT2)
+        self.assertEqual((held["outcome"], self.text(held)["status"], self.text(held)["detail"]),
+                         ("PASS", "held", "candidate_moved"))
+        self.assertEqual(held["receipt"]["provider"]["remote_head"], COMMIT2)
+        self.assertNotIn("pr_edit", self.remote_calls())
+        self.assertEqual(self.port.texts[7]["title"], FIRST["title"])
+
+    def test_authority_lost_after_the_push_holds_the_edit(self):
+        self.publish(FIRST)
+        lost = PodError("standing_authorization_inactive", "Standing authorization is no longer active")
+        with patch("pod.governor_effects._revalidate_standing", side_effect=[None, lost]) as standing:
+            held = self.publish(SECOND, commit=COMMIT2)
+        self.assertEqual(standing.call_count, 2)
+        self.assertEqual((held["outcome"], self.text(held)["status"], self.text(held)["detail"]),
+                         ("PASS", "held", "standing_authorization_inactive"))
+        self.assertNotIn("pr_edit", self.remote_calls())
+
+    def test_unsupported_provider_text_or_a_text_step_fault_keeps_the_publication(self):
+        self.publish(FIRST)
+        self.port.texts[7]["body"] = "\ud800"
+        unsupported = self.publish(SECOND, commit=COMMIT2)
+        self.assertEqual((self.text(unsupported)["status"], self.text(unsupported)["detail"]),
+                         ("unread", "unsupported_text"))
+        self.port.texts[7]["body"] = FIRST["body"]
+        def fault():
+            raise TypeError("unexpected shape")
+        self.port.on_text_read = fault
+        faulted = self.publish(SECOND, commit=COMMIT3)
+        self.assertEqual((faulted["outcome"], self.text(faulted)["status"], self.text(faulted)["detail"]),
+                         ("PASS", "unread", "TypeError"))
+        self.assertEqual(faulted["receipt"]["provider"]["remote_head"], COMMIT3)
+        self.assertNotIn("pr_edit", self.remote_calls())
+
     def test_an_edit_refused_before_submission_is_failed_not_uncertain(self):
         self.publish(FIRST)
         self.port.rejected.add("pr_edit")
@@ -198,6 +256,10 @@ class InputTests(PullRequestTextCase):
         with self.assertRaises(PodError) as push:
             self.publish({"replace_edited": digests("t", "")}, kind="push")
         self.assertEqual(push.exception.code, "invalid_pull_request")
+        for text in ({"title": "t", "body": "\ud800"}, {"title": "\udfff"}):
+            with self.subTest(text=text), self.assertRaises(PodError) as surrogate:
+                self.publish(text)
+            self.assertEqual(surrogate.exception.code, "invalid_pull_request")
         with self.assertRaises(PodError) as unknown:
             self.publish({"title": "t", "draft": True})
         self.assertIn("replace_edited", str(unknown.exception))
@@ -205,7 +267,7 @@ class InputTests(PullRequestTextCase):
 
     def test_guidance_names_the_conflict_and_the_lead_decision(self):
         text = (Path(__file__).resolve().parents[1] / "skills" / "pod" / "references" / "governor.md").read_text()
-        for phrase in ("pr_text", "replace_edited", "never overwrites", "`edited`"):
+        for phrase in ("pr_text", "replace_edited", "never overwrites", "`edited`", "`held`"):
             self.assertIn(phrase, text)
 
 
@@ -235,6 +297,15 @@ class PortTests(unittest.TestCase):
         self.assertEqual(self.commands, [(["pr", "view", "7", "--json", PR_TEXT_FIELDS], False),
                                          (["pr", "edit", "7", "--title", "New", "--body", ""], True),
                                          (["pr", "edit", "7", "--body", "only"], True)])
+
+    def test_an_edit_answer_over_the_output_bound_is_uncertain(self):
+        with self.run_with([completed("x" * 10)]), patch("pod.github.MAX_OUTPUT", 5):
+            with self.assertRaises(PodError) as unbounded:
+                self.port.edit_pull_request(number=7, title="New")
+        self.assertEqual(unbounded.exception.code, "remote_effect_uncertain")
+        with self.run_with([]), self.assertRaises(PodError) as refused:
+            self.port.edit_pull_request(number=7, title=" ")
+        self.assertEqual((refused.exception.code, self.commands), ("unsupported_gh_operation", [(["pr", "edit", "7", "--title", "New"], True)]))
 
     def test_the_allowlist_refuses_other_edit_shapes(self):
         for argv in (["pr", "edit", "7"], ["pr", "edit", "7", "--title", " "], ["pr", "edit", "7", "--title", "x" * 257],
