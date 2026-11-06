@@ -259,6 +259,9 @@ def gh_allowed(argv: list[str], *, bound_issue: tuple[str, int] | None = None,
             branch = argv[1][len(prefix):len(argv[1]) - len(suffix)]
             return _name(branch) and "&" not in branch and "?" not in branch
         return False
+    if len(argv) == 3 and argv[:2] == ["api", "--include"] and isinstance(argv[2], str):
+        # One exact presence read of a run, a workflow file or a commit (R252); gh fills the repository.
+        return _presence_identity(argv[2]) is not None
     if (len(argv) == 7 and argv[:2] == ["run", "view"] and _RUN_ID.fullmatch(argv[2])
             and argv[3] == "--attempt" and _ATTEMPT.fullmatch(argv[4]) and argv[5:] == ["--json", RUN_FIELDS]):
         return True
@@ -685,6 +688,28 @@ def _normalise_run(row: dict) -> dict:
             "attempt": attempt if type(attempt) is int and attempt >= 1 else None}
 
 
+# What one presence read names (R252): a run by its id, a workflow by its file name, a commit by its full id.
+PRESENCE_KINDS = ("run", "workflow", "commit")
+_PRESENCE_PREFIXES = {"run": "repos/{owner}/{repo}/actions/runs/",
+                      "workflow": "repos/{owner}/{repo}/actions/workflows/",
+                      "commit": "repos/{owner}/{repo}/git/commits/"}
+
+
+def presence_path(kind: str, ident: str) -> str | None:
+    """The one API path a presence read of this run, workflow file or commit uses, or None for anything else."""
+    pattern = {"run": _RUN_ID, "workflow": _WORKFLOW, "commit": _SHA1}.get(kind)
+    if pattern is None or not isinstance(ident, str) or pattern.fullmatch(ident) is None:
+        return None
+    return _PRESENCE_PREFIXES[kind] + ident
+
+
+def _presence_identity(path: str) -> tuple[str, str] | None:
+    for kind, prefix in _PRESENCE_PREFIXES.items():
+        if path.startswith(prefix) and presence_path(kind, path[len(prefix):]) == path:
+            return kind, path[len(prefix):]
+    return None
+
+
 def _http_response(output: str) -> tuple[int | None, str]:
     """Read complete --include header blocks, skipping interim 1xx responses only."""
     remaining = output.replace("\r\n", "\n")
@@ -1034,9 +1059,42 @@ class GhPort:
         """
         rows = self._gh_json(["run", "list", "--workflow", workflow, "--commit", commit,
                               "--json", RUN_FIELDS, "--limit", str(RUN_LIST_LIMIT + 1)])
-        if not isinstance(rows, list):
+        # A member that is not an object is an unsupported answer, never a shorter list: a list read as empty may
+        # prove a run absent (R252).
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise PodError("gh_contract", "gh run list returned an unsupported shape")
-        return [_normalise_run(row) for row in rows if isinstance(row, dict)]
+        return [_normalise_run(row) for row in rows]
+
+    def presence(self, *, kind: str, ident: str) -> dict:
+        """Whether GitHub holds this repository's run, workflow file or commit, as one exact read answers (R252).
+
+        Only a complete answer counts: 200 naming exactly that identity is present, and 404 Not Found is absent.
+        Any other status, a refusal, no answer or an unsupported shape is `remote_read_failed`, never an absence.
+        A 404 alone may also mean the repository is not readable; the caller pairs it with reads that are present.
+        """
+        path = presence_path(kind, ident)
+        if path is None:
+            raise PodError("unsupported_gh_operation", "The GitHub port accepts only known gh operations")
+        completed = self._gh(["api", "--include", path], mutation=False)
+        status, payload = _http_response(completed.stdout)
+        if status == 404 and completed.returncode:
+            return {"kind": kind, "id": ident, "status": 404, "present": False}
+        if status != 200 or completed.returncode:
+            raise PodError("remote_read_failed", "gh read gave no exact presence answer")
+        try:
+            row = json.loads(payload)
+        except ValueError as exc:
+            raise PodError("gh_contract", "gh returned invalid JSON") from exc
+        if not isinstance(row, dict):
+            raise PodError("gh_contract", "gh api returned an unsupported shape")
+        if kind == "run" and str(row.get("id")) == ident and type(row.get("id")) is int:
+            return {"kind": kind, "id": ident, "status": 200, "present": True}
+        if (kind == "workflow" and row.get("path") == ".github/workflows/" + ident
+                and type(row.get("id")) is int and isinstance(row.get("state"), str)):
+            return {"kind": kind, "id": ident, "status": 200, "present": True, "state": row["state"][:64]}
+        if kind == "commit" and row.get("sha") == ident:
+            return {"kind": kind, "id": ident, "status": 200, "present": True}
+        raise PodError("gh_contract", "gh api named a different " + kind)
 
     def branch_updates(self, *, branch: str) -> list[dict]:
         """This branch's updates, newest first, from GitHub's repository activity: at most UPDATE_LIST_LIMIT + 1.

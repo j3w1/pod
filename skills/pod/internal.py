@@ -499,7 +499,8 @@ def _finalization_view(request: dict, tabs: list | None = None) -> dict | None:
 
 
 def _op_governor_outcome(request: dict) -> dict:
-    exact(request, {"project", "objective", "owner", "record_id", "outcome", "provider", "evidence", "detail"},
+    exact(request, {"project", "objective", "owner", "record_id", "outcome", "provider", "evidence", "detail",
+                    "settlement"},
           {"project", "objective", "owner", "record_id", "outcome"}, name="request")
     from .governor import record_outcome
     project = Path(request["project"])
@@ -509,7 +510,7 @@ def _op_governor_outcome(request: dict) -> dict:
         result = record_outcome(project, request["objective"], owner=request["owner"],
                                 record_id=request["record_id"], outcome=request["outcome"],
                                 provider=request.get("provider"), evidence=request.get("evidence"),
-                                detail=request.get("detail"))
+                                detail=request.get("detail"), settlement=request.get("settlement"))
     return {**result, "finalization": _finalization_view(request, (projection or {}).get("worker_tabs"))}
 
 
