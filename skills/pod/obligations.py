@@ -1029,7 +1029,7 @@ def _write_evidence(rows: dict, prior_rows: dict, rebind: list[str], triaged: fr
                 _text(record["reason"], "withdrawal reason", limit=1024)
                 ob["withdrawal"] = {**record, "decision": seq}
             else:
-                ob["withdrawal"] = _withdrawal(ob, user, authority)
+                ob["withdrawal"] = _withdrawal(ob, user, authority, rows=rows, lineage=ctx["lineage"])
         if ob["id"] in rebind and ob["provenance"] == "project_policy" and ob.get("source", {}).get("gone"):
             raise refuse("obligation_unaccounted", "evidence_invalidated",
                          "evidence for a policy whose cited text is gone cannot be rebound", obligation=ob["id"])
@@ -1626,21 +1626,47 @@ def _ancestry(rows: dict[str, dict], *, lineage=None) -> None:
             seen.add(cursor["id"])
 
 
+def withdrawn_parent(ob: dict, rows: dict | None, lineage) -> dict | None:
+    """R246: the withdrawn effective parent assurance a coordinator correction follows, or None."""
+    if ob.get("kind") != "correction" or ob.get("provenance") != "coordinator" or rows is None or lineage is None:
+        return None
+    if not isinstance(ob.get("parent"), str) or ob["parent"] not in rows:
+        return None
+    parent = rows.get(lineage.effective(ob["parent"]))
+    if parent is None or parent.get("kind") != "assurance" or parent.get("state") != "withdrawn":
+        return None
+    withdrawal = parent.get("withdrawal")
+    if not isinstance(withdrawal, dict) or not isinstance(withdrawal.get("by"), str) \
+            or not isinstance(withdrawal.get("reason"), str):
+        return None
+    return {"obligation": parent["id"], "by": withdrawal["by"], "reason": withdrawal["reason"]}
+
+
 @input_record("withdrawal")
-def _withdrawal(ob: dict, user: bool, authority: dict | None, *, stored: bool = False) -> dict:
+def _withdrawal(ob: dict, user: bool, authority: dict | None, *, stored: bool = False,
+                rows: dict | None = None, lineage=None) -> dict:
     record = _exact(ob["withdrawal"], fields("withdrawal"), required("withdrawal"), "withdrawal", obligation=ob["id"])
     if "decision" in record:
         raise refuse("obligation_invalid", "withdrawal_unauthorized", "issue revision decision references are kernel-owned", obligation=ob["id"])
+    if "follows" in record and not stored:
+        raise refuse("obligation_invalid", "withdrawal_unauthorized",
+                     "the withdrawn parent a correction follows is kernel-owned; give only by and reason",
+                     next_action='withdraw it with {"by": "coordinator", "reason": "<why>"}', obligation=ob["id"])
     _text(record["reason"], "reason", limit=bound("withdrawal", "reason"), obligation=ob["id"])
     by = record["by"]
     actor_kind = ((authority or {}).get("actor") or {}).get("kind", "person")
+    follows = withdrawn_parent(ob, rows, lineage)
     allowed = (by == ("agent_decision" if actor_kind == "agent" else "user_direct") and user
                or by == "project_policy" and ob["provenance"] == "project_policy"
                and bool(ob.get("source", {}).get("gone"))
-               or by == "coordinator" and ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance"))
+               or by == "coordinator" and ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance")
+               or by == "coordinator" and follows is not None)
     if not allowed:
-        raise _withdrawal_refusal(ob, by, user, actor_kind)
+        raise _withdrawal_refusal(ob, by, user, actor_kind, follows=follows, rows=rows, lineage=lineage)
     result = {"by": by, "reason": record["reason"]}
+    if by == "coordinator" and follows is not None:
+        # R246: a correction retires with its withdrawn assurance; the record names that parent's withdrawal.
+        result["follows"] = follows
     if by in ("user_direct", "agent_decision"):
         result["instruction"] = authority["instruction"]
         result.update(channel_fields(owner_decision(authority, kind="withdrawal", stored=stored or "channel" not in authority)))
@@ -1660,12 +1686,15 @@ _WITHDRAWAL_FORMS = ("allowed: by user_direct or agent_decision with this write'
                      "(provenance user_direct for a person's instruction; agent_decision with channel agent_session "
                      "when the decision policy lets any agent change scope; or a verified decision_request), "
                      "by project_policy for a project_policy obligation whose cited text is gone, "
-                     "by coordinator for the coordinator's own subgoal or assurance")
+                     "by coordinator for the coordinator's own subgoal or assurance, or for a coordinator "
+                     "correction whose effective parent assurance is withdrawn")
 
 
-def _withdrawal_refusal(ob: dict, by: Any, user: bool, actor_kind: str) -> PodError:
+def _withdrawal_refusal(ob: dict, by: Any, user: bool, actor_kind: str, *, follows: dict | None = None,
+                        rows: dict | None = None, lineage=None) -> PodError:
     """Name what is missing or mismatched and the accepted shape; authorization itself is unchanged."""
-    own = ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance")
+    own = (ob["provenance"] == "coordinator" and ob["kind"] in ("subgoal", "assurance")
+           or follows is not None)
     gone = ob["provenance"] == "project_policy" and bool(ob.get("source", {}).get("gone"))
     authority_shape = ('add one top-level revision_authority to this write, {"provenance": "agent_decision", '
                        '"channel": "agent_session", "instruction": "<the scope change>"} (or provenance user_direct '
@@ -1684,12 +1713,26 @@ def _withdrawal_refusal(ob: dict, by: Any, user: bool, actor_kind: str) -> PodEr
         # R99: an unsupported value is named by its field, never echoed.
         problem = "withdrawal.by is not an allowed value"
         action = authority_shape
+    elif by == "coordinator" and ob["kind"] == "correction" and ob["provenance"] == "coordinator":
+        # R246: a review's required finding is never dropped on its own.
+        parent = rows.get(lineage.effective(ob["parent"])) if rows is not None and lineage is not None \
+            and isinstance(ob.get("parent"), str) and ob["parent"] in rows else None
+        named = parent["id"] if parent is not None else ob.get("parent")
+        problem = (f"withdrawal by coordinator does not apply to {ob['id']}, a correction whose parent assurance "
+                   f"{named} is not withdrawn: a review's required finding cannot be dropped on its own, so the "
+                   "coordinator withdraws a correction only after its parent assurance is withdrawn")
+        action = (f"satisfy {ob['id']} with proof, or withdraw its parent assurance {named} first when that review "
+                  "is no longer needed; otherwise " + authority_shape)
     else:
         problem = (f"withdrawal by {by} does not apply to {ob['id']}, a {ob['kind']} with provenance {ob['provenance']}"
                    + (" whose cited text is still present" if ob["provenance"] == "project_policy" and not gone else ""))
         action = ('withdraw it with {"by": "coordinator", "reason": "<why>"}' if own
                   else 'withdraw it with {"by": "project_policy", "reason": "<why>"}' if gone
                   else authority_shape)
+    if follows is not None:
+        # R246: an orphaned correction names the mechanical step, never an owner decision.
+        action = (f'withdraw it with {{"by": "coordinator", "reason": "<why>"}}: its parent assurance '
+                  f'{follows["obligation"]} is withdrawn, so the correction retires with it')
     return refuse("obligation_invalid", "withdrawal_unauthorized", f"{problem}; {_WITHDRAWAL_FORMS}",
                   next_action=action, obligation=ob["id"])
 
@@ -2366,7 +2409,8 @@ def _persisted_rows(state: dict, ctx: dict, *, unverifiable: list[str] | None = 
             else:
                 instruction = withdrawal.get("instruction") if isinstance(withdrawal, dict) else None
                 authority = _authority({"provenance": withdrawal["by"], "instruction": instruction, **channel_fields(withdrawal)}, kind="withdrawal", stored=True) if isinstance(withdrawal, dict) and withdrawal.get("by") in ("user_direct", "agent_decision") else None
-                if _withdrawal(ob, authority is not None, authority, stored=True) != withdrawal:
+                if _withdrawal(ob, authority is not None, authority, stored=True,
+                               rows=rows, lineage=ctx["lineage"]) != withdrawal:
                     raise refuse("obligation_invalid", "withdrawal_unauthorized", "persisted withdrawal retains its complete authority record", obligation=ob["id"])
         unknown = validate_receipts(ob, ctx, seq=state["seq"])
         if unknown and unverifiable is not None:
@@ -2382,9 +2426,20 @@ def _close(state: dict, ctx: dict) -> dict:
     _persisted_rows(state, ctx)
     open_rows = [ob["id"] for ob in state["obligations"] if ob["state"] not in TERMINAL]
     if open_rows:
+        rows = {ob["id"]: ob for ob in state["obligations"]}
+        lineage = Lineage(state["obligations"])
+        orphaned = [key for key in open_rows if withdrawn_parent(rows[key], rows, lineage) is not None]
+        extra = {}
+        if orphaned:
+            # R246: an open correction under a withdrawn assurance is bookkeeping with a mechanical step.
+            parent = withdrawn_parent(rows[orphaned[0]], rows, lineage)["obligation"]
+            extra["next_action"] = (f"withdraw {', '.join(orphaned[:8])} with "
+                                    '{"by": "coordinator", "reason": "<why>"}: '
+                                    f"its parent assurance {parent} is withdrawn, so the correction retires with it; "
+                                    "then write the closing checkpoint again")
         raise refuse("obligation_unaccounted", "closure_unfinished",
                      "an objective closes only when every obligation is satisfied or withdrawn",
-                     obligation=open_rows[0])
+                     obligation=(orphaned or open_rows)[0], **extra)
     if _outstanding(ctx) or undispositioned(ctx):
         raise refuse("obligation_unaccounted", "closure_unfinished",
                      "closure waits for settled admissions and dispositions", record='closure')
@@ -2963,6 +3018,11 @@ def status_projection(state: dict | None, ctx: dict) -> dict:
             detail = "renewed by " + ob["renewal"]["by"]
         elif ob["state"] == "withdrawn":
             detail = f"by {ob['withdrawal']['by']}: {ob['withdrawal']['reason']}"
+            follows = ob["withdrawal"].get("follows")
+            if isinstance(follows, dict):
+                # R246: show the withdrawn parent's reason first so the cause survives truncation.
+                detail = (f"by {ob['withdrawal']['by']} with {follows['obligation']} "
+                          f"(withdrawn by {follows['by']}: {follows['reason']}): {ob['withdrawal']['reason']}")
             if ob["withdrawal"]["by"] in ("user_direct", "agent_decision"):
                 channel = decision_channel(ob["withdrawal"])
                 detail += " (" + channel["channel"] + ("; earlier record" if channel.get("channel_recorded") is False else "") + ")"
