@@ -2115,7 +2115,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
     adopted_observation = None
     delivery_request = proposed.pop("delivery", None)
     withdrawal_refusal = None
-    if proposed or prior_map is not None:
+    # R244: a delivery always takes this route, so a mapless write carrying one refuses by name below.
+    if proposed or prior_map is not None or has_delivery:
         refresh = proposed.get("governance_refresh") is True
         verified_delivery = None
         local_operation = None
@@ -2126,7 +2127,8 @@ def _checkpoint_map_transition(project: Path, objective: str, state: dict, autho
             local_operation = local_request(delivery_request, (prior_map or {}).get("delivery"))
             if prior_map is None:
                 raise PodError("delivery_unverified", "A delivery needs a bound obligation map",
-                               {"detail": "map_missing", "next_action": "checkpoint the objective map first"})
+                               {"detail": "map_missing", "next_action":
+                                "record the delivery in a checkpoint that carries the obligation map"})
             if local_operation is not None:
                 verified_delivery = _verify_local_append(project, objective, state, authority, prior_map,
                                                          local_operation, core)

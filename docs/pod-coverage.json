@@ -12595,6 +12595,22 @@
       "status": "NOT_RUN"
     },
     {
+      "id": "A1093",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_mapless_delivery.MaplessDeliveryTests.test_mapless_delivery_refuses_by_name_without_writing",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1094",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_mapless_delivery.MaplessDeliveryTests.test_mapless_checkpoint_without_delivery_behaves_as_today",
+      "status": "NOT_RUN"
+    },
+    {
       "id": "A1053",
       "required_evidence": [
         "unit"

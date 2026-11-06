@@ -104,6 +104,15 @@ Before a new merge decision for a different head of the same PR and target, an e
 - <a id="a1044"></a>**A1044** — Other PRs, missing later verified PASS, recorded execution evidence, carried rows, unverified merge results and old heads already merged or in target history cannot establish supersedence; failed requests leave the journal unchanged.
 - <a id="a1045"></a>**A1045** — Installed Governor guidance explains settlement before a refreshed merge decision and local recovery of an earlier superseded decision, without changing executed-merge settlement.
 
+### R244 — Refuse a delivery on a mapless checkpoint by name
+
+Type: B · Scenarios: [A1093](#a1093), [A1094](#a1094)
+
+A checkpoint carrying `delivery` while the objective has no stored obligation map refuses `delivery_unverified` with detail `map_missing` and the next action "record the delivery in a checkpoint that carries the obligation map", whether or not it carries `seq` or any other map field, and writes nothing. Pod refuses rather than records because an R93 or R209 delivery is verified against the bound map's sequence, governance and obligations, which a mapless write does not have. A request shape refusal from R209 keeps its precedence. A mapless checkpoint without `delivery` keeps its existing behaviour.
+
+- <a id="a1093"></a>**A1093** — With no stored map, a checkpoint carrying an R93 `{record}` or R209 `{local_append}` delivery and no map field, on the first write or after an accepted mapless write, refuses `delivery_unverified` `map_missing` with the next action naming the obligation map, and the objective's files and record are unchanged.
+- <a id="a1094"></a>**A1094** — A mapless checkpoint without `delivery` is accepted as before, stores no delivery or obligations, and a later mapless write replaces its core.
+
 ### R94 — Objective cleanup plan and consent
 
 Type: B,H · Scenarios: [A170](#a170), [A171](#a171), [A172](#a172), [A410](interface.md#a410), [A476](#a476), [A477](#a477), [A485](#a485), [A498](#a498), [A499](#a499), [A500](#a500), [A976](#a976), [A977](#a977)
