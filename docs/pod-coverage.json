@@ -12247,6 +12247,30 @@
         "tests.test_cleanup_plan.CleanupWorkerTests.test_selected_checkout_returning_before_the_stash_read_refuses"
       ],
       "status": "NOT_RUN"
+    },
+    {
+      "id": "A1025",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governor_evidence.MergeOutcomeTests.test_missing_target_defers_then_integrated_candidate_allows_and_true_merge_passes",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1026",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governor_evidence.MergeOutcomeTests.test_same_tree_target_commit_still_requires_containment",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "A1027",
+      "required_evidence": [
+        "unit"
+      ],
+      "offline_test": "tests.test_governor_evidence.MergeOutcomeTests.test_unavailable_containment_proof_defers_in_observe_mode",
+      "status": "NOT_RUN"
     }
   ],
   "withdrawn_scenarios": [

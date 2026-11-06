@@ -29,7 +29,12 @@ delivered policy. A second merge can therefore use that result as its parent whi
 retaining the earlier policy base. Merge parents must be exactly the admitted
 commit and candidate; a squash has only the admitted commit as parent, and a
 fast-forward equals the candidate with the admitted commit as ancestor. Fetch
-first and call the Governor at the merge boundary. If the result does not use
+first and call the Governor at the merge boundary. A merge request is ready only
+when the PR head contains the current target commit. If containment is absent or
+cannot be proved, the Governor returns DEFER naming the bound target; merge or
+rebase that target into the candidate, then re-review the affected scope under
+the existing rules and prepare the new candidate before requesting merge again.
+The result tree must still equal the candidate tree. If the result does not use
 the admitted commit (the target moved after admission or the merge rewrote
 commits), a later snapshot decision cannot settle that row: keep it UNKNOWN with
 the merge evidence. Never call a landed merge FAILED or CANCELED.

@@ -797,6 +797,70 @@ class MergeOutcomeTests(KernelCase):
             self.outcome(decided["record_id"], "FAILED")
         self.assertEqual(conflict.exception.code, "outcome_conflict")
 
+    def advance_target(self, *, empty=False):
+        git(self.project, "checkout", "-q", "target")
+        if not empty:
+            (self.project / "target.txt").write_text("target change\n")
+            git(self.project, "add", "target.txt")
+        git(self.project, "commit", "--allow-empty", "-qm", "advance target")
+        target = git(self.project, "rev-parse", "HEAD")
+        git(self.project, "update-ref", "refs/remotes/origin/target", target)
+        git(self.project, "checkout", "-q", "candidate")
+        # Adopt the unchanged governance sources at the new operational target.
+        self.write(self.stored())
+        return target
+
+    def assert_target_deferred(self, target):
+        before = len(_read_journal(self.journal)["actions"])
+        decided = self.merge_decision()
+        self.assertEqual(decided["decision"], "DEFER", decided["explanation"])
+        self.assertFalse(decided["recorded"])
+        reason = next(row for row in decided["reasons"] if row["code"] == "candidate_missing_target")
+        self.assertEqual(reason["class"], "correctness")
+        for value in ("refs/remotes/origin/target", target, "Merge or rebase", "re-review the affected scope"):
+            self.assertIn(value, decided["explanation"])
+            self.assertIn(value, decided["next_action"])
+        self.assertEqual(len(_read_journal(self.journal)["actions"]), before)
+        return decided
+
+    def test_missing_target_defers_then_integrated_candidate_allows_and_true_merge_passes(self):
+        from pod.governor import observe_candidate
+        target = self.advance_target()
+        self.assert_target_deferred(target)
+        git(self.project, "merge", "--no-ff", "-qm", "integrate target", "target")
+        self.candidate = git(self.project, "rev-parse", "HEAD")
+        self.write(self.stored())
+        self.observed = observe_candidate(self.project, base_ref="refs/remotes/origin/target")
+        prepare_candidate(self.project, "objective", owner="owner", unit="delivery", observation=self.observed,
+                          branch={"remote": "origin", "base": "target", "branch": "candidate"})
+        decided = self.merge_decision()
+        self.assertEqual(decided["decision"], "ALLOW", decided["explanation"])
+        row = next(row for row in _read_journal(self.journal)["actions"]
+                   if row["record_id"] == decided["record_id"])
+        self.assertEqual(row["target_binding"]["commit"], target)
+        result = self.merged()
+        self.assertEqual(git(self.project, "rev-parse", result + "^{tree}"), self.observed["tree"])
+        recorded = self.outcome(decided["record_id"], "PASS", provider={"merge_commit": result})
+        self.assertEqual(recorded["outcome"], "PASS")
+
+    def test_same_tree_target_commit_still_requires_containment(self):
+        target = self.advance_target(empty=True)
+        self.assertEqual(git(self.project, "rev-parse", target + "^{tree}"),
+                         git(self.project, "rev-parse", self.base + "^{tree}"))
+        self.assert_target_deferred(target)
+
+    def test_unavailable_containment_proof_defers_in_observe_mode(self):
+        from unittest.mock import patch
+        import yaml
+        personal = self.root / "config" / "pod" / "config.yaml"
+        document = yaml.safe_load(personal.read_text())
+        document.setdefault("waste_governor", {})["mode"] = "observe"
+        personal.write_text(yaml.safe_dump(document))
+        self.write(self.stored())
+        with patch("pod.governor.gitio.is_ancestor", return_value=None):
+            decided = self.assert_target_deferred(self.base)
+        self.assertIn("cannot be proved to contain", decided["explanation"])
+
     def test_failed_or_canceled_only_when_the_target_lacks_the_result(self):
         decided = self.merge_decision()["record_id"]
         self.refused("attestation_missing", decided, "CANCELED")
