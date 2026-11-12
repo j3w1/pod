@@ -46,6 +46,7 @@ def tidy(writer, root: Path, state: State, *, target_head: str | None, again: st
         made = str(row.get("worktree", "")).startswith("new-") and place and Path(place) != root   # Orca made it for this assignment
         if made and Path(place).is_dir() and place not in remove:
             reason = (None if worker["owned"] and worker["terminal"] in ("reclaimable", "retained", "released")
+                      else "its worker's terminal is not Orca's to release" if not worker["owned"]
                       else f"its worker's terminal is {worker['terminal'] or 'in an unknown state'}")
             reason = reason or _why_keep(Path(place), safe, worker, list(workers.values()), state.id)
             if reason:
@@ -56,7 +57,9 @@ def tidy(writer, root: Path, state: State, *, target_head: str | None, again: st
             continue
         if worker["terminal"] == "reclaimable" and worker["owned"]:
             release.append(row["dispatch"])
-        elif worker["terminal"] not in ("released", "reclaimable"):
+        elif worker["terminal"] == "reclaimable":
+            kept.append(f"{name}: its terminal is not Orca's to release")
+        elif worker["terminal"] != "released":
             kept.append(f"{name}: its terminal is {worker['terminal'] or 'in an unknown state'}"
                         + (f" ({worker['retained']})" if worker.get("retained") else ""))
     if not release and not remove:
@@ -119,9 +122,11 @@ def _why_keep(place: Path, safe: list[str], worker: dict, workers: list, objecti
         head = gitio.commit(place)
         if not any(gitio.is_ancestor(place, head, commit) for commit in safe):
             return "it holds commits that were not delivered"
-        open_ = orca.call("terminal", "list", "--worktree", f"path:{place}").get("terminals") or []
-        if any(terminal.get("handle") != worker.get("handle") for terminal in open_):
+        open_ = orca.call("terminal", "list", "--worktree", f"path:{place}").get("terminals")
+        if not isinstance(open_, list) or any(not isinstance(item, dict) or not item.get("handle") for item in open_):
+            return "the terminals open in it could not be read"
+        if any(item["handle"] != worker.get("handle") for item in open_):
             return "a terminal other than its worker's is open in it"
-    except PodError as exc:
-        return f"its state could not be read ({exc.code})"
+    except (PodError, OSError) as exc:
+        return f"its state could not be read ({getattr(exc, 'code', type(exc).__name__)})"
     return None

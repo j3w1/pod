@@ -133,6 +133,25 @@ class CleanupTests(CleanupCase):
         self.set_orca(release_stays=None)
         self.assertEqual(gate.deliver(self.repo, None)["cleanup"]["removed"], [str(place)])
 
+    def test_terminals_that_cannot_be_read_or_a_terminal_orca_does_not_own_keep_the_worktree(self):
+        place, _ = self.worker({"src/a.py": "a\n"}, paths=["src"])
+        self.finished()
+        real = self.bin / "orca.real"
+        real.write_text((self.bin / "orca").read_text())
+        real.chmod(0o755)
+        self.script("orca", f'#!/bin/sh\nif [ "$1 $2" = "terminal list" ]; then echo \'{{"ok": true, "result": {{}}}}\'; exit 0; fi\n'
+                            f'exec {real} "$@"\n')
+        output = gate.deliver(self.repo, None)
+        self.assertIn(f"worktree {place}: the terminals open in it could not be read", output["cleanup"]["kept"])
+        self.script("orca", real.read_text())
+        state = self.orca()
+        state["workers"]["ctx_1"]["resource"]["ownershipState"] = "user_owned"
+        self.orca_file.write_text(json.dumps(state))
+        again = gate.deliver(self.repo, None)
+        self.assertIn(f"worktree {place}: its worker's terminal is not Orca's to release", again["cleanup"]["kept"])
+        self.assertTrue(place.exists())
+        self.assertEqual(self.orca()["workers"]["ctx_1"]["terminalState"], "retained")
+
     def test_a_worktree_another_objective_now_works_in_stays(self):
         place, _ = self.worker({"src/a.py": "a\n"}, paths=["src"])
         commands.open_(place, text="Follow-up in that worktree", objective="follow-up", delivery=False)

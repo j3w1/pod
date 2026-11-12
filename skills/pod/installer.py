@@ -503,7 +503,8 @@ def default_preferences(source_bundle: Path) -> bytes:
 
 def _first_install(receipt: dict | None) -> bool:
     """No earlier installation finished here: no receipt, or one from a first attempt that stopped part way."""
-    return receipt is None or (receipt.get("status") == "installing" and receipt.get("previous") is None)
+    return receipt is None or (receipt.get("status") == "installing"
+                               and (receipt.get("first") is True or receipt.get("previous") is None))
 
 
 def _preferences(paths: dict[str, Path], source_bundle: Path, *, first: bool) -> tuple[str, str | None]:
@@ -634,7 +635,9 @@ def install(stage: Path) -> int:
             return 0
         previous = ({"version": _version(canonical), "digest": current} if current else
                     receipt.get("previous") if receipt and receipt["status"] == "installing" else None)
+        first = _first_install(receipt)           # carried in the receipt, so it survives any number of failed attempts
         record = {"schema": "pod-install/v1", "status": "installing", "previous": previous, "target": target,
+                  **({"first": True} if first else {}),
                   "launcher": str(paths["launcher"]), "launcher_digest": launcher_digest,
                   "updated_at": datetime.now(timezone.utc).isoformat()}
         _write_receipt(receipt_file, record)
@@ -660,8 +663,9 @@ def install(stage: Path) -> int:
         _stage("Installing skills", plain="Skills: verified one canonical bundle")
         _atomic(paths["launcher"], template, mode=0o755)
         _stage("Installing pod command", plain="Launcher: installed")
-        prefs, path_status, notes = _finish(paths, source_bundle, fail=3, first=_first_install(receipt))
+        prefs, path_status, notes = _finish(paths, source_bundle, fail=3, first=first)
         record["status"] = "installed"
+        record.pop("first", None)
         _write_receipt(receipt_file, record)
         _say("Receipt: installed")
         _remove_earlier_environments(paths["data"])

@@ -75,9 +75,9 @@ review by a worker that changed nothing.
   the changed paths (`--paths`); after merging the target branch, only files whose content
   changed in the candidate. `pod status` lists what is still uncovered. Name `--context` paths
   (a file, a directory or `.`) when a review depends on something it does not cover.
-- A required finding stays open until a later review raises nothing required on the corrected
-  file, or the person waives it; a second reviewer's pass on the same content does not close
-  it: `pod record --waive a2.1 --why "…" --words "what they said"`.
+- A required finding stays open until a later review of the corrected file passes, or fails
+  only over other files, or the person waives it; a second reviewer's pass on the same content
+  does not close it: `pod record --waive a2.1 --why "…" --words "what they said"`.
 
 ## Evidence
 
@@ -105,8 +105,8 @@ review by a worker that changed nothing.
   and removes the worktrees it had Orca create, when they are clean and fully delivered. A
   worker's own terminal in such a worktree goes with it; any other kept terminal stays. It
   lists what it kept and why (still running, not shown as finished, uncommitted or unmerged
-  work, in use); deal with those and run `pod deliver` again, or leave them. Never force a
-  removal.
+  work, in use); deal with those and run `pod deliver` again (`pod drop` again for a dropped
+  objective), or leave them. Never force a removal.
 
 ## Routes and models
 

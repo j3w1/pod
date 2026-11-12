@@ -91,7 +91,8 @@ criterion, or `pod drop`) also cleans up after it. It asks Orca to release the o
 finished workers and to remove the worktrees it had Orca create for them, when Git shows they
 are clean and hold nothing undelivered. Anything running, changed, unmerged or in use stays
 and is named, and a terminal you kept open is left alone unless it is the worker's own
-terminal in such a worktree, which goes with the worktree. Run `pod deliver` again to retry.
+terminal in such a worktree, which goes with the worktree. To retry, run `pod deliver` again,
+or `pod drop` again for a dropped objective.
 
 ## Models and routes
 
@@ -101,9 +102,9 @@ choices. Enable or disable routes, set a Preferred route or a Pin. Press `R`, or
 `pod models refresh`, to fetch the public leaderboard; nothing else touches the network.
 
 A green `*` marks a benchmark cost that is high value: no other routable route costs less
-while scoring no more than two index points lower, and its index is in the upper half of the
-routable routes that have both measurements, whether or not you enabled them. Rows with an
-estimated index or a fallback profile are never marked. Benchmark cost is not a
+while scoring no more than two index points lower, and its index is in the upper half. Both
+comparisons are among routable routes with a measured index and cost, whether or not you
+enabled them; rows with an estimated index or a fallback profile take no part. Benchmark cost is not a
 subscription charge, a quota or a task duration, and a public listing never makes a route
 usable or changes a preference. Only you change your preferences.
 

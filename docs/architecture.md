@@ -53,8 +53,8 @@ Nothing about applicability is declared (`skills/pod/proof.py`).
   therefore still covers the others; one that fails without naming any required finding covers
   nothing. A project may also require the review at the exact final
   tree. A context path may be a directory, or `.` for the whole tree.
-- A required finding is open until a later review raises nothing required on corrected content
-  at its path that the candidate still holds, or a waiver names it. A second opinion on the same
+- A required finding is open until a later review of corrected content at its path, content
+  the candidate still holds, passes or fails only over other paths, or a waiver names it. A second opinion on the same
   content and a carried review close nothing, and bringing the content back reopens it.
 - A review Orca did not report as completed keeps its findings, covers nothing and closes
   nothing.
@@ -124,7 +124,7 @@ ends an objective (`deliver`, a `record` after which no criterion is open and th
 closed, or `drop`) reads the objective's workers from Orca and:
 
 - asks Orca to release each worker Orca shows as finished whose terminal it reports as
-  reclaimable;
+  reclaimable and still its own to release;
 - asks Orca to remove each worktree the objective itself asked Orca to create for an assignment
   (`pod dispatch --worktree new-…`), when its worker is shown as finished, Git shows it is
   clean and every commit it holds was delivered or is on the target, no other worker,
@@ -135,10 +135,11 @@ Orca keeps the terminal of a worker that got its own worktree open and reports i
 one a person kept open, so that terminal goes with its worktree and is released only when the
 worktree may be removed. Any other terminal kept open is never released.
 
-Nothing is forced. A worker still running or not shown as finished, a worktree with
-uncommitted, untracked or undelivered work or in use by anyone else, anything Orca cannot be
-read about, the objective's own worktree and branch, and everything belonging to another
-objective are left exactly as they are and named with the reason. A removal that fails says
+Nothing is forced. A worker still running or not shown as finished, a terminal that is not
+Orca's to release, a worktree with uncommitted, untracked or undelivered work or in use by
+anyone else, and anything Orca cannot be read about are left exactly as they are and named
+with the reason. The objective's own worktree and branch and everything belonging to another
+objective are never considered at all. A removal that fails says
 what remains and never changes the delivery; `pod deliver` (or `pod drop` for a dropped
 objective) run again tries again. The only record is one cleanup effect, an intent and its
 outcome, saying what was released and removed. There is no cleanup command, plan, state or

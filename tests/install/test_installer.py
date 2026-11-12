@@ -320,9 +320,11 @@ class PreferenceTests(InstallerCase):
         self.assertTrue(installer._first_install({"status": "installing", "previous": None}))
         self.assertFalse(installer._first_install({"status": "installing", "previous": {"version": "0.21.54"}}))
         self.assertFalse(installer._first_install({"status": "installed", "previous": None}))
-        failed = run_install({**self.env, "POD_TEST_NPX_MODE": "fail"})           # the first attempt stops after its receipt
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertFalse(self.config.exists())
+        self.assertTrue(installer._first_install({"status": "installing", "first": True, "previous": {"version": "0.22.0"}}))
+        for mode in ("fail", "tamper", "tamper"):          # attempts that stop before, and after, the skill copy is placed
+            failed = run_install({**self.env, "POD_TEST_NPX_MODE": mode})
+            self.assertNotEqual(failed.returncode, 0, mode)
+            self.assertFalse(self.config.exists())
         again = run_install(self.env)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertTrue(self.config.exists())
