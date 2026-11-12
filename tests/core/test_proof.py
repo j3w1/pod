@@ -74,16 +74,17 @@ class ProofTests(CoreCase):
     def test_a_reviewer_who_wrote_and_a_review_of_a_commit_that_is_gone_cover_nothing(self):
         self.implement({"src/a.py": "a\n"})
         started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
-        edited = self.commit({"src/a.py": "a, edited by the reviewer\n"})
+        edited = self.commit({"src/b.py": "added by the reviewer\n"})      # the reviewed file itself is untouched
         self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "commit": edited})
         commands.accept(self.repo, None, "a2")
-        self.assertEqual(self.uncovered(), ["src/a.py"])
-        commands.record(self.repo, None, carried="an earlier record", commit="HEAD", paths=["src/a.py"], verdict="pass")
+        self.assertEqual(self.uncovered(), ["src/a.py", "src/b.py"])
+        commands.record(self.repo, None, carried="an earlier record", commit="HEAD", paths=["src/a.py", "src/b.py"],
+                        verdict="pass")
         self.assertEqual(self.uncovered(), [])
         state = fold(self.entries("widget"))
         state.of("review")[-1]["commit"] = "0" * 40
         head, base = self.git(self.repo, "rev-parse", "HEAD"), self.git(self.repo, "merge-base", "HEAD", "origin/main")
-        self.assertEqual(proof.coverage(self.repo, state, head, base)["uncovered"], ["src/a.py"])
+        self.assertEqual(proof.coverage(self.repo, state, head, base)["uncovered"], ["src/a.py", "src/b.py"])
 
     def test_a_required_finding_stays_open_until_a_later_review_of_its_path_passes_or_it_is_waived(self):
         self.implement({"src/a.py": "a\n", "src/b.py": "b\n"})
