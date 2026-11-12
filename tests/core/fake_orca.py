@@ -71,7 +71,8 @@ def main():
         number = len(state["tasks"]) + 1
         task, dispatch = f"task_{number}", f"ctx_{number}"
         state["tasks"][task] = {"id": task, "run_id": run["id"], "task_title": option(args, "--task-title"),
-                                "status": "dispatched", "result": None, "spec": spec}
+                                "status": "dispatched", "result": None, "spec": spec,
+                                "base_branch": option(args, "--base-branch")}
         state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
                                       "dispatchStatus": "dispatched", "terminalState": "active"}
         route = {"agent": option(args, "--agent"), "model": option(args, "--model"), "effort": option(args, "--effort")}
@@ -90,7 +91,7 @@ def main():
         rows = [row for row in state["workers"].values() if row["runId"] == option(args, "--run")]
         reply(True, {"workers": rows, "page": {"hasMore": False, "nextCursor": None}})
     if command == "task-list":
-        rows = [{key: value for key, value in row.items() if key != "spec"} for row in state["tasks"].values()
+        rows = [{key: value for key, value in row.items() if key not in ("spec", "base_branch")} for row in state["tasks"].values()
                 if row["run_id"] == option(args, "--run")]
         reply(True, {"tasks": rows})
     reply(False, {"code": "unknown_command", "message": " ".join(args)})

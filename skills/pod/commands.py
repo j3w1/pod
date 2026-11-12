@@ -185,7 +185,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
         selector = f"path:{root}" if worktree == "current" else worktree
         try:
             started = orca.start(run=run, spec=text, title=f"{title} [{state.id}:{ident}]", worktree=selector,
-                                 route=routefile.split(route), request=assignment["request"], name=name)
+                                 route=routefile.split(route), request=assignment["request"], name=name,
+                                 base=gitio.branch(root) if worktree.startswith("new-") else None)
         except PodError as exc:
             if exc.code == "orca_unknown":
                 exc.fix = f"run `pod dispatch --retry {ident}`; it reads what Orca did and never starts a second worker"
@@ -344,12 +345,25 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
                                fix="use one of: " + ", ".join(state.criteria))
             return state.criteria[ident]
 
+        observed = None
+        if given.get("check"):
+            observed = _run_check(root, given["check"])
+            if observed["exit"] != 0 and given.get("met"):
+                writer.append(observed)
+                raise PodError("check_failed", f"The check exited {observed['exit']}, so no criterion was recorded as met.",
+                               fix="correct the work and run the check again; its failed run is recorded")
+            entries.append(observed)
+            done.append(f"check exit {observed['exit']}" + (
+                "" if observed.get("tree") else " (the tree was not one clean commit throughout: binds to no commit)"))
         for ident in given.get("met") or []:
             criterion(ident)
             named = [str(value) for value in given.get("facts") or []]
+            if observed and not named and not given.get("why"):
+                named = [str(len(writer.entries))]         # the check this same call ran and observed
             numbers = [int(value) for value in named if value.isdigit()]
             missing = [value for value in named if not value.isdigit()] + [
-                value for value in numbers if value >= len(writer.entries) or writer.entries[value]["kind"] != "fact"]
+                value for value in numbers if not (observed and value == len(writer.entries))
+                and (value >= len(writer.entries) or writer.entries[value]["kind"] != "fact")]
             if missing or not (numbers or given.get("why")):
                 raise PodError("evidence_required", f"Criterion {ident} needs the facts that prove it.",
                                fix="pass --facts with fact numbers from `pod status`, or --why with what was observed")
@@ -370,9 +384,6 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
             ident = state.next_id("c", list(state.criteria) + [row["id"] for row in entries if row["kind"] == "criterion"])
             entries.append({"kind": "criterion", "id": ident, "text": text, "state": "open"})
             done.append(f"{ident} added")
-        if given.get("check"):
-            entries.append(_run_check(root, given["check"]))
-            done.append(f"check exit {entries[-1]['exit']}" + ("" if entries[-1].get("tree") else " (the tree was not one clean commit throughout: binds to no commit)"))
         if given.get("waive"):
             known = {row["id"] for row in proof.findings(root, state)}
             if given["waive"] not in known or not given.get("why"):

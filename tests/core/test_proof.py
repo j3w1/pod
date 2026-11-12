@@ -118,6 +118,17 @@ class ProofTests(CoreCase):
         self.assertEqual((fact["exit"], fact["source"]), (3, "run by pod"))
         self.assertNotIn("tree", fact)
 
+    def test_a_criterion_can_rest_on_the_check_the_same_call_ran_and_never_on_a_failed_one(self):
+        output = commands.record(self.repo, None, check="true", met=["c1"])
+        check, criterion = self.entries("widget")[-2:]
+        self.assertEqual((check["fact"], check["exit"], criterion["state"], criterion["facts"]), ("check", 0, "met", [check["n"]]))
+        self.assertEqual(output["recorded"], ["check exit 0", "c1 met"])
+        commands.record(self.repo, None, add_criterion=["second"])
+        self.refused("check_failed", commands.record, self.repo, None, check="exit 4", met=["c2"])
+        failed = self.entries("widget")[-1]
+        self.assertEqual((failed["fact"], failed["exit"]), ("check", 4))
+        self.assertEqual(fold(self.entries("widget")).criteria["c2"]["state"], "open")
+
     def test_the_gate_names_uncovered_paths_and_open_findings(self):
         self.implement({"src/a.py": "a\n"})
         self.review("fail", [{"path": "src/a.py", "required": True, "text": "wrong"}])

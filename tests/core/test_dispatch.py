@@ -100,6 +100,12 @@ class DispatchTests(CoreCase):
         self.assertIn(f"Review commit {commit}", self.orca()["tasks"][started["task"]]["spec"])
         self.refused("nothing_to_review", commands.dispatch, self.repo, None, role="review", title="r", spec="x", paths_=["nowhere"])
 
+    def test_a_new_worktree_starts_from_the_objectives_branch(self):
+        here = self.start(paths_=["src"])
+        there = self.start(paths_=["docs"], worktree="new-child")
+        tasks = self.orca()["tasks"]
+        self.assertEqual((tasks[here["task"]]["base_branch"], tasks[there["task"]]["base_branch"]), (None, "work"))
+
     def test_a_closed_objective_starts_nothing(self):
         commands.drop(self.repo, None, why="stopped")
         self.refused("objective_closed", self.start)

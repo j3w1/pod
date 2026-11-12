@@ -68,12 +68,16 @@ def run_show(run: str) -> dict:
 
 
 def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, str, str], request: str,
-          name: str | None = None) -> dict:
-    """Start one worker. Repeating the call with the same request returns the first outcome."""
+          name: str | None = None, base: str | None = None) -> dict:
+    """Start one worker. Repeating the call with the same request returns the first outcome.
+
+    `base` is the branch a new worktree starts from, so the worker begins on the objective's work.
+    """
     agent, model, effort = route
     args = ["orchestration", "worker-start", "--spec-file", "-", "--task-title", title, "--worktree", worktree,
             "--agent", agent, "--model", model, "--effort", effort, "--run", run, "--retry-request", request]
-    result = call(*args, *(["--display-name", name] if name else []), stdin=spec, timeout=180)
+    args += (["--display-name", name] if name else []) + (["--base-branch", base] if base else [])
+    result = call(*args, stdin=spec, timeout=180)
     launch = result.get("launch") or {}
     if result.get("state") == "outcome_unknown" or not result.get("taskId"):
         raise PodError("orca_unknown", "Orca accepted the start and does not know whether the worker is running.", fix=REPEAT)
