@@ -13,7 +13,8 @@ curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh
 ```
 
 This installs the Pod skill for Codex and Claude Code and a user-local `pod` command. Pod has
-no third-party Python dependency. An existing preference file is never rewritten. Open a new
+no third-party Python dependency. A first preference file enables the supported routes (never
+an `ultra` effort); an existing preference file is never rewritten. Open a new
 shell if the installer adds `~/.local/bin` to your PATH. For a download, inspect, then run
 path and removal details, see [installation and security](docs/installation.md).
 
