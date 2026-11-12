@@ -87,7 +87,7 @@ def open_(cwd: Path, *, source: str | None = None, text: str | None = None, obje
             if state.objective.get("source") != described:
                 raise PodError("objective_exists", f"Objective {objective} already exists with a different source.",
                                fix="choose another --objective id, or continue it with `pod resume`")
-            return view(root, state, remote=False)
+            return view(root, state, remote=False, gate=False)
         if run:
             busy = [row["dispatch"] for row in orca.workers(run) if orca.live(row)]
             if busy:
@@ -100,7 +100,7 @@ def open_(cwd: Path, *, source: str | None = None, text: str | None = None, obje
              **({} if delivery else {"delivery": "none"}), "base": gitio.merge_base(root, head, f"origin/{target}") or head},
             *({"kind": "criterion", "id": f"c{index}", "text": row["text"], "state": "open",
                **({"line": row["line"]} if "line" in row else {})} for index, row in enumerate(rows, 1)))
-        return view(root, fold(writer.entries), remote=False)
+        return view(root, fold(writer.entries), remote=False, gate=False)
 
 
 # --- dispatch --------------------------------------------------------------------------------------
@@ -471,9 +471,9 @@ def _run_check(root: Path, command: str) -> dict:
 
 # --- status, resume, drop --------------------------------------------------------------------------
 
-def view(root: Path, state: State, *, remote: bool = True) -> dict:
-    """The derived picture of one objective."""
-    from . import gate
+def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) -> dict:
+    """The derived picture of one objective. `open` shows it without the gate, which has nothing to say yet."""
+    from . import gate as gates
     info = state.objective
     source = info["source"]
     result = {"objective": state.id, "state": "dropped" if state.dropped else "closed" if state.closed else "open",
@@ -499,7 +499,9 @@ def view(root: Path, state: State, *, remote: bool = True) -> dict:
     found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state)]
     if found:
         result["open_required_findings"] = found
-    verdict = gate.evaluate(root, state, remote=remote)
+    if not gate:
+        return result
+    verdict = gates.evaluate(root, state, remote=remote)
     result["candidate"] = f"{verdict['candidate'][:12]} tree {verdict['tree'][:12]}" + (
         "" if not verdict.get("dirty") else f", {len(verdict['dirty'])} uncommitted paths")
     result["gate"] = "ready to deliver" if verdict["pass"] else verdict["needs"]
