@@ -507,6 +507,16 @@ class ExecutionSpecDocumentationTests(unittest.TestCase):
         self.assertIn("PoD#1", EXAMPLE_SPEC)
         self.assertNotIn("N/A", EXAMPLE_SPEC)
 
+    def test_agents_binds_the_design_principles(self):
+        text = (self.root / "AGENTS.md").read_text().split("## Upstream metadata governance", 1)[0]
+        principles = (self.root / "docs" / "design-principles.md").read_text()
+        self.assertTrue(principles.startswith("# Pod's Enduring Design Principles\n"))
+        # The read-when row and the short form both name the one canonical document.
+        self.assertEqual(text.count("`docs/design-principles.md`"), 2)
+        self.assertIn("## Pod's Enduring Design Principles", text)
+        self.assertIn("needs j3w1's approval before merge", text)
+        self.assertEqual(len(re.findall(r"^## \d\. ", principles, re.M)), 9)
+
     def test_external_metadata_notice_is_not_a_product_dependency(self):
         text = (self.root / "AGENTS.md").read_text()
         notice = text.split("## Upstream metadata governance", 1)[1]

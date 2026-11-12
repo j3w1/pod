@@ -5,6 +5,7 @@ exemption. Inspect Git state and preserve unrelated work.
 
 | Read when | Document or check |
 | --- | --- |
+| Changing architecture: adding a subsystem, command, record, persisted field, refusal or validation step, or answering an incident with one | `docs/design-principles.md` |
 | Changing behavior or a requirement | `docs/pod-spec.md` and the linked affected domain |
 | Editing skill text | `docs/spec/interface.md` R71 (the documentation contract), the trigger list in `skills/pod/SKILL.md`, and `python -m pod.skill_validation` |
 | Changing gates or CI | `docs/validation.md` |
@@ -84,6 +85,21 @@ owner decision.
 
 Fixture execution uses disposable projects; existing host and ordinary project trials are
 read-only. No production or provider mutation, and no package or release publication.
+
+## Pod's Enduring Design Principles
+
+`docs/design-principles.md` binds every change. Read it before an architectural change. In short:
+
+- Pod is a lightweight coordinator; the process a task needs is set by the task.
+- Keep only what no other system owns; never copy Orca, Git, GitHub or host state; derive the rest.
+- Never ask a coordinator for what the software can compute; an ordinary result takes one call.
+- Never record a success, exit, result or acceptance that was not observed; bind evidence to the
+  exact commit and tree.
+- Answer an incident by removing what allowed it before adding anything.
+
+A change that breaks a Rule there, or adds a subsystem, service, coordinator-facing command,
+persisted record kind or validation layer, gives the answers that document asks for in its pull
+request and needs j3w1's approval before merge. Ordinary work inside the principles needs neither.
 
 ## Upstream metadata governance
 
