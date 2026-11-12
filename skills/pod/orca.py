@@ -14,6 +14,7 @@ from .errors import PodError
 REPEAT = "repeat the same Pod command; a start is replayed, never duplicated"
 FIXES = {"consumer_fenced": "another conversation coordinates this Run now; run `pod resume` to take it over",
          "request_mismatch": "this assignment was already started with a different packet; dispatch a new assignment"}
+UNKNOWN = ("runtime_timeout", "runtime_unavailable", "invalid_runtime_response")   # Orca itself does not know
 SETTLED = ("completed", "failed", "succeeded", "stopped", "abandoned", "cancelled", "released")
 
 
@@ -36,6 +37,8 @@ def call(*args: str, stdin: str | None = None, timeout: int = 90) -> dict:
     if not reply["ok"]:
         error = reply.get("error") or {}
         code = str(error.get("code") or "orca_refused")
+        if code in UNKNOWN:
+            raise PodError("orca_unknown", f"orca {what} could not say what happened ({code}).", fix=REPEAT)
         raise PodError(code, f"Orca refused: {str(error.get('message') or '')[:400]}",
                        fix=FIXES.get(code, "read Orca's message and correct the request"))
     return reply.get("result") or {}
@@ -72,7 +75,9 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
             "--agent", agent, "--model", model, "--effort", effort, "--run", run, "--retry-request", request]
     result = call(*args, *(["--display-name", name] if name else []), stdin=spec, timeout=180)
     launch = result.get("launch") or {}
-    return {"task": result.get("taskId"), "dispatch": result.get("dispatchId"),
+    if result.get("state") == "outcome_unknown" or not result.get("taskId"):
+        raise PodError("orca_unknown", "Orca accepted the start and does not know whether the worker is running.", fix=REPEAT)
+    return {"task": result.get("taskId"), "dispatch": result.get("dispatchId"), "state": result.get("state"),
             "replayed": bool((result.get("mutation") or {}).get("replayed")),
             "effective": launch.get("effective"), "requested": launch.get("requested")}
 

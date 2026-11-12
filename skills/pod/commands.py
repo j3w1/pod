@@ -33,7 +33,10 @@ def locate(cwd: Path, objective: str | None) -> tuple[Path, Path, str | None]:
     for candidate in log.every():
         if candidate.parent.name != repository:
             continue
-        state = fold(log.read(candidate))
+        try:
+            state = fold(log.read(candidate))
+        except PodError:
+            continue                    # an unreadable log is named by `pod status --all`; it does not stop other work
         if state.entries and state.objective.get("worktree") == str(root):
             (finished if state.closed else here).append((state.entries[-1]["at"], candidate))
     if len(here) == 1 or (not here and finished):
@@ -112,7 +115,8 @@ def packet(state: State, assignment: dict, spec: str) -> str:
     elif role == "review":
         lines += [f"- Review commit {assignment['base']}, these paths: " + ", ".join(paths_),
                   "- Report every finding in one pass. Do not change any file; the writer makes corrections.",
-                  "- Mark a finding required only when the change must not merge without it."]
+                  "- Mark a finding required only when the change must not merge without it.",
+                  "- `outcome` says whether you completed the review; `verdict` says whether the change passes."]
         if assignment.get("context"):
             lines.append("- Read as context: " + ", ".join(assignment["context"]))
     else:
@@ -146,7 +150,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
             raise PodError("route_required", "No Pin or Preferred route is set.",
                            fix="pass --route, one of: " + (", ".join(preferences.enabled()) or "none enabled; run `pod models`"))
         preferences.check(route)
-        paths_ = [item.strip().rstrip("/") for item in paths_ or [] if item.strip()]
+        paths_ = gitio.declared(paths_)
+        context = gitio.declared(context)
         base = gitio.commit(root, commit or "HEAD")
         if role == "review":
             against = gitio.merge_base(root, base, f"origin/{state.objective['target']}") or gitio.merge_base(
@@ -187,6 +192,10 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
             else:
                 writer.append({"kind": "assignment", "id": ident, "void": True, "refused": exc.code})
             raise
+        if not started.get("dispatch"):
+            writer.append({"kind": "assignment", "id": ident, "void": True, "refused": f"start {started.get('state')}"})
+            raise PodError("start_failed", f"Orca created the task and started no worker (state {started.get('state')}).",
+                           fix="read Orca's task list for the reason, then dispatch the work again")
         return _started(writer, ident, started, route)
 
 
@@ -200,6 +209,8 @@ def _started(writer, ident: str, started: dict, route: str) -> dict:
         result["route_mismatch"] = f"asked for {route}, Orca started {effective}"
     if started.get("replayed"):
         result["replayed"] = True
+    if started.get("state") not in (None, "ready"):
+        result["start_state"] = started["state"]
     result["next"] = f"Orca wakes you when it reports; then `pod accept {ident}`"
     return result
 
@@ -296,7 +307,9 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                           for item in stated.get("checks") or [] if isinstance(item, dict) and isinstance(item.get("exit"), int)]
         elif row["role"] == "review":
             verdict = stated.get("verdict") if stated.get("verdict") in ("pass", "fail") else None
-            if verdict:
+            if discarded:
+                output["note"] = "discarded: no review is recorded"
+            elif verdict:
                 found = [{"id": f"{ident}.{index}", "path": item.get("path") or None,
                           "required": bool(item.get("required")), "text": str(item.get("text") or "")[:1000]}
                          for index, item in enumerate(stated.get("findings") or [], 1) if isinstance(item, dict)]
@@ -304,7 +317,7 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "findings": found})
                 output.update(verdict=verdict, findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
-                                                         f"{item['path'] or ''}: {item['text'][:160]}" for item in found])
+                                                         f"{item['path'] or ''}: {_line(item['text'])}" for item in found])
                 if changed:
                     output["note"] = "the reviewer changed files, so this review covers nothing"
             else:
@@ -333,8 +346,10 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
 
         for ident in given.get("met") or []:
             criterion(ident)
-            numbers = [int(value) for value in given.get("facts") or []]
-            missing = [value for value in numbers if value >= len(writer.entries) or writer.entries[value]["kind"] != "fact"]
+            named = [str(value) for value in given.get("facts") or []]
+            numbers = [int(value) for value in named if value.isdigit()]
+            missing = [value for value in named if not value.isdigit()] + [
+                value for value in numbers if value >= len(writer.entries) or writer.entries[value]["kind"] != "fact"]
             if missing or not (numbers or given.get("why")):
                 raise PodError("evidence_required", f"Criterion {ident} needs the facts that prove it.",
                                fix="pass --facts with fact numbers from `pod status`, or --why with what was observed")
@@ -357,9 +372,9 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
             done.append(f"{ident} added")
         if given.get("check"):
             entries.append(_run_check(root, given["check"]))
-            done.append(f"check exit {entries[-1]['exit']}" + ("" if entries[-1].get("tree") else " (uncommitted changes: binds to no commit)"))
+            done.append(f"check exit {entries[-1]['exit']}" + ("" if entries[-1].get("tree") else " (the tree was not one clean commit throughout: binds to no commit)"))
         if given.get("waive"):
-            known = {row["id"] for row in proof.findings(state)}
+            known = {row["id"] for row in proof.findings(root, state)}
             if given["waive"] not in known or not given.get("why"):
                 raise PodError("waiver_invalid", "A waiver names one finding and says who waived it and why.",
                                fix="pass --waive FINDING --why 'who and why'; findings: " + (", ".join(sorted(known)) or "none"))
@@ -379,7 +394,8 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
                         "merge authorized for this objective" if given.get("standing") else f"merge authorized for {head[:12]}")
         if given.get("carried"):
             commit = gitio.commit(root, given.get("commit") or "HEAD")
-            if not given.get("paths") or given.get("verdict") not in ("pass", "fail"):
+            given["paths"] = gitio.declared(given.get("paths"))
+            if not given["paths"] or given.get("verdict") not in ("pass", "fail"):
                 raise PodError("carried_review_incomplete", "A carried review names its commit, paths, verdict and source.",
                                fix="pass --carried REFERENCE --commit SHA --paths a,b --verdict pass")
             entries.append({"kind": "fact", "fact": "review", "commit": commit, "tree": gitio.tree(root, commit),
@@ -400,6 +416,11 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
         return {"recorded": done, "entries": [row["n"] for row in writer.entries[-len(entries):]]}
 
 
+def _line(text: str, limit: int = 160) -> str:
+    """One display line: whitespace collapsed, cut to a length that keeps output small."""
+    return " ".join(text.split())[:limit]
+
+
 def _words(given: dict) -> dict:
     return {"words": given["words"][:1000]} if given.get("words") else {}
 
@@ -413,16 +434,20 @@ def _may_decide(given: dict, what: str) -> None:
 
 
 def _run_check(root: Path, command: str) -> dict:
-    """Run a check and record what was observed. It binds to a commit only if the tree was clean throughout."""
-    before = gitio.dirty(root)
+    """Run a check and record what was observed.
+
+    It binds to a commit only if the tree was clean and at that same commit before and after the
+    run, so a result never attaches to content the check did not see.
+    """
+    before = None if gitio.dirty(root) else (gitio.commit(root), gitio.tree(root))
     try:
         done = subprocess.run(command, shell=True, cwd=root, capture_output=True, timeout=3600)
         code, tail = done.returncode, (done.stdout + done.stderr).decode(errors="replace")[-400:]
     except subprocess.TimeoutExpired:
         code, tail = None, "did not finish within one hour"
-    clean = not before and not gitio.dirty(root)
+    bound = before is not None and not gitio.dirty(root) and before == (gitio.commit(root), gitio.tree(root))
     return {"kind": "fact", "fact": "check", "command": command[:300], "exit": code, "tail": tail, "source": "run by pod",
-            **({"commit": gitio.commit(root), "tree": gitio.tree(root)} if clean else {})}
+            **({"commit": before[0], "tree": before[1]} if bound else {})}
 
 
 # --- status, resume, drop --------------------------------------------------------------------------
@@ -452,7 +477,7 @@ def view(root: Path, state: State, *, remote: bool = True) -> dict:
         rows.append(f"{row['id']} {row['role']} {status}: {row['title'][:80]}")
     if rows:
         result["assignments"] = rows
-    found = [f"{row['id']} {row['path'] or ''}: {row['text'][:160]}" for row in proof.open_required(state)]
+    found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state)]
     if found:
         result["open_required_findings"] = found
     verdict = gate.evaluate(root, state, remote=remote)
@@ -474,7 +499,11 @@ def listing() -> dict:
     """The one read Pod offers other tools: open objectives and what they name. No provider is asked."""
     rows = []
     for target in log.every():
-        state = fold(log.read(target))
+        try:
+            state = fold(log.read(target))
+        except PodError as exc:
+            rows.append({"objective": target.stem, "repository": target.parent.name, "problem": exc.code})
+            continue
         if not state.entries or state.closed:
             continue
         info = state.objective

@@ -42,7 +42,7 @@ def issue(repository: str, number: int) -> dict:
 def pull_request(repository: str, selector: str) -> dict | None:
     """The pull request by number or head branch, or None when there is none or it cannot be read."""
     value, _ = _json("pr", "view", str(selector), "--repo", repository, "--json",
-                     "number,state,isDraft,headRefOid,headRefName,baseRefName,mergeCommit,mergedAt,url")
+                     "number,state,isDraft,headRefOid,headRefName,baseRefName,mergeCommit,mergedAt,mergeStateStatus,url")
     return value
 
 

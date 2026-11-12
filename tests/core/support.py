@@ -68,7 +68,8 @@ class CoreCase(PodCase):
         self.git(self.repo, "push", "-q", "-f", "origin", "HEAD:refs/heads/work")
         current = self.gh()
         current["prs"][str(number)] = {"number": number, "state": state, "isDraft": False, "headRefOid": head,
-                                       "headRefName": "work", "baseRefName": base, "mergeCommit": None, "mergedAt": None, "url": ""}
+                                       "headRefName": "work", "baseRefName": base, "mergeCommit": None, "mergedAt": None, "url": "",
+                                       "mergeStateStatus": "CLEAN"}
         current["checks"] = [] if checks is None else [{"name": "linux", "bucket": checks, "state": checks.upper()}]
         self.gh_file.write_text(json.dumps(current))
 

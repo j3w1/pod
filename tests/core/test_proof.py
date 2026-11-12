@@ -91,7 +91,7 @@ class ProofTests(CoreCase):
         self.review("fail", [{"path": "src/a.py", "required": True, "text": "wrong"},
                              {"path": "src/b.py", "required": True, "text": "also wrong"},
                              {"path": "src/b.py", "required": False, "text": "style"}])
-        opened = lambda: [row["id"] for row in proof.open_required(fold(self.entries("widget")))]
+        opened = lambda: [row["id"] for row in proof.open_required(self.repo, fold(self.entries("widget")))]
         self.assertEqual(opened(), ["a2.1", "a2.2"])
         self.implement({"src/a.py": "a fixed\n"})
         self.assertEqual(opened(), ["a2.1", "a2.2"])                        # a correction alone closes nothing

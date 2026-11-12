@@ -56,9 +56,9 @@ class State:
         if self.dropped:
             return True
         merges = self.merges()
-        if self.open_criteria() or any(not self.merged(effect) for effect in merges):
-            return False
-        return bool(merges) or self.objective.get("delivery") == "none"
+        if self.open_criteria() or any(effect["outcome"] is None for effect in merges):
+            return False               # a criterion is open, or a merge was asked for and its outcome is not read yet
+        return any(self.merged(effect) for effect in merges) or self.objective.get("delivery") == "none"
 
     def next_id(self, prefix: str, existing) -> str:
         numbers = [int(key[len(prefix):]) for key in existing if key.startswith(prefix) and key[len(prefix):].isdigit()]

@@ -243,6 +243,8 @@ class IssueUpdateTests(GateCase):
         body = ("## Proof of Done\n- [ ] a\n```sh\n# run tests\n- [ ] not a criterion\n```\n- [ ] b\n~~~\n## Not a heading\n~~~\n"
                 "- [ ] c\n## Notes\n- [ ] outside\n")
         self.assertEqual([(row["text"], row["line"]) for row in issue.criteria(body)], [("a", 1), ("b", 6), ("c", 10)])
+        nested = "## Proof of Done\n- [ ] a\n````\n```\n# run tests\n```\n````\n- [ ] b\n```make test``` passes\n- [ ] c\n"
+        self.assertEqual([row["text"] for row in issue.criteria(nested)], ["a", "b", "c"])
 
     def test_a_document_type_is_recognised_whatever_its_case(self):
         from pod import issue

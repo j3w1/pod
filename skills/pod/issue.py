@@ -43,19 +43,22 @@ def refuse_undeliverable(title: str) -> None:
 
 
 def _prose(lines: list[str]) -> list[bool]:
-    """Per line, whether it is ordinary text: a line inside a fenced code block is not a heading or a box."""
+    """Per line, whether it is ordinary text: a line inside a fenced code block is not a heading or a box.
+
+    A fence opens with three or more backticks or tildes (a backtick opener carries no further
+    backtick) and closes with at least as many of the same character and nothing after them.
+    """
     flags, fence = [], None
     for line in lines:
-        mark = re.match(r"\s{0,3}(`{3,}|~{3,})", line)
-        if fence is None and mark:
-            fence = mark[1][0]
-            flags.append(False)
-        elif fence is not None:
-            if mark and mark[1][0] == fence and not line.strip().strip(fence):
+        mark = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r"))
+        if fence is None:
+            opens = bool(mark) and not (mark[1][0] == "`" and "`" in mark[2])
+            fence = mark[1] if opens else None
+            flags.append(not opens)
+        else:
+            if mark and mark[1][0] == fence[0] and len(mark[1]) >= len(fence) and not mark[2].strip():
                 fence = None
             flags.append(False)
-        else:
-            flags.append(True)
     return flags
 
 

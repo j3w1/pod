@@ -34,6 +34,6 @@ def rules(cwd: Path, ref: str) -> dict:
         if required is not None and any(not isinstance(name, str) for name in required):
             raise ValueError("required_checks must list check names")
         return {"review": review == "required", "final_tree_review": final, "merge_method": method,
-                "required_checks": required, "source": f"{FILE} at {ref[:12]}"}
+                "required_checks": required or None, "source": f"{FILE} at {ref[:12]}"}
     except ValueError as exc:
         return {**STRICT, "source": f"{FILE} at {ref[:12]}", "problem": str(exc)}

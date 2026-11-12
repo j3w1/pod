@@ -95,8 +95,12 @@ def writer(target: Path, *, create: bool = False):
     try:
         fcntl.flock(handle, fcntl.LOCK_EX)
         entries, _ = _entries(os.pread(handle, os.fstat(handle).st_size, 0))
+        if not entries and not create:
+            raise PodError("objective_unknown", f"No objective log at {target}.", fix="run `pod status --all` to list objectives")
         yield Writer(handle, entries)
     finally:
+        if create and os.fstat(handle).st_size == 0:
+            os.unlink(target)          # nothing was opened: leave no empty log behind
         os.close(handle)
 
 

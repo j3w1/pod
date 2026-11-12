@@ -2,6 +2,7 @@
 
 import hashlib
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 
@@ -52,6 +53,14 @@ def commit(cwd: Path, ref: str = "HEAD") -> str:
     return value
 
 
+def known(cwd: Path, ref: str) -> str | None:
+    """The commit a ref names, or None when this repository has no such ref."""
+    try:
+        return commit(cwd, ref)
+    except PodError:
+        return None
+
+
 def tree(cwd: Path, ref: str = "HEAD") -> str:
     return _text(cwd, "rev-parse", "--verify", f"{ref}^{{tree}}")
 
@@ -91,7 +100,7 @@ def changed(cwd: Path, base: str, head: str) -> list[str]:
 
 
 def blobs(cwd: Path, ref: str, paths_: list[str]) -> dict:
-    """Blob id per path at a commit; a path absent there maps to None."""
+    """File mode and blob id per path at a commit, as one comparable value; a path absent there maps to None."""
     result = dict.fromkeys(paths_)
     if not paths_:
         return result
@@ -102,7 +111,7 @@ def blobs(cwd: Path, ref: str, paths_: list[str]) -> dict:
             continue
         meta, _, name = item.partition("\t")
         if name in wanted:
-            result[name] = meta.split()[2]
+            result[name] = f"{meta.split()[0]} {meta.split()[2]}"
     return result
 
 
@@ -110,6 +119,23 @@ def show(cwd: Path, ref: str, name: str) -> str | None:
     """A file's text at a commit, or None when it is not there."""
     done = git(cwd, "show", f"{ref}:{name}", check=False)
     return done.stdout.decode(errors="replace") if done.returncode == 0 else None
+
+
+def declared(values: list[str] | None) -> list[str]:
+    """Declared paths in one spelling, relative to the repository root. A path that leaves it is refused."""
+    result = []
+    for value in values or []:
+        if not value.strip():
+            continue
+        name = posixpath.normpath(value.strip())
+        if name.startswith("/") or name == ".." or name.startswith("../"):
+            raise PodError("path_invalid", f"{value!r} is not a path inside the repository.",
+                           fix="name paths relative to the repository root, such as src/app")
+        if name != ".":
+            result.append(name)
+        elif value.strip():
+            return []                  # the root itself: the whole tree
+    return result
 
 
 def under(name: str, prefixes: list[str]) -> bool:
