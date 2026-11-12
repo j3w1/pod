@@ -86,7 +86,7 @@ class CliTests(CoreCase):
 class ArchitectureTests(CoreCase):
     GONE = ("obligations", "ledger", "governor", "governor_effects", "governance", "handoff", "succession", "window",
             "evidence_closure", "retirement", "abandoned", "readiness", "admission", "admission_view", "process_exit",
-            "listing", "placement", "cleanup", "history", "history_tree", "internal", "contracts", "records", "assurance",
+            "listing", "placement", "cleanup_observations", "cleanup_archives", "cleanup_stashes", "history", "history_tree", "internal", "contracts", "records", "assurance",
             "lineage", "local_append", "display", "worker_tabs", "wake", "standing", "relay", "policy", "tool_permissions",
             "pod_ticks", "pod_mapping", "issue_revision", "tui", "tui_state", "tui_render", "observations", "sources")
 

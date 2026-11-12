@@ -5,6 +5,7 @@ refused, and a repeated request returns the first outcome instead of starting a 
 
 import json
 import os
+import subprocess
 import sys
 
 STATE = os.environ["FAKE_ORCA_STATE"]
@@ -35,7 +36,7 @@ def main():
     args = [item for item in sys.argv[1:] if item not in ("--json", "--full")]
     state = load()
     command = args[1] if args[:1] == ["orchestration"] else None
-    if state.get("fail") == command:
+    if command and state.get("fail") == command:
         state["fail"] = None
         with open(STATE, "w") as stream:
             json.dump(state, stream)
@@ -73,8 +74,19 @@ def main():
         state["tasks"][task] = {"id": task, "run_id": run["id"], "task_title": option(args, "--task-title"),
                                 "status": "dispatched", "result": None, "spec": spec,
                                 "base_branch": option(args, "--base-branch"), "repo": option(args, "--repo")}
+        where = option(args, "--worktree", "")
+        if where.startswith("new-"):               # Orca makes a real worktree from the named repository and branch
+            repo = option(args, "--repo", "")[len("path:"):]
+            place = os.path.join(os.path.dirname(STATE), f"worker-{number}")
+            subprocess.run(["git", "-C", repo, "worktree", "add", "-q", "-b", f"worker/{number}", place,
+                            option(args, "--base-branch")], check=True, capture_output=True)
+            state.setdefault("worktrees", {})[place] = repo
+        else:
+            place = where[len("path:"):]
         state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
-                                      "dispatchStatus": "dispatched", "terminalState": "active"}
+                                      "dispatchStatus": "dispatched", "terminalState": "active",
+                                      "resource": {"ownershipState": "owned", "retainedReason": None,
+                                                   "worktreeId": f"repo::{place}"}}
         route = {"agent": option(args, "--agent"), "model": option(args, "--model"), "effort": option(args, "--effort")}
         receipt = {"taskId": task, "dispatchId": dispatch, "launch": {"requested": route, "effective": state.get("effective") or route}}
         state["requests"][request] = {"spec": spec, "receipt": receipt}
@@ -89,6 +101,24 @@ def main():
                 json.dump(state, stream)
             raise SystemExit(1)
         reply(True, {**receipt, "mutation": {"requestId": request, "replayed": False}}, state)
+    if command == "worker-release":
+        row = state["workers"][option(args, "--dispatch")]
+        if row["terminalState"] != "reclaimable":
+            reply(False, {"code": "worker_not_releasable", "message": f"terminal is {row['terminalState']}"})
+        row["terminalState"] = "released"
+        state["releases"] = state.get("releases", 0) + 1
+        reply(True, {"dispatchId": row["dispatchId"], "state": "released"}, state)
+    if args[:2] == ["worktree", "rm"]:
+        place = option(args, "--worktree")[len("path:"):]
+        state["removal_attempts"] = state.get("removal_attempts", 0) + 1
+        done = None if state.get("removal_fails") or "--force" in args else subprocess.run(
+            ["git", "-C", state["worktrees"][place], "worktree", "remove", place], capture_output=True, text=True)
+        if done is None or done.returncode:
+            reply(False, {"code": "worktree_remove_failed", "message": done.stderr if done else "the disk said no"}, state)
+        reply(True, {"removed": True}, state)
+    if args[:2] == ["terminal", "list"]:
+        place = option(args, "--worktree")[len("path:"):]
+        reply(True, {"terminals": state.get("open_terminals", {}).get(place, [])})
     if command == "worker-show":
         row = state["workers"].get(option(args, "--dispatch"), {})
         reply(True, {"dispatch": {"id": row.get("dispatchId"), "status": row.get("dispatchStatus"),

@@ -103,8 +103,12 @@ def workers(run: str) -> list[dict]:
     while True:
         args = ["orchestration", "worker-list", "--run", run, "--limit", "100"] + (["--cursor", cursor] if cursor else [])
         result = call(*args)
-        rows += [{"dispatch": row.get("dispatchId"), "task": row.get("taskId"), "state": row.get("workerState"),
-                  "status": row.get("dispatchStatus"), "terminal": row.get("terminalState")} for row in result.get("workers", [])]
+        for row in result.get("workers", []):
+            held = row.get("resource") or {}
+            rows.append({"dispatch": row.get("dispatchId"), "task": row.get("taskId"), "state": row.get("workerState"),
+                         "status": row.get("dispatchStatus"), "terminal": row.get("terminalState"),
+                         "owned": held.get("ownershipState") == "owned", "retained": held.get("retainedReason"),
+                         "worktree": str(held.get("worktreeId") or "").partition("::")[2] or None})
         page = result.get("page") or {}
         cursor = page.get("nextCursor")
         if not page.get("hasMore") or not cursor:

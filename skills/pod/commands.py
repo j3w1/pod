@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from . import github, gitio, issue, log, orca, proof, routefile
+from . import cleanup, github, gitio, issue, log, orca, proof, routefile
 from .errors import PodError
 from .state import ROLES, State, fold
 
@@ -448,7 +448,11 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
         if not entries:
             raise PodError("nothing_to_record", "Nothing was named to record.", fix="run `pod record --help`")
         writer.append(*entries)
-        return {"recorded": done, "entries": [row["n"] for row in writer.entries[-len(entries):]]}
+        result = {"recorded": done, "entries": [row["n"] for row in writer.entries[-len(entries):]]}
+        after = fold(writer.entries)
+        if after.closed and not state.closed:          # an objective that needs no delivery just ended
+            result.update(cleanup.tidy(writer, root, after, target_head=_target_head(root, after)))
+        return result
 
 
 def _line(text: str, limit: int = 160) -> str:
@@ -568,13 +572,18 @@ def resume(cwd: Path, objective: str | None) -> dict:
     return view(root, state)
 
 
+def _target_head(root: Path, state: State) -> str | None:
+    target = state.objective["target"]
+    return gitio.fetch(root, "origin", target) or gitio.known(root, f"origin/{target}") or gitio.known(root, target)
+
+
 def drop(cwd: Path, objective: str | None, *, why: str) -> dict:
-    target, _, _ = locate(cwd, objective)
+    """Stop an objective. Its settled workers are released; unfinished or unmerged work is left where it is."""
+    target, root, _ = locate(cwd, objective)
     with log.writer(target) as writer:
         state = fold(writer.entries)
         if not state.dropped:
             writer.append({"kind": "objective", "dropped": True, "why": why})
-        live = [key for key, value in (_live(state) if state.objective.get("run") else {}).items() if value is not False]
-    return {"objective": state.id, "state": "dropped",
-            **({"still_running": live, "next": "stop these workers through Orca; Pod holds nothing for a dropped objective"}
-               if live else {})}
+        state = fold(writer.entries)
+        return {"objective": state.id, "state": "dropped",
+                **cleanup.tidy(writer, root, state, target_head=_target_head(root, state))}

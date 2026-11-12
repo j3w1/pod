@@ -9,7 +9,7 @@ a repeated call after a lost response settles what happened instead of doing it 
 from pathlib import Path
 import time
 
-from . import github, gitio, issue, log, project, proof, routefile, verifier
+from . import cleanup, github, gitio, issue, log, project, proof, routefile, verifier
 from .errors import PodError
 from .state import State, fold
 
@@ -184,9 +184,7 @@ def deliver(cwd: Path, objective: str | None, *, check: bool = False, commit: st
                                        merge_commit=((request or {}).get("mergeCommit") or {}).get("oid") if landed else None))
                 delivered = True
         if delivered:
-            state = fold(writer.entries)
-            return {"objective": state.id, "merged": candidate, **_update_issue(writer, state, request),
-                    "state": "closed" if fold(writer.entries).closed else "open"}
+            return _report(writer, root, candidate, request, verdict["target_head"])
         if not verdict["pass"]:
             if any(state.merged(effect) for effect in state.merges()):
                 _update_issue(writer, state, request)        # an earlier delivery's proof is still owed to the issue
@@ -212,9 +210,20 @@ def deliver(cwd: Path, objective: str | None, *, check: bool = False, commit: st
             raise PodError("merge_unknown", "The merge was requested and its outcome could not be read.",
                            fix="run `pod deliver` again; it reads GitHub first and never merges twice")
         writer.append(_outcome(ident, True, "pull request merged", merge_commit=(after.get("mergeCommit") or {}).get("oid")))
-        state = fold(writer.entries)
-        return {"objective": state.id, "merged": candidate, "merge_commit": (after.get("mergeCommit") or {}).get("oid"),
-                **_update_issue(writer, state, after), "state": "closed" if fold(writer.entries).closed else "open"}
+        return {"merge_commit": (after.get("mergeCommit") or {}).get("oid"),
+                **_report(writer, root, candidate, after, verdict["target_head"])}
+
+
+def _report(writer, root: Path, candidate: str, request: dict | None, target_head: str | None) -> dict:
+    """What a delivery left behind it: the issue updated, and, once the objective is closed, its workers and
+    worktrees released. Neither can undo the merge; what could not be done is said and tried again next time."""
+    result = {"objective": fold(writer.entries).id, "merged": candidate, **_update_issue(writer, fold(writer.entries), request)}
+    state = fold(writer.entries)
+    result["state"] = "closed" if state.closed else "open"
+    if state.closed:
+        tidied = cleanup.tidy(writer, root, state, target_head=target_head)
+        result.update({**tidied, **({"next": result.get("next") or tidied["next"]} if tidied.get("next") else {})})
+    return result
 
 
 def _on_target(root: Path, state: State, candidate: str, head: str | None) -> bool:
