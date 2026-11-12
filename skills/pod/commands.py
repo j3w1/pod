@@ -121,7 +121,9 @@ def packet(state: State, assignment: dict, spec: str) -> str:
             lines.append("- Read as context: " + ", ".join(assignment["context"]))
     else:
         lines.append("- Read only. Change nothing.")
-    lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.", "",
+    lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.",
+              "- Leave this terminal's name as it is. Orca treats a renamed worker terminal as kept by a person and",
+              "  will not release it when the work is done.", "",
               "## Result", "",
               "Finish through Orca as its instructions say. The body of your final worker_done message must end with",
               "this JSON object, filled in, on its own line. It is the only part of your report that is read by software;",

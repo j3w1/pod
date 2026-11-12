@@ -99,6 +99,10 @@ review by a worker that changed nothing.
   GitHub first and never merges twice.
 - An objective closes by itself when its delivery is merged and no criterion is open. Nothing
   closes it by hand. `pod drop --why "…"` stops one that will not be delivered.
+- Cleanup needs nothing from you. The command that ends an objective releases its settled
+  workers and removes the worktrees it had Orca create, when they are clean and fully
+  delivered. It lists what it kept and why (still running, kept open, uncommitted or unmerged
+  work); deal with those and run the same command again, or leave them. Never force a removal.
 
 ## Routes and models
 

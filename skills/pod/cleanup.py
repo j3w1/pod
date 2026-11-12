@@ -7,6 +7,11 @@ is disposable: its tree is clean and every commit it holds was delivered or is o
 Anything running, kept open, changed, unmerged, shared or unreadable is left exactly as it is
 and named with the reason. A removal that fails changes nothing about the delivery; running
 the same command again tries again.
+
+Orca keeps the terminal of a worker that got its own worktree open by default and reports it
+exactly as it reports one a person kept open. Such a terminal therefore goes with its worktree:
+it is released only when the worktree itself may be removed. In any other worktree a kept
+terminal is never released.
 """
 
 from pathlib import Path
@@ -36,22 +41,22 @@ def tidy(writer, root: Path, state: State, *, target_head: str | None) -> dict:
         if worker is None or orca.live(worker):
             kept.append(f"{name}: {'still running' if worker else 'Orca does not list it'}")
             continue
+        place = worker.get("worktree")
+        made = str(row.get("worktree", "")).startswith("new-") and place and Path(place) != root   # Orca made it for this assignment
+        if made and Path(place).is_dir() and not any(place == path for path, _, _ in remove):
+            reason = _why_keep(Path(place), safe, worker, list(workers.values()))
+            if reason:
+                kept.append(f"worktree {place}: {reason}")
+            else:
+                remove.append((place, gitio.branch(Path(place)), gitio.commit(Path(place))))
+                if worker["terminal"] in ("reclaimable", "retained") and worker["owned"]:
+                    release.append(row["dispatch"])       # its terminal goes with its worktree
+                continue
         if worker["terminal"] == "reclaimable" and worker["owned"]:
             release.append(row["dispatch"])
-        elif worker["terminal"] not in ("released", "reclaimable"):
+        elif worker["terminal"] not in ("released", "reclaimable") and not (made and Path(place).is_dir()):
             kept.append(f"{name}: its terminal is {worker['terminal'] or 'in an unknown state'}"
                         + (f" ({worker['retained']})" if worker.get("retained") else ""))
-        place = worker.get("worktree")
-        if not str(row.get("worktree", "")).startswith("new-") or not place or Path(place) == root:
-            continue                    # only a worktree this objective asked Orca to make for the assignment
-        if not Path(place).is_dir() or any(place == path for path, _, _ in remove):
-            continue
-        reason = _why_keep(Path(place), safe, [other for other in workers.values()
-                                               if other.get("worktree") == place and orca.live(other)])
-        if reason:
-            kept.append(f"worktree {place}: {reason}")
-        else:
-            remove.append((place, gitio.branch(Path(place)), gitio.commit(Path(place))))
     if not release and not remove:
         return {"cleanup": {"kept": kept}} if kept else {}
     ident = state.next_id("k", state.effects)
@@ -66,9 +71,6 @@ def tidy(writer, root: Path, state: State, *, target_head: str | None) -> dict:
             kept.append(f"worker {dispatch}: Orca did not release it ({exc.code})")
     for place, branch, head in remove:
         try:
-            if orca.call("terminal", "list", "--worktree", f"path:{place}").get("terminals"):
-                kept.append(f"worktree {place}: a terminal is still open in it")
-                continue
             orca.call("worktree", "rm", "--worktree", f"path:{place}")     # never forced: Orca and Git refuse what is not clean
             removed.append(place)
         except PodError as exc:
@@ -84,16 +86,19 @@ def tidy(writer, root: Path, state: State, *, target_head: str | None) -> dict:
     return result
 
 
-def _why_keep(place: Path, safe: list[str], users: list) -> str | None:
-    """Why a worker worktree must stay, or None when Git shows it holds nothing that would be lost."""
+def _why_keep(place: Path, safe: list[str], worker: dict, workers: list) -> str | None:
+    """Why a worker worktree must stay, or None when Git and Orca show nothing would be lost."""
     try:
-        if users:
+        if any(other is not worker and other.get("worktree") == str(place) and orca.live(other) for other in workers):
             return "another worker is running in it"
         if gitio.dirty(place):
             return "it has uncommitted or untracked files"
         head = gitio.commit(place)
         if not any(gitio.is_ancestor(place, head, commit) for commit in safe):
             return "it holds commits that were not delivered"
+        open_ = orca.call("terminal", "list", "--worktree", f"path:{place}").get("terminals") or []
+        if any(terminal.get("handle") != worker.get("handle") for terminal in open_):
+            return "a terminal other than its worker's is open in it"
     except PodError as exc:
         return f"its state could not be read ({exc.code})"
     return None

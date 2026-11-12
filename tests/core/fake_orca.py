@@ -33,6 +33,9 @@ def option(args, name, default=None):
 
 
 def main():
+    if "--full" in sys.argv and sys.argv[1] != "orchestration":
+        print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": "Unknown flag --full"}}))
+        raise SystemExit(1)
     args = [item for item in sys.argv[1:] if item not in ("--json", "--full")]
     state = load()
     command = args[1] if args[:1] == ["orchestration"] else None
@@ -85,6 +88,7 @@ def main():
             place = where[len("path:"):]
         state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
                                       "dispatchStatus": "dispatched", "terminalState": "active",
+                                      "agentTerminalHandle": f"term_{dispatch}", "ownWorktree": where.startswith("new-"),
                                       "resource": {"ownershipState": "owned", "retainedReason": None,
                                                    "worktreeId": f"repo::{place}"}}
         route = {"agent": option(args, "--agent"), "model": option(args, "--model"), "effort": option(args, "--effort")}
@@ -103,7 +107,7 @@ def main():
         reply(True, {**receipt, "mutation": {"requestId": request, "replayed": False}}, state)
     if command == "worker-release":
         row = state["workers"][option(args, "--dispatch")]
-        if row["terminalState"] != "reclaimable":
+        if row["terminalState"] not in ("reclaimable", "retained"):      # an explicit release also ends a kept terminal
             reply(False, {"code": "worker_not_releasable", "message": f"terminal is {row['terminalState']}"})
         row["terminalState"] = "released"
         state["releases"] = state.get("releases", 0) + 1
@@ -118,7 +122,9 @@ def main():
         reply(True, {"removed": True}, state)
     if args[:2] == ["terminal", "list"]:
         place = option(args, "--worktree")[len("path:"):]
-        reply(True, {"terminals": state.get("open_terminals", {}).get(place, [])})
+        own = [{"handle": row["agentTerminalHandle"]} for row in state["workers"].values()
+               if row["resource"]["worktreeId"].endswith("::" + place) and row["terminalState"] in ("active", "retained", "reclaimable")]
+        reply(True, {"terminals": own + state.get("open_terminals", {}).get(place, [])})
     if command == "worker-show":
         row = state["workers"].get(option(args, "--dispatch"), {})
         reply(True, {"dispatch": {"id": row.get("dispatchId"), "status": row.get("dispatchStatus"),

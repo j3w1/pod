@@ -95,7 +95,11 @@ class CoreCase(PodCase):
             {"outcome": outcome, "subject": "report", "body": body}))
         for worker in state["workers"].values():
             if worker["taskId"] == task:
-                worker.update(workerState=outcome, dispatchStatus="completed", terminalState="reclaimable")
+                # Orca keeps the terminal of a worker that got its own worktree, and says a person asked for that.
+                kept = worker.get("ownWorktree")
+                worker.update(workerState=outcome, dispatchStatus="completed", terminalState="retained" if kept else "reclaimable")
+                if kept:
+                    worker["resource"]["retainedReason"] = "user_requested"
         self.orca_file.write_text(json.dumps(state))
 
     def entries(self, objective: str) -> list[dict]:

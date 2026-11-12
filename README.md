@@ -84,7 +84,10 @@ preference file if you want the coordinator to decide.
 Objectives are not tied to a terminal or a conversation. Start a new conversation in the
 objective's worktree and it runs `pod resume`: Orca moves the Run to it, and the status shows
 where things stand, including the note the earlier conversation left. An objective closes by
-itself once its delivery is merged and no criterion is open.
+itself once its delivery is merged and no criterion is open. The same command then releases
+the objective's finished workers and removes the worktrees it had Orca create, when Git shows
+they hold nothing undelivered; anything running, kept open, changed or unmerged stays and is
+named.
 
 ## Models and routes
 

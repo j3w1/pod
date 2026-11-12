@@ -23,7 +23,8 @@ def call(*args: str, stdin: str | None = None, timeout: int = 90) -> dict:
     """One Orca command. Returns its result, or raises the refusal Orca gave."""
     what = " ".join(args[:2])
     try:
-        done = subprocess.run(["orca", *args, "--json", "--full"], capture_output=True, timeout=timeout,
+        flags = ["--json", "--full"] if args[0] == "orchestration" else ["--json"]     # only orchestration has a short view
+        done = subprocess.run(["orca", *args, *flags], capture_output=True, timeout=timeout,
                               input=None if stdin is None else stdin.encode())
     except FileNotFoundError as exc:
         raise PodError("orca_unavailable", "The `orca` command is not on PATH.", fix="install Orca or run Pod inside it") from exc
@@ -107,6 +108,7 @@ def workers(run: str) -> list[dict]:
             held = row.get("resource") or {}
             rows.append({"dispatch": row.get("dispatchId"), "task": row.get("taskId"), "state": row.get("workerState"),
                          "status": row.get("dispatchStatus"), "terminal": row.get("terminalState"),
+                         "handle": row.get("agentTerminalHandle"),
                          "owned": held.get("ownershipState") == "owned", "retained": held.get("retainedReason"),
                          "worktree": str(held.get("worktreeId") or "").partition("::")[2] or None})
         page = result.get("page") or {}

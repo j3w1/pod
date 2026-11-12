@@ -78,8 +78,9 @@ class CleanupTests(CleanupCase):
         running = commands.dispatch(self.repo, None, role="investigate", title="still looking", spec="Look.")
         self.review("pass")
         state = self.orca()
-        state["workers"]["ctx_1"].update(terminalState="retained")
-        state["workers"]["ctx_1"]["resource"]["retainedReason"] = "kept open by the person"
+        reviewer = max(state["workers"], key=lambda key: int(key.split("_")[1]))       # it worked in the objective's own worktree
+        state["workers"][reviewer].update(terminalState="retained")
+        state["workers"][reviewer]["resource"]["retainedReason"] = "user_requested"
         state["open_terminals"] = {str(visited): [{"handle": "term_person"}]}
         self.orca_file.write_text(json.dumps(state))
         commands.record(self.repo, None, met=["c1", "c2"], why="seen", authorize=True, words="merge it")
@@ -87,17 +88,17 @@ class CleanupTests(CleanupCase):
         output = gate.deliver(self.repo, None)
         self.assertEqual(output["state"], "closed")
         kept = "\n".join(output["cleanup"]["kept"])
-        for reason in ("still running", "its terminal is retained (kept open by the person)",
+        for reason in ("still running", "(review): its terminal is retained (user_requested)",
                        f"worktree {dirty}: it has uncommitted or untracked files",
                        f"worktree {ahead}: it holds commits that were not delivered",
-                       f"worktree {visited}: a terminal is still open in it"):
+                       f"worktree {visited}: a terminal other than its worker's is open in it"):
             self.assertIn(reason, kept)
         self.assertTrue(dirty.exists() and ahead.exists() and visited.exists())
         self.assertEqual((dirty / "notes.txt").read_text(), "not committed\n")
         self.assertEqual(len(self.git(self.repo, "branch", "--list", "worker/*").splitlines()), 3)
         workers = self.orca()["workers"]
-        self.assertEqual((workers["ctx_1"]["terminalState"], workers[running["dispatch"]]["terminalState"]),
-                         ("retained", "active"))
+        self.assertEqual([workers[key]["terminalState"] for key in ("ctx_1", "ctx_2", "ctx_3", reviewer, running["dispatch"])],
+                         ["retained", "retained", "retained", "retained", "active"])     # nothing kept was released
         self.assertNotIn("removed", output["cleanup"])
 
     def test_a_worktree_another_worker_is_still_using_stays(self):
@@ -146,7 +147,8 @@ class CleanupTests(CleanupCase):
         self.assertEqual(output["cleanup"]["removed"], [str(empty)])          # it never held anything of its own
         self.assertIn(f"worktree {unmerged}: it holds commits that were not delivered", output["cleanup"]["kept"])
         self.assertTrue(unmerged.exists())
-        self.assertEqual(self.orca()["releases"], 2)
+        states = [row["terminalState"] for row in self.orca()["workers"].values()]
+        self.assertEqual((self.orca()["releases"], states), (1, ["retained", "released"]))   # the unfinished work keeps its terminal
 
     def test_an_objective_without_a_delivery_is_tidied_when_its_last_criterion_is_met(self):
         commands.open_(self.repo, text="Find out why", objective="why", delivery=False)

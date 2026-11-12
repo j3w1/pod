@@ -26,7 +26,7 @@ on Pod.
 | Criterion | Text and `open`, `met` (with fact numbers or what was observed) or `dropped` (with why). One that can only be proved after a merge is marked so |
 | Assignment | Orca Task and Dispatch ids, the digest of the frozen packet, role, declared paths, base commit, requested route |
 | Fact | Immutable: a worker result, check, review with findings, CI readback, authorization, waiver, scope change, decision, takeover. Names its commit and tree where it has one |
-| Effect | The intent and the provider-read outcome of a merge or an issue update |
+| Effect | The intent and the read-back outcome of an action Pod performs: a merge, an issue update, a cleanup |
 
 **Storage.** One append-only file per objective at
 `<state home>/objectives/<repository>/<objective>.jsonl`, one JSON entry per line, written
@@ -115,6 +115,27 @@ that performs delivery itself. A delivery someone else performed is recorded onc
 request shows merged into the target at the candidate, or, for a commit the objective recorded
 work or proof for, Git shows it on the target. A withdrawal of authorization holds until the
 person authorizes again.
+
+## Cleanup when an objective ends
+
+Pod plans nothing and keeps no list of resources (`skills/pod/cleanup.py`). When an objective
+closes or is dropped, the command that ended it (`deliver`, a `record` that meets the last
+criterion of an objective without a delivery, or `drop`) reads the objective's workers from
+Orca and:
+
+- asks Orca to release each settled worker whose terminal Orca reports as reclaimable;
+- asks Orca to remove each worktree the objective itself asked Orca to create for an assignment
+  (`pod dispatch --worktree new-…`), when Git shows it is clean and every commit it holds was
+  delivered or is on the target, and then deletes that worktree's branch.
+
+Nothing is forced. A worker still running, a terminal kept open, a worktree with uncommitted,
+untracked or undelivered work, one another worker or a person's terminal is using, anything
+Orca cannot be read about, the objective's own worktree and branch, and everything belonging
+to another objective are left exactly as they are and named with the reason. A removal that
+fails says what remains and never changes the delivery; running the same command again tries
+again. The only record is one effect entry saying what was released and removed. There is no
+cleanup command, plan, state or host dependency; a host that manages worktrees itself still
+reads `pod status --all --json`, in which a closed or dropped objective holds nothing.
 
 ## Interfaces other tools may use
 
