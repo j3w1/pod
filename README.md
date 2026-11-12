@@ -1,27 +1,30 @@
 # Pod
 
-Pod helps a Codex or Claude Code conversation coordinate a software objective. It can use direct work, tools, or Orca workers while keeping the current conversation in charge.
+Pod helps a Codex or Claude Code conversation deliver a software objective through Orca. The
+conversation stays in charge. Pod keeps the few things nothing else keeps: what was asked,
+what proves it, and one gate before a merge.
 
 ## Install
 
-On Linux, with the latest stable Python (including `venv`), Node/npx, curl or wget, and access to GitHub and PyPI:
+On Linux, with the latest stable Python, Node/npx, curl or wget, and access to GitHub:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh
 ```
 
-This installs the Pod skill for Codex and Claude Code, a user-local `pod` command, and a small isolated Python dependency environment. If you have no personal preference file, it enables every supported model+effort route; an existing file is never rewritten. Open a new shell if the installer adds `~/.local/bin` to your PATH. For a download, inspect, then run path and removal details, see [installation and security](docs/installation.md).
+This installs the Pod skill for Codex and Claude Code and a user-local `pod` command. Pod has
+no third-party Python dependency. A first preference file enables the supported routes (never
+an `ultra` effort); an existing preference file is never rewritten. Open a new
+shell if the installer adds `~/.local/bin` to your PATH. For a download, inspect, then run
+path and removal details, see [installation and security](docs/installation.md).
 
 ## Contents
 
 - [How it works](#how-it-works)
 - [The basic workflow](#the-basic-workflow)
-- [How Pod looks in Orca](#how-pod-looks-in-orca)
-- [Plan, direct work, and continuation](#plan-direct-work-and-continuation)
-- [Who decides and sensitive tools](#who-decides-and-sensitive-tools)
-- [Models and the terminal view](#models-and-the-terminal-view)
-- [Delivery and cleanup](#delivery-and-cleanup)
-- [Troubleshooting](#troubleshooting)
+- [Review and evidence](#review-and-evidence)
+- [Continuing later](#continuing-later)
+- [Models and routes](#models-and-routes)
 - [What's inside](#whats-inside)
 - [Philosophy](#philosophy)
 - [Updating and removing](#updating-and-removing)
@@ -29,133 +32,113 @@ This installs the Pod skill for Codex and Claude Code, a user-local `pod` comman
 
 ## How it works
 
-Your existing authenticated session remains the coordinator, with its current model and effort. Orca owns Runs, Tasks, Dispatches, worker tabs, messages, request recovery, worktrees, and lifecycle. Pod makes assignment choices, checks them at admission, and binds evidence to the objective. Your project decides what counts as accepted.
+Your existing authenticated session is the coordinator, with its current model and effort.
+Orca owns Runs, Tasks, workers, messages and worktrees. Git owns content. GitHub owns checks
+and merges. Your project decides what counts as accepted. Pod stores identifiers for all of
+those and reads them when it needs an answer, so its own record is small: an objective, its
+criteria, the facts that prove them, and the effects it performed.
 
-Pod reads an issue completely before using it as scope. It checks that the issue belongs to the actual repository and notices material body changes. Issue text cannot grant authority. A SEAL supplies requirements; Pod refuses it as the primary executable issue, including from another repository or a directory without GitHub repository identity. Use read-only SEAL delivery planning, a bounded PES citing selected SEAL requirements, or an explicitly scoped analysis request. An Evidence Evaluation Ledger issue, titled `EEL:` or marked with its format line, is evidence only: Pod refuses to execute from it, and implementation needs a separate Pod Execution Spec that cites it. A direct objective follows the same process without an issue.
+Simple work needs no objective. Open one when the work is delivered through a pull request,
+uses workers, or must survive the conversation.
 
 ## The basic workflow
 
 1. Open the project in Orca and start a Codex or Claude Code conversation.
-2. In Codex, say `$pod https://github.com/owner/project/issues/123`; in Claude Code, use `/pod <issue-url>`. You can also give either skill a direct objective.
-3. Review the objective and criterion-to-check map when the task warrants one. Plan Mode remains read-only until you accept the plan.
-4. Let the coordinator do simple work directly and delegate bounded independent assignments only when useful. Workers follow Orca's native launch path and your setting for new agent tabs. `pod status` reports placement and any native discoverability warning.
-5. Review the local checks, independent review, hosted CI, and project acceptance as separate evidence. Pod reports remaining gates and uncertain native work instead of assuming success. Reviewers never edit: each reads its whole scope and reports every finding at once, then one fix round and a follow-up review of the changes settle them.
+2. In Codex, say `$pod https://github.com/owner/project/issues/123`; in Claude Code, use
+   `/pod <issue-url>`. You can also give a direct objective in a sentence.
+3. The coordinator runs `pod open`, which reads the issue and returns its criteria. A Proof
+   of Done checklist, when the issue has one, becomes the criteria.
+4. It works directly, or starts workers with `pod dispatch`: an implementer on declared
+   paths, a reviewer on a committed candidate, an investigator that only reads. Workers run
+   only on model routes you enabled.
+5. When a worker reports, `pod accept` reads its result from Orca and its diff from Git, and
+   flags anything outside the declared paths. The coordinator states only what it did with
+   the result.
+6. `pod deliver` runs the gate. It lists what is missing, or merges the exact reviewed
+   candidate once, ticks the proved checklist items on the issue and comments the evidence.
 
-For persistent issue-backed work, the [Issue intake reference](https://github.com/j3w1/pod/blob/main/skills/pod/references/issue-intake.md) explains issue intake; the canonical [SEAL](https://github.com/j3w1/pod/blob/main/skills/pod/references/seal-template.md), [PES](https://github.com/j3w1/pod/blob/main/skills/pod/references/pes-template.md) and [EEL](https://github.com/j3w1/pod/blob/main/skills/pod/references/eel-template.md) authoring templates explain their separate roles and section responsibilities. The PES authoring template includes numbered Proof of Done items. Parent requirements are traceable sources, with their selected requirements and Limits reconciled; they do not replace the child repository target. Authoring in ChatGPT and executing in Orca are separate steps; installation adds no ChatGPT integration.
+`pod status` shows the picture at any time: criteria, workers, open findings and what
+delivery still needs.
 
-## How Pod looks in Orca
+## Review and evidence
 
-Pod names what it creates, so Orca shows each objective as a readable tree. Orca supplies the live status after the dash; Pod supplies the names:
+Whether an independent review is required is your project's rule, kept in `.pod/config.yaml`
+on the target branch. When it is required, every file the candidate changes needs a passing
+review by a worker that changed nothing.
 
-```
-Copilot retirement (#172)
-  Coordinator - <live status>
-  1 child
-    Source retirement
-      Implementer - <live status>
-      Reviewer · round 1
-      Follow-up reviewer · round 2
-```
+Pod derives what a review still covers from Git: a review holds for a file while that file's
+content is unchanged. After a correction only the corrected files need another look, and
+merging the target branch reopens only files whose content changed in your candidate. Nobody
+declares what carries over.
 
-- **Task worktree.** It keeps the name you or your host gave it. If it has none and it is not the main checkout, Pod names it after the task and its issue.
-- **Coordinator tab.** Your conversation's tab is `Coordinator`, or `Coordinator · <task>` when it runs elsewhere, such as on a main checkout. A known wait for you adds `needs you` when Pod owns the title; host-owned names stay unchanged.
-- **Worker worktrees.** A worker that gets its own new, unnamed worktree has it named by its job, linked to the task worktree and the issue, and marked in progress, in review or completed. A worktree your host already named keeps its name and metadata.
-- **Worker tabs.** Tabs carry only a role: Implementer, Investigator, Reviewer, Follow-up reviewer (which reviews only the changes since the previous round) or Fixer. A round number appears once there is more than one review round, and `(continued)` marks resumed work. A worker sharing the task worktree adds its job, such as `Implementer · Source retirement`. Pod names worker tabs only through Orca's metadata and never types into them, so a finished worker can still be released or reused.
+Evidence is recorded only when it was observed and always names its exact commit. Worker
+success, local checks, hosted checks, independent review and the merge are separate facts.
+Something that could not be read stays unknown.
 
-Names never include ids, branches or prompt text, and Pod never renames something your host named. The coordinator runs the Orca commands Pod supplies, then `pod internal display` compares them with what Orca reports. Desktop rows show these titles from the first Orca release containing stablyai/orca#30037 (after 1.4.229). On an older Orca a row can still show the agent's own title, and Pod reports that as an Orca limitation rather than success.
+A merge needs your authorization: your words recorded for the exact commit, a standing one
+for the objective, or your host's verifier. Set `merge_authorization: coordinator` in your
+preference file if you want the coordinator to decide.
 
-## Plan, direct work, and continuation
+## Continuing later
 
-- Direct task: `/pod update the README to explain this feature`.
-- Plan only: `/pod <issue-url> — plan only; do not change files`.
-- Plan SEAL delivery: `/pod https://github.com/owner/project/issues/<SEAL>` reconciles existing delivery first. If work remains, Pod confirms the outcome with you before proposing bounded PESs; if nothing remains, it reports that and stops. Planning writes nothing without authorization and stops at the published PESs.
-- Run an approved PES: `/pod https://github.com/owner/project/issues/<PES>` starts that bounded objective in its target repository, with its own proof and delivery checks.
-- Plan then execute: accept the host plan and continue in the same conversation.
-- Continue after interruption: invoke the same objective; Pod reads the native state and reconciles unresolved requests before another start.
+Objectives are not tied to a terminal or a conversation. Start a new conversation in the
+objective's worktree and it runs `pod resume`: Orca moves the Run to it, and the status shows
+where things stand, including the note the earlier conversation left. An objective closes by
+itself once its delivery is merged and no criterion is open.
 
-A small task can finish with zero workers. Missing Orca delegation support blocks delegation while safe direct work and diagnosis continue. Pod does not configure Orca or sign in to your agent applications.
+The command that ends an objective (`pod deliver`, a `pod record` that meets its last
+criterion, or `pod drop`) also cleans up after it. It asks Orca to release the objective's
+finished workers and to remove the worktrees it had Orca create for them, when Git shows they
+are clean and hold nothing undelivered. Anything running, changed, unmerged or in use stays
+and is named, and a terminal you kept open is left alone unless it is the worker's own
+terminal in such a worktree, which goes with the worktree. To retry, run `pod deliver` again,
+or `pod drop` again for a dropped objective.
 
-## Who decides and sensitive tools
+## Models and routes
 
-On first use, Pod asks who should decide on this machine. Careful asks you about consequential changes; Delegate lets trusted agents decide; Hands-off lets agents decide; Custom lets you choose by category. Skipping keeps Careful. Use `pod policy` to answer or change the choice, without editing a file. New spending, policy changes and human-only login steps always need you. Normal included subscription use, routine continuity, closure, PoD ticking and already-authorized cleanup remain automatic.
+`pod models` opens a keyboard-driven workspace in your terminal: every exact model and effort
+route Pod can use, what the installed agents report, public benchmark observations, and your
+choices. Enable or disable routes, set a Preferred route or a Pin. Press `R`, or run
+`pod models refresh`, to fetch the public leaderboard; nothing else touches the network.
 
-Before every sensitive tool use, the agent runs `pod tool check` with the tool, category and intended operation. Pod remembers whether that tool/category may be used hands-off or needs an answer each time; the stricter policy wins. `pod tool review --tool ID --category CATEGORY` asks again when you want to change a non-money permission. An operation answer applies only to its pending use, and new spending never gets hands-off permission. `pod status --json` shows the policy, remembered modes and when they changed, and actual waits for you or an agent. Pod neither discovers nor executes tools and never needs secret values. These checks are cooperative unless your host enforces them; shared-account claims about who answered are cooperative unless a host verifier attests the person.
+A green `*` marks a benchmark cost that is high value: no other routable route costs less
+while scoring no more than two index points lower, and its index is in the upper half. Both
+comparisons are among routable routes with a measured index and cost, whether or not you
+enabled them; rows with an estimated index or a fallback profile take no part. Benchmark cost is not a
+subscription charge, a quota or a task duration, and a public listing never makes a route
+usable or changes a preference. Only you change your preferences.
 
-Detailed instructions live in the [decision reference](skills/pod/references/decisions.md). Host and project rules still apply, and a trusted agent can approve only within its verified scope.
-
-## Models and the terminal view
-
-`pod`, or `pod models`, opens the model workspace in a terminal; without a TTY it prints the route table. Each supported row is one exact route, a model at one effort such as `codex/gpt-6.1-sol/high`. The supported models are Claude Opus 5.5, Fable 5.1, Sonnet 5.5 and Haiku 5.5 (`claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5-5`, `claude-haiku-5-5`) and GPT-6 Astra, GPT-6.1 Sol and GPT-6 Luna (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`), each at `low`, `medium`, `high`, `xhigh` and `max`.
-
-The table starts sorted by Artificial Analysis (AA) index, with unknown values last. `s` and `S` change the sort, `g` groups routes by model, `/` searches, `f` and `o` filter by provider and discovery, `:` or Ctrl+P opens the command palette, and `?` lists every key. A full-width inspector at the bottom has Details, Benchmarks, Routing and Sources tabs. `c` marks up to four routes to compare, and `e` marks the AA frontier within each like-for-like set of shown rows; both are display only. A † beside a value means AA measured that profile "with fallback", its own harness, which never enables Pod fallback. AA benchmark cost is not your subscription charge, quota or Pod invoice, and benchmark response time is not worker task duration.
-
-Space enables or disables the focused route, and the palette can return it to not set. `P` makes it your Preferred route and `p` pins it; pressing again clears them. `b` previews a bulk change, such as all efforts of one model, and saves it once. Edits save immediately to your personal file; browsing, sorting, filtering and comparing never do.
-
-The personal YAML at `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` is the single route preference authority. `pod config --json` shows its path, status, enabled routes, Preferred and Pin; `pod config edit` opens it in your editor. A route the file does not list is not set, which means not eligible.
-
-The coordinator chooses a suitable enabled route and an exact effort for each assignment. It uses your Preferred route when that route suits the work; choosing another needs a material task-specific reason, which Pod records. Outside a requested composite model rule, a Pin sends every new Pod-routed worker role, including corrections, to that exact model and effort with precedence over repository model rules, or nothing is dispatched; it never falls back or changes effort. It leaves the running coordinator, direct work and outside helpers unchanged, and clearing it restores ordinary routing. Orca has per-worker model and effort preferences but no scoped context flag, so Pod omits a context flag and records `native_default`. Benchmarks are dated observations, not a promise of native availability, billing, or the route Pod will choose.
-
-You can ask for arrangements in ordinary words, such as “Codex only”, “Claude only”, “any model at xhigh”, or a particular coordinator tuple with Codex workers. Pod records one approved requested rule, preserving unrelated restrictions. It filters before Pin, uses Preferred among allowed routes, and can use explicitly approved supported exact tuples outside the enabled pool. A replacement governs new starts; it leaves running agents unchanged. An “only” rule waits when no route fits unless the request explicitly permits a finite fallback. Missing actual coordinator readback stays unavailable; requested settings are not proof. See [model routing](docs/spec/models/routing.md).
-
-With the default `refresh: automatic`, opening the workspace refreshes public model data in the background when it is missing or at least a day old. `pod models refresh` refreshes explicitly, `pod models refresh --check` validates and compares without saving, and `pod models status` diagnoses sources and the cache offline. Set `refresh: manual` to stop automatic network access. Press `R` to refresh now and see AA rows added, changed and removed. Newly discovered and unsupported observations appear in the default view with clear labels; `o` cycles filters, including supported routes only. A refresh never changes your preferences, and an update leaves newly supported routes not set until you enable them.
-
-Temporary readiness failures remain local observations with unknown cause. Pod honors native retry-after or a 60-second reconsideration point; a later coordinator decision can retry, while expiry itself starts nothing. Preferences and the pin stay unchanged.
-
-## Delivery and cleanup
-
-Pod ticks proven PoDs on its bound PES issue and removes its own ticks when proof lapses; status names ambiguous ticks and blocked requests, and closure waits for writable due ticks.
-
-Before the first remote Git change without applicable authorization, Pod asks once whether to merge remotely, keep the result local, or defer. The decision shows the repository, target and exact candidate commit/tree. Merge consent includes publication, required CI, merge of that candidate and the stated post-merge verification. A changed candidate or target needs a new decision. Local-only performs no remote mutation and reports hosted checks as not run.
-
-When you trust an objective end to end, turn on yolo mode: `/pod <issue-url> yolo` (`$pod` in Codex), or say "use yolo from now on" later in the session. Pod then stops waiting for your consent to publish, merge, release, install and clean up each exact candidate, while every test, hosted CI run, independent review and merge check still runs. Production deployment, new paid or cloud resources, secrets, deleting unique work and anything beyond the objective's scope remain outside its default authority and follow the applicable decision policy. New spending always needs you, and host rules still apply. Say "stop yolo" to turn it off. A material change to the issue's requirements, an expiry you set, closure and a successor objective also end or suspend it, and it never carries over on its own. Status and the final report show the mode and every effect it authorized.
-
-After an authorized merge, Pod verifies the exact delivery record before closing the objective. A host that delivers by a protected local append instead records the delivery from its own verifier's read-back of the append; Pod checks the exact candidate and result itself and never appends. The coordinator records the merge outcome, the delivery record, every validation readback, report consumption and closure, in that order, closing in the same turn that proves delivery and consumes the final report, before it ends, is released or its tab closes; helper results name what still remains, and a closing write waits until the rest are recorded. Before cleanup, `pod sweep` closes stranded objectives by delivery evidence without an owner decision; `pod status --list --delivered` previews the proof. For cleanup, `pod internal cleanup-plan` reports this objective's integrated, unique and protected resources without deleting them. A coordinator-closed objective with every current proven PoD complete defaults to cleanup of its exact task leftovers without archives, including unmerged or uncommitted work. Current live, attached, reserved, role, identity and real-stash guards still hold. Other cleanup needs scoped consent and a fresh guarded plan; unique work is retained or preserved by a verified branch bundle unless separately confirmed for discard. Worker release is an explicit coordinator step. Finished tabs that Orca can release hold closure unless you have recorded an instruction to keep them; report acknowledgements name the exact release or close step.
-
-For managed remote actions, `governor-execute` admits and performs the supported action. A `governor` decision reserves it for the caller; an identical execution attaches to that reservation. Evidence binds full Git commit ids, and named REUSE carries unaffected proof across candidate changes using its declared scope. See [coordination](docs/spec/coordination.md) and [delivery](docs/spec/delivery.md).
-
-## Troubleshooting
-
-`pod doctor --json` reads installation ownership, version and bundle integrity, placements, preferences, cached model observations, and available Orca capability without starting a worker or fetching anything. `pod status --objective ID --json` selects an objective and shows scope, assignments, gates, progress and the next safe action. Its first line says in plain words whether the objective is working, waiting on someone, delivered but still finalizing, closed, or has lost its coordinator and how that can be recovered; `--json` carries the same answer as `readiness`, with the records that remain and whether the coordinator is still needed, and the objective list adds a short readiness label. The `worker_tabs` field lists finished workers’ connected tabs and their release, close or readback steps, including tabs whose agent liveness is stale or unverifiable. Owner-kept tabs are marked and named in the final report. A merged pull request or an idle coordinator alone never reads as closed. If Pod cannot verify native settlement, for example after an Orca runtime change, open assignments are shown as unverified rather than active, with the failed read and both runtimes. The next mutation rebinds an objective whose Run, coordinator and workers are unchanged, and asks for your decision when it cannot tell. When a Run has several objectives, status lists choices instead of picking one. A closed objective's assignments read as settled by its closure even after a runtime change. `pod status --list --json` lists every objective recorded for this repository (or `--worktree PATH`), with phase, worktrees and Runs, from Pod's own state; it needs no Orca terminal, so an administrator outside Orca can use it. After an owner-authorized Orca stop or restart ends the coordinators, run `pod continue --objective ID --json` from a new terminal in an objective's recorded worktree: once the host's authorization verifier confirms that window ended the coordinator, the new terminal continues the objective with no owner decision, keeping its history and leaving unfinished work unknown until it is recovered. Inside an Orca terminal, the list shows each open objective's continuation command, or the condition that blocks it, as a task for the project lead. A missing or invalid preference file leaves no eligible routes; use `pod config edit` to correct it. For preference upgrade setup, see [installation](docs/installation.md#updating-and-recovery).
-
-A coordinator that owns a live worker, an unconsumed report or an awaited reply keeps one outstanding native wait: `pod wake --run RUN` rechecks the Run's pending mail and, only if there is none, waits once for any message type; after it returns, the coordinator processes the result and arms one new wait. It returns the worker completions, failures and decisions that woke it, collapses duplicates, and replays an unacknowledged batch after compaction or a restart. `pod status` shows `wake`, marking a quiet coordinator that owns work as a candidate for a missed wake (Orca does not show whether a wait is held). Orca ends the wait; whether that resumes the agent depends on its runtime, and the wake reference states what is and is not established.
-
-If Orca reports the previous coordinator's handle stale or gone, `pod status --objective ID` may show `handoff_available`. For proved delivery, evidence closure is the next action. For unfinished work, an optional handoff asks one plain question to make the current terminal the objective coordinator. With your exact confirmation it records a pending handoff before rebinding the existing Run, then verifies and completes it; a lost response can resume without a second rebind. Work is preserved, and a manual `run-use` cannot establish handoff lineage. Status names any blocking identity, live coordinator or shared Run. A closed peer on the same Run can also hold handoff when its retained REUSE changed definition and the original scope was never recorded. Ordinary work remains available; status names the unverifiable peer, and confirmation cannot override this hold.
-
-When a coordinator is gone and its work settled, a successor objective can continue it instead. After the successor's first checkpoint, `pod internal succession` names the predecessor and returns one plain question; with your instruction the predecessor records `continued_by` and refuses every later write, including from its old terminal, with `objective_continued`. Its assignments read as settled by the claim. Its unsettled Governor effects that Pod can read back move to the successor, which settles them only by reading them back and never repeats them; a release or deploy still pending holds the claim. The list shows it `continued`, with `successor_open` until the successor closes, then `successor_closed`. An evidence-closed successor also ends the chain. Delivered lost work can close directly by evidence without a successor claim. Coordinators record which outside results an obligation accepted or rejected with a checkpoint's `acceptances`, and status shows them. Orca has no send that reaches only a Run's current coordinator, so `pod doctor` reports that route unavailable and names the Orca request.
-
-When a lost objective is not proved delivered, it stays open as a task for the project lead, never an owner question. Delivery-proved objectives leave the historical-retirement question and close by evidence; `proof: delivery` is accepted in place of a decision. As an optional decision path, when an objective's coordinator is permanently gone and its worktree needs releasing, `pod internal historical-retirement` names the objectives and paths, checks with Orca that no coordinator, Dispatch or terminal could still be at work there, and returns one plain question. With your instruction each objective records its historical retirement: status and the list show the phase `retired` with the released paths, the pending, unknown and failed records kept exactly as they were, the unfinished obligations and your delivery references. It is never closed, completed or QUALIFIED, and its record accepts no further writes. A recorded worktree that is already gone can be released too, once this host, Git's worktree registry and Orca's complete inventories all show it absent; the question names each path as existing or absent. An objective under historical retirement holds no worktree: every worktree its record names is released, including any the request did not name, and Pod's record no longer holds locations it never listed. Retirement deletes nothing; your cleanup tool decides about the worktree itself. An objective whose record uses a superseded schema can end through historical retirement the same way, once Pod can prove every field of that record: its record stays byte-identical, the retirement is stored beside it with the decision's evidence, and status then reads it `retired`.
-
-Lost worker-start replies retain the same Orca request for reconciliation. A known effect-free refusal is deferred; an uncertain response remains unresolved until exact native readback. A provider safety refusal never triggers a same-Task model switch. See [installation troubleshooting](docs/installation.md) for PATH, duplicate skills, and interrupted installs.
-
-A recorded worker route mismatch holds the objective until a matching report, a qualifying replacement or a recorded project-lead decision settles it. Its history stays visible, and status names the lead's supported next step. See [route settlement](docs/spec/orca.md#r160--settle-each-recorded-route-mismatch-occurrence) for the conditions.
-
-A finished worker that Orca can no longer observe can hold admission for its worktree. When the host's personal verifier supports the `process_exit` action, `pod admission` asks it at read time whether any process still carries that worker's identity, and counts the worker exited only on that answer, only for that call. Nothing is stored, and the check needs an admission deadline of about 12 seconds or more; below that the worker keeps holding. See [R212](docs/spec/orca.md#r212--count-a-settled-local-dispatch-exited-on-a-read-time-host-process-verdict).
+`pod config` shows the preference file and what it enables.
 
 ## What's inside
 
-- One `skills/pod` tree serves as the skill and importable Python package.
-- One personal YAML file stores exact route states, the Preferred and Pinned routes, the logical worker ceiling, refresh setting, decision policy and remembered tool permissions.
-- One shipped registry holds exact model ids, efforts and attributed guidance; a small bundled snapshot and a user cache hold dated public model observations.
-- A bounded admission/checkpoint record joins Pod decisions to Orca references.
-- The Governor keeps candidate-bound `ALLOW`, `REUSE`, and `DEFER` decisions.
-
-Pod has no scheduler, provider launcher, model account manager, billing system, dashboard, or parallel Orca lifecycle database.
+- **The skill** (`skills/pod/SKILL.md`): how a coordinator decides how much process a task
+  needs, and the eight commands.
+- **The command** (`pod open`, `dispatch`, `accept`, `record`, `status`, `deliver`, `resume`,
+  `drop`; plus `config`, `models`, `doctor`, `update`, `export`).
+- **Authoring templates** for PES, SEAL and EEL documents, for those who use them.
+- [Architecture](docs/architecture.md): the five concepts, derived proof, the gate and the
+  interfaces a host may use.
 
 ## Philosophy
 
-- Choose direct work and tools before deciding to delegate.
-- Let the user control eligibility while the coordinator judges suitability.
-- Preserve user edits and uncertain native effects.
-- Verify outcomes against the project's criteria.
-- Name local, reviewed, hosted, live, accepted, and merged results separately.
+Pod is a lightweight coordinator. The process a task needs is set by the task. Pod keeps only
+what no other system owns, derives the rest, never asks a coordinator for what software can
+compute, and never records what was not observed.
+[Pod's Enduring Design Principles](docs/design-principles.md) hold the reasoning.
 
 ## Updating and removing
 
-Run `pod update` to fetch the current `main` bundle through the same staged installer. It never rewrites your preference file, preserves changed skill copies, and tells active coordinators to reload before new starts; running workers are untouched. The installer owns only identified user-local paths. See [the removal map](docs/installation.md#removal) before deleting anything. There are no release packages or tags.
+Run `pod update` to fetch the current `main` bundle through the same staged installer. It
+never rewrites your preference file. Records written by Pod 0.21 are left untouched;
+`pod export --to DIR` writes them to plain JSON. See
+[the removal map](docs/installation.md#removal) before deleting anything. There are no release
+packages or tags.
 
 ## Contributing
 
-Start with [AGENTS.md](AGENTS.md) for contributor reading triggers and completion criteria. The root `VERSION` is the only authored product version.
+Start with [AGENTS.md](AGENTS.md) for contributor reading triggers and completion criteria.
+The root `VERSION` is the only authored product version.
 
 ## License
 

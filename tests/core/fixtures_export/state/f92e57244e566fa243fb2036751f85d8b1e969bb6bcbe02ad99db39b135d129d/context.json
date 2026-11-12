@@ -1,0 +1,1 @@
+{"admissions":{"a1":{"state":"settled","task":"fixture-task-one"}},"checkpoint":{"objective":"fixture-plain","obligations":[{"findings":[],"id":"o1","receipts":[],"state":"satisfied"}]},"constraints":["fixture constraint"],"interventions":[],"owner":{"handle":"fixture-coordinator"},"revision":3,"schema":"pod-context/v4","source_rejections":[]}

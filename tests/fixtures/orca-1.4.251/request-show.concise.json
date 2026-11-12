@@ -1,1 +1,0 @@
-{"ok":true,"result":{"requestId":"00000000-0000-4000-8000-000000000001","state":"absent","interpretation":"No receipt for request 00000000-0000-4000-8000-000000000001 under this caller identity. It never reached this Orca runtime, failed before recording anything, or its receipt was pruned. Absent is not proof that nothing happened."}}

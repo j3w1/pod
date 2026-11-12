@@ -1,891 +1,137 @@
-"""Installed-Orca adapter: bounded reads and an exact worker-start mutation allowlist."""
+"""Pod's port to Orca. Orca owns Runs, Tasks, Dispatches, workers and who coordinates a Run.
 
-from __future__ import annotations
+Pod stores Orca's identifiers and reads the rest at use. A worker is started only here, with a
+request id the caller derives, so a repeated start replays Orca's recorded outcome instead of
+starting a second worker, and a coordinator that no longer holds the Run is refused by Orca.
+"""
 
-import base64
-from contextlib import contextmanager
-from contextvars import ContextVar
-import errno
-import hashlib
 import json
-import os
-from pathlib import Path
-import re
-import shutil
-import stat
 import subprocess
-import sys
-import time
+import uuid
 
 from .errors import PodError
 
-MAX_OUTPUT = 2_000_000
-DISPLAY_WORKTREE_LIMIT = 1000
-EXIT_KINDS = ("operator_close", "signaled", "exited")
-CAPABILITY_KEYS = {"contract_v1": "orchestration.contract.v1",
-                   "launch_preferences_v1": "orchestration.worker-launch-preferences.v1"}
-# R214: Orchestration V3 (Orca 1.4.248) advertises these six together. The contract version is the same on both
-# runtimes, so it never tells them apart; a runtime that advertises all six is V3, anything less is pre-V3.
-V3_CAPABILITY_KEYS = {"worker_auto_release": "orchestration.worker-auto-release.v1",
-                      "worker_keep_open": "orchestration.worker-keep-open.v1",
-                      "worker_start_implicit_run": "orchestration.worker-start-implicit-run.v1",
-                      "retained_run_bindings": "orchestration.retained-run-bindings.v1",
-                      "worker_turn_stop_reports": "orchestration.worker-turn-stop-reports.v1",
-                      "ask_returns_at_once": "orchestration.ask-returns-at-once.v1"}
-AGENTS = ("codex", "claude")
-# R111: Orca advertises no send conditional on a Run's coordinator, and no sender identity for an
-# administrator without a terminal. Pod reports the form unavailable and names the Orca request.
-MESSAGE_ROUTE_DEPENDENCY = "https://github.com/stablyai/orca/issues/28190"
-PREFLIGHT_REFUSALS = ("task_not_found", "task_not_startable", "inject_rejected")
-WORKTREE_SELECTOR_PREFIXES = ("path:", "id:", "identity:", "name:", "branch:", "issue:")
-# R214: since Orca 1.4.246 (stablyai/orca#36498) every `orchestration` command prints a concise agent view with
-# `--json`, and `--full` prints the full record. Pod reads only the full record, so every orchestration command it
-# runs ends its output flags with exactly these two. Orca's other commands (`status`, `terminal`, `worktree`) are
-# unchanged and refuse `--full`.
-FULL_JSON = ["--json", "--full"]
-CONCISE_VIEW = ("Orca returned its concise orchestration view, not the full record (--json --full) Pod reads")
+REPEAT = "repeat the same Pod command; a start is replayed, never duplicated"
+FIXES = {"consumer_fenced": "this conversation does not coordinate the objective's Run (it holds another Run, or another "
+                            "conversation took this one over); run `pod resume` for this objective",
+         "request_mismatch": "this assignment was already started with a different packet; dispatch a new assignment"}
+UNKNOWN = ("runtime_timeout", "runtime_unavailable", "invalid_runtime_response")   # Orca itself does not know
+SETTLED = ("completed", "failed", "succeeded", "stopped", "abandoned", "cancelled", "released")
 
 
-def executable() -> Path:
-    selected = os.environ.get("ORCA_CLI_COMMAND")
-    if selected:
-        found = shutil.which(selected)
-    elif os.environ.get("ORCA_DEV_REPO_ROOT"):
-        found = shutil.which("orca-dev")
-    elif sys.platform.startswith("linux") and not os.environ.get("ORCA_TERMINAL_HANDLE"):
-        found = shutil.which("orca-ide")
-    else:
-        found = shutil.which("orca")
-    if not found:
-        raise PodError("orca_unavailable", "Configured Orca executable is unavailable")
-    path = Path(found).resolve()
-    if not path.is_file():
-        raise PodError("orca_unavailable", "Orca executable is not a file")
-    return path
-
-
-def _passable(value: object) -> bool:
-    """Whether native text can pass between Pod and Orca unchanged, as an argument or a recorded identity: UTF-8
-    without NUL. JSON can carry a lone surrogate, which neither an argument nor a record can hold (R18)."""
-    if not isinstance(value, str) or "\x00" in value:
-        return False
+def call(*args: str, stdin: str | None = None, timeout: int = 90) -> dict:
+    """One Orca command. Returns its result, or raises the refusal Orca gave."""
+    what = " ".join(args[:2])
     try:
-        value.encode()
-    except UnicodeEncodeError:
-        return False
-    return True
-
-
-def _argument(value: object, *, limit: int = 4096) -> bool:
-    return _passable(value) and bool(value) and not value.startswith("-") and len(value) <= limit
-
-
-def display_worktree_argv() -> list[str]:
-    """One supported bounded naming read; lifecycle inventory shapes stay separate."""
-    return ["worktree", "list", "--limit", str(DISPLAY_WORKTREE_LIMIT), "--json"]
-
-
-def _read_allowed(argv: list[str]) -> bool:
-    if argv == display_worktree_argv():
-        return True
-    if argv in (["--version"], ["status", "--json"],
-                ["orchestration", "run-current", "--json", "--full"],
-                # R113: the complete inventories that prove a released path absent.
-                ["worktree", "list", "--json"], ["terminal", "list", "--json"]):
-        return True
-    if (len(argv) == 5 and argv[0] in ("worktree", "terminal") and argv[1:3] == ["list", "--limit"]
-            and isinstance(argv[3], str) and re.fullmatch(r"[1-9][0-9]*", argv[3]) and argv[4] == "--json"):
-        return True  # R113: the same inventory read past Orca's default page (`complete_list`).
-    if (len(argv) == 5 and argv[:3] == ["terminal", "show", "--terminal"]
-            and _argument(argv[3]) and argv[4] == "--json"):
-        return True
-    if (len(argv) == 8 and argv[:3] == ["terminal", "read", "--terminal"] and _argument(argv[3])
-            and argv[4:6] == ["--screen", "--limit"] and argv[6] in SCREEN_LIMITS and argv[7] == "--json"):
-        return True
-    # R214: every orchestration read asks for Orca's full record (`--json --full`); the concise default is never read.
-    if (len(argv) == 6 and argv[:3] == ["orchestration", "worker-show", "--dispatch"]
-            and _argument(argv[3]) and argv[4:] == FULL_JSON):
-        return True
-    if (len(argv) == 6 and argv[:3] == ["orchestration", "run-show", "--id"]
-            and _argument(argv[3]) and argv[4:] == FULL_JSON):
-        return True
-    # R206 rule S: the whole Run list, page by page, for each Run's current coordinator.
-    if argv == ["orchestration", "run-list", "--limit", "100", *FULL_JSON]:
-        return True
-    if (len(argv) == 8 and argv[:6] == ["orchestration", "run-list", "--limit", "100", *FULL_JSON]
-            and argv[6] == "--cursor" and _argument(argv[7], limit=1024)):
-        return True
-    if (len(argv) == 6 and argv[:3] == ["orchestration", "request-show", "--request"]
-            and _argument(argv[3]) and argv[4:] == FULL_JSON):
-        return True
-    if (len(argv) == 5 and argv[:3] == ["worktree", "show", "--worktree"]
-            and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
-        return True
-    if (len(argv) == 5 and argv[:3] == ["terminal", "list", "--worktree"]
-            and isinstance(argv[3], str) and argv[3].startswith("path:")
-            and worktree_selector(argv[3]) is not None and argv[4] == "--json"):
-        return True
-    if argv[:5] == ["orchestration", "worker-list", "--include-remote", *FULL_JSON]:
-        return _worker_list_tail(argv[5:])
-    return False
-
-
-COMPILE_CACHE = "node-compile-cache"
-_COMPILE_CACHE_HOMES: dict = {}
-
-
-def compile_cache() -> str | None:
-    """Node's compile cache for the Orca CLI's own code: a private directory under Pod's cache home
-    (`$POD_CACHE_HOME`, else `${XDG_CACHE_HOME:-~/.cache}/pod`), never inside any Git working tree, created 0700.
-    Resolved from paths alone, with no Git or other process. None when it cannot be used: not a real
-    directory, another owner, group or other access, or any failure. The read then runs with the variable removed,
-    so an inherited value is never used, and Orca's own configuration is never touched."""
-    try:
-        key = (os.environ.get("POD_CACHE_HOME"), os.environ.get("XDG_CACHE_HOME"), os.environ.get("HOME"), os.getcwd())
-        if key not in _COMPILE_CACHE_HOMES:  # Resolved once per process and environment, a refusal included.
-            _COMPILE_CACHE_HOMES[key] = _compile_cache_path()
-        path = _COMPILE_CACHE_HOMES[key]
-        if path is None:
-            return None
-        try:
-            path.mkdir(mode=0o700, parents=True)
-        except FileExistsError:
-            pass
-        info = os.lstat(path)
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            return None
-        return str(path)
-    except (OSError, PodError, ValueError, RuntimeError):
-        return None
-
-
-def _compile_cache_path() -> Path | None:
-    """The cache directory for this environment, or None. The home is resolved, symlinks included, and refused when
-    it or any ancestor holds a `.git` entry (a repository or a linked worktree's `.git` file), before anything is made.
-    The directory's own name is kept unresolved, so the per-read check still refuses a symlink there."""
-    from .util import explicit_home
-    try:
-        home = explicit_home("POD_CACHE_HOME")
-        if home is None:
-            value = os.environ.get("XDG_CACHE_HOME")
-            base = Path(value) if value else Path.home() / ".cache"
-            if not base.is_absolute() or "\x00" in str(base):
-                return None
-            home = base / "pod"
-        home = home.resolve(strict=False)
-        path = home / COMPILE_CACHE
-        if any(os.path.lexists(parent / ".git") for parent in (path, *path.parents)):
-            return None  # Inside a Git working tree: no cache, never a file in someone's checkout.
-        return path
-    except (OSError, PodError, ValueError, RuntimeError):
-        return None
-
-
-def read_command(argv: list[str], *, timeout: int = 10) -> dict:
-    if not _read_allowed(argv):
-        raise PodError("unsupported_orca_read", "Orca adapter accepts only known read operations")
-    if not all(_passable(value) for value in argv):
-        # Checked whatever the shape: Python would pass a surrogate-escaped argument to Orca as raw bytes (R18).
-        raise PodError("unsupported_orca_read", "Orca read arguments must be UTF-8 text without NUL")
-    command = [str(executable()), *argv]
-    # Outside glue for the CLI's start-up only: Pod's validated cache, or none at all, never an inherited one.
-    env = {key: value for key, value in os.environ.items() if key != "NODE_COMPILE_CACHE"}
-    cache = compile_cache()
-    if cache:
-        env["NODE_COMPILE_CACHE"] = cache
-    try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, env=env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise PodError("orca_unavailable", "Orca read failed") from exc
-    except UnicodeDecodeError:
-        raise PodError("orca_contract", "Orca read output is not valid UTF-8") from None
-    if proc.returncode:
-        detail = {}
-        if len(proc.stdout) <= MAX_OUTPUT:
-            try:
-                envelope = json.loads(proc.stdout)
-                code = envelope.get("error", {}).get("code") if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict) else None
-                if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
-                    detail["native_code"] = code
-            except (ValueError, TypeError, RecursionError):
-                pass
-        message = "Orca read did not succeed"
-        if detail.get("native_code") == "no_active_sender_terminal":
-            message += "; this process is not in a live Orca terminal and Pod records need one; use read-only pod status --objective ID"
-        raise PodError("orca_read_failed", message, detail or None)
-    if len(proc.stdout) > MAX_OUTPUT:
-        raise PodError("orca_contract", "Orca read exceeds bounded output")
-    if argv == ["--version"]:
-        return {"version": proc.stdout.strip(), "executable": str(executable())}
-    return _envelope(proc.stdout)
-
-
-# A caller that must stay within one wall-time budget (the objective list's window discovery) sets a deadline; every
-# read below then clamps its timeout to the time left and none starts once it is spent.
-_DEADLINE: ContextVar = ContextVar("pod_orca_read_deadline", default=None)
-DEADLINE_SPENT = "discovery_budget"
-
-
-@contextmanager
-def read_deadline(budget):
-    """Bound every read of this module inside the block by `budget`.
-
-    `budget.limit(seconds)` returns the timeout a read may use, at most the time left, and `budget.check()` passes
-    while time is left; both raise `DEADLINE_SPENT` once it is spent. A read the deadline cut short reports that
-    error, and no reader here turns it into an Orca answer."""
-    token = _DEADLINE.set(budget)
-    try:
-        yield
-    finally:
-        _DEADLINE.reset(token)
-
-
-def _read(argv: list[str], *, timeout: float | None = None) -> dict:
-    budget = _DEADLINE.get()
-    if budget is None:
-        return read_command(argv) if timeout is None else read_command(argv, timeout=timeout)
-    limit = budget.limit(10 if timeout is None else timeout)
-    try:
-        return read_command(argv, timeout=limit)
-    except PodError as exc:
-        if exc.code == "orca_unavailable":
-            budget.check()
-        raise
-
-
-def concise_view(value: object) -> bool:
-    """Whether an Orca answer is the concise orchestration view (R214): the bare `{ok, result}` or `{ok, error}`
-    envelope without the request `id` and `_meta` every full record carries. It never proves anything."""
-    return isinstance(value, dict) and "ok" in value and "_meta" not in value and "id" not in value
-
-
-def _envelope(stdout: str) -> dict:
-    try:
-        value = json.loads(stdout)
-    except ValueError as exc:
-        raise PodError("orca_contract", "Orca returned invalid JSON") from exc
-    if concise_view(value):
-        raise PodError("orca_contract", CONCISE_VIEW)
-    if not isinstance(value, dict) or not value.get("ok") or not isinstance(value.get("result"), dict):
-        raise PodError("orca_contract", "Orca returned an unsupported result")
-    meta = value.get("_meta")
-    runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
-    # The runtime is an identity Pod compares and records, unlike free text such as a terminal preview.
-    if not _passable(runtime) or not runtime:
-        raise PodError("orca_contract", "Orca runtime identity is unavailable or cannot be encoded")
-    mutation = value["result"].get("mutation")
-    if not isinstance(mutation, dict):
-        mutation = value.get("mutation")
-    request_uuid = mutation.get("requestId") if isinstance(mutation, dict) else None
-    return {"runtime": runtime, "result": value["result"], "request_uuid": request_uuid}
-
-
-def _mutation_envelope(stdout: str | bytes) -> dict:
-    """Decode native response fields; refusal classification belongs to admission."""
-    try:
-        value = json.loads(stdout)
-    except (ValueError, RecursionError) as exc:
-        raise PodError("native_effect_uncertain", "Native response is not valid JSON") from exc
-    if not isinstance(value, dict):
-        raise PodError("native_effect_uncertain", "Native response is malformed")
-    if concise_view(value):
-        raise PodError("native_effect_uncertain", CONCISE_VIEW)
-    meta = value.get("_meta")
-    runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
-    if not isinstance(runtime, str) or not runtime:
-        raise PodError("native_effect_uncertain", "Native response has no runtime identity")
-    if value.get("ok") is True and isinstance(value.get("result"), dict):
-        result = value["result"]
-        error = None
-    elif value.get("ok") is False and isinstance(value.get("error"), dict):
-        error = value["error"]
-        native_result = value.get("result")
-        if native_result is not None and not isinstance(native_result, dict):
-            raise PodError("native_effect_uncertain", "Native refusal carries a malformed result")
-        result = dict(native_result or {})
-        if "error" in result:
-            result["_result_error"] = result["error"]
-        result["error"] = error
-        for key in ("dispatchId", "workerId", "residualResources", "effects", "terminal",
-                    "terminalHandle", "worktreeId", "terminalResourceId", "resource",
-                    "failedStage"):
-            if key not in value:
-                continue
-            if key in result and result[key] != value[key]:
-                result.setdefault("_envelope_conflicts", {})[key] = value[key]
-            else:
-                result[key] = value[key]
-    else:
-        raise PodError("native_effect_uncertain", "Native response does not prove an effect or refusal")
-    request_uuid, conflict = _request_identity(value)
-    if conflict:
-        result["_request_conflict"] = True
-    return {"runtime": runtime, "result": result, "request_uuid": request_uuid,
-            "error": error}
-
-
-def _request_identity(value: dict) -> tuple[object, bool]:
-    """Collect native identifiers even when the result body cannot be interpreted."""
-    result = value.get("result") if isinstance(value.get("result"), dict) else {}
-    error = value.get("error")
-    request_references = []
-    request_malformed = False
-    for carrier in (result, value):
-        if "mutation" not in carrier:
-            continue
-        mutation = carrier["mutation"]
-        if not isinstance(mutation, dict) or mutation.get("requestId") is None:
-            request_malformed = True
-            continue
-        request_references.append(mutation["requestId"])
-    error_data = error.get("data") if isinstance(error, dict) else None
-    error_request = (error_data.get("orchestrationRequestId")
-                     if isinstance(error_data, dict) else None)
-    if isinstance(error_data, dict) and "orchestrationRequestId" in error_data:
-        if error_request is None:
-            request_malformed = True
-        else:
-            request_references.append(error_request)
-    request_uuid = request_references[0] if request_references else None
-    return request_uuid, (request_malformed or any(
-        reference != request_uuid for reference in request_references[1:]))
-
-
-def _captured_output(value: str | bytes | None) -> dict:
-    raw = value.encode("utf-8") if isinstance(value, str) else value or b""
-    # Out-of-contract oversized output is identified, never silently truncated into proof.
-    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
-            "base64": base64.b64encode(raw).decode("ascii") if len(raw) <= MAX_OUTPUT else None}
-
-
-WORKER_TERMINAL_STATES = ("active", "reclaimable", "retained", "release_pending", "release_unknown", "released")
-
-
-def _worker_list_tail(tail: list[str]) -> bool:
-    bounded = tail[:2] == ["--limit", "100"]
-    if bounded:
-        tail = tail[2:]
-        if tail[:1] == ["--terminal-state"]:
-            if len(tail) < 2 or tail[1] not in WORKER_TERMINAL_STATES:
-                return False
-            tail = tail[2:]
-    if bounded and (not tail or len(tail) == 2 and tail[0] == "--cursor" and _argument(tail[1])):
-        return True  # Admission verifies the returned all-Run scope on every page.
-    if len(tail) < 2 or tail[0] != "--run" or not _argument(tail[1]):
-        return False
-    tail = tail[2:]
-    if len(tail) >= 2 and tail[0] == "--cursor":
-        if not _argument(tail[1]):
-            return False
-        tail = tail[2:]
-    return not tail
-
-
-def _mutate_allowed(argv: list[str]) -> bool:
-    if (len(argv) == 6 and argv[:3] == ["orchestration", "run-use", "--id"]
-            and _argument(argv[3]) and argv[4:] == FULL_JSON):
-        return True
-    if argv[:2] == ["orchestration", "worker-start"]:
-        return _worker_start_shape(argv[2:])
-    return False
-
-
-def _worker_start_shape(tail: list[str]) -> bool:
-    if tail[-1:] != ["--full"]:
-        return False  # R214: the full record, which admission reads; the concise view is never asked for.
-    tail = tail[:-1]
-    retry = None
-    if len(tail) >= 3 and tail[-3] == "--retry-request" and tail[-1] == "--json":
-        retry = tail[-2]
-        tail = tail[:-3] + ["--json"]
-    retry_parent = None
-    if len(tail) >= 3 and tail[-3] == "--retry-of" and tail[-1] == "--json":
-        retry_parent = tail[-2]
-        if not _argument(retry_parent):
-            return False
-        tail = tail[:-3] + ["--json"]
-    if (len(tail) < 9 or tail[:1] != ["--task"] or not _argument(tail[1])
-            or tail[2:3] != ["--run"] or not _argument(tail[3])
-            or tail[4:5] != ["--worktree"] or worktree_selector(tail[5]) is None
-            or tail[-1:] != ["--json"] or (retry is not None and not _argument(retry))):
-        return False
-    route = tail[6:-1]
-    if route[-1:] == ["--keep-open"]:
-        route = route[:-1]  # R214: only Pod's recorded keep-open intent, on a runtime that advertises it, adds it.
-    if len(route) == 2 and route[0] == "--terminal":
-        return retry_parent is None and _argument(route[1])
-    if len(route) == 4 and route[0] == "--agent" and route[2] == "--model":
-        return _argument(route[1]) and _argument(route[3])
-    if len(route) == 6 and route[0] == "--agent" and route[2] == "--model" and route[4] == "--effort":
-        return all(_argument(route[i]) for i in (1, 3, 5))
-    return False
-
-
-def worktree_selector(value: object) -> str | None:
-    """Accept an existing-worktree selector only; creation modes are refused here."""
-    if value in ("current", "active"):
-        return value
-    if not _passable(value) or not value or len(value) > 4096:
-        return None
-    if value in ("new-child", "new-top-level"):
-        return None
-    for prefix in WORKTREE_SELECTOR_PREFIXES:
-        if value.startswith(prefix) and len(value) > len(prefix):
-            return value
-    return None
-
-
-def worktree_identity(selector: str) -> dict:
-    """Resolve an existing native selector to its actual local Git workspace."""
-    selected = worktree_selector(selector)
-    if selected is None:
-        raise PodError("invalid_worktree_selector", "Worker placement must name an existing worktree")
-    try:
-        response = _read(["worktree", "show", "--worktree", selected, "--json"])
-    except PodError as exc:
-        raise PodError("worktree_resolution_unavailable",
-                       "Orca could not resolve the selected worker worktree") from exc
-    row = response["result"].get("worktree")
-    git = row.get("git") if isinstance(row, dict) else None
-    if not isinstance(row, dict) or not isinstance(git, dict):
-        raise PodError("worktree_resolution_unavailable", "Orca worktree readback is incomplete")
-    path, git_path = row.get("path"), git.get("path")
-    branch, git_branch = row.get("branch"), git.get("branch")
-    if (not isinstance(path, str) or not Path(path).is_absolute() or path != git_path
-            or branch != git_branch or row.get("isBare") is not False
-            or git.get("isBare") is not False):
-        raise PodError("worktree_resolution_ambiguous", "Orca worktree identity is contradictory")
-    normalized_branch = branch.removeprefix("refs/heads/") if isinstance(branch, str) else None
-    if normalized_branch is not None and (not normalized_branch or len(normalized_branch) > 256):
-        raise PodError("worktree_resolution_ambiguous", "Orca worktree branch is malformed")
-    # Naming facts come from the same read; they decide only whether Pod may name the worktree.
-    return {"runtime": response["runtime"], "path": str(Path(path).resolve()),
-            "branch": normalized_branch,
-            "display_name_mode": row.get("displayNameMode") if isinstance(row.get("displayNameMode"), str) else None,
-            "main": row.get("isMainWorktree") if isinstance(row.get("isMainWorktree"), bool) else None}
-
-
-def mutate_command(argv: list[str], *, timeout: int = 120, accept_exit: tuple[int, ...] = (0,)) -> dict:
-    """Run one allowlisted state-changing Orca command and return its exact receipt."""
-    if not _mutate_allowed(argv):
-        raise PodError("unsupported_orca_mutation", "Orca adapter accepts only known mutations")
-    if not all(_passable(value) for value in argv):
-        raise PodError("unsupported_orca_mutation", "Orca mutation arguments must be UTF-8 text without NUL")
-    command = [str(executable()), *argv]
-    stdout, stderr, returncode, transport = None, None, None, "completed"
-    try:
-        completed = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
-        stdout, stderr, returncode = completed.stdout, completed.stderr, completed.returncode
+        flags = ["--json", "--full"] if args[0] == "orchestration" else ["--json"]     # only orchestration has a short view
+        done = subprocess.run(["orca", *args, *flags], capture_output=True, timeout=timeout,
+                              input=None if stdin is None else stdin.encode())
+    except FileNotFoundError as exc:
+        raise PodError("orca_unavailable", "The `orca` command is not on PATH.", fix="install Orca or run Pod inside it") from exc
     except subprocess.TimeoutExpired as exc:
-        stdout, stderr, transport = exc.stdout, exc.stderr, "timeout"
-    except OSError as exc:
-        transport = type(exc).__name__
-    finally:
-        # The effect may have created or moved worktrees; identity read after it is fresh.
-        from .github import forget_repository_reads
-        forget_repository_reads()
-    observation = {"argv": command, "transport": transport, "exit": returncode,
-                   "stdout": _captured_output(stdout), "stderr": _captured_output(stderr)}
+        raise PodError("orca_unknown", f"orca {what} did not answer in {timeout} s; its outcome is unknown.", fix=REPEAT) from exc
     try:
-        if transport != "completed":
-            raise PodError("native_effect_uncertain", "Native response is unavailable")
-        if returncode not in accept_exit:
-            raise PodError("native_effect_uncertain", "Native command returned an unsupported exit status")
-        if observation["stdout"]["bytes"] > MAX_OUTPUT:
-            raise PodError("native_effect_uncertain", "Native response exceeds bounded output")
-        envelope = _mutation_envelope(stdout)
-    except PodError as exc:
-        # Private exception attributes are persisted by admission, not echoed as CLI error text.
-        exc.native_observation = observation
-        try:
-            value = json.loads(stdout) if observation["stdout"]["bytes"] <= MAX_OUTPUT else None
-        except (ValueError, TypeError, UnicodeError, RecursionError):
-            value = None
-        if isinstance(value, dict):
-            meta = value.get("_meta")
-            request, conflict = _request_identity(value)
-            exc.native_reference = {"runtime": meta.get("runtimeId") if isinstance(meta, dict) else None,
-                                    "request_uuid": request, "_request_conflict": conflict}
-        raise
-    return {"runtime": envelope["runtime"], "exit": completed.returncode,
-            "result": envelope["result"], "request_uuid": envelope.get("request_uuid"),
-            "error": envelope.get("error"), "native_observation": observation}
+        reply = json.loads(done.stdout.decode(errors="replace"), strict=False)
+    except ValueError:
+        reply = None
+    if not isinstance(reply, dict) or "ok" not in reply:
+        raise PodError("orca_unknown", f"orca {what} gave no readable answer; its outcome is unknown.", fix=REPEAT)
+    if not reply["ok"]:
+        error = reply.get("error") or {}
+        code = str(error.get("code") or "orca_refused")
+        if code in UNKNOWN:
+            raise PodError("orca_unknown", f"orca {what} could not say what happened ({code}).", fix=REPEAT)
+        raise PodError(code, f"Orca refused: {str(error.get('message') or '')[:400]}",
+                       fix=FIXES.get(code, "read Orca's message and correct the request"))
+    return reply.get("result") or {}
 
 
-def contract() -> dict:
-    """What the installed runtime is and which orchestration contracts it advertises."""
-    try:
-        version = _read(["--version"])
-    except PodError as exc:
-        return {"status": "unavailable", "reason": exc.code}
-    snapshot = {"status": "unavailable", "version": version["version"],
-                "executable": version["executable"], "runtime": None, "capabilities": {}}
-    try:
-        status = _read(["status", "--json"])
-    except PodError as exc:
-        snapshot["reason"] = exc.code
-        return snapshot
-    result = status["result"]
-    runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
-    advertised = runtime.get("capabilities")
-    advertised = advertised if isinstance(advertised, list) else []
-    snapshot["runtime"] = status["runtime"]
-    snapshot["status"] = "observed"
-    snapshot["capabilities"] = {key: value in advertised for key, value in CAPABILITY_KEYS.items()}
-    snapshot["runtime_state"] = runtime.get("state")
-    snapshot["orchestration_features"] = orchestration_features(runtime.get("capabilities"))
-    return snapshot
+def request_id(repository: str, objective: str, assignment: str, attempt: int) -> str:
+    """The same assignment and attempt always give the same request, so a retry cannot start twice."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"pod:{repository}:{objective}:{assignment}:{attempt}"))
 
 
-def orchestration_features(advertised: object) -> dict:
-    """R214: which Orchestration V3 behaviours the runtime advertises, from its capability list alone."""
-    if not isinstance(advertised, list):
-        return features_unread("capabilities_unreadable")
-    capabilities = {key: value in advertised for key, value in V3_CAPABILITY_KEYS.items()}
-    return {"mode": "v3" if all(capabilities.values()) else "pre_v3", "basis": "advertised",
-            "capabilities": capabilities}
+def run_current() -> str | None:
+    result = call("orchestration", "run-current")
+    return (result.get("run") or {}).get("id") or result.get("runId")
 
 
-def features_unread(reason: str) -> dict:
-    """An unread or unreadable capability list: Pod behaves as on a pre-V3 runtime and says why."""
-    return {"mode": "pre_v3", "basis": "unread", "reason": reason,
-            "capabilities": {key: False for key in V3_CAPABILITY_KEYS}}
+def run_create(objective: str) -> str:
+    return call("orchestration", "run-create", "--objective", objective[:200])["run"]["id"]
 
 
-def read_orchestration_features() -> dict:
-    """One bounded `status --json` read of the advertised capabilities; any failure reads as pre-V3."""
-    try:
-        status = _read(["status", "--json"])
-    except PodError as exc:
-        return features_unread(exc.code)
-    runtime = status["result"].get("runtime")
-    return orchestration_features(runtime.get("capabilities") if isinstance(runtime, dict) else None)
-
-
-def features_of(snapshot: dict) -> dict:
-    """The features a `contract()` snapshot carries, or pre-V3 with the reason they are missing."""
-    features = snapshot.get("orchestration_features") if isinstance(snapshot, dict) else None
-    if isinstance(features, dict) and isinstance(features.get("capabilities"), dict):
-        return features
-    reason = snapshot.get("reason") if isinstance(snapshot, dict) else None
-    return features_unread(reason if isinstance(reason, str) and reason else "capabilities_unread")
-
-
-def message_route(snapshot: dict) -> dict:
-    """Which delivery form reaches only a Run's current coordinator; Pod never borrows a sender.
-
-    The relay form needs no new Orca capability: a terminal bound to no Run may send to
-    `run:<id>`, and only the coordinator bound to that Run when it checks reads the message.
-    """
-    observed = snapshot.get("status") == "observed"
-    contract = observed and snapshot.get("capabilities", {}).get("contract_v1") is True
-    return {"conditional_send": "unavailable", "administrator_sender": "unavailable",
-            "administrator_relay": "available" if contract else "unavailable",
-            "relay_address": "run:<run id>",
-            "relay_sender": "the administrator's own Orca terminal, bound to no Run",
-            "relay_basis": ("Orca advertises its orchestration contract; probed on Orca 1.4.224" if contract
-                            else "Orca's orchestration contract is not advertised or unread"),
-            "basis": "no advertised Orca capability" if observed else "Orca capabilities are unread",
-            "dependency": MESSAGE_ROUTE_DEPENDENCY}
-
-
-def worker_rows(run: str) -> dict:
-    """Read workers for one exact Run; unscoped fleet enumeration is forbidden.
-
-    Under a `read_deadline` each page is one bounded read, and no page starts once the deadline is spent."""
-    if not _argument(run):
-        raise PodError("orca_contract", "Exact Run identity is required for worker reads")
-    prefix = ["orchestration", "worker-list", "--include-remote", *FULL_JSON, "--limit", "100"]
-    prefix += ["--run", run]
-    all_rows: list[dict] = []
-    identities = set()
-    cursor = None
-    seen = set()
-    runtime = None
-    scope = None
-    for _ in range(100):
-        response = _read(prefix + (["--cursor", cursor] if cursor else []))
-        result = response["result"]
-        page = result.get("page")
-        rows = result.get("workers")
-        if (not isinstance(rows, list) or len(rows) > 100 or not isinstance(page, dict)
-                or type(page.get("hasMore")) is not bool or result.get("truncated", False) is not False):
-            raise PodError("orca_contract", "Run worker page is malformed")
-        page_scope = result.get("scope")
-        if (not isinstance(page_scope, dict) or page_scope.get("run") != run
-                or page_scope.get("source") not in ("flag", "run")):
-            raise PodError("orca_scope_changed", "Run worker page does not prove exact requested Run scope")
-        if runtime is not None and response["runtime"] != runtime:
-            raise PodError("orca_runtime_changed", "Runtime changed during Run worker read")
-        if runtime is not None and result.get("scope") != scope:
-            raise PodError("orca_scope_changed", "Run worker scope changed during read")
-        runtime, scope = response["runtime"], result.get("scope")
-        for row in rows:
-            identity = row.get("dispatchId") if isinstance(row, dict) else None
-            if not _argument(identity) or identity in identities:
-                raise PodError("orca_pagination", "Run worker inventory is repeated or incomplete")
-            identities.add(identity)
-        all_rows.extend(rows)
-        if page["hasMore"] is False:
-            return {"runtime": runtime, "scope": scope, "workers": all_rows,
-                    "complete": True, "page_count": len(seen) + 1}
-        cursor = page.get("nextCursor")
-        if not _argument(cursor) or cursor in seen or not rows:
-            raise PodError("orca_pagination", "Run worker cursor is missing or repeated")
-        seen.add(cursor)
-    raise PodError("orca_pagination", "Run worker read exceeds bounded pages")
-
-
-def current_run(*, timeout: int | None = None) -> dict:
-    """Read this terminal's native coordinator binding without adopting or creating one.
-
-    `timeout` shortens the read for a caller that must stay responsive (the objective list)."""
-    argv = ["orchestration", "run-current", *FULL_JSON]
-    response = _read(argv, timeout=timeout)
-    result = response["result"]
-    if "run" not in result:
-        raise PodError("orca_contract", "Current Run response lacks an explicit binding")
-    row = result["run"]
-    if row is None:
-        return {"runtime": response["runtime"], "run": None}
-    if not isinstance(row, dict):
-        raise PodError("orca_contract", "Current Run binding is malformed")
-    run_id = row.get("id")
-    coordinator = row.get("coordinator_handle")
-    generation = row.get("consumer_generation")
-    # The Run id is recorded as the objective's Run and passed back to Orca, so it must pass exactly.
-    if (not _passable(run_id) or not run_id
-            or not isinstance(coordinator, str) or not coordinator
-            or type(generation) is not int or generation < 0):
-        raise PodError("orca_contract", "Current Run ownership proof is incomplete")
-    return {"runtime": response["runtime"], "run": {
-            "id": run_id, "coordinator_handle": coordinator,
-            "consumer_generation": generation}}
+def run_use(run: str) -> dict:
+    """Bind this conversation as the Run's coordinator. Orca fences the earlier one."""
+    return call("orchestration", "run-use", "--id", run)["run"]
 
 
 def run_show(run: str) -> dict:
-    """Who coordinates one exact Run now; only its identity and generation leave this port."""
-    if not _argument(run):
-        raise PodError("orca_contract", "Exact Run identity is required for a Run read")
-    response = _read(["orchestration", "run-show", "--id", run, *FULL_JSON])
-    row = response["result"].get("run") if isinstance(response["result"], dict) else None
-    coordinator = row.get("coordinator_handle") if isinstance(row, dict) else None
-    generation = row.get("consumer_generation") if isinstance(row, dict) else None
-    if (not isinstance(row, dict) or row.get("id") != run
-            or coordinator is not None and not _argument(coordinator, limit=256)
-            or type(generation) is not int or generation < 0):
-        raise PodError("orca_contract", "Run read does not prove the requested Run's coordinator")
-    return {"runtime": response["runtime"], "run": run, "coordinator_handle": coordinator,
-            "consumer_generation": generation, "coordinator_known": "coordinator_handle" in row}
+    return call("orchestration", "run-show", "--id", run)["run"]
 
 
-def worker_show(dispatch: str) -> dict:
-    return _read(["orchestration", "worker-show", "--dispatch", dispatch, *FULL_JSON])
+def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, str, str], request: str,
+          name: str | None = None, new_from: tuple[str, str] | None = None) -> dict:
+    """Start one worker. Repeating the call with the same request returns the first outcome.
 
-
-def _whole(response: object, kind: str) -> bool:
-    """Whether an Orca list answer is complete as a whole: its rows a list of records, untruncated, an integer
-    total (never a bool or float) equal to its rows, covering the local execution host and omitting none."""
-    result = response.get("result") if isinstance(response, dict) else None
-    if not isinstance(result, dict):
-        return False
-    rows, total, scope = result.get(kind + "s"), result.get("totalCount"), result.get("hostScope")
-    hosts = scope.get("hostIds") if isinstance(scope, dict) else None
-    return (isinstance(rows, list) and all(isinstance(row, dict) for row in rows) and result.get("truncated") is False
-            and type(total) is int and total == len(rows)
-            and isinstance(hosts, list) and "local" in hosts and scope.get("omittedHostIds") == [])
-
-
-def complete_list(kind: str, read=None) -> dict:
-    """Orca's whole `worktree` or `terminal` inventory (R113). Orca answers one default page; when that page reports
-    itself truncated short of an integer total, Pod reads once more asking for exactly that many rows. That answer
-    replaces the first only when it is complete as a whole (`_whole`); otherwise the first page is returned
-    unchanged, so the caller's own completeness check refuses it as before. No loop, no third read, no fixed cap."""
-    read = _read if read is None else read
-    response = read([kind, "list", "--json"])
-    result = response.get("result") if isinstance(response, dict) else None
-    rows = result.get(kind + "s") if isinstance(result, dict) else None
-    total = result.get("totalCount") if isinstance(result, dict) else None
-    if isinstance(rows, list) and result.get("truncated") is True and type(total) is int and total > len(rows):
-        retried = read([kind, "list", "--limit", str(total), "--json"])
-        if _whole(retried, kind):
-            return retried
-    return response
-
-
-def terminal_inventory() -> list[dict] | None:
-    """Orca's complete live terminal records, or None when the read is not provably complete."""
-    result = complete_list("terminal")["result"]
-    rows = result.get("terminals") if isinstance(result, dict) else None
-    if (not isinstance(rows, list) or result.get("truncated") is not False
-            or type(result.get("totalCount")) is not int or result["totalCount"] != len(rows)
-            or not all(isinstance(row, dict) and all(isinstance(row.get(key), str) and row[key]
-                                                      for key in ("handle", "incarnationId")) for row in rows)):
-        return None  # a record that cannot be identified cannot show the terminal absent
-    return rows
-
-
-def handle_carriers(handle: str, proc: str = "/proc") -> bool | None:
-    """Whether a same-user process carries ORCA_TERMINAL_HANDLE=<handle>; None when that cannot be told.
-
-    Orca exports the handle to every process of a terminal. A process that vanishes during the scan is
-    gone. A same-user process whose environment the kernel refuses with EACCES is a non-dumpable helper
-    such as systemd, a zombie or ssh-agent, never an agent, shell or tool the terminal ran; it is skipped.
-    Any other failure, including a failed owner lookup or EPERM, leaves the answer unknown.
+    `new_from` is the repository and branch a new worktree is made from. Without it Orca would
+    make the worktree in the coordinator's own repository, which need not be the objective's.
     """
-    wanted = b"ORCA_TERMINAL_HANDLE=" + handle.encode()
-    uid = os.getuid()
+    agent, model, effort = route
+    args = ["orchestration", "worker-start", "--spec-file", "-", "--task-title", title, "--worktree", worktree,
+            "--agent", agent, "--model", model, "--effort", effort, "--run", run, "--retry-request", request]
+    args += (["--display-name", name] if name else []) + (
+        ["--repo", f"path:{new_from[0]}", "--base-branch", new_from[1]] if new_from else [])
+    result = call(*args, stdin=spec, timeout=180)
+    launch = result.get("launch") or {}
+    if result.get("state") == "outcome_unknown" or not result.get("taskId"):
+        raise PodError("orca_unknown", "Orca accepted the start and does not know whether the worker is running.", fix=REPEAT)
+    return {"task": result.get("taskId"), "dispatch": result.get("dispatchId"), "state": result.get("state"),
+            "replayed": bool((result.get("mutation") or {}).get("replayed")),
+            "effective": launch.get("effective"), "requested": launch.get("requested")}
+
+
+def failure(dispatch: str) -> str:
+    """Why Orca says a Dispatch failed, in its own words; empty when it does not say."""
     try:
-        names = [name for name in os.listdir(proc) if name.isdecimal()]
-    except OSError:
-        return None
-    for name in names:
-        path = os.path.join(proc, name)
-        try:
-            owner = os.stat(path).st_uid
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        except OSError:
-            return None
-        if owner != uid:
-            continue
-        try:
-            with open(os.path.join(path, "environ"), "rb") as source:
-                environment = source.read().split(b"\0")
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        except OSError as exc:
-            if exc.errno == errno.EACCES:
-                continue
-            return None
-        if wanted in environment:
-            return True
-    return False
-
-
-def terminal_identity(handle: str) -> dict:
-    """Read only handle liveness; presentation and pane fields never leave this port."""
-    try:
-        shown = _read(["terminal", "show", "--terminal", handle, "--json"])
-    except PodError as exc:
-        if exc.code == DEADLINE_SPENT:
-            raise
-        code = (exc.detail or {}).get("native_code")
-        return {"handle": handle, "runtime": None, "state": "lost" if code in
-                ("terminal_handle_stale", "terminal_not_found", "terminal_handle_gone") else "unreadable",
-                "code": code or exc.code, "exited": False, "cause": None}
-    row = shown["result"].get("terminal")
-    live = (isinstance(row, dict) and row.get("handle") == handle
-            and row.get("connected") is True and row.get("writable") is True
-            and row.get("orphaned") is False)
-    cause = row.get("exitCause") if isinstance(row, dict) else None
-    # Orca keeps a closed terminal's record: not connected or writable, with the cause it exited.
-    # Only a confirmed exit counts; an `unknown` cause (a stop never confirmed) proves nothing.
-    exited = (not live and isinstance(row, dict) and row.get("handle") == handle
-              and row.get("connected") is False and row.get("writable") is False
-              and isinstance(cause, dict) and cause.get("kind") in EXIT_KINDS)
-    return {"handle": handle, "runtime": shown["runtime"],
-            "state": "live" if live else "unreadable", "code": None, "exited": exited,
-            "cause": cause["kind"] if exited else None}
-
-
-# R190: the one native mailbox call a coordinator's wake uses. `check` consumes (a consuming read replays its batch
-# until acknowledged), so it is not a plain read; Pod passes only the shapes below and never `--peek`, `--types`,
-# `--from` or a Dispatch/terminal override.
-MAILBOX_GRACE_SECONDS = 30
-MAILBOX_NATIVE_REFUSALS = ("stale_delivery", "consumer_fenced")
-
-
-def mailbox_check(run: str, *, ack: str | None = None, wait_ms: int | None = None) -> dict:
-    """One native `orchestration check` for exactly this Run: acknowledge `ack` first, then return the oldest
-    unacknowledged FIFO batch, or, with `wait_ms`, block until a message of any type arrives or the timeout ends.
-
-    A pending batch makes the wait return at once, so mail that arrives before the wait is armed is not lost; the
-    batch replays until acknowledged. A timeout, a cancelled wait and a lost connection consume nothing."""
-    if not _argument(run) or ack is not None and not _argument(ack):
-        raise PodError("orca_contract", "Exact Run and delivery identities are required for a mailbox check")
-    if wait_ms is not None and (type(wait_ms) is not int or wait_ms < 1):
-        raise PodError("orca_contract", "A mailbox wait needs a positive millisecond timeout")
-    argv = ["orchestration", "check", "--run", run]
-    if ack is not None:
-        argv += ["--ack", ack]
-    if wait_ms is not None:
-        argv += ["--wait", "--timeout-ms", str(wait_ms)]
-    argv += FULL_JSON
-    command = [str(executable()), *argv]
-    limit = (wait_ms or 0) / 1000 + MAILBOX_GRACE_SECONDS
-    try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=limit, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise PodError("orca_unavailable", "Orca mailbox check failed") from exc
-    except UnicodeDecodeError:
-        raise PodError("orca_contract", "Orca mailbox output is not valid UTF-8") from None
-    if len(proc.stdout) > MAX_OUTPUT:
-        raise PodError("orca_contract", "Orca mailbox output exceeds bounded output")
-    try:
-        value = json.loads(proc.stdout)
-    except ValueError:
-        value = None
-    if not isinstance(value, dict):
-        raise PodError("orca_contract", "Orca mailbox check returned invalid JSON")
-    if concise_view(value):
-        raise PodError("orca_contract", CONCISE_VIEW)
-    if value.get("ok") is not True:
-        error = value.get("error") if isinstance(value.get("error"), dict) else {}
-        code = error.get("code") if isinstance(error.get("code"), str) else None
-        raise PodError("mailbox_refused" if code in MAILBOX_NATIVE_REFUSALS else "orca_contract",
-                       "Orca refused the mailbox check", {"native_code": code})
-    result = value.get("result")
-    meta = value.get("_meta")
-    runtime = meta.get("runtimeId") if isinstance(meta, dict) else None
-    messages = result.get("messages") if isinstance(result, dict) else None
-    if not _passable(runtime) or not runtime or not isinstance(messages, list):
-        raise PodError("orca_contract", "Orca mailbox response is incomplete")
-    delivery = result.get("deliveryId")
-    if delivery is None and isinstance(result.get("delivery"), dict):
-        delivery = result["delivery"].get("id")
-    if messages and not _argument(delivery):
-        raise PodError("orca_contract", "Orca mailbox batch carries no delivery identity")
-    return {"runtime": runtime, "delivery": delivery if messages else None, "messages": messages,
-            "replayed": result.get("replayed") is True,
-            # R214: Orchestration V3 acknowledges a batch when it hands it over; such a delivery never replays.
-            "delivery_acknowledged": bool(messages) and result.get("deliveryAcknowledged") is True,
-            "timed_out": result.get("timedOut") is True,
-            "cancelled": result.get("cancelled") is True,
-            "connection_lost": result.get("connectionLost") is True}
-
-
-SCREEN_LIMITS = ("40",)  # R200: the one bounded rendered-screen read a receiver diagnosis makes.
-
-
-def terminal_screen(handle: str) -> list[str] | None:
-    """The bounded rendered screen of one exact terminal as text rows, or None when it cannot be read exactly.
-
-    Read-only and used only to classify why a receiving session did not start; the rows never leave the caller.
-    """
-    try:
-        shown = _read(["terminal", "read", "--terminal", handle, "--screen", "--limit", SCREEN_LIMITS[0], "--json"])
-    except PodError as exc:
-        if exc.code == DEADLINE_SPENT:
-            raise
-        return None
-    row = shown["result"].get("terminal")
-    tail = row.get("tail") if isinstance(row, dict) else None
-    if (not isinstance(row, dict) or row.get("handle") != handle or row.get("source") != "screen"
-            or not isinstance(tail, list) or len(tail) > int(SCREEN_LIMITS[0])
-            or any(not isinstance(line, str) for line in tail)):
-        return None
-    return [line[:400] for line in tail]
-
-
-def terminal_activity(handle: str) -> int | None:
-    """Milliseconds since Orca last saw output from one exact terminal, or None when it cannot be read."""
-    try:
-        shown = _read(["terminal", "show", "--terminal", handle, "--json"])
+        return str((call("orchestration", "worker-show", "--dispatch", dispatch).get("dispatch") or {}).get("lastFailure") or "")
     except PodError:
-        return None
-    row = shown["result"].get("terminal")
-    last = row.get("lastOutputAt") if isinstance(row, dict) and row.get("handle") == handle else None
-    if type(last) is not int or last < 0:
-        return None
-    return max(0, int(time.time() * 1000) - last)
+        return ""
+
+
+def workers(run: str) -> list[dict]:
+    """Every worker Dispatch of the Run with its live state."""
+    rows, cursor = [], None
+    while True:
+        args = ["orchestration", "worker-list", "--run", run, "--limit", "100"] + (["--cursor", cursor] if cursor else [])
+        result = call(*args)
+        for row in result.get("workers", []):
+            held = row.get("resource") or {}
+            rows.append({"dispatch": row.get("dispatchId"), "task": row.get("taskId"), "state": row.get("workerState"),
+                         "status": row.get("dispatchStatus"), "terminal": row.get("terminalState"),
+                         "handle": row.get("agentTerminalHandle"),
+                         "owned": held.get("ownershipState") == "owned", "retained": held.get("retainedReason"),
+                         "worktree": str(held.get("worktreeId") or "").partition("::")[2] or None})
+        page = result.get("page") or {}
+        cursor = page.get("nextCursor")
+        if not page.get("hasMore") or not cursor:
+            return rows
+
+
+def live(row: dict) -> bool:
+    """Whether a worker may still be changing files. Anything not known to be settled counts as live."""
+    return str(row.get("status") or "").lower() not in SETTLED and str(row.get("state") or "").lower() not in SETTLED
+
+
+def tasks(run: str) -> dict:
+    """Tasks of the Run by id, each with the worker's own result when it has reported one."""
+    result = {}
+    for row in call("orchestration", "task-list", "--run", run).get("tasks", []):
+        report = row.get("result")
+        if isinstance(report, str):
+            try:
+                report = json.loads(report, strict=False)
+            except ValueError:
+                report = None
+        result[row["id"]] = {"status": row.get("status"), "title": row.get("task_title"),
+                             "report": report if isinstance(report, dict) else None}
+    return result

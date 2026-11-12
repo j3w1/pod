@@ -1,42 +1,19 @@
-"""The one inventory of the Pod skill bundle: skill text, helpers and package modules."""
+"""The Pod skill bundle: the package directory itself, with nothing listed by hand."""
 
 from __future__ import annotations
 
-from importlib.resources import files
+from importlib.resources import files as _package_files
 from pathlib import Path
-import re
 
-import yaml
-
+from . import installer, yamlsubset
 from .errors import PodError
 
-BUNDLE_TEXT = ("SKILL.md", "VERSION", "catalog.json", "observations.json", "agents/openai.yaml", "scripts/pod.py",
-               "references/issue-intake.md", "references/seal-delivery.md",
-               "references/planning.md", "references/models.md", "references/decisions.md",
-               "references/orca-boundary.md", "references/verification.md",
-               "references/governor.md", "references/pes-template.md",
-               "references/seal-template.md", "references/eel-template.md",
-               "references/recovery.md", "references/cleanup.md", "references/worker-tabs.md", "references/pod-ticks.md",
-               "references/wake.md")
-BUNDLE_MODULES = ("__init__.py", "__main__.py", "abandoned.py", "admission_view.py", "assurance.py", "bundle.py", "catalog.py", "cleanup.py",
-                  "cleanup_archives.py", "cleanup_observations.py",
-                  "cleanup_stashes.py", "cli.py", "config.py", "context.py", "contracts.py",
-                  "admission.py", "delivery.py", "display.py", "errors.py", "evidence_closure.py", "github.py", "gitio.py", "handoff.py", "history.py", "history_tree.py", "governance.py", "governor.py", "governor_effects.py", "installer.py", "internal.py", "ledger.py", "listing.py", "local_append.py",
-                  "issue_revision.py", "keyed_index.py", "lineage.py", "obligations.py", "observations.py", "operations.py", "orca.py", "placement.py", "process_exit.py", "readiness.py", "records.py",
-                  "relay.py", "retirement.py", "routes.py", "selection.py", "sources.py", "succession.py",
-                  "policy.py", "tool_permissions.py",
-                  "pod_mapping.py", "pod_ticks.py", "skill_validation.py", "standing.py", "status.py", "term.py", "tui.py", "tui_render.py",
-                  "tui_state.py", "traces.py", "util.py", "wake.py", "window.py", "worker_tabs.py")
-BUNDLE_FILES = tuple(sorted(BUNDLE_TEXT + BUNDLE_MODULES))
-IGNORED_DIRS = frozenset({"__pycache__"})
-IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
-MAX_SKILL = 64 * 1024
-RELOAD_ACTION = "reload the skill, re-read pod config --json, and write a fresh checkpoint"
+MAX_TEXT = 64 * 1024
 
 
 def bundle_root() -> Path:
-    """The installed bundle directory: the importable package and the skill are one tree."""
-    return Path(str(files("pod")))
+    """The running bundle directory: the importable package and the skill are one tree."""
+    return Path(str(_package_files("pod")))
 
 
 def version() -> str:
@@ -45,96 +22,24 @@ def version() -> str:
     return __version__
 
 
-def running_identity() -> dict[str, str | None]:
-    """Hash the running bundle using the installer's canonical, cache-free digest."""
-    from .installer import optional_digest
-    return {"version": version(), "bundle_digest": optional_digest(bundle_root())}
+def files(root: Path | None = None) -> list[str]:
+    """Relative names of the bundle's files, derived from the directory."""
+    return installer.bundle_files(bundle_root() if root is None else root)
 
 
-def checkpoint_identity(checkpoint: object) -> dict[str, str | None]:
-    row = checkpoint if isinstance(checkpoint, dict) else {}
-    return {"version": row.get("pod_version"), "bundle_digest": row.get("bundle_digest")}
-
-
-def identity_matches(recorded: dict, running: dict | None = None) -> bool:
-    current = running_identity() if running is None else running
-    return (isinstance(current.get("bundle_digest"), str)
-            and isinstance(recorded.get("bundle_digest"), str)
-            and recorded.get("version") == current.get("version")
-            and recorded["bundle_digest"] == current["bundle_digest"])
-
-
-def identity_label(identity: dict | None) -> str:
-    row = identity if isinstance(identity, dict) else {}
-    reported = row.get("version")
-    ver = reported if isinstance(reported, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,32}", reported) else "missing"
-    value = row.get("bundle_digest")
-    short = value[:12] if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else "missing"
-    return f"version {ver}, digest {short}"
-
-
-def identity_drift_message(checkpoint: object, *, running: dict | None = None) -> str:
-    current = running_identity() if running is None else running
-    return (f"Checkpoint {identity_label(checkpoint_identity(checkpoint))}; "
-            f"running {identity_label(current)}. Next: {RELOAD_ACTION}")
-
-
-def require_current_identity(checkpoint: object) -> dict[str, str | None]:
-    current = running_identity()
-    if not identity_matches(checkpoint_identity(checkpoint), current):
-        raise PodError("installed_version_changed", identity_drift_message(checkpoint, running=current))
-    return current
-
-
-def canonical(root: Path | None = None) -> dict[str, bytes]:
-    base = bundle_root() if root is None else root
-    source = {}
-    for name in BUNDLE_FILES:
-        path = base.joinpath(*name.split("/"))
-        try:
-            source[name] = path.read_bytes()
-        except OSError as exc:
-            raise PodError("bundle_incomplete", f"Bundle file {name} is unreadable") from exc
-        if len(source[name]) > MAX_SKILL and name in BUNDLE_TEXT:
-            raise PodError("invalid_skill", f"{name} is oversized")
-    return source
+def digest(root: Path | None = None) -> str | None:
+    """The digest the installer records for a placed copy; None when the directory is not a bundle."""
+    return installer.optional_digest(bundle_root() if root is None else root)
 
 
 def frontmatter(text: str) -> dict:
-    if not text.startswith("---\n"):
-        raise PodError("invalid_skill", "SKILL.md frontmatter is missing")
+    """SKILL.md front matter as plain values and one-level mappings, and the body after it."""
     parts = text.split("---\n", 2)
-    if len(parts) != 3:
-        raise PodError("invalid_skill", "SKILL.md frontmatter is not bounded")
+    if not text.startswith("---\n") or len(parts) != 3:
+        raise PodError("invalid_skill", "SKILL.md front matter is missing or not closed")
     try:
-        metadata = yaml.safe_load(parts[1])
-    except yaml.YAMLError as exc:
-        raise PodError("invalid_skill", "SKILL.md frontmatter is invalid YAML") from exc
-    if not isinstance(metadata, dict):
-        raise PodError("invalid_skill", "SKILL.md frontmatter is not a mapping")
+        metadata = {key: yamlsubset.scalar(block.value) if block.value is not None else yamlsubset.mapping(block)
+                    for key, block in yamlsubset.parse(parts[1].rstrip("\n")).items()}
+    except ValueError as exc:
+        raise PodError("invalid_skill", f"SKILL.md front matter must be plain one-line values ({exc})") from exc
     return {"metadata": metadata, "body": parts[2]}
-
-
-def _ignored(path: Path, root: Path) -> bool:
-    relative = path.relative_to(root)
-    return bool(IGNORED_DIRS.intersection(relative.parts)) or path.suffix in IGNORED_SUFFIXES
-
-
-def installed_files(target: Path) -> set[str]:
-    """Relative names of a placed copy, ignoring interpreter caches."""
-    names = set()
-    for path in target.rglob("*"):
-        if _ignored(path, target):
-            continue
-        if path.is_symlink() or path.is_file():
-            names.add(path.relative_to(target).as_posix())
-    return names
-
-
-def installed_version(target: Path) -> str | None:
-    """The VERSION a placed copy carries, or None when unreadable."""
-    try:
-        text = (target / "VERSION").read_text(encoding="ascii").strip()
-    except (OSError, UnicodeError):
-        return None
-    return text if re.fullmatch(r"\d+\.\d+\.\d+", text) else None
