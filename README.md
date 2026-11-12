@@ -93,8 +93,9 @@ route Pod can use, what the installed agents report, public benchmark observatio
 choices. Enable or disable routes, set a Preferred route or a Pin. Press `R`, or run
 `pod models refresh`, to fetch the public leaderboard; nothing else touches the network.
 
-A green `*` marks a benchmark cost that is high value: nothing cheaper scores within two
-index points, among the stronger half of your routable routes. Benchmark cost is not a
+A green `*` marks a benchmark cost that is high value: no other routable route costs less
+while scoring within two index points, and its index is in the upper half of the routable
+routes that have both measurements, whether or not you enabled them. Benchmark cost is not a
 subscription charge, a quota or a task duration, and a public listing never makes a route
 usable or changes a preference. Only you change your preferences.
 

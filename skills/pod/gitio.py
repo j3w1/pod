@@ -115,14 +115,34 @@ def blobs(cwd: Path, ref: str, paths_: list[str]) -> dict:
     return result
 
 
+def identities(cwd: Path, ref: str, names: list[str]) -> dict:
+    """What each path is at a commit, file or directory alike: a directory changes when anything under it does.
+
+    `.` is the whole tree. A path absent at the commit maps to None.
+    """
+    result = dict.fromkeys(names)
+    for name in names:
+        if name == ".":
+            result[name] = tree(cwd, ref)
+            continue
+        out = git(cwd, "ls-tree", "-z", ref, "--", name).stdout.decode(errors="surrogateescape")
+        entry = next((item for item in out.split("\0") if item.partition("\t")[2] == name), None)
+        result[name] = entry.partition("\t")[0] if entry else None
+    return result
+
+
 def show(cwd: Path, ref: str, name: str) -> str | None:
     """A file's text at a commit, or None when it is not there."""
     done = git(cwd, "show", f"{ref}:{name}", check=False)
     return done.stdout.decode(errors="replace") if done.returncode == 0 else None
 
 
-def declared(values: list[str] | None) -> list[str]:
-    """Declared paths in one spelling, relative to the repository root. A path that leaves it is refused."""
+def declared(values: list[str] | None, *, keep_root: bool = False) -> list[str]:
+    """Declared paths in one spelling, relative to the repository root. A path that leaves it is refused.
+
+    The root itself means the whole tree: an empty list for paths a worker may change, or `.` when
+    `keep_root` asks for it by name.
+    """
     result = []
     for value in values or []:
         if not value.strip():
@@ -133,8 +153,8 @@ def declared(values: list[str] | None) -> list[str]:
                            fix="name paths relative to the repository root, such as src/app")
         if name != ".":
             result.append(name)
-        elif value.strip():
-            return []                  # the root itself: the whole tree
+        else:
+            return ["."] if keep_root else []
     return result
 
 

@@ -150,7 +150,7 @@ class FindingAndAuthorityTests(GateCase):
         self.implement({"src/a.py": "a\n"})
         self.review("fail", [{"path": "src/a.py", "required": True, "text": "wrong"}])
         self.review("pass")                                                 # another reviewer, same commit
-        opened = lambda: [row["id"] for row in proof.open_required(self.repo, fold(self.entries("issue-5")))]
+        opened = lambda: [row["id"] for row in proof.open_required(self.repo, fold(self.entries("issue-5")), self.git(self.repo, "rev-parse", "HEAD"))]
         self.assertEqual(opened(), ["a2.1"])
         self.commit({"docs/unrelated.md": "x\n"})
         self.review("pass")                                                 # a later commit, the file itself unchanged
@@ -227,11 +227,147 @@ class RobustnessTests(GateCase):
         listed = commands.listing()["objectives"]
         self.assertEqual([(row["objective"], row.get("problem")) for row in listed], [("broken", "log_damaged"), ("issue-5", None)])
 
-    def test_a_refused_open_leaves_no_log_and_unknown_objectives_are_refused_cleanly(self):
+    def test_a_refused_open_leaves_no_objective_and_unknown_objectives_are_refused_cleanly(self):
         started = commands.dispatch(self.repo, None, role="investigate", title="look", spec="Look.")
         self.refused("run_busy", commands.open_, self.repo, text="Another", objective="another", run="run_1")
-        self.assertFalse(log.path("acme--widgets", "another").exists())
         self.refused("objective_unknown", commands.record, self.repo, "another", note="x")
+        self.assertEqual([row["objective"] for row in commands.listing()["objectives"]], ["issue-5"])
         self.refused("objective_unknown", gate.deliver, self.repo, "nowhere", check=True)
         self.refused("evidence_required", commands.record, self.repo, None, met=["c1"], facts=["a2.1"])
         self.assertTrue(started["dispatch"])
+
+
+class FinalReviewTests(GateCase):
+    """Edges the final independent review found."""
+
+    def opened(self):
+        return [row["id"] for row in proof.open_required(self.repo, fold(self.entries("issue-5")), self.git(self.repo, "rev-parse", "HEAD"))]
+
+    def uncovered(self):
+        head, base = self.git(self.repo, "rev-parse", "HEAD"), self.git(self.repo, "merge-base", "HEAD", "origin/main")
+        return proof.coverage(self.repo, fold(self.entries("issue-5")), head, base)["uncovered"]
+
+    def test_a_directory_named_as_context_lapses_the_review_when_anything_under_it_changes(self):
+        self.implement({"src/client.py": "c\n", "schema/api.json": "{}\n"})
+        self.review("pass", paths_=["src/client.py"], context=["schema"])
+        self.assertEqual(self.uncovered(), ["schema/api.json"])
+        self.commit({"schema/new.json": "{}\n"})                           # a file added under the directory
+        self.assertEqual(self.uncovered(), ["schema/api.json", "schema/new.json", "src/client.py"])
+
+    def test_the_whole_tree_can_be_named_as_context(self):
+        self.implement({"src/client.py": "c\n"})
+        self.review("pass", context=["."])
+        self.assertEqual(self.uncovered(), [])
+        self.commit({"elsewhere.txt": "x\n"})
+        self.assertEqual(self.uncovered(), ["elsewhere.txt", "src/client.py"])
+
+    def test_a_review_orca_did_not_report_as_completed_covers_nothing_and_keeps_its_findings(self):
+        self.implement({"src/a.py": "a\n"})
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []}, outcome="failed")
+        self.assertIn("covers nothing", commands.accept(self.repo, None, "a2")["note"])
+        self.assertEqual(self.uncovered(), ["src/a.py"])
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        self.finish(started["task"], {"outcome": "failed", "verdict": "fail",
+                                      "findings": [{"path": "src/a.py", "required": True, "text": "wrong"}]}, outcome="failed")
+        commands.accept(self.repo, None, "a3")
+        self.assertEqual(self.opened(), ["a3.1"])
+
+    def test_bringing_the_offending_content_back_reopens_its_finding(self):
+        self.implement({"src/a.py": "A\n"})
+        self.review("pass")
+        self.review("fail", [{"path": "src/a.py", "required": True, "text": "A is wrong"}])
+        self.implement({"src/a.py": "B\n"})
+        self.review("pass", paths_=["src/a.py"])
+        self.assertEqual(self.opened(), [])
+        self.commit({"src/a.py": "A\n"})                                   # the correction is reverted
+        self.assertEqual(self.uncovered(), [])                              # the first pass on A applies again
+        self.assertEqual(self.opened(), ["a3.1"])                           # and so does the finding on A
+
+    def test_a_failing_full_review_covers_the_files_it_found_nothing_required_on(self):
+        self.implement({"src/a.py": "a\n", "src/b.py": "b\n", "docs/c.md": "c\n"})
+        self.review("fail", [{"path": "src/a.py", "required": True, "text": "wrong"},
+                             {"path": "docs/c.md", "required": False, "text": "typo"}])
+        self.assertEqual(self.uncovered(), ["src/a.py"])
+        self.implement({"src/a.py": "a corrected\n"})
+        self.review("pass", paths_=["src/a.py"])                            # only the corrected file is read again
+        self.assertEqual((self.uncovered(), self.opened()), ([], []))
+
+    def test_a_finding_without_a_path_or_an_unexplained_failure_covers_nothing(self):
+        self.implement({"src/a.py": "a\n", "src/b.py": "b\n"})
+        self.review("fail", [{"path": None, "required": True, "text": "the approach is wrong"}])
+        self.review("fail", [{"path": "src/a.py", "required": False, "text": "style"}])
+        self.assertEqual(self.uncovered(), ["src/a.py", "src/b.py"])
+
+    def test_a_review_that_raises_a_required_finding_on_the_corrected_file_does_not_close_the_earlier_one(self):
+        self.implement({"src/a.py": "a\n"})
+        self.review("fail", [{"path": "src/a.py", "required": True, "text": "wrong"}])
+        self.implement({"src/a.py": "a, still wrong\n"})
+        self.review("fail", [{"path": "src/a.py", "required": True, "text": "still wrong"}])
+        self.assertEqual(self.opened(), ["a2.1", "a4.1"])
+
+    def test_a_short_write_is_never_taken_for_a_whole_entry(self):
+        import os
+        from unittest.mock import patch
+        target = log.path("acme--widgets", "issue-5")
+        real, calls = os.pwrite, []
+
+        def short(handle, data, offset):
+            calls.append(len(data))
+            return real(handle, data[:max(1, len(data) // 2)], offset)
+
+        with patch.object(os, "pwrite", short), log.writer(target) as writer:
+            writer.append({"kind": "fact", "fact": "note", "text": "x" * 200})
+        self.assertGreater(len(calls), 1)
+        self.assertEqual(log.read(target)[-1]["text"], "x" * 200)
+
+    def test_a_refused_open_cannot_take_another_openers_log_with_it(self):
+        target = log.path("acme--widgets", "raced")
+        with self.assertRaises(RuntimeError), log.writer(target, create=True):
+            raise RuntimeError("refused before anything was written")
+        self.assertTrue(target.exists())                                    # the file identity other openers may hold stays
+        with log.writer(target, create=True) as writer:
+            writer.append({"kind": "objective", "id": "raced", "source": {"kind": "text", "text": "x"}, "target": "main"})
+        self.assertEqual(len(log.read(target)), 1)
+
+    def test_a_lost_start_is_settled_from_orcas_receipt_before_anything_is_voided(self):
+        self.set_orca(lose_reply=True)
+        self.refused("orca_unknown", commands.dispatch, self.repo, None, role="implement", title="w", spec="Do.", paths_=["src"])
+        state = self.orca()
+        state["tasks"]["task_1"]["task_title"] = "renamed by a person"       # the title can no longer identify it
+        self.orca_file.write_text(json.dumps(state))
+        settled = commands.dispatch(self.repo, None, retry="a1")
+        self.assertEqual((settled.get("task"), settled.get("dispatch"), settled.get("void")), ("task_1", "ctx_1", None))
+        self.refused("paths_overlap", commands.dispatch, self.repo, None, role="implement", title="w", spec="Do.", paths_=["src"])
+
+    def test_the_tick_and_the_comment_are_owed_separately(self):
+        self.ready()
+        real = self.bin / "gh.real"
+        real.write_text((self.bin / "gh").read_text())
+        real.chmod(0o755)
+        self.script("gh", f'#!/bin/sh\nif [ "$1 $2" = "issue edit" ]; then exit 1; fi\nexec {real} "$@"\n')
+        first = gate.deliver(self.repo, None)
+        self.assertEqual((first["issue"], first["issue_owed"]), ("checklist not ticked, evidence commented", ["the checklist edit"]))
+        self.assertNotIn("left as it is", self.gh()["comments"][0])          # nothing false is said about the issue text
+        self.script("gh", f'#!/bin/sh\nif [ "$1 $2" = "issue comment" ]; then exit 1; fi\nexec {real} "$@"\n')
+        second = gate.deliver(self.repo, None)
+        self.assertEqual(second["issue"], "checklist ticked")
+        self.assertEqual((self.gh()["issues"]["5"]["body"], len(self.gh()["comments"])), (BODY.replace("[ ]", "[x]"), 1))
+        self.assertNotIn("issue", gate.deliver(self.repo, None))             # nothing is owed any more
+
+    def test_check_only_reports_authorization_apart_and_status_never_calls_an_unauthorized_candidate_ready(self):
+        self.ready(authorize=False)
+        verdict = gate.deliver(self.repo, None, check=True)
+        self.assertEqual((verdict["pass"], verdict["authorized"]), (True, False))
+        self.assertIn("still needs a merge authorization", commands.status(self.repo, None)["gate"])
+        commands.record(self.repo, None, authorize=True, words="go")
+        self.assertEqual(commands.status(self.repo, None)["gate"], "ready to deliver")
+
+    def test_a_commit_is_only_ever_judged_never_merged_by_name(self):
+        self.ready()
+        self.refused("commit_needs_check", gate.deliver, self.repo, None, commit="HEAD~1")
+        self.assertEqual(self.gh().get("merge_attempts", 0), 0)
+
+    def test_requests_of_the_same_objective_name_in_two_repositories_differ(self):
+        from pod import orca
+        self.assertNotEqual(orca.request_id("acme--widgets", "issue-5", "a1", 1), orca.request_id("acme--gears", "issue-5", "a1", 1))

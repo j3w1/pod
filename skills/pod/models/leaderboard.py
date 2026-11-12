@@ -11,6 +11,7 @@ import http.client
 import math
 import re
 import unicodedata
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,7 +21,8 @@ URL = "https://artificialanalysis.ai/leaderboards/models"
 ATTRIBUTION = "Artificial Analysis"
 USER_AGENT = "Pod public-model-observations (+https://github.com/j3w1/pod)"
 MAX_BYTES = 8 * 1024 * 1024
-TIMEOUT_S = 20.0
+TIMEOUT_S = 20.0          # per read
+DEADLINE_S = 60.0         # for the whole answer
 MAX_ROWS = 2000
 MAX_CELLS = 40
 MAX_CELL_TEXT = 512
@@ -77,8 +79,18 @@ def fetch(url: str = URL, *, max_bytes: int = MAX_BYTES, timeout: float = TIMEOU
                                                    "Accept-Encoding": "gzip"})
     opener = urllib.request.build_opener(_NoRedirect)
     try:
+        deadline = time.monotonic() + DEADLINE_S
         with opener.open(request, timeout=timeout) as response:
-            raw = response.read(max_bytes + 1)
+            chunks, size = [], 0
+            while size <= max_bytes:              # bounded in bytes and in total time, however slowly the source sends
+                if time.monotonic() > deadline:
+                    raise RefreshError(f"The source did not finish answering within {int(DEADLINE_S)} seconds")
+                chunk = response.read(min(65536, max_bytes + 1 - size))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            raw = b"".join(chunks)
             encoding = (response.headers.get("Content-Encoding") or "").lower()
     except RefreshError:
         raise

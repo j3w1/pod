@@ -79,7 +79,9 @@ class Writer:
         stamped = [{"n": len(self.entries) + offset, "at": now(), **entry} for offset, entry in enumerate(new)]
         payload = b"".join(json.dumps(entry, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
                            for entry in stamped)
-        os.pwrite(self._handle, payload, good)
+        written = 0
+        while written < len(payload):       # a short write is not an entry: write every byte or raise
+            written += os.pwrite(self._handle, payload[written:], good + written)
         os.fsync(self._handle)
         self.entries.extend(stamped)
         return stamped
@@ -99,9 +101,7 @@ def writer(target: Path, *, create: bool = False):
             raise PodError("objective_unknown", f"No objective log at {target}.", fix="run `pod status --all` to list objectives")
         yield Writer(handle, entries)
     finally:
-        if create and os.fstat(handle).st_size == 0:
-            os.unlink(target)          # nothing was opened: leave no empty log behind
-        os.close(handle)
+        os.close(handle)               # an empty file left by a refused open is not an objective and is reused
 
 
 def every() -> list[Path]:

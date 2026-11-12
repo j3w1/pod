@@ -66,11 +66,11 @@ class DispatchTests(CoreCase):
         self.assertEqual(self.orca()["starts"], 1)
 
     def test_the_same_assignment_always_carries_the_same_request(self):
-        self.assertEqual(orca.request_id("widget", "a1", 1), orca.request_id("widget", "a1", 1))
-        self.assertNotEqual(orca.request_id("widget", "a1", 1), orca.request_id("widget", "a2", 1))
+        self.assertEqual(orca.request_id("acme--widgets", "widget", "a1", 1), orca.request_id("acme--widgets", "widget", "a1", 1))
+        self.assertNotEqual(orca.request_id("acme--widgets", "widget", "a1", 1), orca.request_id("acme--widgets", "widget", "a2", 1))
         self.start(paths_=["src"])
-        self.assertEqual(self.entries("widget")[-2]["request"], orca.request_id("widget", "a1", 1))
-        self.assertIn(orca.request_id("widget", "a1", 1), self.orca()["requests"])
+        self.assertEqual(self.entries("widget")[-2]["request"], orca.request_id("acme--widgets", "widget", "a1", 1))
+        self.assertIn(orca.request_id("acme--widgets", "widget", "a1", 1), self.orca()["requests"])
 
     def test_a_second_coordinator_cannot_start_work_until_it_takes_the_run_over(self):
         self.start(paths_=["src"])

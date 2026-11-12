@@ -255,6 +255,7 @@ def _refuse_redirected(paths: dict[str, Path]) -> None:
               (paths["config"], "POD_CONFIG_HOME" if "POD_CONFIG_HOME" in os.environ else None),
               (paths["claude"], "CLAUDE_CONFIG_DIR"),
               (paths["codex"], "CODEX_HOME" if "CODEX_HOME" in os.environ else None),
+              (paths["canonical"].parent.parent, None), (paths["canonical"].parent, None),   # ~/.agents, whatever CODEX_HOME is
               (paths["launcher"].parent, None)]
     if "ZDOTDIR" in os.environ:
         places.append((_absolute_env("ZDOTDIR", paths["home"]), "ZDOTDIR"))
@@ -500,9 +501,13 @@ def default_preferences(source_bundle: Path) -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
-def _preferences(paths: dict[str, Path], source_bundle: Path) -> tuple[str, str | None]:
+def _preferences(paths: dict[str, Path], source_bundle: Path, *, first: bool) -> tuple[str, str | None]:
+    """Report the preference file. Only a first install may create it; an update never creates or changes it."""
     config = paths["config"] / "config.yaml"
-    created = not config.exists() and not config.is_symlink()
+    absent = not config.exists() and not config.is_symlink()
+    created = absent and first
+    if absent and not first:
+        return "absent", "no preference file, so no route is enabled; choose routes with pod models"
     if created:
         _atomic(config, default_preferences(source_bundle))
     result = _run_bundle(paths["canonical"].parent,
@@ -571,9 +576,9 @@ def _path(paths: dict[str, Path]) -> tuple[str, list[str]]:
     return outcome, notes
 
 
-def _finish(paths: dict[str, Path], source_bundle: Path, *, fail: int) -> tuple:
+def _finish(paths: dict[str, Path], source_bundle: Path, *, fail: int, first: bool) -> tuple:
     """Preferences and PATH: the same closing steps for a new copy and a current one."""
-    prefs = _preferences(paths, source_bundle)
+    prefs = _preferences(paths, source_bundle, first=first)
     if prefs[0] == "failed":
         raise InstallError(fail, prefs[1] + "; rerun the installer")
     _stage("Preferences", state="ok" if prefs[0] != "invalid" and not prefs[1] else "warn",
@@ -619,7 +624,7 @@ def install(stage: Path) -> int:
                 and claude_link.resolve(strict=False) == canonical.resolve(strict=False)):
             _stage("Installing skills", detail="Already current", plain="Already current")
             _stage("Installing pod command", detail="already present")
-            prefs, path_status, notes = _finish(paths, source_bundle, fail=1)
+            prefs, path_status, notes = _finish(paths, source_bundle, fail=1, first=False)
             _summary(paths, prefs, path_status, notes, duplicates(paths), None)
             return 0
         previous = ({"version": _version(canonical), "digest": current} if current else
@@ -650,7 +655,7 @@ def install(stage: Path) -> int:
         _stage("Installing skills", plain="Skills: verified one canonical bundle")
         _atomic(paths["launcher"], template, mode=0o755)
         _stage("Installing pod command", plain="Launcher: installed")
-        prefs, path_status, notes = _finish(paths, source_bundle, fail=3)
+        prefs, path_status, notes = _finish(paths, source_bundle, fail=3, first=receipt is None)
         record["status"] = "installed"
         _write_receipt(receipt_file, record)
         _say("Receipt: installed")

@@ -83,7 +83,7 @@ def evaluate(root: Path, state: State, *, commit: str | None = None, remote: boo
         if cover["uncovered"]:
             shown = ", ".join(cover["uncovered"][:8]) + (f" and {len(cover['uncovered']) - 8} more" if len(cover["uncovered"]) > 8 else "")
             needs.append(f"an independent passing review of {len(cover['uncovered'])} changed paths: {shown}")
-    for finding in proof.open_required(root, state):
+    for finding in proof.open_required(root, state, candidate):
         needs.append(f"finding {finding['id']} resolved by a passing review of the corrected "
                      f"{finding['path'] or 'paths it covers'}, or waived")
     # 4. Every criterion that can be proved before the merge.
@@ -156,6 +156,9 @@ def _settle(writer, state: State, request: dict | None, candidate: str) -> dict 
 def deliver(cwd: Path, objective: str | None, *, check: bool = False, commit: str | None = None) -> dict:
     from .commands import locate
     target, root, _ = locate(cwd, objective)
+    if commit and not check:
+        raise PodError("commit_needs_check", "`pod deliver` merges the branch head; --commit only names a candidate to judge.",
+                       fix="add --check to judge that commit, or check it out and deliver without --commit")
     if check:
         entries = log.read(target)
         if not entries:
@@ -226,31 +229,48 @@ def _on_target(root: Path, state: State, candidate: str, head: str | None) -> bo
 
 
 def _update_issue(writer, state: State, request: dict | None) -> dict:
-    """Tick the proved criteria on the source issue once and comment the evidence. Never untick."""
+    """Tick the proved criteria on the source issue and comment the evidence. Never untick.
+
+    The tick and the comment are owed separately: one that failed is tried again by the next
+    call, and one that happened is never repeated.
+    """
     source = state.objective["source"]
-    ticked = {ident for effect in state.effects.values() if effect["intent"]["effect"] == "issue_update" and effect["outcome"]
-              and effect["outcome"].get("updated") for ident in effect["intent"]["criteria"]}
-    proved = [row for row in state.criteria.values() if row["state"] == "met" and row["id"] not in ticked]
-    if source["kind"] != "issue" or not proved:
+    if source["kind"] != "issue":
         return {}
-    known = [source["digest"]] + [effect["outcome"]["digest"] for effect in state.effects.values()
-                                  if effect["intent"]["effect"] == "issue_update" and effect["outcome"]
-                                  and effect["outcome"].get("digest")]
+    done = [effect["outcome"] for effect in state.effects.values()
+            if effect["intent"]["effect"] == "issue_update" and effect["outcome"]]
+    ticked = {ident for outcome in done for ident in outcome.get("ticked", [])}
+    commented = {ident for outcome in done for ident in outcome.get("commented", [])}
+    met = [row for row in state.criteria.values() if row["state"] == "met"]
+    to_tick = [row for row in met if "line" in row and row["id"] not in ticked]
+    to_comment = [row for row in met if row["id"] not in commented]
+    if not to_tick and not to_comment:
+        return {}
+    known = [source["digest"]] + [outcome["digest"] for outcome in done if outcome.get("digest")]
     ident = state.next_id("u", state.effects)
     writer.append({"kind": "effect", "effect": "issue_update", "phase": "intent", "id": ident,
-                   "criteria": [row["id"] for row in proved]})
+                   "tick": [row["id"] for row in to_tick], "comment": [row["id"] for row in to_comment]})
     document = github.issue(source["repository"], source["number"])
-    lines = [row["line"] for row in proved if "line" in row]
-    edited, digest = False, None
-    if lines and issue.digest(document["body"]) == known[-1]:
-        body = issue.tick(document["body"], lines)
-        edited = body != document["body"] and github.edit_issue(source["repository"], source["number"], body)
-        digest = issue.digest(body) if edited else None
-    where = f"pull request {request['number']}" if request else "the target branch"
-    text = "\n".join([f"Delivered through {where}. Criteria proved:", ""] + [
-        f"- {row['text']}" + (f" ({row['why']})" if row.get("why") else "") for row in proved] + (
-        [] if edited or not lines else ["", "The issue text changed after the objective opened, so its checklist was left as it is."]))
-    commented = github.comment_issue(source["repository"], source["number"], text)
-    writer.append({"kind": "effect", "effect": "issue_update", "phase": "outcome", "id": ident,
-                   "updated": bool(edited or commented), "edited": bool(edited), "commented": bool(commented), "digest": digest})
-    return {"issue": ("checklist ticked" if edited else "checklist left unchanged") + (", evidence commented" if commented else ", comment failed")}
+    outcome = {"kind": "effect", "effect": "issue_update", "phase": "outcome", "id": ident, "ticked": [], "commented": []}
+    changed = bool(to_tick) and issue.digest(document["body"]) != known[-1]
+    if to_tick and changed:
+        outcome["ticked"] = [row["id"] for row in to_tick]       # settled: a text the person changed is left as it is
+        outcome["left_unedited"] = True
+    elif to_tick:
+        body = issue.tick(document["body"], [row["line"] for row in to_tick])
+        if body == document["body"] or github.edit_issue(source["repository"], source["number"], body):
+            outcome["ticked"], outcome["digest"] = [row["id"] for row in to_tick], issue.digest(body)
+    if to_comment:
+        where = f"pull request {request['number']}" if request else "the target branch"
+        text = "\n".join([f"Delivered through {where}. Criteria proved:", ""] + [
+            f"- {row['text']}" + (f" ({row['why']})" if row.get("why") else "") for row in to_comment] + (
+            ["", "The issue text changed after the objective opened, so its checklist was left as it is."] if changed else []))
+        if github.comment_issue(source["repository"], source["number"], text):
+            outcome["commented"] = [row["id"] for row in to_comment]
+    writer.append(outcome)
+    owed = [name for name, wanted, got in (("the checklist edit", to_tick, outcome["ticked"]),
+                                           ("the evidence comment", to_comment, outcome["commented"])) if wanted and not got]
+    said = ("checklist left unchanged" if changed else "checklist ticked" if outcome["ticked"] else
+            "checklist already ticked" if not to_tick else "checklist not ticked")
+    said += ", evidence commented" if outcome["commented"] else "" if not to_comment else ", comment failed"
+    return {"issue": said, **({"issue_owed": owed, "next": "run `pod deliver` again to finish the issue update"} if owed else {})}

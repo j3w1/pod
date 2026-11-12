@@ -12,7 +12,8 @@ import uuid
 from .errors import PodError
 
 REPEAT = "repeat the same Pod command; a start is replayed, never duplicated"
-FIXES = {"consumer_fenced": "another conversation coordinates this Run now; run `pod resume` to take it over",
+FIXES = {"consumer_fenced": "this conversation does not coordinate the objective's Run (it holds another Run, or another "
+                            "conversation took this one over); run `pod resume` for this objective",
          "request_mismatch": "this assignment was already started with a different packet; dispatch a new assignment"}
 UNKNOWN = ("runtime_timeout", "runtime_unavailable", "invalid_runtime_response")   # Orca itself does not know
 SETTLED = ("completed", "failed", "succeeded", "stopped", "abandoned", "cancelled", "released")
@@ -44,9 +45,9 @@ def call(*args: str, stdin: str | None = None, timeout: int = 90) -> dict:
     return reply.get("result") or {}
 
 
-def request_id(objective: str, assignment: str, attempt: int) -> str:
+def request_id(repository: str, objective: str, assignment: str, attempt: int) -> str:
     """The same assignment and attempt always give the same request, so a retry cannot start twice."""
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"pod:{objective}:{assignment}:{attempt}"))
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"pod:{repository}:{objective}:{assignment}:{attempt}"))
 
 
 def run_current() -> str | None:

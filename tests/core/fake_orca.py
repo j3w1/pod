@@ -95,7 +95,9 @@ def main():
                                   "lastFailure": row.get("lastFailure")}})
     if command == "request-show":
         request = option(args, "--request")
-        reply(True, {"requestId": request, "state": "completed" if request in state["requests"] else "absent"})
+        known = state["requests"].get(request)
+        reply(True, {"requestId": request, "state": "completed" if known else "absent",
+                     **({"receipt": known["receipt"]} if known else {})})
     if command == "worker-list":
         rows = [row for row in state["workers"].values() if row["runId"] == option(args, "--run")]
         reply(True, {"workers": rows, "page": {"hasMore": False, "nextCursor": None}})

@@ -48,10 +48,15 @@ Nothing about applicability is declared (`skills/pod/proof.py`).
 - A review fact applies to a path while the candidate's blob at that path equals the blob at
   the reviewed commit. It lapses when a context path it named changes.
 - A candidate is reviewed when every path it changes against its merge base with the target is
-  covered by an applicable passing review whose reviewer changed nothing. A project may also
-  require the review at the exact final tree.
-- A required finding is open until a later review passes on corrected content at its path, or
-  a waiver names it. A second opinion on the same content and a carried review close nothing.
+  covered by an applicable completed review, by a reviewer who changed nothing, that raised no
+  required finding on that path (and none without a path). A review that fails over two files
+  therefore still covers the others. A project may also require the review at the exact final
+  tree. A context path may be a directory, or `.` for the whole tree.
+- A required finding is open until a later review raises nothing required on corrected content
+  at its path that the candidate still holds, or a waiver names it. A second opinion on the same
+  content and a carried review close nothing, and bringing the content back reopens it.
+- A review Orca did not report as completed keeps its findings, covers nothing and closes
+  nothing.
 
 So a review of only the corrected paths composes with an earlier full review, and merging the
 target branch reopens only files whose content changed in the candidate.
@@ -103,7 +108,9 @@ Then it merges with the exact head, reads the outcome back, ticks the proved cri
 source issue in one edit (or only comments when the issue text changed since `open`) and
 comments the evidence. Boxes are never unticked.
 
-`pod deliver --check [--commit SHA]` prints the same verdict and changes nothing, for a host
+`pod deliver --check [--commit SHA]` prints the verdict and changes nothing: `pass` covers
+conditions 1 to 4 and `authorized` reports the fifth separately, because a host that performs
+the delivery supplies its own authorization. It is for a host
 that performs delivery itself. A delivery someone else performed is recorded once the pull
 request shows merged into the target at the candidate, or, for a commit the objective recorded
 work or proof for, Git shows it on the target. A withdrawal of authorization holds until the
@@ -170,6 +177,7 @@ the person changes it, through `pod models` or an editor. Coordination reads it 
   update changes a preference.
 - **High-value mark.** A cost is marked when no other routable route costs less within 2 index
   points, and its index is at or above the median of routable routes with both measurements.
+  Rows with an estimated index or a fallback profile are left out.
   It is benchmark-relative decision support and changes no state.
 
 ## Tests and CI

@@ -246,7 +246,12 @@ class RedirectedPathTests(InstallerCase):
             env["HOME"] = str(link)
             return link, "Set HOME=" + str(home)
 
-        for prepare in (claude, launcher_directory, linked_home):
+        def agents_with_codex_home_set(home, env):
+            (home / ".agents").symlink_to(home / "tmp/elsewhere", target_is_directory=True)   # nothing may be made there
+            env["CODEX_HOME"] = str(home / "codex")           # naming another Codex home never moves the canonical copy
+            return home / ".agents", "Replace the link with a real directory"
+
+        for prepare in (claude, launcher_directory, linked_home, agents_with_codex_home_set):
             with self.subTest(prepare=prepare.__name__), tempfile.TemporaryDirectory() as directory:
                 env, _ = sandbox(Path(directory))
                 home = Path(env["HOME"])
@@ -308,6 +313,17 @@ class PreferenceTests(InstallerCase):
         self.assertEqual((self.config.read_bytes(), self.config.stat().st_mode), (EXISTING, mode))
         report = doctor(self.env)["preferences"]
         self.assertEqual((report["status"], report["enabled"], report["preferred"]), ("ok", 1, "codex/gpt-6.1-sol/high"))
+
+    def test_an_update_never_creates_a_preference_file_the_person_removed(self):
+        self.assertIn("(created)", self.installed().stdout)
+        self.config.unlink()
+        newer, _ = self.newer()
+        for env in (self.env, {**self.env, "POD_INSTALL_SOURCE": newer.as_uri()}):      # already current, then a newer bundle
+            updated = run_pod(env, "update")
+            self.assertEqual(updated.returncode, 0, updated.stdout + updated.stderr)
+            self.assertFalse(self.config.exists(), updated.stdout)
+        report = doctor(self.env)["preferences"]
+        self.assertEqual((report["status"], report["enabled"]), ("absent", 0))
 
     def test_an_unreadable_file_and_a_linked_file_are_kept_and_reported(self):
         self.config.parent.mkdir(parents=True)

@@ -151,7 +151,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
                            fix="pass --route, one of: " + (", ".join(preferences.enabled()) or "none enabled; run `pod models`"))
         preferences.check(route)
         paths_ = gitio.declared(paths_)
-        context = gitio.declared(context)
+        context = gitio.declared(context, keep_root=True)
         base = gitio.commit(root, commit or "HEAD")
         if role == "review":
             against = gitio.merge_base(root, base, f"origin/{state.objective['target']}") or gitio.merge_base(
@@ -177,7 +177,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
             writer.append({"kind": "objective", "run": run})
         ident = state.next_id("a", state.assignments)
         assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
-                      "route": route, "request": orca.request_id(state.id, ident, 1), "worktree": worktree,
+                      "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
                       **({"context": context} if context else {})}
         text = packet(state, assignment, spec)
         assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
@@ -219,22 +219,36 @@ def _started(writer, ident: str, started: dict, route: str) -> dict:
 
 
 def _settle_start(writer, state: State, ident: str) -> dict:
-    """After a lost reply: learn from Orca whether the worker started. Never start it again here."""
+    """After a lost reply: learn from Orca whether the worker started. Never start it again here.
+
+    Orca's own receipt is read first. Only when Orca holds neither a receipt nor a task for the
+    assignment is the start taken as not having happened; anything unsettled keeps its paths.
+    """
     row = state.assignments.get(ident)
     if not row:
         raise PodError("assignment_unknown", f"There is no assignment {ident}.", fix="run `pod status` for the ids")
     if row.get("dispatch"):
         return {"assignment": ident, "task": row["task"], "dispatch": row["dispatch"], "already": True}
-    marker = f"[{state.id}:{ident}]"
-    found = next((key for key, task in orca.tasks(state.objective["run"]).items() if marker in (task["title"] or "")), None)
-    if found:
-        worker = next((item for item in orca.workers(state.objective["run"]) if item["task"] == found), {})
-        return _started(writer, ident, {"task": found, "dispatch": worker.get("dispatch")}, row["route"])
-    receipt = orca.call("orchestration", "request-show", "--request", row["request"])
-    if receipt.get("state") == "pending":
+    run = state.objective["run"]
+    answer = orca.call("orchestration", "request-show", "--request", row["request"])
+    if answer.get("state") == "pending":
         raise PodError("start_pending", f"Orca is still starting {ident}.", fix=f"run `pod dispatch --retry {ident}` again shortly")
-    writer.append({"kind": "assignment", "id": ident, "void": True, "refused": "start_not_recorded"})
-    return {"assignment": ident, "void": True, "next": "Orca has no task for it; dispatch the work again as a new assignment"}
+    receipt = answer.get("receipt") or {}
+    found = receipt.get("taskId") if answer.get("state") == "completed" else None
+    marker = f"[{state.id}:{ident}]"
+    found = found or next((key for key, task in orca.tasks(run).items() if marker in (task["title"] or "")), None)
+    if found:
+        worker = next((item for item in orca.workers(run) if item["task"] == found), {})
+        dispatch_ = receipt.get("dispatchId") or worker.get("dispatch")
+        if dispatch_ and receipt.get("state") != "failed":
+            return _started(writer, ident, {"task": found, "dispatch": dispatch_}, row["route"])
+        if answer.get("state") != "completed" and not dispatch_:
+            raise PodError("start_pending", f"Orca has a task for {ident} and no worker yet.",
+                           fix=f"run `pod dispatch --retry {ident}` again shortly")
+    writer.append({"kind": "assignment", "id": ident, "void": True, "task": found,
+                   "refused": "start failed" if found else "start_not_recorded"})
+    return {"assignment": ident, "void": True,
+            "next": "Orca started no worker for it; dispatch the work again as a new assignment"}
 
 
 # --- accept ----------------------------------------------------------------------------------------
@@ -318,11 +332,15 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                          for index, item in enumerate(stated.get("findings") or [], 1) if isinstance(item, dict)]
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
-                              "reviewer": ident, "wrote": bool(changed), "findings": found})
+                              "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
+                              "findings": found})
                 output.update(verdict=verdict, findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
                                                          f"{item['path'] or ''}: {_line(item['text'])}" for item in found])
                 if changed:
                     output["note"] = "the reviewer changed files, so this review covers nothing"
+                elif outcome != "succeeded":
+                    output["note"] = (f"Orca reports the review as {outcome}, not completed: its findings are kept, "
+                                      "and it covers nothing and closes no finding")
             else:
                 output["note"] = ("the reviewer's message has no result object with a verdict, so no review is recorded; "
                                   "dispatch the review again if it is needed")
@@ -391,7 +409,7 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
             entries.append({"kind": "criterion", "id": ident, "text": text, "state": "open"})
             done.append(f"{ident} added")
         if given.get("waive"):
-            known = {row["id"] for row in proof.findings(root, state)}
+            known = {row["id"] for row in proof.findings(root, state, gitio.commit(root))}
             if given["waive"] not in known or not given.get("why"):
                 raise PodError("waiver_invalid", "A waiver names one finding and says who waived it and why.",
                                fix="pass --waive FINDING --why 'who and why'; findings: " + (", ".join(sorted(known)) or "none"))
@@ -496,7 +514,7 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         rows.append(f"{row['id']} {row['role']} {status}: {row['title'][:80]}")
     if rows:
         result["assignments"] = rows
-    found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state)]
+    found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state, gitio.commit(root))]
     if found:
         result["open_required_findings"] = found
     if not gate:
@@ -504,7 +522,8 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
     verdict = gates.evaluate(root, state, remote=remote)
     result["candidate"] = f"{verdict['candidate'][:12]} tree {verdict['tree'][:12]}" + (
         "" if not verdict.get("dirty") else f", {len(verdict['dirty'])} uncommitted paths")
-    result["gate"] = "ready to deliver" if verdict["pass"] else verdict["needs"]
+    result["gate"] = verdict["needs"] or ("ready to deliver" if verdict["authorized"] else
+                                           "passes; `pod deliver` still needs a merge authorization for this commit")
     return result
 
 

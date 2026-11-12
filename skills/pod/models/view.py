@@ -72,7 +72,8 @@ class View:
         lines = [first]
         if self.attempt is not None and not self.attempt["ok"]:
             lines.append(f"Last refresh failed {snapshot.age(self.attempt.get('attempted_at'))}: "
-                         f"{self.attempt.get('failure')}. The snapshot above was kept.")
+                         f"{self.attempt.get('failure')}. "
+                         + ("The snapshot above was kept." if self.snapshot is not None else "There is no earlier snapshot."))
         if self.preferences.status == "invalid":
             lines.append(f"Preference file is invalid ({self.preferences.problem}); no route is eligible and "
                          "nothing can be changed here until it is corrected with `pod config edit`.")
