@@ -68,15 +68,17 @@ def run_show(run: str) -> dict:
 
 
 def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, str, str], request: str,
-          name: str | None = None, base: str | None = None) -> dict:
+          name: str | None = None, new_from: tuple[str, str] | None = None) -> dict:
     """Start one worker. Repeating the call with the same request returns the first outcome.
 
-    `base` is the branch a new worktree starts from, so the worker begins on the objective's work.
+    `new_from` is the repository and branch a new worktree is made from. Without it Orca would
+    make the worktree in the coordinator's own repository, which need not be the objective's.
     """
     agent, model, effort = route
     args = ["orchestration", "worker-start", "--spec-file", "-", "--task-title", title, "--worktree", worktree,
             "--agent", agent, "--model", model, "--effort", effort, "--run", run, "--retry-request", request]
-    args += (["--display-name", name] if name else []) + (["--base-branch", base] if base else [])
+    args += (["--display-name", name] if name else []) + (
+        ["--repo", f"path:{new_from[0]}", "--base-branch", new_from[1]] if new_from else [])
     result = call(*args, stdin=spec, timeout=180)
     launch = result.get("launch") or {}
     if result.get("state") == "outcome_unknown" or not result.get("taskId"):
@@ -84,6 +86,14 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
     return {"task": result.get("taskId"), "dispatch": result.get("dispatchId"), "state": result.get("state"),
             "replayed": bool((result.get("mutation") or {}).get("replayed")),
             "effective": launch.get("effective"), "requested": launch.get("requested")}
+
+
+def failure(dispatch: str) -> str:
+    """Why Orca says a Dispatch failed, in its own words; empty when it does not say."""
+    try:
+        return str((call("orchestration", "worker-show", "--dispatch", dispatch).get("dispatch") or {}).get("lastFailure") or "")
+    except PodError:
+        return ""
 
 
 def workers(run: str) -> list[dict]:

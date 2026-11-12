@@ -105,6 +105,15 @@ class DispatchTests(CoreCase):
         there = self.start(paths_=["docs"], worktree="new-child")
         tasks = self.orca()["tasks"]
         self.assertEqual((tasks[here["task"]]["base_branch"], tasks[there["task"]]["base_branch"]), (None, "work"))
+        self.assertEqual((tasks[here["task"]]["repo"], tasks[there["task"]]["repo"]), (None, f"path:{self.repo}"))
+
+    def test_a_start_orca_reports_as_failed_is_a_refusal_with_its_reason_and_holds_no_paths(self):
+        self.set_orca(start_fails="fatal: invalid reference: work")
+        problem = self.refused("start_failed", self.start, paths_=["src"], worktree="new-child")
+        self.assertIn("invalid reference", str(problem))
+        self.assertTrue(self.entries("widget")[-1]["void"])
+        self.set_orca(start_fails=None)
+        self.assertEqual(self.start(paths_=["src"])["assignment"], "a2")
 
     def test_a_closed_objective_starts_nothing(self):
         commands.drop(self.repo, None, why="stopped")

@@ -72,18 +72,27 @@ def main():
         task, dispatch = f"task_{number}", f"ctx_{number}"
         state["tasks"][task] = {"id": task, "run_id": run["id"], "task_title": option(args, "--task-title"),
                                 "status": "dispatched", "result": None, "spec": spec,
-                                "base_branch": option(args, "--base-branch")}
+                                "base_branch": option(args, "--base-branch"), "repo": option(args, "--repo")}
         state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
                                       "dispatchStatus": "dispatched", "terminalState": "active"}
         route = {"agent": option(args, "--agent"), "model": option(args, "--model"), "effort": option(args, "--effort")}
         receipt = {"taskId": task, "dispatchId": dispatch, "launch": {"requested": route, "effective": state.get("effective") or route}}
         state["requests"][request] = {"spec": spec, "receipt": receipt}
+        if state.get("start_fails"):
+            state["workers"][dispatch].update(workerState="failed", dispatchStatus="failed", lastFailure=state["start_fails"])
+            state["tasks"][task]["status"] = "failed"
+            receipt["state"] = "failed"
+            reply(True, {**receipt, "mutation": {"requestId": request, "replayed": False}}, state)
         if state.get("lose_reply"):
             state["lose_reply"] = False
             with open(STATE, "w") as stream:
                 json.dump(state, stream)
             raise SystemExit(1)
         reply(True, {**receipt, "mutation": {"requestId": request, "replayed": False}}, state)
+    if command == "worker-show":
+        row = state["workers"].get(option(args, "--dispatch"), {})
+        reply(True, {"dispatch": {"id": row.get("dispatchId"), "status": row.get("dispatchStatus"),
+                                  "lastFailure": row.get("lastFailure")}})
     if command == "request-show":
         request = option(args, "--request")
         reply(True, {"requestId": request, "state": "completed" if request in state["requests"] else "absent"})
@@ -91,7 +100,7 @@ def main():
         rows = [row for row in state["workers"].values() if row["runId"] == option(args, "--run")]
         reply(True, {"workers": rows, "page": {"hasMore": False, "nextCursor": None}})
     if command == "task-list":
-        rows = [{key: value for key, value in row.items() if key not in ("spec", "base_branch")} for row in state["tasks"].values()
+        rows = [{key: value for key, value in row.items() if key not in ("spec", "base_branch", "repo")} for row in state["tasks"].values()
                 if row["run_id"] == option(args, "--run")]
         reply(True, {"tasks": rows})
     reply(False, {"code": "unknown_command", "message": " ".join(args)})

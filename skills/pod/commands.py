@@ -186,17 +186,19 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
         try:
             started = orca.start(run=run, spec=text, title=f"{title} [{state.id}:{ident}]", worktree=selector,
                                  route=routefile.split(route), request=assignment["request"], name=name,
-                                 base=gitio.branch(root) if worktree.startswith("new-") else None)
+                                 new_from=(str(root), gitio.branch(root) or base) if worktree.startswith("new-") else None)
         except PodError as exc:
             if exc.code == "orca_unknown":
                 exc.fix = f"run `pod dispatch --retry {ident}`; it reads what Orca did and never starts a second worker"
             else:
                 writer.append({"kind": "assignment", "id": ident, "void": True, "refused": exc.code})
             raise
-        if not started.get("dispatch"):
-            writer.append({"kind": "assignment", "id": ident, "void": True, "refused": f"start {started.get('state')}"})
-            raise PodError("start_failed", f"Orca created the task and started no worker (state {started.get('state')}).",
-                           fix="read Orca's task list for the reason, then dispatch the work again")
+        if not started.get("dispatch") or started.get("state") == "failed":
+            reason = " ".join(orca.failure(started["dispatch"]).split())[:300] if started.get("dispatch") else ""
+            writer.append({"kind": "assignment", "id": ident, "void": True, "refused": "start failed",
+                           "task": started["task"], "dispatch": started.get("dispatch")})
+            raise PodError("start_failed", f"Orca started no worker for {ident}: {reason or 'it gave no reason'}",
+                           fix="correct what Orca reported, then dispatch the work again as a new assignment")
         return _started(writer, ident, started, route)
 
 
