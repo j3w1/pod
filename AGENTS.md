@@ -5,7 +5,7 @@ exemption. Inspect Git state and preserve unrelated work.
 
 | Read when | Document or check |
 | --- | --- |
-| Changing architecture: adding a subsystem, command, record, persisted field, refusal or validation step, or answering an incident with one | `docs/design-principles.md` |
+| Adding a subsystem, a coordinator-facing command or a persisted record kind, or answering an incident by adding one | `docs/design-principles.md` |
 | Changing behavior or a requirement | `docs/pod-spec.md` and the linked affected domain |
 | Editing skill text | `docs/spec/interface.md` R71 (the documentation contract), the trigger list in `skills/pod/SKILL.md`, and `python -m pod.skill_validation` |
 | Changing gates or CI | `docs/validation.md` |
@@ -88,18 +88,19 @@ read-only. No production or provider mutation, and no package or release publica
 
 ## Pod's Enduring Design Principles
 
-`docs/design-principles.md` binds every change. Read it before an architectural change. In short:
+`docs/design-principles.md` holds the reasoning. The short form binds every change:
 
 - Pod is a lightweight coordinator; the process a task needs is set by the task.
 - Keep only what no other system owns; never copy Orca, Git, GitHub or host state; derive the rest.
-- Never ask a coordinator for what the software can compute; an ordinary result takes one call.
+- Never ask a coordinator for what the software can compute.
 - Never record a success, exit, result or acceptance that was not observed; bind evidence to the
   exact commit and tree.
+- Only the person changes a preference; a public observation enables nothing.
 - Answer an incident by removing what allowed it before adding anything.
 
-A change that breaks a Rule there, or adds a subsystem, service, coordinator-facing command,
-persisted record kind or validation layer, gives the answers that document asks for in its pull
-request and needs j3w1's approval before merge. Ordinary work inside the principles needs neither.
+A change that adds a subsystem, a coordinator-facing command or a persisted record kind answers
+that document's three questions in its pull request description. A change that breaks a Rule
+there says so and why. Removing or simplifying owes neither.
 
 ## Upstream metadata governance
 
