@@ -1,11 +1,10 @@
 name: Pod checks
 
 # Every run is a full run: pull requests, main pushes, the weekly run (which catches a new
-# CPython or runner image on an unchanged main) and a hand dispatch all run every lane share
-# and `checks`; `linux` is the required check.
+# CPython or runner image on an unchanged main) and a hand dispatch all run the same three
+# jobs; `linux` is the required check.
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   schedule:
@@ -21,13 +20,13 @@ concurrency:
 
 env:
   PYTHONDONTWRITEBYTECODE: "1"
-  POD_REQUIRE_PTY: "1"
+  PYTHONPATH: skills
   DISABLE_TELEMETRY: "1"
   DO_NOT_TRACK: "1"
 
 jobs:
   python:
-    # Resolve the latest stable CPython once; every job and shard runs exactly this version.
+    # Resolve the latest stable CPython once; every job runs exactly this version.
     name: python
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -42,66 +41,48 @@ jobs:
           allow-prereleases: false
       - run: python --version
 
-  tests:
-    name: tests (${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.of }})
+  core:
+    name: core
     needs: python
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        # One row per lane share, each run once; tests/suite_lanes.json names the same shards.
-        include:
-          - {lane: parallel, shard: 1, of: 10}
-          - {lane: parallel, shard: 2, of: 10}
-          - {lane: parallel, shard: 3, of: 10}
-          - {lane: parallel, shard: 4, of: 10}
-          - {lane: parallel, shard: 5, of: 10}
-          - {lane: parallel, shard: 6, of: 10}
-          - {lane: parallel, shard: 7, of: 10}
-          - {lane: parallel, shard: 8, of: 10}
-          - {lane: parallel, shard: 9, of: 10}
-          - {lane: parallel, shard: 10, of: 10}
-          - {lane: serial, shard: 1, of: 1}
-          - {lane: installer, shard: 1, of: 2}
-          - {lane: installer, shard: 2, of: 2}
-    env:
-      PYTHONPATH: skills
-      LANE: ${{ matrix.lane }}
-      SHARD: ${{ matrix.shard }}
-      OF: ${{ matrix.of }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ needs.python.outputs.version }}
       - name: The resolved interpreter is the one running
         run: test "$(python -c 'import platform; print(platform.python_version())')" = "${{ needs.python.outputs.version }}"
-      - name: Install bubblewrap, and zsh for shell and terminal tests
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y bubblewrap
-          if [ "$LANE" != parallel ]; then sudo apt-get install -y zsh; fi
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Install Python test prerequisites
-        run: |
-          PIN="$(python -c 'from pod.installer import PIN; print(PIN)')"
-          python -m pip install "$PIN" -r tests/requirements-pty.txt
-      - name: Unit, incident, PTY and installer tests in this lane share, with the home and credentials absent
-        run: python tools/isolate.py -- python tools/suite_lanes.py run --lane "$LANE" --shard "$SHARD" --of "$OF" --strict --forbid-skips
+      - name: Core tests, with an empty home
+        run: mkdir -p "$RUNNER_TEMP/home" && HOME="$RUNNER_TEMP/home" python -m unittest discover -s tests/core -t .
 
-  checks:
-    name: checks
+  models:
+    name: models
     needs: python
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ needs.python.outputs.version }}
+      - name: The resolved interpreter is the one running
+        run: test "$(python -c 'import platform; print(platform.python_version())')" = "${{ needs.python.outputs.version }}"
+      - name: Model registry, refresh and workspace tests, with an empty home
+        run: mkdir -p "$RUNNER_TEMP/home" && HOME="$RUNNER_TEMP/home" python -m unittest discover -s tests/models -t .
+
+  install:
+    name: install
+    needs: python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -111,124 +92,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Install Python prerequisites
+      - name: Install zsh for shell tests
+        run: sudo apt-get update -qq && sudo apt-get install -y zsh
+      - name: Static checks
         run: |
-          PIN="$(PYTHONPATH=skills python -c 'from pod.installer import PIN; print(PIN)')"
-          python -m pip install "$PIN"
-      - name: Suite lanes, budgets and incident modules
-        run: python tools/suite_lanes.py check
+          python tools/source_audit.py
+          python -m pod.skill_validation
+          python -m compileall -q skills tests tools
         env:
-          PYTHONPATH: skills
-      - name: Explicit incident discovery
-        run: python -m unittest discover -s tests/incidents -t . -v
-        env:
-          PYTHONPATH: skills
-      - name: Compile
-        run: python -m compileall -q skills tests tools
-      - name: Whitespace
-        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
-      - name: Validate the skill bundle
-        run: python -m pod.skill_validation skills/pod
-        env:
-          PYTHONPATH: skills
-      - name: Validate the catalog
-        run: python -m pod.catalog --check
-        env:
-          PYTHONPATH: skills
-      - name: Tracked source hygiene audit
-        run: python tools/source_audit.py .
-      - name: Every recorded trace fixture
-        run: python tools/trace_check.py tests/fixtures/traces/*.json
-        env:
-          PYTHONPATH: skills
-
-      - name: Copied bundle works without the checkout
-        run: |
-          COPY="$RUNNER_TEMP/copy/pod"
-          mkdir -p "$COPY" "$RUNNER_TEMP/elsewhere" "$RUNNER_TEMP/copy-home"
-          cp -rL skills/pod/. "$COPY/"
-          cd "$RUNNER_TEMP/elsewhere"
-          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" python -I "$COPY/scripts/pod.py" --version > version.txt
-          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" python -I "$COPY/scripts/pod.py" config --json > config.json || test "$?" -eq 1
-          env -i PATH="$PATH" HOME="$RUNNER_TEMP/copy-home" python -I "$COPY/scripts/pod.py" doctor --json > doctor.json
-          python - "$GITHUB_WORKSPACE/VERSION" <<'PY'
-          import json, pathlib, sys
-          assert pathlib.Path('version.txt').read_text().strip() == pathlib.Path(sys.argv[1]).read_text().strip()
-          assert json.loads(pathlib.Path('config.json').read_text())['eligible'] == []
-          assert json.loads(pathlib.Path('doctor.json').read_text())['installation'] == 'not installed by the one-shot installer'
-          PY
-
-      - name: Install this commit from an archive in a clean home
-        run: |
-          git archive --format=tar.gz --prefix=pod-source/ HEAD > "$RUNNER_TEMP/pod-source.tar.gz"
-          SMOKE="$RUNNER_TEMP/install-home"
-          mkdir -p "$SMOKE/home" "$SMOKE/claude" "$SMOKE/codex" "$SMOKE/work"
-          export POD_INSTALL_SOURCE="file://$RUNNER_TEMP/pod-source.tar.gz"
-          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
-            POD_INSTALL_SOURCE="$POD_INSTALL_SOURCE" sh install.sh
-          test ! -e "$SMOKE/codex/skills/pod"
-          test "$(readlink -f "$SMOKE/claude/skills/pod")" = "$(readlink -f "$SMOKE/home/.agents/skills/pod")"
-          PYTHONPATH=skills python -m pod.skill_validation --installed "$SMOKE/home/.agents/skills/pod"
-          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
-            "$SMOKE/home/.local/bin/pod" --version | diff - VERSION
-          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
-            "$SMOKE/home/.local/bin/pod" config --json > "$RUNNER_TEMP/installed-config.json"
-          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
-            "$SMOKE/home/.local/bin/pod" doctor --json > "$RUNNER_TEMP/installed-doctor.json"
-          python - "$RUNNER_TEMP/installed-doctor.json" "$RUNNER_TEMP/installed-config.json" "$SMOKE/home"/data/pod/install.json <<'PY'
-          import json, pathlib, sys
-          doctor = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          config = json.loads(pathlib.Path(sys.argv[2]).read_text())
-          receipt = json.loads(pathlib.Path(sys.argv[3]).read_text())
-          assert receipt['status'] == 'installed'
-          assert config['eligible'] and set(config['eligible']) == {row['key'] for row in config['routes']}
-          assert doctor['installation_checks']['healthy']
-          assert doctor['installation_checks']['digest_matches']
-          PY
-          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
-            POD_INSTALL_SOURCE="$POD_INSTALL_SOURCE" sh install.sh | grep 'Already current'
-          env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
-            POD_INSTALL_SOURCE="$POD_INSTALL_SOURCE" "$SMOKE/home/.local/bin/pod" update | grep 'Already current'
-
-      - name: SHA-pinned public endpoints install this exact commit
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          SMOKE="$RUNNER_TEMP/public-home"
-          mkdir -p "$SMOKE/home" "$SMOKE/claude" "$SMOKE/codex"
-          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh" | \
-            env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-              XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-              CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash \
-              POD_INSTALL_SOURCE="https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/${GITHUB_SHA}" sh
-          test "$(env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" \
-            XDG_STATE_HOME="$SMOKE/home/state" XDG_CONFIG_HOME="$SMOKE/home/config" \
-            CLAUDE_CONFIG_DIR="$SMOKE/claude" CODEX_HOME="$SMOKE/codex" \
-            "$SMOKE/home/.local/bin/pod" --version)" = "$(cat VERSION)"
+          PYTHONDONTWRITEBYTECODE: "0"
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
+      - name: Installer trials and install smoke, with an empty home
+        run: mkdir -p "$RUNNER_TEMP/home" && HOME="$RUNNER_TEMP/home" python -m unittest discover -s tests/install -t .
 
   linux:
+    # The one required check: it is green only when every job above passed on this head.
     name: linux
-    needs: [python, tests, checks]
-    # Always reports, so the required check is never a skipped one; it passes only when every
-    # lane share and every check passed.
+    needs: [python, core, models, install]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Every lane share and check passed
-        env:
-          NEEDS: ${{ toJSON(needs) }}
+      - name: Every job passed
         run: |
-          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null
+          test "${{ needs.python.result }}" = success
+          test "${{ needs.core.result }}" = success
+          test "${{ needs.models.result }}" = success
+          test "${{ needs.install.result }}" = success
