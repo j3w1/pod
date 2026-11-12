@@ -9,8 +9,9 @@ import re
 
 from .errors import PodError
 
-BOX = re.compile(r"^(\s*[-*+]\s+\[)([ xX])(\]\s+)(.*?)\s*$")
-HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+BULLET = r"\s*(?:[-*+]|\d{1,9}[.)])\s+"
+BOX = re.compile(r"^(" + BULLET + r"\[)([ xX])(\]\s+)(.*?)\s*$")
+HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*$")
 REFERENCE = re.compile(r"^(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#?(?P<number>\d+)$")
 URL = re.compile(r"^https://github\.com/(?P<repo>[^/\s]+/[^/\s]+)/issues/(?P<number>\d+)")
 NOT_DELIVERABLE = {"eel": "an EEL records evidence and is not delivered", "seal": "a SEAL plans several deliveries; "
@@ -43,22 +44,33 @@ def refuse_undeliverable(title: str) -> None:
 
 
 def _prose(lines: list[str]) -> list[bool]:
-    """Per line, whether it is ordinary text: a line inside a fenced code block is not a heading or a box.
+    """Per line, whether it is ordinary text: a line inside a fenced code block or an HTML comment is
+    neither a heading nor a box.
 
     A fence opens with three or more backticks or tildes (a backtick opener carries no further
-    backtick) and closes with at least as many of the same character and nothing after them.
+    backtick) and closes with at least as many of the same character and nothing after them. A
+    comment runs from `<!--` to the next `-->`, across lines.
     """
-    flags, fence = [], None
-    for line in lines:
-        mark = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r"))
-        if fence is None:
-            opens = bool(mark) and not (mark[1][0] == "`" and "`" in mark[2])
-            fence = mark[1] if opens else None
-            flags.append(not opens)
-        else:
+    flags, fence, comment = [], None, False
+    for raw in lines:
+        line = raw.rstrip("\r")
+        if comment:
+            comment = "-->" not in line
+            flags.append(False)
+            continue
+        mark = re.match(r"\s*(`{3,}|~{3,})(.*)$", line)
+        if fence is not None:
             if mark and mark[1][0] == fence[0] and len(mark[1]) >= len(fence) and not mark[2].strip():
                 fence = None
             flags.append(False)
+            continue
+        if mark and not (mark[1][0] == "`" and "`" in mark[2]):
+            fence = mark[1]
+            flags.append(False)
+            continue
+        opened = line.rfind("<!--")
+        comment = opened >= 0 and "-->" not in line[opened:]
+        flags.append(not (comment and not line[:opened].strip()))     # text before an opening comment still counts
     return flags
 
 
@@ -89,5 +101,5 @@ def tick(body: str, lines: list[int]) -> str:
     rows = body.split("\n")
     for index in lines:
         if 0 <= index < len(rows):
-            rows[index] = re.sub(r"^(\s*[-*+]\s+\[) (\])", r"\1x\2", rows[index], count=1)
+            rows[index] = re.sub(r"^(" + BULLET + r"\[) (\])", r"\1x\2", rows[index], count=1)
     return "\n".join(rows)

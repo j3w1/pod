@@ -90,7 +90,7 @@ itself once its delivery is merged and no criterion is open.
 
 `pod models` opens a keyboard-driven workspace in your terminal: every exact model and effort
 route Pod can use, what the installed agents report, public benchmark observations, and your
-choices. Enable or disable routes, set a Preferred route or a Pin. Press `r`, or run
+choices. Enable or disable routes, set a Preferred route or a Pin. Press `R`, or run
 `pod models refresh`, to fetch the public leaderboard; nothing else touches the network.
 
 A green `*` marks a benchmark cost that is high value: nothing cheaper scores within two
