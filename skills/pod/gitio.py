@@ -70,9 +70,9 @@ def branch(cwd: Path) -> str | None:
     return value or None
 
 
-def dirty(cwd: Path) -> list[str]:
-    """Paths with uncommitted or untracked changes."""
-    out = git(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=normal").stdout.decode(errors="replace")
+def dirty(cwd: Path, *, untracked: bool = True) -> list[str]:
+    """Paths with uncommitted changes, and untracked files unless told to leave them out."""
+    out = git(cwd, "status", "--porcelain=v1", "-z", f"--untracked-files={'normal' if untracked else 'no'}").stdout.decode(errors="replace")
     return [item[3:] for item in out.split("\0") if item]
 
 

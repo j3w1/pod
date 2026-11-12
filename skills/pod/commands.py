@@ -350,10 +350,14 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
         observed = None
         if given.get("check"):
             observed = _run_check(root, given["check"])
-            if observed["exit"] != 0 and given.get("met"):
+            if given.get("met") and not given.get("facts") and not given.get("why") and (
+                    observed["exit"] != 0 or "tree" not in observed):
                 writer.append(observed)
-                raise PodError("check_failed", f"The check exited {observed['exit']}, so no criterion was recorded as met.",
-                               fix="correct the work and run the check again; its failed run is recorded")
+                if observed["exit"] != 0:
+                    raise PodError("check_failed", f"The check exited {observed['exit']}, so no criterion was recorded as met.",
+                                   fix="correct the work and run the check again; its failed run is recorded")
+                raise PodError("check_unbound", "The check ran on uncommitted or untracked files, so it proves nothing about a commit.",
+                               fix="commit or remove them (ignore build leftovers in .gitignore) and run the check again")
             entries.append(observed)
             done.append(f"check exit {observed['exit']}" + (
                 "" if observed.get("tree") else " (the tree was not one clean commit throughout: binds to no commit)"))
@@ -449,8 +453,9 @@ def _may_decide(given: dict, what: str) -> None:
 def _run_check(root: Path, command: str) -> dict:
     """Run a check and record what was observed.
 
-    It binds to a commit only if the tree was clean and at that same commit before and after the
-    run, so a result never attaches to content the check did not see.
+    It binds to a commit only if the tree was clean before the run and the same commit, with no
+    tracked file changed, after it, so a result never attaches to content the check did not see.
+    Files the check itself left behind, such as caches, do not unbind it.
     """
     before = None if gitio.dirty(root) else (gitio.commit(root), gitio.tree(root))
     try:
@@ -458,7 +463,8 @@ def _run_check(root: Path, command: str) -> dict:
         code, tail = done.returncode, (done.stdout + done.stderr).decode(errors="replace")[-400:]
     except subprocess.TimeoutExpired:
         code, tail = None, "did not finish within one hour"
-    bound = before is not None and not gitio.dirty(root) and before == (gitio.commit(root), gitio.tree(root))
+    bound = (before is not None and not gitio.dirty(root, untracked=False)
+             and before == (gitio.commit(root), gitio.tree(root)))
     return {"kind": "fact", "fact": "check", "command": command[:300], "exit": code, "tail": tail, "source": "run by pod",
             **({"commit": before[0], "tree": before[1]} if bound else {})}
 

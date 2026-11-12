@@ -128,6 +128,16 @@ class ProofTests(CoreCase):
         failed = self.entries("widget")[-1]
         self.assertEqual((failed["fact"], failed["exit"]), ("check", 4))
         self.assertEqual(fold(self.entries("widget")).criteria["c2"]["state"], "open")
+        (self.repo / "stray.txt").write_text("not committed\n")
+        self.refused("check_unbound", commands.record, self.repo, None, check="true", met=["c2"])
+        self.assertEqual(fold(self.entries("widget")).criteria["c2"]["state"], "open")
+
+    def test_files_a_check_leaves_behind_do_not_unbind_it_and_a_changed_tracked_file_does(self):
+        commands.record(self.repo, None, check="mkdir -p cache && echo x > cache/left")
+        self.assertEqual(self.entries("widget")[-1]["commit"], self.git(self.repo, "rev-parse", "HEAD"))
+        self.git(self.repo, "clean", "-qfd")
+        commands.record(self.repo, None, check="echo changed > README.md")
+        self.assertNotIn("commit", self.entries("widget")[-1])
 
     def test_the_gate_names_uncovered_paths_and_open_findings(self):
         self.implement({"src/a.py": "a\n"})
