@@ -234,6 +234,20 @@ class IssueUpdateTests(GateCase):
         body = "- [x] already\n- [ ] first\ntext [ ] not a box\n- [ ] second\r\n"
         self.assertEqual(issue.tick(body, [1]), "- [x] already\n- [x] first\ntext [ ] not a box\n- [ ] second\r\n")
         self.assertEqual(issue.tick(body, [0, 2, 3, 99]), "- [x] already\n- [ ] first\ntext [ ] not a box\n- [x] second\r\n")
+        spaced = "- [ ] hard break after this   \n* [ ] second  \r\n  + [ ] nested [ ] twice\n"
+        self.assertEqual(issue.tick(spaced, [0, 1, 2]), spaced.replace("- [ ]", "- [x]").replace("* [ ]", "* [x]")
+                         .replace("+ [ ] nested", "+ [x] nested"))
+
+    def test_fenced_code_is_neither_a_heading_nor_a_criterion(self):
+        from pod import issue
+        body = ("## Proof of Done\n- [ ] a\n```sh\n# run tests\n- [ ] not a criterion\n```\n- [ ] b\n~~~\n## Not a heading\n~~~\n"
+                "- [ ] c\n## Notes\n- [ ] outside\n")
+        self.assertEqual([(row["text"], row["line"]) for row in issue.criteria(body)], [("a", 1), ("b", 6), ("c", 10)])
+
+    def test_a_document_type_is_recognised_whatever_its_case(self):
+        from pod import issue
+        self.assertEqual([issue.kind(title) for title in ("EEL: x", "eel: x", " Seal : y", "PES: z", "Peel: no", "An EEL: no")],
+                         ["eel", "eel", "seal", "pes", None, None])
 
 
 class ProjectRulesTests(GateCase):

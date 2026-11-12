@@ -31,7 +31,7 @@ def digest(body: str) -> str:
 
 
 def kind(title: str) -> str | None:
-    match = re.match(r"\s*(EEL|SEAL|PES)\s*:", title or "")
+    match = re.match(r"\s*(EEL|SEAL|PES)\s*:", title or "", re.IGNORECASE)
     return match[1].lower() if match else None
 
 
@@ -42,12 +42,30 @@ def refuse_undeliverable(title: str) -> None:
                        fix="open the issue that states the work to deliver")
 
 
+def _prose(lines: list[str]) -> list[bool]:
+    """Per line, whether it is ordinary text: a line inside a fenced code block is not a heading or a box."""
+    flags, fence = [], None
+    for line in lines:
+        mark = re.match(r"\s{0,3}(`{3,}|~{3,})", line)
+        if fence is None and mark:
+            fence = mark[1][0]
+            flags.append(False)
+        elif fence is not None:
+            if mark and mark[1][0] == fence and not line.strip().strip(fence):
+                fence = None
+            flags.append(False)
+        else:
+            flags.append(True)
+    return flags
+
+
 def criteria(body: str) -> list[dict]:
     """Unchecked checklist items, from the Proof of Done section when there is one, else the whole body."""
     lines = (body or "").split("\n")
+    prose = _prose(lines)
     start, end, level = 0, len(lines), None
     for index, line in enumerate(lines):
-        heading = HEADING.match(line.rstrip("\r"))
+        heading = HEADING.match(line.rstrip("\r")) if prose[index] else None
         if not heading:
             continue
         if level is None and re.search(r"proof of done", heading[2], re.IGNORECASE):
@@ -57,17 +75,16 @@ def criteria(body: str) -> list[dict]:
             break
     found = []
     for index in range(start, end):
-        box = BOX.match(lines[index].rstrip("\r"))
+        box = BOX.match(lines[index].rstrip("\r")) if prose[index] else None
         if box and box[2] == " " and box[4]:
             found.append({"text": box[4], "line": index})
     return found
 
 
 def tick(body: str, lines: list[int]) -> str:
-    """The body with those checklist lines ticked and nothing else changed."""
+    """The body with those checklist lines ticked and not one other character changed."""
     rows = body.split("\n")
     for index in lines:
         if 0 <= index < len(rows):
-            rows[index] = BOX.sub(lambda box: f"{box[1]}x{box[3]}{box[4]}", rows[index].rstrip("\r")) + (
-                "\r" if rows[index].endswith("\r") else "")
+            rows[index] = re.sub(r"^(\s*[-*+]\s+\[) (\])", r"\1x\2", rows[index], count=1)
     return "\n".join(rows)

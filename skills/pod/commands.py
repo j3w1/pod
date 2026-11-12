@@ -118,7 +118,10 @@ def packet(state: State, assignment: dict, spec: str) -> str:
     else:
         lines.append("- Read only. Change nothing.")
     lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.", "",
-              "## Result", "", "Finish through Orca as its instructions say. End your final message body with one JSON object:",
+              "## Result", "",
+              "Finish through Orca as its instructions say. The body of your final worker_done message must end with",
+              "this JSON object, filled in, on its own line. It is the only part of your report that is read by software;",
+              "without it your " + ("verdict is not recorded" if role == "review" else "result commit and checks are not recorded") + ".",
               "", REVIEW_FORMAT if role == "review" else RESULT_FORMAT]
     return "\n".join(lines) + "\n"
 
@@ -266,7 +269,7 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
         changed = gitio.changed(root, row["base"], commit) if commit and commit != row["base"] else []
         fact = {"kind": "fact", "fact": "result", "assignment": ident, "role": row["role"], "outcome": outcome,
                 "commit": commit, "decision": "discarded" if discarded else "integrated" if writes else "read",
-                "summary": str(stated.get("summary") or report.get("subject") or "")[:600]}
+                "summary": str(stated.get("summary") or report.get("body") or report.get("subject") or "")[:600]}
         if why:
             fact["why"] = why
         output = {"assignment": ident, "outcome": outcome, "decision": fact["decision"]}
@@ -305,7 +308,8 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 if changed:
                     output["note"] = "the reviewer changed files, so this review covers nothing"
             else:
-                output["note"] = "the reviewer stated no verdict; no review is recorded"
+                output["note"] = ("the reviewer's message has no result object with a verdict, so no review is recorded; "
+                                  "dispatch the review again if it is needed")
         if fact["summary"]:
             output["summary"] = fact["summary"]
         output["facts"] = [entry["n"] for entry in writer.append(*facts)]
