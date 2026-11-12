@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from unittest.mock import patch
 
 from tests.support import PodCase
 
@@ -23,6 +24,10 @@ class CoreCase(PodCase):
                           GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t",
                           GIT_COMMITTER_EMAIL="t@example.invalid")
         self.gh_file.write_text(json.dumps({"issues": {}, "prs": {}, "checks": []}))
+        from pod import gate
+        wait = patch.object(gate, "SETTLE_SECONDS", 0)           # tests never wait for time to pass
+        wait.start()
+        self.addCleanup(wait.stop)
         self.write_routes(ROUTES)
         self.bare, self.repo = self.tmp / "origin.git", self.tmp / "work"
         self.git(self.tmp, "init", "-q", "--bare", "-b", "main", str(self.bare))

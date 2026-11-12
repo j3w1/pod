@@ -116,6 +116,21 @@ class RulesAndChecksTests(GateCase):
         self.gh_file.write_text(json.dumps(state))
         self.assertEqual(gate.deliver(self.repo, None)["state"], "closed")
 
+    def test_a_merge_state_github_is_still_computing_is_read_again_before_refusing(self):
+        self.ready()
+        self.pull_request(checks=None)
+        state = self.gh()
+        state["prs"]["7"]["mergeStateStatus"] = "UNKNOWN"
+        self.gh_file.write_text(json.dumps(state))
+        real = self.bin / "gh.real"
+        real.write_text((self.bin / "gh").read_text())
+        real.chmod(0o755)
+        count = self.tmp / "views"
+        self.script("gh", f'#!/bin/sh\nif [ "$1 $2" = "pr view" ]; then echo x >> {count}; '
+                          f'if [ "$(wc -l < {count})" -ge 3 ]; then {real} "$@" | sed s/UNKNOWN/CLEAN/; exit 0; fi; fi\n'
+                          f'exec {real} "$@"\n')
+        self.assertEqual(gate.deliver(self.repo, None)["state"], "closed")
+
     def test_an_empty_list_of_required_checks_falls_back_to_githubs(self):
         self.project("schema: pod-project/v1\nrequired_checks:\n# - linux\n")
         self.ready(review=False)

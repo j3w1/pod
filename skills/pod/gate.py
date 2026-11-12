@@ -7,10 +7,14 @@ a repeated call after a lost response settles what happened instead of doing it 
 """
 
 from pathlib import Path
+import time
 
 from . import github, gitio, issue, log, project, proof, routefile, verifier
 from .errors import PodError
 from .state import State, fold
+
+
+SETTLE_READS, SETTLE_SECONDS = 5, 2
 
 
 def evaluate(root: Path, state: State, *, commit: str | None = None, remote: bool = True) -> dict:
@@ -57,6 +61,11 @@ def evaluate(root: Path, state: State, *, commit: str | None = None, remote: boo
     # 2. Required checks are green on that head.
     if request and request["state"] == "OPEN" and request["headRefOid"] == candidate:
         verdict["checks"] = found = github.checks(slug, request["number"], rules["required_checks"])
+        for _ in range(SETTLE_READS):       # GitHub computes this shortly after a push; one more read is cheaper than a turn
+            if found["state"] != "none" or request.get("mergeStateStatus") != "UNKNOWN":
+                break
+            time.sleep(SETTLE_SECONDS)
+            request = verdict["pr"] = github.pull_request(slug, str(request["number"])) or request
         if found["state"] == "none" and request.get("mergeStateStatus") in ("BLOCKED", "UNKNOWN", None):
             needs.append(f"GitHub to allow the merge: it reports the pull request {request.get('mergeStateStatus') or 'state unknown'} "
                          "and no check has reported on this head yet")
