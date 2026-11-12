@@ -143,15 +143,97 @@ class CompleteRecords(ExportCase):
         self.assertTrue(Path(rows[key]["output"]).is_file())
         empty = [row for row in rows.values() if row["status"] == "empty"]
         self.assertEqual([row["output"] for row in empty], [None])
-        self.assertEqual(index["skipped"], ["not-a-record"])
+        self.assertEqual(index["skipped"], [])
         self.assertEqual(sum(index["counts"][key] for key in ("exported", "incomplete", "failed", "empty")),
                          index["counts"]["found"])
 
     def test_the_new_objective_directory_is_never_read_or_reported(self):
         (self.source / paths.objectives_home().name).mkdir()
         (self.source / paths.objectives_home().name / "one.jsonl").write_text("{}\n")
+        result = self.run_export()
+        self.assertEqual((result["found"], result["copied"], result["not_exported"]), (4, 1, 0))
+        self.assertNotIn("one.jsonl", (self.destination / "index.json").read_text())
+        self.assertEqual(list(self.destination.rglob("one.jsonl")), [])
+
+
+class EverythingElse(ExportCase):
+    """What 0.21 wrote beside its top-level record directories."""
+
+    def setUp(self):
+        super().setUp()
+        self.key = BY_OBJECTIVE["fixture-plain"]
+        self.relay = self.source / ".relay-authorizations"
+        self.relay.mkdir()
+        self.grant = b'{"schema":"fixture-relay/v1",  "grant": "kept byte for byte"}\n\n'
+        (self.relay / ("ab" * 32 + ".json")).write_bytes(self.grant)
+        (self.relay / ".lock").write_bytes(b"")
+        self.quarantine = self.source / ".quarantine-fixture" / "deeper"
+        shutil.copytree(self.source / self.key, self.quarantine / self.key)
+        context = self.quarantine / self.key / "context.json"
+        context.write_bytes(context.read_bytes().replace(b"fixture-plain", b"fixture-moved"))
+
+    def test_record_directories_are_found_at_any_depth_and_never_overwrite_one_another(self):
+        result = self.run_export()
+        self.assertEqual((result["found"], result["exported"], result["empty"]), (5, 4, 1))
+        nested = self.destination / "nested" / ".quarantine-fixture" / "deeper" / (self.key + ".json")
+        moved = json.loads(nested.read_text())
+        self.assertTrue(moved["complete"])
+        self.assertEqual(moved["files"]["context.json"]["value"]["checkpoint"]["objective"], "fixture-moved")
+        self.assertEqual(self.document("fixture-plain")["files"]["context.json"]["value"]["checkpoint"]["objective"],
+                         "fixture-plain")
+        rows = [row for row in self.index()["records"] if row["record"] == self.key]
+        self.assertEqual([(row["source"], row["output"], row["objective"]) for row in rows],
+                         [(str(self.quarantine / self.key), str(nested), "fixture-moved"),
+                          (str(self.source / self.key), str(self.destination / (self.key + ".json")), "fixture-plain")])
+
+    def test_every_other_json_file_is_copied_byte_for_byte_and_indexed(self):
+        result = self.run_export()
+        self.assertEqual(result["copied"], 2)
+        copy = self.destination / "files" / ".relay-authorizations" / ("ab" * 32 + ".json")
+        self.assertEqual(copy.read_bytes(), self.grant)
+        self.assertEqual((self.destination / "files" / "not-a-record" / "note.json").read_bytes(),
+                         (self.source / "not-a-record" / "note.json").read_bytes())
+        self.assertEqual(self.index()["files"][0],
+                         {"path": ".relay-authorizations/" + "ab" * 32 + ".json", "output": str(copy),
+                          "bytes": len(self.grant), "sha256": hashlib.sha256(self.grant).hexdigest()})
+        self.assertEqual(self.index()["counts"]["copied"], 2)
+
+    def test_what_is_not_exported_is_counted_and_listed_in_the_index_and_the_summary(self):
+        outside = self.tmp / "outside.json"
+        outside.write_text('{"secret": "elsewhere"}\n')
+        (self.relay / "linked.json").symlink_to(outside)
+        (self.source / "linked-directory").symlink_to(self.tmp)
+        expected = [{"path": ".relay-authorizations/.lock", "reason": "not a JSON file"},
+                    {"path": ".relay-authorizations/linked.json", "reason": "symbolic link, not followed"},
+                    {"path": "linked-directory", "reason": "symbolic link, not followed"}]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = export.main(["--to", str(self.destination), "--from", str(self.source)])
+        self.assertEqual(code, 0, "only an incomplete or failed record makes the command fail")
+        self.assertEqual(self.index()["skipped"], expected)
+        self.assertEqual(self.index()["counts"]["not_exported"], 3)
+        shown = out.getvalue()
+        self.assertIn("5 records: 4 exported, 0 incomplete, 0 failed, 1 empty. 2 other JSON files copied as they "
+                      "are. 3 not exported.", shown)
+        for item in expected:
+            self.assertIn(f"  not exported: {item['path']} ({item['reason']})", shown)
+        self.assertNotIn("elsewhere", "".join(path.read_text() for path in self.destination.rglob("*.json")))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            export.main(["--to", str(self.destination), "--from", str(self.source), "--json"])
+        self.assertEqual((json.loads(out.getvalue())["not_exported"], json.loads(out.getvalue())["skipped"]),
+                         (3, expected))
+
+    def test_the_source_stays_byte_identical_and_a_destination_around_it_is_refused(self):
+        before = tree_digest(self.source)
         self.run_export()
-        self.assertEqual(self.index()["skipped"], ["not-a-record"])
+        with self.assertRaises(PodError) as caught:
+            export.run(self.tmp, source=self.source)
+        self.assertEqual(caught.exception.code, "export_inside_source")
+        self.assertIn("does not contain", caught.exception.fix)
+        self.assertEqual(tree_digest(self.source), before)
+        self.assertEqual(sorted(path.name for path in self.tmp.iterdir() if path.name.startswith(("files", "nested"))),
+                         [])
 
 
 class DamagedRecords(ExportCase):

@@ -1,9 +1,14 @@
 """Export the records written by 0.21 to plain JSON, for audit. The source is only ever read.
 
-Each 0.21 objective is a directory named by a 64-hex record key. Its JSON files are either
-plain, plain with values moved out to digest-addressed chunks, or an envelope whose root is a
-tree of pages. One exported document per directory inlines all of that, so it needs no other
-file to read. Nothing here is used by coordination, and the new core never reads this format.
+Each 0.21 objective is a directory named by a 64-hex record key, at any depth under the state
+directory. Its JSON files are either plain, plain with values moved out to digest-addressed
+chunks, or an envelope whose root is a tree of pages. One exported document per directory
+inlines all of that, so it needs no other file to read. Every other JSON file 0.21 wrote is
+copied byte for byte, and whatever is still left behind is listed. Nothing here is used by
+coordination, and the new core never reads this format.
+
+In the destination: `index.json`; `<key>.json` for a record directly under the source;
+`nested/<its directory>/<key>.json` for a record found deeper; `files/<its path>` for a copy.
 """
 
 import argparse
@@ -178,13 +183,18 @@ def _stable(directory: Path) -> dict:
     return document
 
 
-def _write(path: Path, value: dict) -> None:
+def _write(path: Path, value: dict | bytes) -> None:
+    """Place a document as JSON, or bytes exactly as they are."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".export-")
     try:
-        with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-            json.dump(value, stream, indent=1)
-            stream.write("\n")
+        if isinstance(value, bytes):
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(value)
+        else:
+            with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+                json.dump(value, stream, indent=1)
+                stream.write("\n")
         os.replace(temporary, path)
     except BaseException:
         os.unlink(temporary)
@@ -204,48 +214,94 @@ def _named(document: dict) -> dict:
     return result
 
 
+def _survey(source: Path) -> tuple[list, list, list]:
+    """Record directories at any depth, every file outside them, and what could not be looked at."""
+    records, files, skipped = [], [], []
+
+    def unreadable(error: OSError) -> None:
+        skipped.append({"path": os.path.relpath(error.filename or source, source),
+                        "reason": f"directory could not be read ({type(error).__name__})"})
+
+    for parent, folders, names in os.walk(source, onerror=unreadable):
+        here = Path(parent)
+        descend = []
+        for name in sorted(folders):
+            path = here / name
+            if here == source and name == paths.objectives_home().name:
+                continue    # the new core's own logs, not written by 0.21
+            if path.is_symlink():
+                skipped.append({"path": str(path.relative_to(source)), "reason": "symbolic link, not followed"})
+            elif RECORD_KEY.fullmatch(name):
+                records.append(path)
+            else:
+                descend.append(name)
+        folders[:] = descend
+        files += [here / name for name in sorted(names)]
+    return sorted(records), files, skipped
+
+
 def run(destination: Path, *, source: Path | None = None) -> dict:
-    """Export every 0.21 record under `source` to `destination`. Returns the counts and the index path."""
+    """Export everything 0.21 wrote under `source` to `destination`. Returns the counts and what was left."""
     source = (paths.state_home() if source is None else Path(source)).resolve()
     destination = Path(destination).resolve()
     if destination == source or source in destination.parents:
         raise PodError("export_inside_source", f"{destination} is inside the records being exported.",
                        fix="choose a destination outside " + str(source))
+    if destination in source.parents:
+        raise PodError("export_inside_source", f"{destination} contains the records being exported.",
+                       fix="choose a destination that does not contain " + str(source))
     if not source.is_dir():
         raise PodError("export_source_missing", f"{source} is not a directory.",
                        fix="name the state directory that holds the 0.21 records with --from")
-    counts = dict.fromkeys(("found", "exported", "incomplete", "failed", "empty"), 0)
-    records, skipped = [], []
-    for entry in sorted(os.scandir(source), key=lambda item: item.name):
-        if not RECORD_KEY.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):
-            if entry.name != paths.objectives_home().name:
-                skipped.append(entry.name)
-            continue
+    counts = dict.fromkeys(("found", "exported", "incomplete", "failed", "empty", "copied", "not_exported"), 0)
+    found, others, skipped = _survey(source)
+    records, files = [], []
+    for directory in found:
         counts["found"] += 1
-        row = {"record": entry.name, "source": entry.path, "output": None}
+        relative = directory.relative_to(source)
+        row = {"record": directory.name, "source": str(directory), "output": None}
         try:
-            document = _stable(Path(entry.path))
+            document = _stable(directory)
             row.update(_named(document))
             if not document["files"]:
                 row["status"] = "empty"
             else:
                 row["status"] = "exported" if document["complete"] else "incomplete"
                 row["problems"] = document["problems"]
-                row["output"] = str(destination / (entry.name + ".json"))
+                inside = destination if relative.parent == Path(".") else destination / "nested" / relative.parent
+                row["output"] = str(inside / (directory.name + ".json"))
                 _write(Path(row["output"]), document)
         except FAULTS as exc:
             row.update(status="failed", output=None, problems=[f"{type(exc).__name__}: {exc}"])
         counts[row["status"]] += 1
         records.append(row)
+    for path in others:
+        relative = path.relative_to(source)
+        reason = ("symbolic link, not followed" if path.is_symlink() else
+                  None if path.name.endswith(".json") else "not a JSON file")
+        if reason:
+            skipped.append({"path": str(relative), "reason": reason})
+            continue
+        try:
+            raw = _read(path)
+            _write(destination / "files" / relative, raw)
+        except FAULTS as exc:
+            skipped.append({"path": str(relative), "reason": f"{type(exc).__name__}: {exc}"})
+            continue
+        files.append({"path": str(relative), "output": str(destination / "files" / relative), "bytes": len(raw),
+                      "sha256": _sha(raw)})
+    skipped.sort(key=lambda item: item["path"])
+    counts.update(copied=len(files), not_exported=len(skipped))
     index = destination / "index.json"
     _write(index, {"schema": SCHEMA, "source": str(source), "counts": counts, "records": records,
-                   "skipped": skipped})
-    return {**counts, "index": str(index)}
+                   "files": files, "skipped": skipped})
+    return {**counts, "index": str(index), "skipped": skipped}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pod export",
-                                     description="Write every record written by 0.21 to plain JSON. "
+                                     description="Write every record written by 0.21 to plain JSON, copy its "
+                                                 "other JSON files as they are, and list what is left. "
                                                  "The records themselves are only read.")
     parser.add_argument("--to", required=True, type=Path, help="directory for the exported files")
     parser.add_argument("--from", dest="source", type=Path, help="state directory to read (default: Pod's own)")
@@ -262,6 +318,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result))
     else:
-        print("{found} records: {exported} exported, {incomplete} incomplete, {failed} failed, "
-              "{empty} empty. Index: {index}".format(**result))
+        print("{found} records: {exported} exported, {incomplete} incomplete, {failed} failed, {empty} empty. "
+              "{copied} other JSON files copied as they are. {not_exported} not exported. "
+              "Index: {index}".format(**result))
+        for item in result["skipped"]:
+            print("  not exported: {path} ({reason})".format(**item))
     return 1 if result["incomplete"] or result["failed"] else 0

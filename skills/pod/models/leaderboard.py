@@ -7,6 +7,7 @@ unknown column: no metric is ever read from a header it was not defined for.
 """
 
 from html.parser import HTMLParser
+import http.client
 import math
 import re
 import unicodedata
@@ -56,24 +57,25 @@ def clean(value: str, limit: int = MAX_CELL_TEXT) -> str:
     return " ".join("".join(kept).split())[:limit]
 
 
-class _SameHost(urllib.request.HTTPRedirectHandler):
-    max_redirections = 3
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is never followed: following one would be a second request."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
-        if (new.scheme, new.netloc) != (old.scheme, old.netloc):
-            raise RefreshError("The source redirected to another site")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+    def http_error_302(self, req, fp, code, msg, headers):
+        fp.close()
+        target = clean(headers.get("Location") or "", 200) or "an unnamed location"
+        raise RefreshError(f"The source redirected (HTTP {code}) to {target}; it was not followed")
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
 
 def fetch(url: str = URL, *, max_bytes: int = MAX_BYTES, timeout: float = TIMEOUT_S) -> str:
-    """One GET. HTTPS only, except a loopback address; never retried."""
+    """One GET. HTTPS only, except a loopback address; never retried, and no redirect is followed."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" and not (parts.scheme == "http" and parts.hostname == "127.0.0.1"):
         raise RefreshError("The source must be fetched over HTTPS")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html",
                                                    "Accept-Encoding": "gzip"})
-    opener = urllib.request.build_opener(_SameHost)
+    opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
             raw = response.read(max_bytes + 1)
@@ -83,7 +85,7 @@ def fetch(url: str = URL, *, max_bytes: int = MAX_BYTES, timeout: float = TIMEOU
     except urllib.error.HTTPError as exc:
         exc.close()
         raise RefreshError(f"The source answered HTTP {exc.code}") from None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:
         raise RefreshError(f"The source could not be reached ({type(exc).__name__})") from None
     if len(raw) > max_bytes:
         raise RefreshError("The source page is larger than the fetch limit")

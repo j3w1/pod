@@ -223,6 +223,79 @@ class PlacementTests(InstallerCase):
                 self.assertFalse((self.home / ".local/bin/pod").exists())
 
 
+class RedirectedPathTests(InstallerCase):
+    def untouched(self, home=None):
+        home = home or self.home
+        self.assertFalse((home / "data/pod").exists() or (home / ".agents").exists()
+                         or (home / "config/pod").exists() or (home / ".bashrc").exists())
+
+    def test_every_redirected_destination_is_refused_before_anything_changes_and_says_what_to_do(self):
+        def claude(home, env):
+            (home / ".claude").symlink_to(home / "claude", target_is_directory=True)
+            env.pop("CLAUDE_CONFIG_DIR")
+            return home / ".claude", "Set CLAUDE_CONFIG_DIR=" + str(home / "claude")
+
+        def launcher_directory(home, env):
+            (home / ".local").mkdir()
+            (home / ".local/bin").symlink_to(home / "tmp", target_is_directory=True)
+            return home / ".local/bin", "Replace the link with a real directory"
+
+        def linked_home(home, env):
+            link = home.parent / "home-link"
+            link.symlink_to(home, target_is_directory=True)
+            env["HOME"] = str(link)
+            return link, "Set HOME=" + str(home)
+
+        for prepare in (claude, launcher_directory, linked_home):
+            with self.subTest(prepare=prepare.__name__), tempfile.TemporaryDirectory() as directory:
+                env, _ = sandbox(Path(directory))
+                home = Path(env["HOME"])
+                (home / "claude").mkdir()
+                path, remedy = prepare(home, env)
+                refused = run_install(env)
+                self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+                self.assertIn(f"Refuse redirected directory: {path} is a symbolic link", refused.stderr)
+                self.assertIn(remedy + ", then rerun the installer", refused.stderr)
+                self.untouched(home)
+                self.assertEqual(list((home / "tmp").iterdir()), [])
+                self.assertEqual(run_install(env).returncode, 1, "a rerun is refused the same way")
+                self.untouched(home)
+
+    def test_a_launcher_directory_redirected_after_an_install_leaves_that_install_as_it_was(self):
+        self.installed()
+        before = (self.receipt.read_bytes(), bundle_digest(self.canonical), self.launcher.read_bytes())
+        self.launcher.parent.rename(self.home / ".local/real-bin")
+        self.launcher.parent.symlink_to(self.home / ".local/real-bin", target_is_directory=True)
+        newer, _ = self.newer()
+        refused = run_install({**self.env, "POD_INSTALL_SOURCE": newer.as_uri()})
+        self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+        self.assertIn("Refuse redirected directory", refused.stderr)
+        self.assertEqual((self.receipt.read_bytes(), bundle_digest(self.canonical), self.launcher.read_bytes()), before)
+        self.assertEqual(json.loads(self.receipt.read_text())["status"], "installed")
+
+    def test_following_the_advice_installs_and_a_redirected_claude_directory_never_blocks_a_command(self):
+        (self.home / "claude").mkdir()
+        (self.home / ".claude").symlink_to(self.home / "claude", target_is_directory=True)
+        self.installed()        # the sandbox names the real directory with CLAUDE_CONFIG_DIR, as the refusal advises
+        env = {name: value for name, value in self.env.items() if name != "CLAUDE_CONFIG_DIR"}
+        self.assertEqual(run_pod(env, "--version").stdout.strip(), VERSION)
+        status = run_pod(env, "status", "--all", "--json")
+        self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        self.assertNotIn("install_incomplete", status.stdout + status.stderr)
+        report = run_pod(env, "doctor", "--json")
+        self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
+        self.assertTrue(json.loads(report.stdout)["installation"]["healthy"])
+        self.assertIn("Set CLAUDE_CONFIG_DIR=", run_install(env).stderr)
+
+    def test_a_receipt_that_cannot_be_read_is_reported_by_doctor_and_blocks_nothing(self):
+        self.installed()
+        self.receipt.write_text("{not json")
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), VERSION)
+        report = run_pod(self.env, "doctor", "--json")
+        self.assertEqual(report.returncode, 0, report.stdout + report.stderr)
+        self.assertEqual(json.loads(report.stdout)["installation"]["status"], "needs attention")
+
+
 class PreferenceTests(InstallerCase):
     def test_an_existing_file_is_byte_identical_after_install_and_update(self):
         self.config.parent.mkdir(parents=True)
@@ -430,6 +503,23 @@ class UpdateAndRecoveryTests(InstallerCase):
         self.assertEqual(json.loads(gate.stdout)["error"]["code"], "install_incomplete")
         untouched = run_install({**self.env, "POD_TEST_NPX_MODE": "fail"})
         self.assertEqual(untouched.returncode, 1, "a copy that never began leaves the placed bundle as it was")
+
+    def test_a_copy_without_its_installer_is_incomplete_and_answers_cleanly(self):
+        self.installed()
+        self.receipt.write_text(json.dumps({**json.loads(self.receipt.read_text()), "status": "installing"}))
+        (self.canonical / "installer.py").unlink()
+        for arguments in (("doctor", "--json"), ("status", "--all", "--json"), ("--version",), ("models", "--plain")):
+            blocked = run_pod(self.env, *arguments)
+            self.assertEqual(blocked.returncode, 2, (arguments, blocked.stdout, blocked.stderr))
+            self.assertNotIn("Traceback", blocked.stderr)
+            shown = blocked.stdout if "--json" in arguments else blocked.stderr
+            self.assertIn("incomplete (missing installer.py)", shown)
+            self.assertIn("/main/install.sh", shown)
+            if "--json" in arguments:
+                self.assertEqual(json.loads(blocked.stdout)["error"]["code"], "bundle_incomplete")
+        self.installed()
+        self.assertEqual(json.loads(self.receipt.read_text())["status"], "installed")
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), VERSION)
 
     def test_only_the_recorded_target_may_replace_an_interrupted_copy(self):
         self.installed()

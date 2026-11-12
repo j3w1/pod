@@ -98,6 +98,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", "http://localhost.invalid/")
             self.end_headers()
             return
+        if self.path in ("/loop", "/moved"):
+            self.send_response(301 if self.path == "/moved" else 302)
+            self.send_header("Location", "/loop" if self.path == "/loop" else "/")
+            self.end_headers()
+            return
+        if self.path in ("/cut", "/garbage"):
+            self.wfile.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n40\r\n<html>"
+                             if self.path == "/cut" else b"\x00\x01 not HTTP\r\n\r\n")
+            self.close_connection = True
+            return
         body = b"x" * 5000 if self.path == "/big" else b"<html>ok</html>"
         self.send_response(200 if self.path != "/missing" else 404)
         self.send_header("Content-Length", str(len(body)))
@@ -135,9 +145,27 @@ class FetchTests(unittest.TestCase):
             leaderboard.fetch(self.base + "/missing")
         self.assertEqual(self.server.requests, before + 1)
 
-    def test_a_redirect_to_another_site_and_plain_http_are_refused(self):
-        with self.assertRaisesRegex(leaderboard.RefreshError, "another site"):
-            leaderboard.fetch(self.base + "/away")
+    def test_a_redirect_is_one_request_and_a_failure_that_says_where_it_pointed(self):
+        for path, code, target in (("/away", 302, "http://localhost.invalid/"), ("/loop", 302, "/loop"),
+                                   ("/moved", 301, "/")):
+            with self.subTest(path=path):
+                before = self.server.requests
+                with self.assertRaises(leaderboard.RefreshError) as caught:
+                    leaderboard.fetch(self.base + path)
+                self.assertEqual(str(caught.exception),
+                                 f"The source redirected (HTTP {code}) to {target}; it was not followed")
+                self.assertEqual(self.server.requests, before + 1)
+
+    def test_a_transfer_that_breaks_off_is_a_failed_refresh_not_an_exception(self):
+        for path, error in (("/cut", "IncompleteRead"), ("/garbage", "BadStatusLine")):
+            with self.subTest(path=path):
+                before = self.server.requests
+                with self.assertRaises(leaderboard.RefreshError) as caught:
+                    leaderboard.fetch(self.base + path)
+                self.assertEqual(str(caught.exception), f"The source could not be reached ({error})")
+                self.assertEqual(self.server.requests, before + 1)
+
+    def test_plain_http_is_refused(self):
         with self.assertRaisesRegex(leaderboard.RefreshError, "HTTPS"):
             leaderboard.fetch("http://example.invalid/leaderboard")
 

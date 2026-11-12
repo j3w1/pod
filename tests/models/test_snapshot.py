@@ -1,8 +1,12 @@
+import contextlib
 from datetime import datetime, timezone
+import http.client
+import io
 import json
+from unittest.mock import patch
 
-from pod import routefile
-from pod.models import adapters, leaderboard, snapshot
+from pod import paths, routefile
+from pod.models import adapters, cli, leaderboard, snapshot, view
 from tests.models.support import ModelCase, ROUTES, live_page, page, without
 
 
@@ -32,6 +36,37 @@ class RefreshTests(ModelCase):
         self.assertEqual((attempt["ok"], snapshot.load()), (False, None))
         self.assertIn("could not be reached", snapshot.last_attempt()["failure"])
 
+    def test_a_broken_transfer_is_a_recorded_failed_refresh_and_keeps_the_last_good_snapshot(self):
+        self.refresh_from(live_page())
+        kept = (snapshot.home() / "snapshot.json").read_bytes()
+        for error in (http.client.IncompleteRead(b"<html>"), http.client.BadStatusLine("garbage"), KeyError("x")):
+            def broken(error=error):
+                raise error
+            with self.subTest(error=type(error).__name__):
+                attempt = snapshot.refresh(broken)
+                self.assertEqual((attempt["ok"], attempt["failure"]),
+                                 (False, f"The refresh failed ({type(error).__name__})"))
+                self.assertEqual(snapshot.last_attempt(), attempt)
+                self.assertEqual((snapshot.home() / "snapshot.json").read_bytes(), kept)
+                self.assertIn("Last refresh failed", "\n".join(view.build().header()))
+
+    def test_a_cache_that_cannot_be_written_fails_cleanly_with_a_message(self):
+        paths.cache_home().mkdir(parents=True)
+        (paths.cache_home() / "models").write_text("a file where the cache directory belongs")
+        for fetch, reason in ((live_page, "The snapshot could not be written to"),
+                              (lambda: page(*without("Cost per Task USD")), "lacks required columns")):
+            attempt = snapshot.refresh(fetch)
+            self.assertFalse(attempt["ok"])
+            self.assertIn(reason, attempt["failure"])
+            self.assertIn(f"this attempt could not be recorded in {snapshot.home()}", attempt["failure"])
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(leaderboard, "fetch", live_page), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(cli.main(["refresh"]), 1)
+        self.assertIn("Refresh failed: The snapshot could not be written to", err.getvalue())
+        self.assertIn("There is no earlier snapshot.", err.getvalue())
+        self.assertEqual(out.getvalue(), "")
+
     def test_the_fetch_is_called_exactly_once(self):
         calls = []
         snapshot.refresh(lambda: calls.append(1) or "<html></html>")
@@ -54,7 +89,7 @@ class RefreshTests(ModelCase):
 
 class PreferenceIsolationTests(ModelCase):
     def test_refresh_and_reading_never_change_the_preference_file(self):
-        from pod.models import cli, view, workspace
+        from pod.models import workspace
         target = self.write_routes(ROUTES)
         before = target.read_bytes()
         stamp = target.stat().st_mtime_ns
@@ -62,8 +97,6 @@ class PreferenceIsolationTests(ModelCase):
         self.refresh_from(page(*without("Creator")))
         view.build()
         workspace.Workspace(refresh=lambda: self.fail("opening must not refresh"))
-        import contextlib
-        import io
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.main(["status"]), 0)
             self.assertEqual(cli.main(["--plain"]), 0)

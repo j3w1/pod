@@ -65,22 +65,32 @@ def _installer(bundle):
 
 
 def _integrity_failure(bundle):
-    """An installation that stopped mid-copy is neither its previous bundle nor its target."""
-    if not os.path.isfile(os.path.join(bundle, "installer.py")):
-        return None  # The ordinary entry-file check reports a missing module.
+    """Block an incomplete bundle and an installation that stopped mid-copy, and nothing else.
+
+    A copy in progress is neither its previous bundle nor its target. A place the installer
+    would refuse to write to, or a receipt it cannot read, is for `pod doctor` to report: it
+    does not say a copy is in progress, so it never stops a command.
+    """
     try:
         installer = _installer(bundle)
+    except Exception as exc:
+        reason = "missing installer.py" if isinstance(exc, FileNotFoundError) else "installer.py cannot be loaded"
+        return {"code": "bundle_incomplete",
+                "message": "Pod bundle at %s is incomplete (%s). Reinstall it: %s" % (bundle, reason, REINSTALL)}
+    try:
         receipt = installer.read_receipt(installer.receipt_path())
-        if receipt is None or receipt.get("status") != "installing":
-            return None
-        actual = installer.optional_digest(__import__("pathlib").Path(bundle))
-        allowed = {item.get("digest") for item in (receipt.get("previous"), receipt.get("target"))
-                   if isinstance(item, dict)}
-        if actual in allowed and actual is not None:
-            return None
     except Exception:
-        return {"code": "install_incomplete",
-                "message": "Installation receipt or bundle is incomplete; rerun: " + REINSTALL}
+        return None
+    if receipt is None or receipt.get("status") != "installing":
+        return None
+    try:
+        actual = installer.optional_digest(__import__("pathlib").Path(bundle))
+    except Exception:
+        actual = None
+    allowed = {item.get("digest") for item in (receipt.get("previous"), receipt.get("target"))
+               if isinstance(item, dict)}
+    if actual is not None and actual in allowed:
+        return None
     return {"code": "install_incomplete", "message": "Installation stopped during skill copy; rerun: " + REINSTALL}
 
 

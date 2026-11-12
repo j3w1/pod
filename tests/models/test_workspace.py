@@ -1,9 +1,12 @@
+import curses
+import locale
 import os
 import pty
 import select
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 from pod import routefile
 from pod.models import snapshot, table, view, workspace
@@ -192,6 +195,87 @@ class DrawTests(WorkspaceCase):
         self.assertIn("no non-reasoning effort for gpt-6.1-terra", shown)
         self.assertIn(view.COST_STATEMENT, shown)
         self.assertIn("* high value", shown)
+
+
+PAUSE = object()    # stands for the terminal sending nothing more for the moment
+
+
+class FakeWindow:
+    """A stand-in for the curses window: it hands out queued input as the terminal would deliver it."""
+
+    def __init__(self, *chunks):
+        self.pending = [item for chunk in chunks for item in (chunk if isinstance(chunk, str) else [chunk])]
+        self.waits = []
+
+    def get_wch(self):
+        if not self.pending:
+            raise AssertionError("the loop read past the end of the input")
+        item = self.pending.pop(0)
+        if item is PAUSE:
+            raise curses.error("no input")
+        return item
+
+    def timeout(self, delay):
+        self.waits.append(delay)
+
+    def getmaxyx(self):
+        return 40, 120
+
+    def keypad(self, flag):
+        pass
+
+    def erase(self):
+        pass
+
+    def addstr(self, *args):
+        pass
+
+    def refresh(self):
+        pass
+
+
+class KeyReadingTests(WorkspaceCase):
+    # Sequences curses does not name under TERM=screen-256color (Ctrl+Left first), each ending in a command key.
+    UNRECOGNISED = ("\x1b[1;5D", "\x1b[1;5C", "\x1b[1;2P", "\x1b[1;3p", "\x1b[1;5E", "\x1bD", "\x1bE",
+                    "\x1b ", "\x1bq")
+
+    def test_no_byte_of_an_unrecognised_escape_sequence_is_a_command(self):
+        before = self.target.read_bytes()
+        self.go("GPT-6.1 Sol (high)")
+        for sequence in self.UNRECOGNISED:
+            with self.subTest(sequence=sequence):
+                window = FakeWindow(sequence, PAUSE)
+                key = workspace._read_key(window)
+                self.assertIsNone(key)
+                self.assertEqual(window.pending, [])
+                self.assertEqual(window.waits[-1], -1, "reading blocks again afterwards")
+                self.assertIsNone(self.space.handle(key))
+                self.assertEqual(self.target.read_bytes(), before)
+
+    def test_the_loop_ignores_such_sequences_and_changes_nothing(self):
+        before = self.target.read_bytes()
+        self.go("GPT-6.1 Sol (high)")
+        chunks = [item for sequence in self.UNRECOGNISED for item in (sequence, PAUSE)]
+        workspace._loop(FakeWindow(*chunks, "q"), self.space)
+        self.assertEqual(self.target.read_bytes(), before)
+        self.assertEqual(self.space.current.name, "GPT-6.1 Sol (high)")
+        self.assertEqual((self.space.detail, self.space.searching, self.space.sort), (False, False, "index"))
+
+    def test_a_lone_escape_and_ordinary_keys_keep_their_meaning(self):
+        window = FakeWindow("/so\x1b", PAUSE, "D", curses.KEY_DOWN, curses.KEY_RESIZE, PAUSE)
+        read = [workspace._read_key(window) for _ in range(8)]
+        self.assertEqual(read, ["/", "s", "o", "\x1b", "D", "down", None, None])
+        self.keys("/", "s", "o", "\x1b")
+        self.assertEqual((self.space.searching, self.space.search), (False, ""))
+
+
+class LocaleTests(WorkspaceCase):
+    def test_a_locale_the_host_has_not_generated_does_not_stop_the_workspace(self):
+        opened = []
+        with patch.object(locale, "setlocale", side_effect=locale.Error("unsupported locale setting")), \
+                patch.object(curses, "wrapper", lambda loop, space: opened.append(space)):
+            self.assertEqual(workspace.run(), 0)
+        self.assertEqual(len(opened), 1)
 
 
 class TerminalSmokeTest(WorkspaceCase):

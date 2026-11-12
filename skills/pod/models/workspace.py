@@ -14,6 +14,7 @@ from . import edit, registry, snapshot, table, view
 
 KEYS = ("space on/off · E/D whole model on/off · p Preferred · P Pin · Enter detail · "
         "s sort · r reverse · f provider · / search · R refresh · q quit")
+ESCAPE_WAIT_MS = 25   # how long the rest of an escape sequence may take to arrive after its ESC
 
 
 class Workspace:
@@ -178,6 +179,35 @@ _NAMES = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_PPAGE: "pageu
           curses.KEY_HOME: "home", curses.KEY_END: "end", curses.KEY_ENTER: "enter", curses.KEY_BACKSPACE: "backspace"}
 
 
+def _read_key(screen):
+    """One key for `Workspace.handle`, or None when the input was not a key.
+
+    curses hands back an escape sequence it does not recognise one character at a time: ESC,
+    then the rest. Whatever follows an ESC without a pause belongs to that sequence, so all of
+    it is read and dropped and no part of it can act as a command. An ESC alone is the Esc key.
+    """
+    try:
+        key = screen.get_wch()
+    except curses.error:
+        return None
+    if key == curses.KEY_RESIZE:
+        return None
+    if key != "\x1b":
+        return _NAMES.get(key, key) if isinstance(key, int) else key
+    followed = False
+    screen.timeout(ESCAPE_WAIT_MS)
+    try:
+        while True:
+            try:
+                screen.get_wch()
+            except curses.error:
+                break
+            followed = True
+    finally:
+        screen.timeout(-1)
+    return None if followed else "\x1b"
+
+
 def _styles() -> dict:
     """Green, red and magenta on the terminal's own background read on dark and on light themes."""
     styles = {"": 0, "head": curses.A_BOLD, "dim": curses.A_DIM, "good": curses.A_BOLD, "value": curses.A_BOLD,
@@ -214,13 +244,10 @@ def _loop(screen, space: Workspace) -> None:
                     pass
                 x += len(text)
         screen.refresh()
-        try:
-            key = screen.get_wch()
-        except curses.error:
+        key = _read_key(screen)
+        if key is None:
             continue
-        if key == curses.KEY_RESIZE:
-            continue
-        action = space.handle(_NAMES.get(key, key) if isinstance(key, int) else key)
+        action = space.handle(key)
         if action == "quit":
             return
         if action == "refresh":
@@ -233,7 +260,10 @@ def _loop(screen, space: Workspace) -> None:
 
 
 def run() -> int:
-    locale.setlocale(locale.LC_ALL, "")
+    try:
+        locale.setlocale(locale.LC_ALL, "")
+    except locale.Error:
+        pass    # LANG or LC_ALL names a locale this host has not generated; curses then uses the C locale
     space = Workspace()
     curses.wrapper(_loop, space)
     return 0

@@ -45,11 +45,10 @@ def cells(row: view.Row) -> dict:
     mark = "P+Pin" if row.preferred and row.pinned else "Pref" if row.preferred else "Pin" if row.pinned else ""
     index = _number(metrics["intelligence_index"], "{:g}") + ("e" if row.estimated else "")
     cost = _number(metrics["cost_per_task_usd"], "${:.2f}") + ("*" if row.value else "")
-    context = metrics["context_window_tokens"]
     return {"state": row.state, "mark": mark, "name": row.name, "index": index, "cost": cost,
             "time": _number(metrics["time_per_task_min"], "{:.1f}"),
             "first": _number(metrics["first_answer_token_s"], "{:.1f}"),
-            "context": tokens(context if context is not None else row.adapter_context),
+            "context": tokens(metrics["context_window_tokens"]),     # the public value or n/a, never the adapter's
             "public": "yes" if row.observed else "no", "adapter": row.adapter, "provider": row.provider}
 
 
@@ -89,7 +88,8 @@ def detail(row: view.Row, shot: dict | None) -> list[str]:
         f" ({shot.get('methodology') or 'methodology not stated'})" if shot else "") if row.observed
         else "no row on the leaderboard snapshot"))
     lines.append(f"  Installed adapter: {row.adapter}" + (
-        f", context {tokens(row.adapter_context)}" if row.adapter_context else ""))
+        f"; context window stated by the adapter's catalog: {tokens(row.adapter_context)}"
+        if row.adapter_context else ""))
     lines.append("  Registry: " + ("routable" if row.routable else "not routable"))
     preference = row.preference or "not set, so not eligible"
     picks = "".join(label for label, held in ((", Preferred", row.preferred), (", Pin", row.pinned)) if held)

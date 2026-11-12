@@ -52,6 +52,22 @@ class StateTests(ViewCase):
                          ("no route", "listed", False))
         self.assertIn("not in the shipped registry", adapter_only.reason)
 
+    def test_the_context_column_is_the_public_value_and_the_adapters_is_labelled_in_the_detail(self):
+        self.codex_catalog(CODEX)       # the stand-in catalog states 500000 tokens for every model
+        from pod.models import adapters, table
+        rows = [public("GPT-6.1 Sol (high)", 50, 0.59),
+                public("GPT-6.1 Sol (max)", 55, 1.2, context_window_tokens=1_000_000)]
+        model = self.build(rows, ROUTES, adapters.catalogs())
+        unstated, stated, unobserved = (self.by_name(model, f"GPT-6.1 Sol ({effort})")
+                                        for effort in ("high", "max", "low"))
+        self.assertEqual([row.adapter_context for row in (unstated, stated, unobserved)], [500000] * 3)
+        self.assertEqual([table.cells(row)["context"] for row in (unstated, stated, unobserved)],
+                         ["n/a", "1M", "n/a"])
+        self.assertNotIn("500k", table.plain(model, model.rows, 200))
+        detail = table.detail(unstated, model.snapshot)
+        self.assertIn("  Installed adapter: listed; context window stated by the adapter's catalog: 500k", detail)
+        self.assertIn("  context_window_tokens: n/a", detail)
+
     def test_a_public_observation_never_makes_or_enables_a_route(self):
         model = self.build(leaderboard.parse(live_page())["rows"])
         self.assertEqual({row.state for row in model.rows}, {"routable", "no route"})

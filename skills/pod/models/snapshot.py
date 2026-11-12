@@ -67,21 +67,39 @@ def now() -> str:
 
 
 def refresh(fetch=None) -> dict:
-    """One fetch and one parse. Returns the attempt record; the snapshot changes only on success."""
+    """One fetch and one parse. Returns the attempt record; the snapshot changes only on success.
+
+    Whatever goes wrong is one failed refresh with a reason, never an exception. The attempt is
+    recorded when the cache can be written; when it cannot, the returned reason says so.
+    """
     attempt = {"attempted_at": now(), "source": leaderboard.URL, "ok": False, "failure": None}
     try:
         parsed = leaderboard.parse((fetch or leaderboard.fetch)())
     except leaderboard.RefreshError as exc:
         attempt["failure"] = leaderboard.clean(str(exc), 300)
+    except Exception as exc:    # a failure the fetch did not name is still a failed refresh
+        attempt["failure"] = f"The refresh failed ({type(exc).__name__})"
     else:
-        _write(home() / "snapshot.json", {
-            "schema": SCHEMA, "source": leaderboard.URL, "attribution": leaderboard.ATTRIBUTION,
-            "fetched_at": attempt["attempted_at"], "methodology": parsed["methodology"],
-            "units": leaderboard.UNITS, "unknown_columns": parsed["unknown_columns"],
-            "absent_metrics": parsed["absent_metrics"], "diagnostics": parsed["diagnostics"], "rows": parsed["rows"]})
-        attempt.update(ok=True, rows=len(parsed["rows"]), methodology=parsed["methodology"],
-                       diagnostics=parsed["diagnostics"])
-    _write(home() / "attempt.json", attempt)
+        try:
+            _write(home() / "snapshot.json", {
+                "schema": SCHEMA, "source": leaderboard.URL, "attribution": leaderboard.ATTRIBUTION,
+                "fetched_at": attempt["attempted_at"], "methodology": parsed["methodology"],
+                "units": leaderboard.UNITS, "unknown_columns": parsed["unknown_columns"],
+                "absent_metrics": parsed["absent_metrics"], "diagnostics": parsed["diagnostics"],
+                "rows": parsed["rows"]})
+        except OSError as exc:
+            attempt["failure"] = f"The snapshot could not be written to {home()} ({type(exc).__name__})"
+        else:
+            attempt.update(ok=True, rows=len(parsed["rows"]), methodology=parsed["methodology"],
+                           diagnostics=list(parsed["diagnostics"]))
+    try:
+        _write(home() / "attempt.json", attempt)
+    except OSError as exc:
+        note = f"this attempt could not be recorded in {home()} ({type(exc).__name__})"
+        if attempt["ok"]:
+            attempt["diagnostics"].append(note[0].upper() + note[1:])
+        else:
+            attempt["failure"] += "; " + note
     return attempt
 
 

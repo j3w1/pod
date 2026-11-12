@@ -28,7 +28,7 @@ sh pod-install.sh
 
 The script refuses root and other systems. It downloads one tarball, rejects unsafe archive paths, then runs the staged installer, which uses only the standard library. In order, the installer:
 
-1. Checks prerequisites and ownership before changing anything: a `pod` command, skill directory or Claude link it did not place is refused, not replaced.
+1. Checks prerequisites, ownership and every destination before changing anything: a `pod` command, skill directory or Claude link it did not place is refused, not replaced, and so is a destination directory that is a symbolic link (`$HOME`, `~/.local/bin`, `~/.agents` or `CODEX_HOME`, the Claude, data and configuration directories, `ZDOTDIR`). That refusal names the path and what to do.
 2. Validates the staged bundle.
 3. Writes a receipt marked `installing`.
 4. Lets the skills CLI copy the skill, then verifies that the copy's digest equals the validated source and that the Claude link points at it.
@@ -63,11 +63,11 @@ Earlier installers kept a Python environment under `${XDG_DATA_HOME:-~/.local/sh
 
 `pod update` downloads `main`, runs the same staged checks, and reports “Already current” when the receipt, launcher and copy match. A change someone made to the canonical skill is preserved under `preserved/` before the skills CLI replaces it. Running workers are untouched; reload active coordinator conversations before new starts. `pod update` needs only the installer, so it also repairs a bundle whose package can no longer start.
 
-If a download or a copy is interrupted, rerun the one-shot installer or `pod update`. A receipt still marked `installing` records the previous and the target digests; a copy that matches neither makes every other command answer `install_incomplete` instead of running. Only a copy made for the recorded target is replaced automatically; anything else in that directory is refused and left as it is.
+If a download or a copy is interrupted, rerun the one-shot installer or `pod update`. A receipt still marked `installing` records the previous and the target digests; a copy that matches neither makes every other command answer `install_incomplete` instead of running, and a copy that lacks `installer.py` answers `bundle_incomplete`. Nothing else stops a command: a receipt that cannot be read is reported by `pod doctor`, and a directory the installer refuses to write through stops only the installer. Only a copy made for the recorded target is replaced automatically; anything else in that directory is refused and left as it is.
 
 `pod doctor` reads and reports the version, the interpreter, the bundle and its digest, the receipt, launcher ownership, the Claude link, duplicates, whether `orca`, `git` and `gh` are present and what version each prints, the preference file's status, and where configuration, state and cache live. It uses no network and changes nothing. What it cannot observe it reports as unknown.
 
-The installer never overwrites a `~/.local/bin/pod` it did not write or a redirected rc file. If `pod` resolves to another command, inspect `command -v pod` and your PATH order before removing anything.
+The installer never overwrites a `~/.local/bin/pod` it did not write or a redirected rc file, and never writes through a destination directory that is a symbolic link. For `~/.claude`, name the real directory with `CLAUDE_CONFIG_DIR`; for `$HOME`, set `HOME` to the real directory; otherwise replace the link with a real directory. Then rerun. If `pod` resolves to another command, inspect `command -v pod` and your PATH order before removing anything.
 
 ## Removal
 

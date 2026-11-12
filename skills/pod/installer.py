@@ -233,21 +233,37 @@ def _absolute_env(name: str, fallback: Path) -> Path:
     return path
 
 
+def _data_home(home: Path) -> Path:
+    return _absolute_env("XDG_DATA_HOME", home / ".local/share") / "pod"
+
+
 def _paths() -> dict[str, Path]:
+    """Where everything lives. Reading these places refuses nothing; `_refuse_redirected` guards writing."""
     home = Path.home()
     if not home.is_absolute():
         raise InstallError(1, "HOME must be absolute")
-    data = _absolute_env("XDG_DATA_HOME", home / ".local/share") / "pod"
     config = _absolute_env("POD_CONFIG_HOME", _absolute_env("XDG_CONFIG_HOME", home / ".config") / "pod")
     claude = _absolute_env("CLAUDE_CONFIG_DIR", home / ".claude")
     codex = _absolute_env("CODEX_HOME", home / ".agents")
-    if "ZDOTDIR" in os.environ and _absolute_env("ZDOTDIR", home).is_symlink():
-        raise InstallError(1, "Refuse redirected ZDOTDIR")
-    for path in (data, config, claude, codex):
-        if path.is_symlink():
-            raise InstallError(1, f"Refuse redirected directory: {path}")
-    return {"home": home, "data": data, "config": config, "claude": claude, "codex": codex,
+    return {"home": home, "data": _data_home(home), "config": config, "claude": claude, "codex": codex,
             "canonical": home / ".agents/skills/pod", "launcher": home / ".local/bin/pod"}
+
+
+def _refuse_redirected(paths: dict[str, Path]) -> None:
+    """Every directory this installer writes into, checked before anything is changed."""
+    places = [(paths["home"], "HOME"), (paths["data"], None), (paths["data"] / "preserved", None),
+              (paths["config"], "POD_CONFIG_HOME" if "POD_CONFIG_HOME" in os.environ else None),
+              (paths["claude"], "CLAUDE_CONFIG_DIR"),
+              (paths["codex"], "CODEX_HOME" if "CODEX_HOME" in os.environ else None),
+              (paths["launcher"].parent, None)]
+    if "ZDOTDIR" in os.environ:
+        places.append((_absolute_env("ZDOTDIR", paths["home"]), "ZDOTDIR"))
+    for path, variable in places:
+        if path.is_symlink():
+            target = os.path.realpath(path)
+            remedy = f"Set {variable}={target}" if variable else "Replace the link with a real directory"
+            raise InstallError(1, f"Refuse redirected directory: {path} is a symbolic link to {target}. "
+                                  f"{remedy}, then rerun the installer")
 
 
 def bundle_files(root: Path) -> list[str]:
@@ -290,7 +306,8 @@ def _version(root: Path) -> str:
 
 
 def receipt_path() -> Path:
-    return _paths()["data"] / "install.json"
+    """The receipt's own location. No other place can keep it from being read."""
+    return _data_home(Path.home()) / "install.json"
 
 
 def read_receipt(path: Path) -> dict | None:
@@ -396,6 +413,7 @@ def _preflight(stage: Path, paths: dict[str, Path], template: bytes) -> None:
         raise InstallError(1, "Python curses is required for pod models") from exc
     if shutil.which("npx") is None or shutil.which("node") is None:
         raise InstallError(1, "Node and npx are required")
+    _refuse_redirected(paths)
     source_bundle = stage / "skills/pod"
     if not source_bundle.is_dir() or not (source_bundle / "SKILL.md").is_file():
         raise InstallError(1, "Source has no Pod skill")
