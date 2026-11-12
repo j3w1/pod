@@ -277,8 +277,11 @@ class ProjectRulesTests(GateCase):
         self.project("schema: pod/v1\nwaste_governor:\n  preflight: [a, b]\n")
         self.ready(review=False)
         needs = self.needs()
-        self.assertTrue(any(".pod/config.yaml" in need and "expected pod-project/v1" in need for need in needs), needs)
-        self.assertTrue(any("independent passing review" in need for need in needs), needs)
+        self.assertEqual([need.split(":")[0] for need in needs], ["an independent passing review of 1 changed paths"])
+        verdict = gate.deliver(self.repo, None, check=True)
+        self.assertIn("expected pod-project/v1), so review is required", verdict["notes"][0])
+        self.review("pass")                           # the change that replaces the file is itself deliverable once reviewed
+        self.assertEqual(gate.deliver(self.repo, None)["state"], "closed")
 
     def test_a_project_can_name_its_own_required_checks_and_ask_for_a_final_tree_review(self):
         self.project("schema: pod-project/v1\nreview: required\nfinal_tree_review: true\nmerge_method: squash\n"

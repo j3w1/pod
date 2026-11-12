@@ -528,6 +528,8 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
     verdict = gates.evaluate(root, state, remote=remote)
     result["candidate"] = f"{verdict['candidate'][:12]} tree {verdict['tree'][:12]}" + (
         "" if not verdict.get("dirty") else f", {len(verdict['dirty'])} uncommitted paths")
+    if verdict["notes"]:
+        result["notes"] = verdict["notes"]
     result["gate"] = verdict["needs"] or ("ready to deliver" if verdict["authorized"] else
                                            "passes; `pod deliver` still needs a merge authorization for this commit")
     return result

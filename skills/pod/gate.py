@@ -22,7 +22,7 @@ def evaluate(root: Path, state: State, *, commit: str | None = None, remote: boo
     info = state.objective
     slug, target = info.get("repository"), info["target"]
     candidate = gitio.commit(root, commit or "HEAD")
-    verdict = {"candidate": candidate, "tree": gitio.tree(root, candidate), "target": target, "needs": []}
+    verdict = {"candidate": candidate, "tree": gitio.tree(root, candidate), "target": target, "needs": [], "notes": []}
     needs = verdict["needs"]
     if commit is None:
         verdict["dirty"] = gitio.dirty(root)
@@ -56,8 +56,8 @@ def evaluate(root: Path, state: State, *, commit: str | None = None, remote: boo
     verdict["rules"], verdict["target_head"] = rules, head
     if not head:
         needs.append(f"the target branch {target}, which could not be read; until then review is required")
-    elif rules.get("problem"):
-        needs.append(f"a readable {project.FILE} on {target} ({rules['problem']}); until then review is required")
+    elif rules.get("problem"):       # not a reason to refuse: the strictest rule applies until the file is readable
+        verdict["notes"].append(f"{project.FILE} on {target} is not readable ({rules['problem']}), so review is required")
     # 2. Required checks are green on that head.
     if request and request["state"] == "OPEN" and request["headRefOid"] == candidate:
         verdict["checks"] = found = github.checks(slug, request["number"], rules["required_checks"])
@@ -121,7 +121,7 @@ def public(verdict: dict) -> dict:
     request = verdict.get("pr")
     return {"candidate": verdict["candidate"], "tree": verdict["tree"], "target": verdict["target"],
             "pr": request and request["number"], "pass": verdict["pass"], "authorized": verdict["authorized"],
-            "needs": verdict["needs"]}
+            "needs": verdict["needs"], **({"notes": verdict["notes"]} if verdict["notes"] else {})}
 
 
 def _outcome(ident: str, merged: bool, observed: str, **more) -> dict:
