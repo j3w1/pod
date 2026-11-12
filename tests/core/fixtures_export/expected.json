@@ -1,0 +1,832 @@
+{
+ "5f0b9c0c6923d08dd487bfb5e3ca8e836b860053c8e2b9bf1a9f96aeea2dafbf": {
+  "attribution": {
+   "objective": "fixture-paged",
+   "reason": "repository_unavailable",
+   "root_sha256": "5ed8bc1647ca811220270c82026e7f81c7ec25ccf7246f6b3796b308691b07ce",
+   "status": "unknown"
+  },
+  "context": {
+   "admissions": {
+    "a0": {
+     "note": "Invented note 0: the lighthouse keeper counted 0 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-0"
+    },
+    "a1": {
+     "note": "Invented note 1: the lighthouse keeper counted 7 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-1"
+    },
+    "a10": {
+     "note": "Invented note 10: the lighthouse keeper counted 70 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-10"
+    },
+    "a11": {
+     "note": "Invented note 11: the lighthouse keeper counted 77 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-11"
+    },
+    "a12": {
+     "note": "Invented note 12: the lighthouse keeper counted 84 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-12"
+    },
+    "a13": {
+     "note": "Invented note 13: the lighthouse keeper counted 91 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-13"
+    },
+    "a14": {
+     "note": "Invented note 14: the lighthouse keeper counted 98 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-14"
+    },
+    "a15": {
+     "note": "Invented note 15: the lighthouse keeper counted 105 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-15"
+    },
+    "a16": {
+     "note": "Invented note 16: the lighthouse keeper counted 112 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-16"
+    },
+    "a17": {
+     "note": "Invented note 17: the lighthouse keeper counted 119 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-17"
+    },
+    "a18": {
+     "note": "Invented note 18: the lighthouse keeper counted 126 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-18"
+    },
+    "a19": {
+     "note": "Invented note 19: the lighthouse keeper counted 133 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-19"
+    },
+    "a2": {
+     "note": "Invented note 2: the lighthouse keeper counted 14 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-2"
+    },
+    "a20": {
+     "note": "Invented note 20: the lighthouse keeper counted 140 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-20"
+    },
+    "a21": {
+     "note": "Invented note 21: the lighthouse keeper counted 147 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-21"
+    },
+    "a22": {
+     "note": "Invented note 22: the lighthouse keeper counted 154 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-22"
+    },
+    "a23": {
+     "note": "Invented note 23: the lighthouse keeper counted 161 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-23"
+    },
+    "a24": {
+     "note": "Invented note 24: the lighthouse keeper counted 168 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-24"
+    },
+    "a25": {
+     "note": "Invented note 25: the lighthouse keeper counted 175 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-25"
+    },
+    "a26": {
+     "note": "Invented note 26: the lighthouse keeper counted 182 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-26"
+    },
+    "a27": {
+     "note": "Invented note 27: the lighthouse keeper counted 189 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-27"
+    },
+    "a28": {
+     "note": "Invented note 28: the lighthouse keeper counted 196 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-28"
+    },
+    "a29": {
+     "note": "Invented note 29: the lighthouse keeper counted 203 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-29"
+    },
+    "a3": {
+     "note": "Invented note 3: the lighthouse keeper counted 21 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-3"
+    },
+    "a30": {
+     "note": "Invented note 30: the lighthouse keeper counted 210 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-30"
+    },
+    "a31": {
+     "note": "Invented note 31: the lighthouse keeper counted 217 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-31"
+    },
+    "a32": {
+     "note": "Invented note 32: the lighthouse keeper counted 224 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-32"
+    },
+    "a33": {
+     "note": "Invented note 33: the lighthouse keeper counted 231 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-33"
+    },
+    "a34": {
+     "note": "Invented note 34: the lighthouse keeper counted 238 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-34"
+    },
+    "a35": {
+     "note": "Invented note 35: the lighthouse keeper counted 245 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-35"
+    },
+    "a36": {
+     "note": "Invented note 36: the lighthouse keeper counted 252 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-36"
+    },
+    "a37": {
+     "note": "Invented note 37: the lighthouse keeper counted 259 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-37"
+    },
+    "a38": {
+     "note": "Invented note 38: the lighthouse keeper counted 266 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-38"
+    },
+    "a39": {
+     "note": "Invented note 39: the lighthouse keeper counted 273 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-39"
+    },
+    "a4": {
+     "note": "Invented note 4: the lighthouse keeper counted 28 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-4"
+    },
+    "a40": {
+     "note": "Invented note 40: the lighthouse keeper counted 280 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-40"
+    },
+    "a41": {
+     "note": "Invented note 41: the lighthouse keeper counted 287 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-41"
+    },
+    "a42": {
+     "note": "Invented note 42: the lighthouse keeper counted 294 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-42"
+    },
+    "a43": {
+     "note": "Invented note 43: the lighthouse keeper counted 301 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-43"
+    },
+    "a44": {
+     "note": "Invented note 44: the lighthouse keeper counted 308 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-44"
+    },
+    "a45": {
+     "note": "Invented note 45: the lighthouse keeper counted 315 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-45"
+    },
+    "a46": {
+     "note": "Invented note 46: the lighthouse keeper counted 322 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-46"
+    },
+    "a47": {
+     "note": "Invented note 47: the lighthouse keeper counted 329 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-47"
+    },
+    "a48": {
+     "note": "Invented note 48: the lighthouse keeper counted 336 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-48"
+    },
+    "a49": {
+     "note": "Invented note 49: the lighthouse keeper counted 343 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-49"
+    },
+    "a5": {
+     "note": "Invented note 5: the lighthouse keeper counted 35 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-5"
+    },
+    "a50": {
+     "note": "Invented note 50: the lighthouse keeper counted 350 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-50"
+    },
+    "a51": {
+     "note": "Invented note 51: the lighthouse keeper counted 357 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-51"
+    },
+    "a52": {
+     "note": "Invented note 52: the lighthouse keeper counted 364 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-52"
+    },
+    "a53": {
+     "note": "Invented note 53: the lighthouse keeper counted 371 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-53"
+    },
+    "a54": {
+     "note": "Invented note 54: the lighthouse keeper counted 378 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-54"
+    },
+    "a55": {
+     "note": "Invented note 55: the lighthouse keeper counted 385 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-55"
+    },
+    "a56": {
+     "note": "Invented note 56: the lighthouse keeper counted 392 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-56"
+    },
+    "a57": {
+     "note": "Invented note 57: the lighthouse keeper counted 399 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-57"
+    },
+    "a58": {
+     "note": "Invented note 58: the lighthouse keeper counted 406 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-58"
+    },
+    "a59": {
+     "note": "Invented note 59: the lighthouse keeper counted 413 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-59"
+    },
+    "a6": {
+     "note": "Invented note 6: the lighthouse keeper counted 42 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-6"
+    },
+    "a60": {
+     "note": "Invented note 60: the lighthouse keeper counted 420 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-60"
+    },
+    "a61": {
+     "note": "Invented note 61: the lighthouse keeper counted 427 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-61"
+    },
+    "a62": {
+     "note": "Invented note 62: the lighthouse keeper counted 434 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-62"
+    },
+    "a63": {
+     "note": "Invented note 63: the lighthouse keeper counted 441 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-63"
+    },
+    "a64": {
+     "note": "Invented note 64: the lighthouse keeper counted 448 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-64"
+    },
+    "a65": {
+     "note": "Invented note 65: the lighthouse keeper counted 455 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-65"
+    },
+    "a66": {
+     "note": "Invented note 66: the lighthouse keeper counted 462 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-66"
+    },
+    "a67": {
+     "note": "Invented note 67: the lighthouse keeper counted 469 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-67"
+    },
+    "a68": {
+     "note": "Invented note 68: the lighthouse keeper counted 476 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-68"
+    },
+    "a69": {
+     "note": "Invented note 69: the lighthouse keeper counted 483 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-69"
+    },
+    "a7": {
+     "note": "Invented note 7: the lighthouse keeper counted 49 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-7"
+    },
+    "a70": {
+     "note": "Invented note 70: the lighthouse keeper counted 490 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-70"
+    },
+    "a71": {
+     "note": "Invented note 71: the lighthouse keeper counted 497 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-71"
+    },
+    "a72": {
+     "note": "Invented note 72: the lighthouse keeper counted 504 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-72"
+    },
+    "a73": {
+     "note": "Invented note 73: the lighthouse keeper counted 511 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-73"
+    },
+    "a74": {
+     "note": "Invented note 74: the lighthouse keeper counted 518 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-74"
+    },
+    "a75": {
+     "note": "Invented note 75: the lighthouse keeper counted 525 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-75"
+    },
+    "a76": {
+     "note": "Invented note 76: the lighthouse keeper counted 532 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-76"
+    },
+    "a77": {
+     "note": "Invented note 77: the lighthouse keeper counted 539 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-77"
+    },
+    "a78": {
+     "note": "Invented note 78: the lighthouse keeper counted 546 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-78"
+    },
+    "a79": {
+     "note": "Invented note 79: the lighthouse keeper counted 553 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-79"
+    },
+    "a8": {
+     "note": "Invented note 8: the lighthouse keeper counted 56 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-8"
+    },
+    "a80": {
+     "note": "Invented note 80: the lighthouse keeper counted 560 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-80"
+    },
+    "a81": {
+     "note": "Invented note 81: the lighthouse keeper counted 567 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-81"
+    },
+    "a82": {
+     "note": "Invented note 82: the lighthouse keeper counted 574 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-82"
+    },
+    "a83": {
+     "note": "Invented note 83: the lighthouse keeper counted 581 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-83"
+    },
+    "a84": {
+     "note": "Invented note 84: the lighthouse keeper counted 588 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-84"
+    },
+    "a85": {
+     "note": "Invented note 85: the lighthouse keeper counted 595 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-85"
+    },
+    "a86": {
+     "note": "Invented note 86: the lighthouse keeper counted 602 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-86"
+    },
+    "a87": {
+     "note": "Invented note 87: the lighthouse keeper counted 609 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-87"
+    },
+    "a88": {
+     "note": "Invented note 88: the lighthouse keeper counted 616 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-88"
+    },
+    "a89": {
+     "note": "Invented note 89: the lighthouse keeper counted 623 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-89"
+    },
+    "a9": {
+     "note": "Invented note 9: the lighthouse keeper counted 63 gulls before breakfast.",
+     "state": "settled",
+     "task": "fixture-task-9"
+    }
+   },
+   "checkpoint": {
+    "objective": "fixture-paged",
+    "obligations": [
+     {
+      "findings": [],
+      "id": "o0",
+      "receipts": [
+       "Invented note 0: the lighthouse keeper counted 0 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o1",
+      "receipts": [
+       "Invented note 1: the lighthouse keeper counted 7 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o2",
+      "receipts": [
+       "Invented note 2: the lighthouse keeper counted 14 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o3",
+      "receipts": [
+       "Invented note 3: the lighthouse keeper counted 21 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o4",
+      "receipts": [
+       "Invented note 4: the lighthouse keeper counted 28 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o5",
+      "receipts": [
+       "Invented note 5: the lighthouse keeper counted 35 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o6",
+      "receipts": [
+       "Invented note 6: the lighthouse keeper counted 42 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o7",
+      "receipts": [
+       "Invented note 7: the lighthouse keeper counted 49 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o8",
+      "receipts": [
+       "Invented note 8: the lighthouse keeper counted 56 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o9",
+      "receipts": [
+       "Invented note 9: the lighthouse keeper counted 63 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o10",
+      "receipts": [
+       "Invented note 10: the lighthouse keeper counted 70 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o11",
+      "receipts": [
+       "Invented note 11: the lighthouse keeper counted 77 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o12",
+      "receipts": [
+       "Invented note 12: the lighthouse keeper counted 84 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o13",
+      "receipts": [
+       "Invented note 13: the lighthouse keeper counted 91 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o14",
+      "receipts": [
+       "Invented note 14: the lighthouse keeper counted 98 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o15",
+      "receipts": [
+       "Invented note 15: the lighthouse keeper counted 105 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o16",
+      "receipts": [
+       "Invented note 16: the lighthouse keeper counted 112 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o17",
+      "receipts": [
+       "Invented note 17: the lighthouse keeper counted 119 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o18",
+      "receipts": [
+       "Invented note 18: the lighthouse keeper counted 126 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o19",
+      "receipts": [
+       "Invented note 19: the lighthouse keeper counted 133 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o20",
+      "receipts": [
+       "Invented note 20: the lighthouse keeper counted 140 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o21",
+      "receipts": [
+       "Invented note 21: the lighthouse keeper counted 147 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o22",
+      "receipts": [
+       "Invented note 22: the lighthouse keeper counted 154 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o23",
+      "receipts": [
+       "Invented note 23: the lighthouse keeper counted 161 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o24",
+      "receipts": [
+       "Invented note 24: the lighthouse keeper counted 168 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o25",
+      "receipts": [
+       "Invented note 25: the lighthouse keeper counted 175 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o26",
+      "receipts": [
+       "Invented note 26: the lighthouse keeper counted 182 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o27",
+      "receipts": [
+       "Invented note 27: the lighthouse keeper counted 189 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o28",
+      "receipts": [
+       "Invented note 28: the lighthouse keeper counted 196 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     },
+     {
+      "findings": [],
+      "id": "o29",
+      "receipts": [
+       "Invented note 29: the lighthouse keeper counted 203 gulls before breakfast."
+      ],
+      "state": "satisfied"
+     }
+    ],
+    "summary": "Invented note 0: the lighthouse keeper counted 0 gulls before breakfast. Invented note 1: the lighthouse keeper counted 7 gulls before breakfast. Invented note 2: the lighthouse keeper counted 14 gulls before breakfast. Invented note 3: the lighthouse keeper counted 21 gulls before breakfast. Invented note 4: the lighthouse keeper counted 28 gulls before breakfast. Invented note 5: the lighthouse keeper counted 35 gulls before breakfast. Invented note 6: the lighthouse keeper counted 42 gulls before breakfast. Invented note 7: the lighthouse keeper counted 49 gulls before breakfast. Invented note 8: the lighthouse keeper counted 56 gulls before breakfast. Invented note 9: the lighthouse keeper counted 63 gulls before breakfast. Invented note 10: the lighthouse keeper counted 70 gulls before breakfast. Invented note 11: the lighthouse keeper counted 77 gulls before breakfast. Invented note 12: the lighthouse keeper counted 84 gulls before breakfast. Invented note 13: the lighthouse keeper counted 91 gulls before breakfast. Invented note 14: the lighthouse keeper counted 98 gulls before breakfast. Invented note 15: the lighthouse keeper counted 105 gulls before breakfast. Invented note 16: the lighthouse keeper counted 112 gulls before breakfast. Invented note 17: the lighthouse keeper counted 119 gulls before breakfast. Invented note 18: the lighthouse keeper counted 126 gulls before breakfast. Invented note 19: the lighthouse keeper counted 133 gulls before breakfast. Invented note 20: the lighthouse keeper counted 140 gulls before breakfast. Invented note 21: the lighthouse keeper counted 147 gulls before breakfast. Invented note 22: the lighthouse keeper counted 154 gulls before breakfast. Invented note 23: the lighthouse keeper counted 161 gulls before breakfast. Invented note 24: the lighthouse keeper counted 168 gulls before breakfast. Invented note 25: the lighthouse keeper counted 175 gulls before breakfast. Invented note 26: the lighthouse keeper counted 182 gulls before breakfast. Invented note 27: the lighthouse keeper counted 189 gulls before breakfast. Invented note 28: the lighthouse keeper counted 196 gulls before breakfast. Invented note 29: the lighthouse keeper counted 203 gulls before breakfast. Invented note 30: the lighthouse keeper counted 210 gulls before breakfast. Invented note 31: the lighthouse keeper counted 217 gulls before breakfast. Invented note 32: the lighthouse keeper counted 224 gulls before breakfast. Invented note 33: the lighthouse keeper counted 231 gulls before breakfast. Invented note 34: the lighthouse keeper counted 238 gulls before breakfast. Invented note 35: the lighthouse keeper counted 245 gulls before breakfast. Invented note 36: the lighthouse keeper counted 252 gulls before breakfast. Invented note 37: the lighthouse keeper counted 259 gulls before breakfast. Invented note 38: the lighthouse keeper counted 266 gulls before breakfast. Invented note 39: the lighthouse keeper counted 273 gulls before breakfast."
+   },
+   "constraints": [],
+   "interventions": [],
+   "owner": {
+    "handle": "fixture-coordinator"
+   },
+   "revision": 1,
+   "schema": "pod-context/v4",
+   "source_rejections": []
+  },
+  "objective": "fixture-paged"
+ },
+ "824c60832ddb68d2fc335cfd63848e1ec49c7c20abc162c6b0cc2c3024601ce9": {
+  "context": {
+   "admissions": {
+    "a1": {
+     "report": [
+      "Invented note 0: the lighthouse keeper counted 0 gulls before breakfast.",
+      "Invented note 1: the lighthouse keeper counted 7 gulls before breakfast.",
+      "Invented note 2: the lighthouse keeper counted 14 gulls before breakfast.",
+      "Invented note 3: the lighthouse keeper counted 21 gulls before breakfast.",
+      "Invented note 4: the lighthouse keeper counted 28 gulls before breakfast.",
+      "Invented note 5: the lighthouse keeper counted 35 gulls before breakfast.",
+      "Invented note 6: the lighthouse keeper counted 42 gulls before breakfast.",
+      "Invented note 7: the lighthouse keeper counted 49 gulls before breakfast.",
+      "Invented note 8: the lighthouse keeper counted 56 gulls before breakfast.",
+      "Invented note 9: the lighthouse keeper counted 63 gulls before breakfast.",
+      "Invented note 10: the lighthouse keeper counted 70 gulls before breakfast.",
+      "Invented note 11: the lighthouse keeper counted 77 gulls before breakfast.",
+      "Invented note 12: the lighthouse keeper counted 84 gulls before breakfast.",
+      "Invented note 13: the lighthouse keeper counted 91 gulls before breakfast.",
+      "Invented note 14: the lighthouse keeper counted 98 gulls before breakfast.",
+      "Invented note 15: the lighthouse keeper counted 105 gulls before breakfast.",
+      "Invented note 16: the lighthouse keeper counted 112 gulls before breakfast.",
+      "Invented note 17: the lighthouse keeper counted 119 gulls before breakfast.",
+      "Invented note 18: the lighthouse keeper counted 126 gulls before breakfast.",
+      "Invented note 19: the lighthouse keeper counted 133 gulls before breakfast.",
+      "Invented note 20: the lighthouse keeper counted 140 gulls before breakfast.",
+      "Invented note 21: the lighthouse keeper counted 147 gulls before breakfast.",
+      "Invented note 22: the lighthouse keeper counted 154 gulls before breakfast.",
+      "Invented note 23: the lighthouse keeper counted 161 gulls before breakfast.",
+      "Invented note 24: the lighthouse keeper counted 168 gulls before breakfast.",
+      "Invented note 25: the lighthouse keeper counted 175 gulls before breakfast.",
+      "Invented note 26: the lighthouse keeper counted 182 gulls before breakfast.",
+      "Invented note 27: the lighthouse keeper counted 189 gulls before breakfast.",
+      "Invented note 28: the lighthouse keeper counted 196 gulls before breakfast.",
+      "Invented note 29: the lighthouse keeper counted 203 gulls before breakfast.",
+      "Invented note 30: the lighthouse keeper counted 210 gulls before breakfast.",
+      "Invented note 31: the lighthouse keeper counted 217 gulls before breakfast.",
+      "Invented note 32: the lighthouse keeper counted 224 gulls before breakfast.",
+      "Invented note 33: the lighthouse keeper counted 231 gulls before breakfast.",
+      "Invented note 34: the lighthouse keeper counted 238 gulls before breakfast.",
+      "Invented note 35: the lighthouse keeper counted 245 gulls before breakfast.",
+      "Invented note 36: the lighthouse keeper counted 252 gulls before breakfast.",
+      "Invented note 37: the lighthouse keeper counted 259 gulls before breakfast.",
+      "Invented note 38: the lighthouse keeper counted 266 gulls before breakfast.",
+      "Invented note 39: the lighthouse keeper counted 273 gulls before breakfast."
+     ],
+     "state": "settled",
+     "task": "fixture-task-two"
+    },
+    "a2": {
+     "state": "live",
+     "task": "fixture-task-three"
+    }
+   },
+   "checkpoint": {
+    "objective": "fixture-apart",
+    "obligations": [
+     {
+      "findings": [
+       {
+        "id": "f1",
+        "text": "Invented note 0: the lighthouse keeper counted 0 gulls before breakfast. Invented note 1: the lighthouse keeper counted 7 gulls before breakfast. Invented note 2: the lighthouse keeper counted 14 gulls before breakfast. Invented note 3: the lighthouse keeper counted 21 gulls before breakfast. Invented note 4: the lighthouse keeper counted 28 gulls before breakfast. Invented note 5: the lighthouse keeper counted 35 gulls before breakfast. Invented note 6: the lighthouse keeper counted 42 gulls before breakfast. Invented note 7: the lighthouse keeper counted 49 gulls before breakfast. Invented note 8: the lighthouse keeper counted 56 gulls before breakfast. Invented note 9: the lighthouse keeper counted 63 gulls before breakfast. Invented note 10: the lighthouse keeper counted 70 gulls before breakfast. Invented note 11: the lighthouse keeper counted 77 gulls before breakfast. Invented note 12: the lighthouse keeper counted 84 gulls before breakfast. Invented note 13: the lighthouse keeper counted 91 gulls before breakfast. Invented note 14: the lighthouse keeper counted 98 gulls before breakfast. Invented note 15: the lighthouse keeper counted 105 gulls before breakfast. Invented note 16: the lighthouse keeper counted 112 gulls before breakfast. Invented note 17: the lighthouse keeper counted 119 gulls before breakfast. Invented note 18: the lighthouse keeper counted 126 gulls before breakfast. Invented note 19: the lighthouse keeper counted 133 gulls before breakfast. Invented note 20: the lighthouse keeper counted 140 gulls before breakfast. Invented note 21: the lighthouse keeper counted 147 gulls before breakfast. Invented note 22: the lighthouse keeper counted 154 gulls before breakfast. Invented note 23: the lighthouse keeper counted 161 gulls before breakfast. Invented note 24: the lighthouse keeper counted 168 gulls before breakfast. Invented note 25: the lighthouse keeper counted 175 gulls before breakfast. Invented note 26: the lighthouse keeper counted 182 gulls before breakfast. Invented note 27: the lighthouse keeper counted 189 gulls before breakfast. Invented note 28: the lighthouse keeper counted 196 gulls before breakfast. Invented note 29: the lighthouse keeper counted 203 gulls before breakfast."
+       }
+      ],
+      "id": "o1",
+      "receipts": [],
+      "state": "satisfied"
+     }
+    ]
+   },
+   "constraints": [],
+   "interventions": [],
+   "owner": {
+    "handle": "fixture-coordinator"
+   },
+   "revision": 9,
+   "schema": "pod-context/v4",
+   "source_rejections": []
+  },
+  "objective": "fixture-apart"
+ },
+ "f92e57244e566fa243fb2036751f85d8b1e969bb6bcbe02ad99db39b135d129d": {
+  "context": {
+   "admissions": {
+    "a1": {
+     "state": "settled",
+     "task": "fixture-task-one"
+    }
+   },
+   "checkpoint": {
+    "objective": "fixture-plain",
+    "obligations": [
+     {
+      "findings": [],
+      "id": "o1",
+      "receipts": [],
+      "state": "satisfied"
+     }
+    ]
+   },
+   "constraints": [
+    "fixture constraint"
+   ],
+   "interventions": [],
+   "owner": {
+    "handle": "fixture-coordinator"
+   },
+   "revision": 3,
+   "schema": "pod-context/v4",
+   "source_rejections": []
+  },
+  "objective": "fixture-plain"
+ }
+}

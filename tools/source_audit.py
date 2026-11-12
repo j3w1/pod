@@ -85,8 +85,13 @@ PUBLICATION_PATHS = ("release/", "CHANGELOG", "pyproject.toml", "setup.py", "set
 PACKAGE_SUFFIXES = (".whl", ".tar.gz", ".tgz", ".egg", ".zip")
 # The guard names its own patterns, so exactly these two files are exempt from every table
 # but FORBIDDEN.
-GUARD_FILES = frozenset({"tools/source_audit.py", "tests/test_source_audit.py"})
-FIXTURES = "tests/fixtures/"
+GUARD_FILES = frozenset({"tools/source_audit.py", "tests/install/test_source_audit.py"})
+
+
+def _fixture(name: str) -> bool:
+    """Sanitized captures live in a `fixtures` directory, or one named `fixtures_*`, anywhere under tests."""
+    parts = name.split("/")
+    return parts[0] == "tests" and any(part.startswith("fixtures") for part in parts[1:-1])
 
 
 def _line_number(data: bytes, offset: int) -> int:
@@ -97,12 +102,11 @@ def _scan(name: str, data: bytes) -> list[str]:
     tables = [FORBIDDEN]
     if name not in GUARD_FILES:
         tables += [MECHANISM, PUBLICATION]
-        if not name.startswith(FIXTURES):
+        if not _fixture(name):
             tables.append(WORDING)
         if name.endswith(".md") and not name.startswith("tests/"):
             tables.append(COUNT_CENTRED)
-        if name.startswith(".github/") or (not name.startswith(("tests/", FIXTURES))
-                                           and name.endswith(AUTOMATION_CODE)):
+        if name.startswith(".github/") or (not name.startswith("tests/") and name.endswith(AUTOMATION_CODE)):
             tables.append(AUTOMATION_STEP)
     findings = []
     for table in tables:
@@ -142,6 +146,8 @@ def audit_source(root: pathlib.Path) -> list[str]:
             if not stat.S_ISREG(mode) or path.stat().st_size > 2_000_000:
                 continue
             data = path.read_bytes()
+        except FileNotFoundError:
+            continue  # Removed from the working tree and not yet from the index: there is nothing to carry.
         except OSError:
             findings.append(f"{name} :: tracked source is unreadable")
             continue

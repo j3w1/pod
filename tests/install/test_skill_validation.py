@@ -1,283 +1,138 @@
-import os
-from contextlib import redirect_stderr, redirect_stdout
+"""The bundle's structure is checked on a small fixture skill; the shipped skill is checked once, as it is."""
+
+from contextlib import redirect_stdout
 from io import StringIO
-from pathlib import Path
-import shutil
+import os
 import unittest
 
-from pod.bundle import BUNDLE_FILES, MAX_SKILL, bundle_root
+from pod import bundle
 from pod.errors import PodError
-from pod.skill_validation import REFERENCES, main, validate_installed, validate_skill
-from tests.common import fixture
-
-BUNDLE = bundle_root()
-
-
-def copied(target: Path) -> Path:
-    destination = target / "pod"
-    shutil.copytree(BUNDLE, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    return destination
+from pod.skill_validation import main, validate_installed, validate_skill
+from tests.install.install_support import BUNDLE, FIXTURE_SKILL, ROOT, fixture_skill
+from tests.support import PodCase
 
 
-def rewrite_frontmatter(skill: Path, replacement: str) -> None:
-    text = (skill / "SKILL.md").read_text(encoding="utf-8")
-    head, _, body = text.partition("---\n")[2].partition("---\n")
-    (skill / "SKILL.md").write_text("---\n" + replacement + "---\n" + body, encoding="utf-8")
+class SkillValidationTests(PodCase):
+    def setUp(self):
+        super().setUp()
+        self.count = 0
 
+    def skill(self):
+        self.count += 1
+        return fixture_skill(self.tmp / f"copy-{self.count}")
 
-class SkillValidationTests(unittest.TestCase):
-    def test_long_guidance_validates_without_refusal_or_warning(self):
-        with fixture() as root:
-            skill = copied(root)
-            path = skill / "SKILL.md"
-            path.write_text(path.read_text() + (
-                "Read the applicable evidence and explain what it establishes for the requested outcome.\n" * 510))
-            for name in REFERENCES:
-                path = skill / name
-                path.write_text(path.read_text() + (
-                    "\nExplain which evidence supports the outcome and which questions remain open.\n" * 50))
-            output, errors = StringIO(), StringIO()
-            with redirect_stdout(output), redirect_stderr(errors):
-                result = validate_skill(skill)
-                code = main([str(skill)])
-            counts = result["word_counts"]
-            self.assertGreater(len((skill / "SKILL.md").read_text().splitlines()), 500)
-            self.assertGreater(counts["SKILL.md"], 400)
-            self.assertTrue(all(counts[name] > 450 for name in REFERENCES))
-            # Every reference exceeds 450, so both the three-template total and
-            # the other references exceed their former thresholds as well.
-            templates = [name for name in REFERENCES if name.endswith("-template.md")]
-            self.assertEqual(len(templates), 3)
-            self.assertGreater(sum(counts[name] for name in templates), 1350)
-            self.assertGreater(sum(counts[name] for name in REFERENCES if name not in templates), 2000)
-            self.assertGreater(counts["SKILL.md"], 2000)
-            self.assertEqual(result["status"], "valid")
-            self.assertEqual(code, 0)
-            self.assertIn("Skill is valid!", output.getvalue())
-            self.assertNotRegex(output.getvalue().lower(), "warning|failed|refus")
-            self.assertEqual(errors.getvalue(), "")
+    def refused(self, change, message):
+        skill = self.skill()
+        change(skill)
+        with self.assertRaisesRegex(PodError, message) as caught:
+            validate_skill(skill)
+        self.assertEqual(caught.exception.code, "invalid_skill")
 
-    def test_kept_limits_and_structure_still_refuse(self):
-        cases = (
-            ("skill-bytes", "SKILL.md", lambda text: text + "x" * MAX_SKILL, "oversized"),
-            ("reference-bytes", "references/cleanup.md", lambda text: text + "x" * MAX_SKILL, "bounded title"),
-            ("metadata-before-body", "SKILL.md", lambda text: text.replace("Use when", "Invoke if").replace(
-                "## Roles", "## Else"), "Use when"),
-            ("version-before-body", "VERSION", lambda text: "v0.4.0\n", "MAJOR.MINOR.PATCH"),
-            ("missing-link", "SKILL.md", lambda text: text.replace(
-                "- Issue intake, a change to a bound issue's body or amendments, or reconciliation of issue-derived criteria: [intake](references/issue-intake.md).", ""), "exactly once"),
-            ("duplicate-link", "SKILL.md", lambda text: text + (
-                "\n- Extra intake: [intake](references/issue-intake.md).\n"), "exactly once"),
-            ("untriggered-link", "SKILL.md", lambda text: text.replace("- Issue intake, a change to a bound issue's body or amendments, or reconciliation of issue-derived criteria:", "-"), "read-when trigger"),
-            ("cross-link", "references/cleanup.md", lambda text: text + (
-                "\nSee [planning](planning.md).\n"), "must not link another reference"),
-        )
-        with fixture() as root:
-            for name, relative, change, message in cases:
-                with self.subTest(name=name):
-                    skill = copied(root / name)
-                    path = skill / relative
-                    path.write_text(change(path.read_text()))
-                    if name == "version-before-body":
-                        path = skill / "SKILL.md"
-                        path.write_text(path.read_text().replace("## Roles", "## Else"))
-                    with self.assertRaisesRegex(PodError, message):
-                        validate_skill(skill)
-            skill = copied(root / "inventory")
-            (skill / "references/cleanup.md").unlink()
-            with self.assertRaisesRegex(PodError, "inventory mismatch"):
-                validate_skill(skill)
+    def text(self, old, new):
+        return lambda skill: (skill / "SKILL.md").write_text(FIXTURE_SKILL.replace(old, new))
 
-    def test_repository_bundle_is_valid(self):
+    def test_the_shipped_bundle_is_valid(self):
         result = validate_skill(BUNDLE)
-        self.assertEqual(result["status"], "valid")
-        self.assertEqual(set(result["files"]), set(BUNDLE_FILES))
+        self.assertEqual((result["status"], result["files"], result["digest"]),
+                         ("valid", bundle.files(BUNDLE), bundle.digest(BUNDLE)))
 
-    def test_validator_reports_all_word_counts(self):
-        result = validate_skill(BUNDLE)
-        counts = result["word_counts"]
-        self.assertEqual(counts["SKILL.md"], len((BUNDLE / "SKILL.md").read_text().split()))
-        self.assertEqual(set(counts), {"SKILL.md", *REFERENCES, "installed_guidance"})
-        for name in REFERENCES:
-            self.assertEqual(counts[name], len((BUNDLE / name).read_text().split()))
+    def test_the_fixture_is_valid_and_grows_without_any_list_to_edit(self):
+        skill = self.skill()
+        (skill / "models").mkdir(exist_ok=True)
+        (skill / "models/added_later.py").write_text("VALUE = 1\n")
+        (skill / "SKILL.md").write_text(FIXTURE_SKILL + "\nMore guidance.\n" * 3000)
+        (skill / "__pycache__").mkdir()
+        (skill / "__pycache__/cli.cpython-314.pyc").write_bytes(b"cached")
+        self.assertIn("models/added_later.py", validate_skill(skill)["files"])
         output = StringIO()
         with redirect_stdout(output):
-            self.assertEqual(main([str(BUNDLE)]), 0)
-        self.assertEqual(counts["installed_guidance"], counts["SKILL.md"] + sum(counts[name] for name in REFERENCES))
-        self.assertIn("Stored word counts (informational; they do not measure the context an agent loads)",
-                      output.getvalue())
-        for name, count in counts.items():
-            self.assertIn(f"{name}: {count} words", output.getvalue())
+            self.assertEqual(main([str(skill)]), 0)
+        self.assertIn("Skill is valid!", output.getvalue())
 
-    def test_descriptors_and_router_structure_are_enforced(self):
-        cases = (
-            ("description-length", "description: ", "description: Use when " + "x" * 251 + " # ", "250 characters"),
-            ("description-trigger", "Use when", "Invoke if", "Use when"),
-            ("compatibility", "compatibility: Linux,", "compatibility: |\n  Linux,", "one plain line"),
-            ("sections", "## Roles", "## Else", "five router sections"),
-            ("duplicate-link", "- PES authoring/revision:", "- Duplicate: [intake](references/issue-intake.md).\n- PES authoring/revision:", "exactly once"),
-            ("missing-trigger", "- PES authoring/revision:", "-", "read-when trigger"),
-            ("duplicate-trigger", "- PES authoring/revision:", "- Issue intake, a change to a bound issue's body or amendments, or reconciliation of issue-derived criteria:", "read-when trigger"),
-        )
-        with fixture() as root:
-            for name, old, new, message in cases:
-                with self.subTest(name=name):
-                    skill = copied(root / name)
-                    path = skill / "SKILL.md"
-                    text = path.read_text().replace(old, new)
-                    path.write_text(text)
-                    with self.assertRaisesRegex(PodError, message):
-                        validate_skill(skill)
-            for index, target in enumerate(("verification.md", "../references/verification.md",
-                                           "https://example.invalid/references/verification.md",
-                                           "verification", "../references/verification#proof")):
-                skill = copied(root / f"reference-link-{index}")
-                path = skill / "references" / "governor.md"
-                path.write_text(path.read_text() + f"\nSee [verification]({target}).\n")
-                with self.assertRaisesRegex(PodError, "must not link another reference"):
-                    validate_skill(skill)
-            for index, target in enumerate(("models.md", "../references/models", "<verification.md>")):
-                skill = copied(root / f"definition-link-{index}")
-                path = skill / "references" / "governor.md"
-                path.write_text(path.read_text() + f"\nSee [route].\n\n[route]: {target}\n")
-                with self.assertRaisesRegex(PodError, "must not link another reference"):
-                    validate_skill(skill)
-            skill = copied(root / "interface-length")
-            path = skill / "agents" / "openai.yaml"
-            path.write_text('interface:\n  display_name: Pod\n  short_description: ' + 'x' * 101)
-            with self.assertRaisesRegex(PodError, "short_description is invalid"):
-                validate_skill(skill)
+    def test_front_matter_is_held_to_its_few_fields(self):
+        for old, new, message in (
+                ("name: pod", "name: other", "name must be pod"),
+                ("Use when", "Invoke if", "Use when"),
+                ("description: Use when", "description: Use when " + "x" * 250, "250 characters"),
+                ("compatibility: Linux,", "compatibility: |\n  Linux,", "plain one-line values"),
+                ("license: MIT\n", "license: MIT\nmodel: opus\n", "unsupported fields"),
+                ("license: MIT\n", "license: MIT\nallowed-tools: Bash\n", "unsupported fields"),
+                ("metadata:\n", 'metadata:\n  version: "0.4.0"\n', "only in VERSION"),
+                ("https://github.com/j3w1/pod", "https://example.invalid/pod", "name this repository"),
+                ("---\nname", "name", "front matter is missing")):
+            with self.subTest(new=new):
+                self.refused(self.text(old, new), message)
+        skill = self.skill()
+        (skill / "SKILL.md").write_text(FIXTURE_SKILL.replace("compatibility: Linux, the latest stable CPython and Orca.\n", ""))
+        self.assertEqual(validate_skill(skill)["status"], "valid")
 
-    def test_compatibility_remains_optional(self):
-        with fixture() as root:
-            skill = copied(root)
-            path = skill / "SKILL.md"
-            path.write_text("\n".join(line for line in path.read_text().splitlines()
-                                      if not line.startswith("compatibility:")) + "\n")
-            self.assertEqual(validate_skill(skill)["status"], "valid")
+    def test_links_must_resolve_and_every_reference_must_be_reachable_and_titled(self):
+        self.refused(self.text("references/planning.md", "references/absent.md"), "names references/absent.md")
+        self.refused(self.text("[script](scripts/pod.py)", "`scripts/absent.py`"), "names scripts/absent.py")
+        self.refused(self.text("- Planning: [planning](references/planning.md).\n", ""), "not named in SKILL.md")
+        plain = self.skill()
+        (plain / "SKILL.md").write_text(FIXTURE_SKILL.replace("[planning](references/planning.md).", "`references/planning.md`."))
+        self.assertEqual(validate_skill(plain)["status"], "valid")
+        self.refused(lambda skill: (skill / "references/planning.md").write_text("no title\n"), "missing its title")
+        self.refused(lambda skill: (skill / "references/planning.md").write_text("# T\n" + "x" * bundle.MAX_TEXT), "oversized")
 
-    def test_runtime_omits_kernel_details_and_generic_test_reminders(self):
-        texts = [(BUNDLE / "SKILL.md").read_text(),
-                 *(p.read_text() for p in (BUNDLE / "references").glob("*.md"))]
-        text = " ".join(" ".join(texts).lower().split())
-        for removed in ("pending replay does not re-read model preferences",
-                        "exact native settlement frees the logical slot",
-                        "`native_default` effort exists only in older records",
-                        "pod-context/v4", "pod-admission/v4", "pod-packet/v3", "pod-checkpoint/v3"):
-            self.assertNotIn(removed, text)
-        self.assertNotRegex(text, r"\brun (?:project |focused |required )?(?:tests|checks)\b")
+    def test_the_tree_carries_only_bundle_files_and_no_links(self):
+        self.refused(lambda skill: (skill / "notes.txt").write_text("stray\n"), "not a kind of file")
+        self.refused(lambda skill: (skill / "extra.py").symlink_to(skill / "cli.py"), "link or a special file")
+        self.refused(lambda skill: os.mkfifo(skill / "pipe.py"), "link or a special file")
+        self.refused(lambda skill: (skill / "installer.py").unlink(), "missing installer.py")
+        self.refused(lambda skill: (skill / "errors.py").write_text("def broken(:\n"), "errors.py does not parse")
+        self.refused(lambda skill: skill.rename(skill.with_name("other")) and None, "named pod")
 
-    def test_frontmatter_allowlist_rejects_coordinator_overrides(self):
-        with fixture() as root:
-            for extra in ("context: fork\n", "model: opus\n", "effort: max\n",
-                          "agent: Explore\n", "allowed-tools: Bash\n"):
-                with self.subTest(extra=extra.strip()):
-                    skill = copied(root / extra.split(":")[0])
-                    text = (skill / "SKILL.md").read_text(encoding="utf-8")
-                    front = text.partition("---\n")[2].partition("---\n")[0]
-                    rewrite_frontmatter(skill, front + extra)
-                    with self.assertRaises(PodError) as caught:
-                        validate_skill(skill)
-                    self.assertEqual(caught.exception.code, "invalid_skill")
+    def test_the_version_is_one_well_formed_line_and_only_the_repository_may_link_it(self):
+        for body in ("0.4\n", "v0.4.0\n", "0.4.0", "0.4.0\n0.5.0\n"):
+            with self.subTest(body=body):
+                self.refused(lambda skill, body=body: (skill / "VERSION").write_text(body), "MAJOR.MINOR.PATCH")
 
-    def test_the_version_lives_only_in_a_well_formed_version_file(self):
-        with fixture() as root:
-            for name, change in (("skill-meta", lambda s: s.replace("metadata:\n", 'metadata:\n  version: "0.4.0"\n')),):
-                skill = copied(root / name)
-                text = (skill / "SKILL.md").read_text(encoding="utf-8")
-                text = text.replace("## Roles", "## Else")
-                (skill / "SKILL.md").write_text(change(text), encoding="utf-8")
-                with self.assertRaises(PodError) as duplicated:
-                    validate_skill(skill)
-                self.assertIn("VERSION", str(duplicated.exception))
-            for body in ("0.4\n", "v0.4.0\n", "0.4.0", "0.4.0\n0.5.0\n"):
-                with self.subTest(body=body):
-                    skill = copied(root / ("bad" + str(abs(hash(body)))))
-                    (skill / "VERSION").write_text(body, encoding="ascii")
-                    with self.assertRaises(PodError):
-                        validate_skill(skill)
+        def link(target):
+            def change(skill):
+                (skill.parent / "VERSION").write_text("0.4.0\n")
+                (skill / "VERSION").unlink()
+                (skill / "VERSION").symlink_to(target)
+            return change
+        self.refused(link("../VERSION"), "link or a special file")
+        self.refused(link("../../VERSION"), "link or a special file")
+        self.assertEqual(os.readlink(BUNDLE / "VERSION"), "../../VERSION")
+        self.assertTrue((ROOT / "VERSION").is_file())
 
-    def test_only_the_repository_version_link_is_allowed(self):
-        with fixture() as root:
-            skill = copied(root / "linked")
-            (root / "linked" / "VERSION").write_text("0.4.0\n")
-            (skill / "VERSION").unlink()
-            (skill / "VERSION").symlink_to("../../VERSION")
-            with self.assertRaises(PodError):
-                validate_skill(skill)
-            (skill / "VERSION").unlink()
-            (skill / "VERSION").symlink_to("../VERSION")
-            with self.assertRaises(PodError):
-                validate_skill(skill)
-        repository = Path(__file__).resolve().parents[1]
-        link = repository / "skills" / "pod" / "VERSION"
-        self.assertTrue(link.is_symlink())
-        self.assertEqual(os.readlink(link), "../../VERSION")
-        self.assertEqual(validate_skill(repository / "skills" / "pod")["status"], "valid")
+    def test_the_launcher_imports_nothing_of_the_package_before_its_check(self):
+        def change(skill):
+            launcher = skill / "scripts/pod.py"
+            launcher.write_text("from pod import cli\n" + launcher.read_text())
+        self.refused(change, "must not import pod")
 
-    def test_obsolete_helper_and_install_forms_are_rejected(self):
-        with fixture() as root:
-            for bad in ("Run python3 ~/.agents/skills/pod/scripts/pod.py doctor.",
-                        "Run python -m pod.internal preview for the route.",
-                        "See `pod.internal` for details.",
-                        "Run npx skills add j3w1/pod --skill pod."):
-                with self.subTest(bad=bad):
-                    skill = copied(root / str(abs(hash(bad))))
-                    text = (skill / "SKILL.md").read_text(encoding="utf-8")
-                    (skill / "SKILL.md").write_text(text.replace("Do not run source-checkout helpers or create another configuration source.", bad), encoding="utf-8")
-                    with self.assertRaises(PodError) as caught:
-                        validate_skill(skill)
-                    self.assertEqual(caught.exception.code, "invalid_skill")
+    def test_the_agent_interface_file_is_exact(self):
+        for body, message in (('interface:\n  display_name: "Pod"\n  short_description: "' + "x" * 101 + '"\n', "short_description"),
+                              ('interface:\n  display_name: "Other"\n  short_description: "x"\n', "exactly the Pod interface"),
+                              ('interface:\n  display_name: "Pod"\n  short_description: "x"\nextra: 1\n', "exactly the Pod interface"),
+                              ("interface: [\n", "not readable")):
+            with self.subTest(body=body):
+                self.refused(lambda skill, body=body: (skill / "agents/openai.yaml").write_text(body), message)
 
-    def test_missing_launcher_forms_are_rejected(self):
-        with fixture() as root:
-            for required in ("pod config --json", "pod internal <op> --input FILE",
-                             "~/.local/bin/pod"):
-                with self.subTest(required=required):
-                    skill = copied(root / str(abs(hash(required))))
-                    text = (skill / "SKILL.md").read_text(encoding="utf-8")
-                    (skill / "SKILL.md").write_text(text.replace(required, "omitted"), encoding="utf-8")
-                    with self.assertRaises(PodError):
-                        validate_skill(skill)
+    def test_a_placed_copy_is_compared_by_bytes_and_caches_are_no_difference(self):
+        skill = self.skill()
+        placed = fixture_skill(self.tmp / "placed")
+        (placed / "__pycache__").mkdir()
+        (placed / "__pycache__/cli.cpython-314.pyc").write_bytes(b"cached")
+        self.assertEqual(validate_installed(placed, skill)["digest"], bundle.digest(skill))
+        (placed / "references/planning.md").write_text("# edited\n")
+        (placed / "extra.py").write_text("")
+        (placed / "errors.py").unlink()
+        with self.assertRaises(PodError) as caught:
+            validate_installed(placed, skill)
+        self.assertEqual(caught.exception.code, "bundle_parity")
+        for part in ("differs references/planning.md", "unexpected extra.py", "missing errors.py"):
+            self.assertIn(part, str(caught.exception))
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(["--installed", str(placed)]), 1)
+        self.assertIn("Skill validation failed", output.getvalue())
 
-    def test_launcher_must_not_import_the_package_before_its_check(self):
-        with fixture() as root:
-            skill = copied(root)
-            launcher = skill / "scripts" / "pod.py"
-            launcher.write_text("import yaml\n" + launcher.read_text(encoding="utf-8"),
-                                encoding="utf-8")
-            with self.assertRaises(PodError) as caught:
-                validate_skill(skill)
-            self.assertEqual(caught.exception.code, "invalid_skill")
 
-    def test_inventory_extras_and_absences_are_both_reported(self):
-        with fixture() as root:
-            extra = copied(root / "extra")
-            (extra / "notes.md").write_text("# stray\n", encoding="utf-8")
-            with self.assertRaises(PodError) as with_extra:
-                validate_skill(extra)
-            self.assertIn("unexpected", str(with_extra.exception))
-            missing = copied(root / "missing")
-            (missing / "references" / "models.md").unlink()
-            with self.assertRaises(PodError) as without:
-                validate_skill(missing)
-            self.assertIn("missing", str(without.exception))
-
-    def test_installed_copy_parity_names_what_differs(self):
-        with fixture() as root:
-            skill = copied(root)
-            self.assertEqual(validate_installed(skill)["status"], "valid")
-            (skill / "references" / "planning.md").write_text("# edited\n", encoding="utf-8")
-            with self.assertRaises(PodError) as caught:
-                validate_installed(skill)
-            self.assertEqual(caught.exception.code, "bundle_parity")
-            self.assertIn("references/planning.md", str(caught.exception))
-
-    def test_interpreter_caches_are_not_a_difference(self):
-        with fixture() as root:
-            skill = copied(root)
-            cache = skill / "__pycache__"
-            cache.mkdir()
-            (cache / "cli.cpython-313.pyc").write_bytes(b"cached")
-            self.assertEqual(validate_installed(skill)["status"], "valid")
-            self.assertEqual(validate_skill(skill)["status"], "valid")
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,125 @@
+"""Reads from Git. Pod never copies what Git holds; it asks again when it needs the answer."""
+
+import hashlib
+from pathlib import Path
+import re
+import subprocess
+
+from .errors import PodError
+
+SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    try:
+        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PodError("git_unavailable", f"git {args[0]} did not complete: {exc}", fix="check the repository and retry") from exc
+    if check and done.returncode != 0:
+        raise PodError("git_failed", f"git {' '.join(args)}: {done.stderr.decode(errors='replace').strip()[:300]}",
+                       fix="resolve the Git error and retry")
+    return done
+
+
+def _text(cwd: Path, *args: str) -> str:
+    return git(cwd, *args).stdout.decode().strip()
+
+
+def root(cwd: Path) -> Path:
+    done = git(cwd, "rev-parse", "--show-toplevel", check=False)
+    if done.returncode != 0:
+        raise PodError("not_a_repository", f"{cwd} is not inside a Git worktree.", fix="run Pod from the objective's worktree")
+    return Path(done.stdout.decode().strip())
+
+
+def repository(cwd: Path) -> tuple[str, str | None]:
+    """A stable id for this repository's logs, and its GitHub `owner/name` when the origin names one."""
+    url = git(cwd, "config", "--get", "remote.origin.url", check=False).stdout.decode().strip()
+    match = re.search(r"github\.com[:/]+([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$", url)
+    if match:
+        slug = f"{match[1]}/{match[2]}"
+        return re.sub(r"[^a-z0-9._-]", "-", slug.lower().replace("/", "--")), slug
+    common = Path(_text(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    return "local-" + hashlib.sha256(str(common).encode()).hexdigest()[:16], None
+
+
+def commit(cwd: Path, ref: str = "HEAD") -> str:
+    done = git(cwd, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    value = done.stdout.decode().strip()
+    if done.returncode != 0 or not SHA.fullmatch(value):
+        raise PodError("commit_unknown", f"{ref} does not name a commit in this repository.",
+                       fix="fetch it or name an existing commit")
+    return value
+
+
+def tree(cwd: Path, ref: str = "HEAD") -> str:
+    return _text(cwd, "rev-parse", "--verify", f"{ref}^{{tree}}")
+
+
+def branch(cwd: Path) -> str | None:
+    value = git(cwd, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).stdout.decode().strip()
+    return value or None
+
+
+def dirty(cwd: Path) -> list[str]:
+    """Paths with uncommitted or untracked changes."""
+    out = git(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=normal").stdout.decode(errors="replace")
+    return [item[3:] for item in out.split("\0") if item]
+
+
+def fetch(cwd: Path, remote: str, name: str) -> str | None:
+    """Bring the remote branch up to date and return its commit; None when it cannot be read."""
+    if git(cwd, "fetch", "--quiet", "--no-tags", remote, name, check=False).returncode != 0:
+        return None
+    done = git(cwd, "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}", check=False)
+    return done.stdout.decode().strip() or None
+
+
+def merge_base(cwd: Path, one: str, other: str) -> str | None:
+    done = git(cwd, "merge-base", one, other, check=False)
+    return done.stdout.decode().strip() or None
+
+
+def is_ancestor(cwd: Path, older: str, newer: str) -> bool:
+    return git(cwd, "merge-base", "--is-ancestor", older, newer, check=False).returncode == 0
+
+
+def changed(cwd: Path, base: str, head: str) -> list[str]:
+    """Every path whose content differs between two commits; a rename is both of its paths."""
+    out = git(cwd, "diff", "--name-only", "--no-renames", "-z", base, head).stdout.decode(errors="surrogateescape")
+    return sorted(item for item in out.split("\0") if item)
+
+
+def blobs(cwd: Path, ref: str, paths_: list[str]) -> dict:
+    """Blob id per path at a commit; a path absent there maps to None."""
+    result = dict.fromkeys(paths_)
+    if not paths_:
+        return result
+    out = git(cwd, "ls-tree", "-r", "-z", ref).stdout.decode(errors="surrogateescape")
+    wanted = set(paths_)
+    for item in out.split("\0"):
+        if not item:
+            continue
+        meta, _, name = item.partition("\t")
+        if name in wanted:
+            result[name] = meta.split()[2]
+    return result
+
+
+def show(cwd: Path, ref: str, name: str) -> str | None:
+    """A file's text at a commit, or None when it is not there."""
+    done = git(cwd, "show", f"{ref}:{name}", check=False)
+    return done.stdout.decode(errors="replace") if done.returncode == 0 else None
+
+
+def under(name: str, prefixes: list[str]) -> bool:
+    """Whether a path is one of the declared paths or inside a declared directory."""
+    return any(name == prefix.rstrip("/") or name.startswith(prefix.rstrip("/") + "/") or prefix in (".", "")
+               for prefix in prefixes)
+
+
+def overlap(one: list[str], other: list[str]) -> bool:
+    """Whether two declared path sets can touch the same file. An empty set means the whole tree."""
+    if not one or not other:
+        return True
+    return any(under(a.rstrip("/"), [b]) or under(b.rstrip("/"), [a]) for a in one for b in other)

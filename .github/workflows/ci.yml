@@ -102,8 +102,25 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "0"
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
-      - name: Installer trials and install smoke, with an empty home
+      - name: Installer trials, with an empty home
         run: mkdir -p "$RUNNER_TEMP/home" && HOME="$RUNNER_TEMP/home" python -m unittest discover -s tests/install -t .
+      - name: Install this commit from an archive in a clean home, through the real skills CLI
+        run: |
+          git archive --format=tar.gz --prefix=pod-source/ HEAD > "$RUNNER_TEMP/pod-source.tar.gz"
+          SMOKE="$RUNNER_TEMP/install-home"
+          mkdir -p "$SMOKE/home" "$SMOKE/claude" "$SMOKE/codex"
+          clean() {
+            env -i PATH="$PATH" HOME="$SMOKE/home" XDG_DATA_HOME="$SMOKE/home/data" XDG_STATE_HOME="$SMOKE/home/state" \
+              XDG_CONFIG_HOME="$SMOKE/home/config" XDG_CACHE_HOME="$SMOKE/home/cache" CLAUDE_CONFIG_DIR="$SMOKE/claude" \
+              CODEX_HOME="$SMOKE/codex" SHELL=/bin/bash "$@"
+          }
+          clean POD_INSTALL_SOURCE="file://$RUNNER_TEMP/pod-source.tar.gz" sh install.sh
+          python -m pod.skill_validation --installed "$SMOKE/home/.agents/skills/pod"
+          clean "$SMOKE/home/.local/bin/pod" --version | diff - VERSION
+          clean "$SMOKE/home/.local/bin/pod" config --json
+          clean "$SMOKE/home/.local/bin/pod" doctor --json
+          clean "$SMOKE/home/.local/bin/pod" models --plain | head -n 5
+          clean "$SMOKE/home/.local/bin/pod" status --all --json
 
   linux:
     # The one required check: it is green only when every job above passed on this head.

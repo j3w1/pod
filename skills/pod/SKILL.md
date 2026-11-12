@@ -2,66 +2,113 @@
 name: pod
 description: Use when the user invokes Pod ($pod or /pod) to deliver an objective or GitHub issue through supervised Orca workers, or to continue, check or close a Pod objective.
 license: MIT
-compatibility: Linux, the latest stable CPython, installer-managed PyYAML and Orca.
+compatibility: Linux, the latest stable CPython and Orca.
 metadata:
   source: https://github.com/j3w1/pod
 ---
 
 # Pod
 
-## Roles
+You are the coordinator, in this conversation, with your current model. Pod is a small command
+that keeps what no other system keeps: the objective, its criteria, the facts that prove them
+and one delivery gate. Orca owns workers, Git owns content, GitHub owns checks and merges. Pod
+reads them when it needs them; never copy their state into Pod or into your messages.
 
-Read objective, criteria, instructions and assumptions.
-Keep this conversation, model, effort and settings as coordinator; pool edits never change them. Orca owns Runs, Tasks, Dispatches, workers and lifecycle. Pod helpers validate admission and record evidence; the project owns acceptance. Pod adds no lifecycle journal.
+## Decide how much process the task needs
 
-## Done when
+- **Direct work.** A change you can make and verify yourself, with no pull request gate to
+  pass, needs no objective. Do it and report what you observed.
+- **An objective.** Open one when the work is delivered through a pull request, uses workers,
+  or must survive this conversation. `pod open --issue N` or `pod open --text "…"`.
+- **Several objectives.** A programme is several objectives under one parent issue. Keep each
+  small enough to deliver on its own.
 
-Close only with every live obligation satisfied or validly withdrawn with reason, a final report, final-candidate gates and independent review required by work/project, and Governor-recorded delivery or a host-verified local append. Work replaced before delivery instead closes by withdrawing every remaining obligation in the closing write and reports withdrawn, not delivered; the Governor reference gives the procedure. Withdrawal is not passing verification. Separate implementation, local checks, independent review, hosted CI, live native proof, project acceptance and merge; name uncertainty, unresolved native references and next safe action.
+Workers are for work that is independent, bounded and worth a second session: a separable
+implementation, a review by someone who did not write the change, an investigation that would
+flood your context. Do the rest yourself.
 
-Closure is part of delivery. Once the source's PoDs are all ticked, delivery is merged and installed where in scope, and the final report is consumed, record closure in the same turn. Never end, be released or have the coordinator tab closed before that write; no owner decision is needed. Lost or stranded delivered objectives route to `pod sweep`.
+## The eight commands
 
-Worker tabs are done when no releasable finished tab remains except an owner-kept one; every other kept tab is closed under the worker-tab standing close authorization or named with Orca's close failure or its need for an owner decision; the final report names every owner-kept tab, including one Orca has since marked user-owned.
+| Command | What it does | What you state |
+| --- | --- | --- |
+| `pod open` | Reads the issue or sentence, returns criteria | The source; an existing `--branch`, `--pr`, `--run` when continuing earlier work |
+| `pod dispatch` | Starts one worker through Orca | `--role`, `--title`, the task text, `--paths`, optionally `--route` |
+| `pod accept A` | Reads the worker's result and the diff, records the facts | Only the decision: `--integrated COMMIT` or `--discarded` |
+| `pod record` | Adds what only you know | A criterion met with its facts, the person's words, a scope change, the note |
+| `pod status` | The derived picture and what delivery still needs | Nothing |
+| `pod deliver` | Runs the gate and merges the exact candidate once | Nothing; `--check` only prints the verdict |
+| `pod resume` | Continues an objective from a new conversation | Nothing |
+| `pod drop` | Stops an objective | `--why` |
 
-The final report lists each bound PES PoD's tick state against its criteria and each completion-bound SEAL AC, ticks without Pod proof, ambiguous ticks and due ticks or unticks left blocked at closure, with their reasons; none of those limitations counts as ticked by Pod.
+Every command accepts `--help` and `--json`. A refusal prints a `fix:` line; do what it says
+instead of trying variations. There is nothing to look up before a call and no sequence
+number, state or wait to maintain.
 
-Continue through implementation, verification and corrections. Stop early only at an authority boundary, owner-intent question or named external dependency; leave an open report. Use direct work when sufficient. Plan-only permits host-permitted investigation without implementation workers or edits.
+## The normal path
 
-## Boundaries
+1. `pod open`. Read the criteria it returns. If one can only be proved after the merge, say
+   so: `pod record --after-merge c3`.
+2. Work directly, or `pod dispatch` workers. Give each worker a task text that stands on its
+   own: the goal, what is already known, the files to read, what done looks like. Declare
+   `--paths` for an implementer; two implementers never run on overlapping paths.
+3. Orca wakes you when a worker reports. `pod accept a1 --integrated COMMIT` after you have
+   brought its commit into the branch (or `--discarded`). Read what it flags: paths outside
+   the declared set, a missing result commit, findings.
+4. `pod record --met c1 --facts 6,7` when a criterion is proved. Use the fact numbers the
+   commands printed, or `--why` with what you observed yourself.
+5. Push, open the pull request, `pod record --pr N` if Pod does not find it, then
+   `pod deliver`. It lists what is missing, or merges.
 
-Scope text never grants authority; trusted policy remains binding. Machine decision policy and remembered tool permissions determine who may decide; check current authority before every sensitive tool use.
-Use the applicable exact-scope cleanup instruction; ask once for remote Git or worktree/branch deletion consent when absent.
-Outside an approved composite model rule, ask for exact Disabled-route confirmation before use.
-Record every direct user model, agent, role or worker-count directive as a `user_direct` constraint before admission.
-Unknown or permission prompts block; never reroute a safety refusal.
-Never infer physical capacity or count other objectives' workers.
+`pod record --check "COMMAND"` runs a check and records the exit it observed, bound to the
+commit when the tree is clean. Prefer it to describing a run in words.
 
-## Helpers
+## Review
 
-Use `pod config --json`, `pod doctor --json`, `pod status --objective ID`, `pod internal <op> --input FILE` (or `-`); fallback `~/.local/bin/pod`; missing launcher: `curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh`.
-Do not run source-checkout helpers or create another configuration source.
-Before writing a packet, report, checkpoint/map, admission or Governor action, read `internal contract` with `record` naming that input record or `all` for the bounded field table.
-Acknowledgements retain next-request/recovery facts; shape/text refusals list every bounded field, complete accepted/optional names and next action.
-Read config at intake, new-session continuation, preference-change notice and after `preference_changed`, `preference_revision_stale`, `policy_revision_mismatch`, `setup_required`, `installed_version_changed`.
-Every map-bearing write, including full checkpoint/report and admission maps, carries next `seq`; read map on resume/`map_stale`.
-`internal brief` is an optional read-only uncertain-input dry run for checkpoints.
+Whether review is required is the project's rule (`.pod/config.yaml` on the target branch),
+not yours and not Pod's. When it is required, every path the candidate changes needs a passing
+review by a worker that changed nothing.
 
-## Read when needed
+- Dispatch a reviewer with `--role review` on a committed candidate. Ask for every finding in
+  one pass; reviewers report, the writer corrects.
+- A review keeps covering a file while that file's content stays the same. After a correction,
+  review only the changed paths (`--paths`); after merging the target branch, only files whose
+  content changed in the candidate. Name `--context` paths when a review depends on a file it
+  does not cover.
+- A required finding stays open until a later review of its path passes, or the person waives
+  it: `pod record --waive a2.1 --why "…" --words "what they said"`.
 
-Read a reference when the current action, or a necessary prerequisite of it, needs it. Never preload the reference directory, and never read a reference merely because it is linked. Read an authoring template only to author or revise that kind of document. Reload guidance when it is lost, changed or insufficient. Trivial work reads none.
+## Evidence
 
-- Issue intake, a change to a bound issue's body or amendments, or reconciliation of issue-derived criteria: [intake](references/issue-intake.md).
-- Ticking, a due tick or untick, confirming its readback, or closing an issue-bound objective: [PoD ticks](references/pod-ticks.md).
-- SEAL link or SEAL delivery planning: [delivery planning](references/seal-delivery.md).
-- SEAL authoring/revision: [template](references/seal-template.md).
-- PES authoring/revision: [template](references/pes-template.md).
-- EEL authoring/revision: [template](references/eel-template.md).
-- Map/worktree/packets, row renewal, route settlement or delegation: [planning](references/planning.md).
-- First admission, same-Task retry or supervision: [Orca](references/orca-boundary.md).
-- Starting, claiming, continuing or resuming an objective, admitting a worker, accepting a worker report, retaining or releasing a worker, or closing: [worker tabs](references/worker-tabs.md).
-- First-use policy setup or change, a sensitive tool use or permission answer, or deciding who may authorize an effect: [decisions](references/decisions.md).
-- Any route choice or requested model arrangement: [models](references/models.md).
-- Failure/resume/reload, an over-limit record, a lost coordinator or stranded delivery: [recovery](references/recovery.md).
-- Proof, a review packet or review result, REUSE, or showing another tool that Pod accepted a report: [verification](references/verification.md).
-- Delivery/Git/CI/deployment, or yolo mode on or off: [Governor](references/governor.md).
-- Before cleanup, a sweep or worktree/branch deletion; after worker release or when deciding immediate worktree reuse: [cleanup](references/cleanup.md).
-- Before parking with a live worker, an unconsumed report or an awaited reply, or when a wait returns or you resume after compaction or a restart: [wake](references/wake.md).
+- Record only what was observed. If a check was not run, or a result could not be read, say
+  so; it stays unknown. Never restate a worker's claim as your own observation.
+- Worker success, local checks, hosted checks, independent review, project acceptance and the
+  merge are separate facts. Report them separately.
+- The person's decisions are theirs. For a merge authorization, a waiver or a scope change,
+  ask, then record their words with `--words`. Only when their preference file says
+  `merge_authorization: coordinator` may you authorize a merge yourself.
+
+## Continuing and stopping
+
+- Before your context runs short, `pod record --note "…"` with what a fresh conversation needs:
+  the plan, what is waiting, what to do next. Keep it current; it replaces the previous note.
+- A new conversation runs `pod resume` in the objective's worktree. It takes the Orca Run over
+  and prints the status. No proof that the earlier conversation ended is needed.
+- After a lost reply from `pod dispatch`, run `pod dispatch --retry aN`. It reads Orca and
+  never starts a second worker. After a lost reply from `pod deliver`, run it again; it reads
+  GitHub first and never merges twice.
+- An objective closes by itself when its delivery is merged and no criterion is open. Nothing
+  closes it by hand. `pod drop --why "…"` stops one that will not be delivered.
+
+## Routes and models
+
+Workers run only on routes the person enabled; the Pin, when set, is the only route used.
+`pod dispatch` uses the Pin, else the Preferred route, else asks you to name one of the enabled
+routes it lists. Choose by the task: its difficulty, risk and size. `pod models` is the
+person's workspace for comparing and enabling routes; do not change their preferences.
+
+## Document types
+
+Pod delivers an ordinary issue or a PES; a Proof of Done checklist, when present, becomes the
+criteria. It refuses an issue titled `EEL:` or `SEAL:`. The authoring templates are in
+`references/pes-template.md`, `references/seal-template.md` and `references/eel-template.md`;
+read one only when asked to write such a document.

@@ -1,121 +1,41 @@
-"""One-shot Pod installer and explicit updater. Stdlib only, including before PyYAML exists."""
+"""One-shot Pod installer and explicit updater. Standard library only.
+
+It never imports the Pod package, so it runs from a staged source tree before anything is
+placed, and it never reads or writes the state directory.
+"""
 
 from __future__ import annotations
 
-import ast
 from datetime import datetime, timezone
 import fcntl
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
+import unicodedata
 import urllib.request
 
-PIN = "PyYAML==6.0.3"
-# PyYAML installs from a prebuilt wheel. Only when pip finds no compatible wheel for the running
-# interpreter, and only for this exact pin, it builds PyPI's source archive pyyaml-6.0.3.tar.gz,
-# accepted solely by this hash; pip's build tools then come from PyPI.
-PIN_SOURCE_SHA256 = {"PyYAML==6.0.3": "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f"}
 SKILLS_CLI = "skills@1.7.0"
 SOURCE = "https://codeload.github.com/j3w1/pod/tar.gz/refs/heads/main"
 REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
 LAUNCHER_MARKER = "# pod-launcher/v1"
 PATH_START = "# >>> pod path >>>"
 PATH_END = "# <<< pod path <<<"
-# The objective-state contracts this bundle reads. 0.6.0 is a hard cutover: a record on
-# another schema is listed and blocked, never converted. The ledger imports these, so the
-# installer's read-only notice and doctor/status agree without a second list.
-STATE_SCHEMAS = {"context": "pod-context/v4", "checkpoint": "pod-checkpoint/v3",
-                 "admission": "pod-admission/v4"}
-STORAGE_SCHEMA = "pod-history-record/v1"
-MAX_STATE_SCAN = 256
-
-
-def superseded_schemas(value: object) -> list[str]:
-    """The superseded schema names one objective record carries; empty when current."""
-    if not isinstance(value, dict):
-        return ["unknown"]
-    if value.get("schema") == STORAGE_SCHEMA and value.get("kind") == "context":
-        # Physical format/family notice only, exactly as for typed history below.
-        # The verified reader still checks every dependency its decision needs.
-        return []
-    found = set()
-    # Schema-family notice only: typed history placeholders carry no admission schema.
-    # Full validity still requires the verified context reader, never this installer scan.
-    history = value.get("history")
-    history_refs = isinstance(history, dict) and history.get("schema") == "pod-history-refs/v1"
-    if value.get("schema") != STATE_SCHEMAS["context"]:
-        found.add(str(value.get("schema"))[:64])
-    checkpoint = value.get("checkpoint")
-    if isinstance(checkpoint, dict) and checkpoint.get("schema") != STATE_SCHEMAS["checkpoint"]:
-        found.add(str(checkpoint.get("schema"))[:64])
-    admissions = value.get("admissions")
-    if isinstance(admissions, dict):
-        for row in list(admissions.values())[:MAX_STATE_SCAN]:
-            if history_refs and isinstance(row, dict) and set(row) == {"$pod_history"}:
-                continue
-            if isinstance(row, dict) and row.get("schema") != STATE_SCHEMAS["admission"]:
-                found.add(str(row.get("schema"))[:64])
-    return sorted(found)
-
-
-def superseded_objectives(state_root: Path) -> list[dict]:
-    """Read-only list of objective records on superseded schemas. It changes nothing."""
-    rows: list[dict] = []
-    try:
-        if not state_root.is_dir() or state_root.is_symlink():
-            return rows
-        candidates = sorted(state_root.glob("*/context.json"))[:MAX_STATE_SCAN]
-    except OSError:
-        return rows
-    for path in candidates:
-        try:
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
-                rows.append({"record": path.parent.name, "objective": None, "schemas": ["unreadable"]})
-                continue
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, ValueError):
-            rows.append({"record": path.parent.name, "objective": None, "schemas": ["unreadable"]})
-            continue
-        schemas = superseded_schemas(value)
-        if schemas:
-            checkpoint = value.get("checkpoint") if isinstance(value, dict) else None
-            objective = checkpoint.get("objective") if isinstance(checkpoint, dict) else None
-            rows.append({"record": path.parent.name,
-                         "objective": objective if isinstance(objective, str) else None,
-                         "schemas": schemas})
-    return rows
-
-
-def _state_root(paths: dict[str, Path]) -> Path:
-    override = os.environ.get("POD_STATE_HOME")
-    if override and Path(override).is_absolute():
-        return Path(override)
-    return paths["state"].resolve(strict=False) / "pod"
-
-
-def _cutover_notice(paths: dict[str, Path]) -> None:
-    """Name objectives this version will not continue; read-only, nothing is converted."""
-    rows = superseded_objectives(_state_root(paths))
-    if not rows:
-        return
-    prefix = "  " if sys.stdout.isatty() else "pod-install: "
-    lines = [f"Notice: {len(rows)} objective record(s) use superseded state schemas and are blocked; "
-             "nothing was converted. Settle their workers through Orca and start a new objective."]
-    lines += [f"  {row['objective'] or row['record']}: {', '.join(row['schemas'])}" for row in rows[:16]]
-    for line in lines:
-        print(prefix + _clean(line), flush=True)
-
-
+# The bundle is derived from the skill directory: these kinds of file, plus VERSION.
+BUNDLE_SUFFIXES = (".py", ".md", ".json", ".yaml")
+REGISTRY = "models/registry.json"
+NEVER_DEFAULT = ("ultra",)
+ROUTE = re.compile(r"[a-z][a-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]*")
 BANNER = ("         /\\                       /\\           /\\",
           "  ______/  \\___          ______/  \\_      __/ \\_",
           "_/#### (o)    \\__      _/### (o)    \\_    /# (o) \\",
@@ -124,35 +44,20 @@ BANNER = ("         /\\                       /\\           /\\",
           "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
 
 
-def _term():
-    """Load the shared terminal helpers without importing Pod or PyYAML."""
-    try:
-        from . import term
-        return term
-    except ImportError:
-        name = "pod_installer_term"
-        module = sys.modules.get(name)
-        if module is None:
-            spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("term.py"))
-            if spec is None or spec.loader is None:
-                raise InstallError(1, "Terminal helpers are unavailable")
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[name] = module
-            spec.loader.exec_module(module)
-        return module
-
-
-def _clean(value: object) -> str:
-    try:
-        return _term().clean(value)
-    except (OSError, ImportError, InstallError):
-        return "Installer terminal helpers are unavailable"
-
-
 class InstallError(Exception):
     def __init__(self, code: int, message: str):
         super().__init__(message)
         self.code = code
+
+
+# Output: plain lines in pipes and logs, a small staged layout on a terminal.
+
+def _clean(value: object) -> str:
+    """Strip control, format and surrogate characters before anything reaches a terminal."""
+    text = str(value)
+    if text.isascii() and text.isprintable():
+        return text
+    return "".join(char for char in text if unicodedata.category(char) not in ("Cc", "Cf", "Cs"))
 
 
 def _say(message: str) -> None:
@@ -162,8 +67,7 @@ def _say(message: str) -> None:
 
 def _utf8() -> bool:
     setting = next((os.environ[key] for key in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(key)), "C")
-    value = setting.upper()
-    return os.environ.get("TERM") != "dumb" and ("UTF-8" in value or "UTF8" in value)
+    return os.environ.get("TERM") != "dumb" and ("UTF-8" in setting.upper() or "UTF8" in setting.upper())
 
 
 def _color() -> bool:
@@ -175,45 +79,40 @@ def _paint(value: str, code: str) -> str:
 
 
 def _marker(state: str) -> str:
-    if _utf8():
-        return {"ok": "✓", "warn": "!", "fail": "✗"}[state]
-    return {"ok": "[ok]", "warn": "[!]", "fail": "[x]"}[state]
+    return ({"ok": "✓", "warn": "!", "fail": "✗"} if _utf8() else {"ok": "[ok]", "warn": "[!]", "fail": "[x]"})[state]
 
 
-def _stage(label: str, *, state: str = "ok", detail: str | None = None,
-           plain: str | None = None) -> None:
+def _columns() -> int:
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def _stage(label: str, *, state: str = "ok", detail: str | None = None, plain: str | None = None) -> None:
     if not sys.stdout.isatty():
         if plain is not None:
             _say(plain)
         return
     marker = _paint(_marker(state), {"ok": "38;5;37", "warn": "38;5;214", "fail": "38;5;160"}[state])
-    suffix = f"  {_clean(detail)}" if detail else ""
-    print(f"  {marker}  {_clean(label)}{suffix}", flush=True)
+    print(f"  {marker}  {_clean(label)}" + (f"  {_clean(detail)}" if detail else ""), flush=True)
 
 
 def _banner(version: str) -> None:
     if not sys.stdout.isatty():
         return
-    import re as _re
     for index, line in enumerate(BANNER):
         if not _color():
             print(line, flush=True)
-            continue
-        if index == len(BANNER) - 1:
+        elif index == len(BANNER) - 1:
             print(_paint(line, "38;5;30"), flush=True)
-            continue
-        parts = _re.split(r"(\(o\)|#+)", line)
-        print("".join(_paint(part, "38;5;255" if part == "(o)" else
-                             "38;5;23" if part.startswith("#") else "38;5;37") for part in parts if part), flush=True)
+        else:
+            print("".join(_paint(part, "38;5;255" if part == "(o)" else "38;5;23" if part.startswith("#") else "38;5;37")
+                          for part in re.split(r"(\(o\)|#+)", line) if part), flush=True)
     print(_paint(f"             Pod {version} / one-shot install", "1;38;5;153"), flush=True)
 
 
 def _section(title: str, *, stream=None) -> None:
-    stream = sys.stdout if stream is None else stream
-    width = min(60, max(24, shutil.get_terminal_size((80, 24)).columns - 2))
     heading = "  " + title + " "
-    rule = "─" if _utf8() else "-"
-    print(_paint(heading + rule * max(0, width - len(heading)), "38;5;30"), file=stream, flush=True)
+    rule = ("─" if _utf8() else "-") * max(0, min(60, max(24, _columns() - 2)) - len(heading))
+    print(_paint(heading + rule, "38;5;30"), file=sys.stdout if stream is None else stream, flush=True)
 
 
 def _display_path(path: Path, home: Path) -> str:
@@ -222,8 +121,12 @@ def _display_path(path: Path, home: Path) -> str:
         value = "~" if not relative.parts else "~/" + relative.as_posix()
     except ValueError:
         value = str(path)
-    width = min(52, max(14, shutil.get_terminal_size((80, 24)).columns - 24))
-    return _term().elide_middle(_clean(value), width, ascii_only=not _utf8())
+    value, width = _clean(value), min(52, max(14, _columns() - 24))
+    if len(value) <= width:
+        return value
+    mark = "…" if _utf8() else "..."
+    room = width - len(mark)
+    return value[:(room + 1) // 2] + mark + value[len(value) - room // 2:]
 
 
 def _field(label: str, value: str) -> None:
@@ -231,32 +134,47 @@ def _field(label: str, value: str) -> None:
 
 
 def _path_label(path_status: str, notes: list[str]) -> str:
-    if "manual PATH step" in path_status or any(
-           "shadows" in note or "symlink" in note or "manually" in note or "malformed" in note
-           or "not regular" in note or "not UTF-8" in note
-           for note in notes):
+    if "manual PATH step" in path_status:
         return "manual step"
     return "ready" if "already on PATH" in path_status else "open a new shell"
 
 
-def _preference_label(status: str) -> str:
-    return {"invalid": "needs attention", "setup_required": "kept; route setup required"}.get(status, status)
+def _attention(prefs: tuple[str, str | None]) -> str | None:
+    if prefs[0] == "invalid":
+        return f"{prefs[1]}; run pod config edit"
+    return prefs[1]
 
 
-def _tty_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path_status: str,
-                 notes: list[str], duplicates: list[str], preserved: Path | None) -> None:
-    home = paths["home"]
-    path_label = _path_label(path_status, notes)
-    print(file=sys.stdout)
+def _summary(paths: dict[str, Path], prefs: tuple[str, str | None], path_status: str, notes: list[str],
+             duplicates: list[str], preserved: Path | None) -> None:
+    home, config = paths["home"], paths["config"] / "config.yaml"
+    agents = [name + (" found (sign-in not checked)" if shutil.which(name) else " not found") for name in ("codex", "claude")]
+    orca = "Orca found (connection not checked)" if shutil.which("orca") else "Orca not found"
+    if not sys.stdout.isatty():
+        _say(f"Installed Codex skill: {paths['canonical']}")
+        _say(f"Installed Claude Code skill: {paths['claude'] / 'skills/pod'}")
+        _say(f"Command: {paths['launcher']} ({path_status})")
+        _say(f"Preferences: {config} ({prefs[0]})")
+        if _attention(prefs):
+            _say(f"Preferences need attention: {_attention(prefs)}")
+        if preserved:
+            _say(f"Preserved changed skill at {preserved}")
+        for duplicate in duplicates:
+            _say(f"Duplicate skill at {duplicate}; inspect and remove it manually if unused")
+        _say("In session: $pod <objective>  /  /pod <issue-url>")
+        for line in (orca, *agents, "Existing agent sessions and workers are unchanged"):
+            _say(line)
+        return
+    label = _path_label(path_status, notes)
+    print()
     _section("Installed")
     _field("Codex skill", _display_path(paths["canonical"], home))
     _field("Claude Code skill", _display_path(paths["claude"] / "skills/pod", home))
     _field("pod command", _display_path(paths["launcher"], home))
-    state = _preference_label(prefs[0])
-    _field("Preferences", f"{state}  {_display_path(paths['config'] / 'config.yaml', home)}")
-    _field("PATH", path_label)
-    if prefs[1]:
-        _field("Attention", prefs[1] if prefs[0] == "setup_required" else f"{prefs[1]}; run pod config edit")
+    _field("Preferences", f"{'needs attention' if prefs[0] == 'invalid' else prefs[0]}  {_display_path(config, home)}")
+    _field("PATH", label)
+    if _attention(prefs):
+        _field("Attention", _attention(prefs))
     if preserved:
         _field("Preserved", _display_path(preserved, home))
     for duplicate in duplicates:
@@ -264,27 +182,18 @@ def _tty_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path_sta
     for note in notes:
         _field("Note", note.replace(str(home), "~"))
     _section("Environment")
-    print("  " + ("Orca found (connection not checked)" if shutil.which("orca") else
-                  "Orca not found (connection not checked)"), flush=True)
-    if shutil.which("codex") and shutil.which("claude"):
-        print("  codex/claude found (sign-in not checked)", flush=True)
-    else:
-        for agent in ("codex", "claude"):
-            print(f"  {agent} " + ("found" if shutil.which(agent) else "not found") +
-                  " (sign-in not checked)", flush=True)
-    print("  Existing agent sessions and workers unchanged", flush=True)
+    for line in (orca, *agents, "Existing agent sessions and workers unchanged"):
+        print("  " + line, flush=True)
     _section("Next")
-    if path_label == "open a new shell":
+    if label == "open a new shell":
         print("  Open a new shell for the pod command.", flush=True)
-    elif path_label == "manual step":
+    elif label == "manual step":
         print("  Resolve the PATH note above before using the pod command.", flush=True)
     if prefs[0] == "invalid":
         print("  Correct preferences with pod config edit before delegation.", flush=True)
-    elif prefs[0] == "setup_required":
-        print("  Open pod in a terminal and confirm the route setup before delegation.", flush=True)
     print("  Codex       $pod <objective>", flush=True)
     print("  Claude Code /pod <issue-url>", flush=True)
-    print("  Optional    pod  (review models)", flush=True)
+    print("  Optional    pod models  (review routes)", flush=True)
 
 
 def _failure(message: str, code: int) -> None:
@@ -295,34 +204,24 @@ def _failure(message: str, code: int) -> None:
     _section("Install stopped", stream=sys.stderr)
     mark = _paint(_marker("fail"), "38;5;160")
     display = _clean(message).replace(str(Path.home()), "~")
-    width = max(20, shutil.get_terminal_size((80, 24)).columns - 7)
-    for index, row in enumerate(_term().wrap(display, width)):
+    for index, row in enumerate(textwrap.wrap(display, max(20, _columns() - 7)) or [""]):
         print(f"  {mark if index == 0 else ' '}  {row}", file=sys.stderr, flush=True)
-    if code == 3:
-        state = "Skill copy may be incomplete; the receipt remains installing."
-    elif code == 130:
-        state = "Interrupted; no completed installation is claimed."
-    elif code == 2:
-        state = "No installation action was accepted."
-    else:
-        state = "The previous skill and launcher were not promoted."
+    state = {3: "Skill copy may be incomplete; the receipt remains installing.",
+             130: "Interrupted; no completed installation is claimed.",
+             2: "No installation action was accepted."}.get(code, "The previous skill and launcher were not promoted.")
     print("  State  " + state, file=sys.stderr, flush=True)
     print("  Existing agent sessions and workers unchanged.", file=sys.stderr, flush=True)
     _section("Next", stream=sys.stderr)
-    if "unrelated pod command" in message:
-        print("  Inspect the unrelated pod command, then rerun:", file=sys.stderr, flush=True)
-    elif "foreign" in message or "redirected" in message:
-        print("  Inspect the reported path, then rerun:", file=sys.stderr, flush=True)
-    else:
-        print("  Resolve the reported cause, then rerun:", file=sys.stderr, flush=True)
-    try:
-        action_rows = _term().wrap(REINSTALL, max(20, shutil.get_terminal_size((80, 24)).columns - 4))
-    except (OSError, ImportError, InstallError):
-        action_rows = [REINSTALL]
-    for row in action_rows:
+    cause = ("Inspect the unrelated pod command" if "unrelated pod command" in message else
+             "Inspect the reported path" if "foreign" in message or "redirected" in message else
+             "Resolve the reported cause")
+    print(f"  {cause}, then rerun:", file=sys.stderr, flush=True)
+    for row in textwrap.wrap(REINSTALL, max(20, _columns() - 4), break_long_words=False):
         print("  " + row, file=sys.stderr, flush=True)
     print(f"  Exit code {code}", file=sys.stderr, flush=True)
 
+
+# Locations, the derived bundle and the receipt.
 
 def _absolute_env(name: str, fallback: Path) -> Path:
     raw = os.environ.get(name, str(fallback))
@@ -340,44 +239,35 @@ def _paths() -> dict[str, Path]:
         raise InstallError(1, "HOME must be absolute")
     data = _absolute_env("XDG_DATA_HOME", home / ".local/share") / "pod"
     config = _absolute_env("POD_CONFIG_HOME", _absolute_env("XDG_CONFIG_HOME", home / ".config") / "pod")
-    state = _absolute_env("XDG_STATE_HOME", home / ".local/state")
     claude = _absolute_env("CLAUDE_CONFIG_DIR", home / ".claude")
     codex = _absolute_env("CODEX_HOME", home / ".agents")
-    if "ZDOTDIR" in os.environ:
-        zsh_home = _absolute_env("ZDOTDIR", home)
-        if zsh_home.is_symlink():
-            raise InstallError(1, "Refuse redirected ZDOTDIR")
-    for path in (data, config, state, claude, codex):
+    if "ZDOTDIR" in os.environ and _absolute_env("ZDOTDIR", home).is_symlink():
+        raise InstallError(1, "Refuse redirected ZDOTDIR")
+    for path in (data, config, claude, codex):
         if path.is_symlink():
             raise InstallError(1, f"Refuse redirected directory: {path}")
-    return {"home": home, "data": data, "config": config, "state": state,
-            "claude": claude, "codex": codex, "canonical": home / ".agents/skills/pod",
-            "launcher": home / ".local/bin/pod"}
+    return {"home": home, "data": data, "config": config, "claude": claude, "codex": codex,
+            "canonical": home / ".agents/skills/pod", "launcher": home / ".local/bin/pod"}
 
 
-def _inventory(root: Path) -> tuple[str, ...]:
-    source = (root / "bundle.py").read_text(encoding="utf-8")
-    if len(source) > 65536:
-        raise InstallError(1, "Bundle inventory is oversized")
-    entries = {}
-    for node in ast.parse(source).body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            if node.targets[0].id in ("BUNDLE_TEXT", "BUNDLE_MODULES"):
-                entries[node.targets[0].id] = ast.literal_eval(node.value)
-    if set(entries) != {"BUNDLE_TEXT", "BUNDLE_MODULES"}:
-        raise InstallError(1, "Bundle inventory is incomplete")
-    names = tuple(entries["BUNDLE_TEXT"]) + tuple(entries["BUNDLE_MODULES"])
-    if len(names) != len(set(names)) or any(not isinstance(name, str) or name.startswith("/") or ".." in name.split("/") for name in names):
-        raise InstallError(1, "Bundle inventory is unsafe")
-    return names
+def bundle_files(root: Path) -> list[str]:
+    """Relative names of the bundle's files, read from the directory itself."""
+    names = []
+    for directory, subdirs, files in os.walk(root):
+        subdirs[:] = [name for name in subdirs if name != "__pycache__"]
+        names += [(Path(directory) / name).relative_to(root).as_posix() for name in files
+                  if name == "VERSION" or name.endswith(BUNDLE_SUFFIXES)]
+    return sorted(names)
 
 
 def bundle_digest(root: Path) -> str:
-    """Digest the authored bundle inventory, independent of symlink copy shape."""
+    """One digest over every bundle file's name and bytes, the same for a linked or copied VERSION."""
+    names = bundle_files(root)
+    if "SKILL.md" not in names or "VERSION" not in names:
+        raise InstallError(1, "Not a Pod bundle")
     digest = hashlib.sha256()
-    for name in sorted(_inventory(root)):
-        path = root.joinpath(*name.split("/"))
-        data = path.read_bytes()
+    for name in names:
+        data = (root / name).read_bytes()
         digest.update(name.encode() + b"\0" + len(data).to_bytes(8, "big") + data)
     return digest.hexdigest()
 
@@ -385,7 +275,7 @@ def bundle_digest(root: Path) -> str:
 def optional_digest(root: Path) -> str | None:
     try:
         return bundle_digest(root) if root.is_dir() else None
-    except (OSError, UnicodeError, ValueError, SyntaxError, InstallError):
+    except (OSError, InstallError):
         return None
 
 
@@ -417,12 +307,11 @@ def read_receipt(path: Path) -> dict | None:
     target = value.get("target") if isinstance(value, dict) else None
     previous = value.get("previous") if isinstance(value, dict) else None
     if (not isinstance(value, dict) or value.get("schema") != "pod-install/v1"
-            or value.get("status") not in ("installing", "installed")
-            or not isinstance(target, dict)
+            or value.get("status") not in ("installing", "installed") or not isinstance(target, dict)
             or not re.fullmatch(r"\d+\.\d+\.\d+", str(target.get("version", "")))
             or not re.fullmatch(r"[0-9a-f]{64}", str(target.get("digest", "")))
             or (previous is not None and (not isinstance(previous, dict)
-                                           or not re.fullmatch(r"[0-9a-f]{64}", str(previous.get("digest", "")))))):
+                                          or not re.fullmatch(r"[0-9a-f]{64}", str(previous.get("digest", "")))))):
         raise InstallError(1, "Installation receipt has an unsupported schema")
     return value
 
@@ -453,49 +342,44 @@ def _write_receipt(path: Path, value: dict) -> None:
     _atomic(path, (json.dumps(value, sort_keys=True, indent=2) + "\n").encode())
 
 
-def _launcher_template(venv_python: Path, canonical: Path) -> bytes:
-    import shlex
-    script = canonical / "scripts/pod.py"
+# The launcher runs the placed bundle with the interpreter this installer verified.
+
+def _python() -> Path:
+    return Path(getattr(sys, "_base_executable", None) or sys.executable)
+
+
+def _launcher_template(python: Path, canonical: Path) -> bytes:
+    script = shlex.quote(str(canonical / "scripts/pod.py"))
     return ("#!/bin/sh\n" + LAUNCHER_MARKER + "\n"
-            + "if [ ! -x " + shlex.quote(str(venv_python)) + " ] || [ ! -f "
-            + shlex.quote(str(script)) + " ]; then\n"
-            + "  echo 'pod: installation incomplete; rerun " + REINSTALL + "' >&2\n"
-            + "  exit 2\nfi\n"
-            + "exec " + shlex.quote(str(venv_python)) + " -I "
-            + shlex.quote(str(script)) + " \"$@\"\n").encode()
+            + f"if [ ! -x {shlex.quote(str(python))} ] || [ ! -f {script} ]; then\n"
+            + "  echo 'pod: installation incomplete; rerun " + REINSTALL + "' >&2\n  exit 2\nfi\n"
+            + f"exec {shlex.quote(str(python))} -I {script} \"$@\"\n").encode()
 
 
-def launcher_info(path: Path, template: bytes) -> dict:
+def launcher_owned(path: Path, digests: set) -> dict:
+    """Whether the launcher is the file Pod wrote: its bytes match a digest Pod recorded or would write."""
     if path.is_symlink():
         return {"owned": False, "reason": "symlink"}
     if not path.exists():
         return {"owned": False, "reason": "missing"}
     if not path.is_file() or path.stat().st_size > 16 * 1024:
         return {"owned": False, "reason": "foreign"}
-    actual = path.read_bytes()
-    return {"owned": actual == template,
-            "reason": "owned" if actual == template else "foreign"}
+    owned = hashlib.sha256(path.read_bytes()).hexdigest() in digests
+    return {"owned": owned, "reason": "owned" if owned else "foreign"}
 
 
 def _reconcilable_copy(canonical: Path, receipt: dict | None, source_bundle: Path) -> bool:
     """An interrupted skills-CLI copy can be replaced only for its exact target."""
-    if (not receipt or receipt.get("status") != "installing" or not canonical.is_dir()
-            or canonical.is_symlink() or receipt["target"]["version"] != _version(source_bundle)
+    if (not receipt or receipt.get("status") != "installing" or not canonical.is_dir() or canonical.is_symlink()
+            or receipt["target"]["version"] != _version(source_bundle)
             or receipt["target"]["digest"] != bundle_digest(source_bundle)):
         return False
-    names = set(_inventory(source_bundle))
+    names = set(bundle_files(source_bundle))
     directories = {str(parent) for name in names for parent in Path(name).parents if str(parent) != "."}
     for child in canonical.rglob("*"):
         relative = child.relative_to(canonical).as_posix()
-        if child.is_symlink():
-            return False
-        if child.is_dir():
-            if relative not in directories:
-                return False
-        elif child.is_file():
-            if relative not in names:
-                return False
-        else:
+        if child.is_symlink() or not (child.is_dir() and relative in directories
+                                      or child.is_file() and relative in names):
             return False
     return True
 
@@ -504,21 +388,18 @@ def _preflight(stage: Path, paths: dict[str, Path], template: bytes) -> None:
     if platform.system() != "Linux" or os.geteuid() == 0:
         raise InstallError(1, "Run as a non-root user on Linux")
     if sys.version_info.releaselevel != "final":
-        raise InstallError(1, "A stable CPython (not a prerelease) is required; install the latest stable one, then rerun the installer")
+        raise InstallError(1, "A stable CPython (not a prerelease) is required; install the latest stable one, "
+                              "then rerun the installer")
     try:
-        import ensurepip  # noqa: F401
         import curses  # noqa: F401
     except ImportError as exc:
-        raise InstallError(1, "Python venv/ensurepip/curses is required (on Debian, install the matching python3 venv package)") from exc
+        raise InstallError(1, "Python curses is required for pod models") from exc
     if shutil.which("npx") is None or shutil.which("node") is None:
         raise InstallError(1, "Node and npx are required")
     source_bundle = stage / "skills/pod"
     if not source_bundle.is_dir() or not (source_bundle / "SKILL.md").is_file():
         raise InstallError(1, "Source has no Pod skill")
     _version(source_bundle)
-    for name in _inventory(source_bundle):
-        if not source_bundle.joinpath(*name.split("/")).is_file():
-            raise InstallError(1, f"Source bundle file {name} is missing")
     receipt = read_receipt(paths["data"] / "install.json")
     canonical = paths["canonical"]
     if canonical.is_symlink() or (canonical.exists() and not canonical.is_dir()):
@@ -533,201 +414,94 @@ def _preflight(stage: Path, paths: dict[str, Path], template: bytes) -> None:
     if claude_link.exists() or claude_link.is_symlink():
         if not claude_link.is_symlink() or claude_link.resolve(strict=False) != canonical.resolve(strict=False):
             raise InstallError(1, f"Refuse foreign Claude skill path: {claude_link}")
-    launcher = launcher_info(paths["launcher"], template)
-    prior_template = receipt.get("launcher_digest") if receipt else None
-    prior_owned = (paths["launcher"].is_file() and not paths["launcher"].is_symlink()
-                   and prior_template == hashlib.sha256(paths["launcher"].read_bytes()).hexdigest())
-    if launcher["reason"] not in ("missing", "owned") and not prior_owned:
+    known = {hashlib.sha256(template).hexdigest(), (receipt or {}).get("launcher_digest")}
+    if launcher_owned(paths["launcher"], known)["reason"] not in ("missing", "owned"):
         raise InstallError(1, f"Refuse unrelated pod command: {paths['launcher']}")
-    lock = paths["data"] / ".install.lock"
-    if lock.is_symlink():
+    if (paths["data"] / ".install.lock").is_symlink():
         raise InstallError(1, "Installation lock is redirected")
 
 
-def _venv_path(paths: dict[str, Path]) -> Path:
-    key = hashlib.sha256((str(_base_python()) + "\0" + PIN).encode()).hexdigest()[:12]
-    return paths["data"] / ("venv-" + key)
+def _run_bundle(root: Path, program: str, *arguments: str) -> subprocess.CompletedProcess:
+    """Run a few lines against the package under `root` in a separate, isolated interpreter."""
+    return subprocess.run([str(_python()), "-I", "-B", "-c", "import sys\nsys.path.insert(0, sys.argv[1])\n" + program,
+                           str(root), *arguments], cwd="/", stdin=subprocess.DEVNULL, capture_output=True,
+                          text=True, timeout=40)
 
 
-def _base_python() -> Path:
-    return Path(getattr(sys, "_base_executable", sys.executable)).resolve()
-
-
-def _venv_ready(path: Path) -> bool:
-    marker = path / ".pod-venv"
-    if not marker.is_file() or marker.is_symlink():
-        return False
-    try:
-        value = json.loads(marker.read_text())
-        if value != {"pin": PIN, "python": str(_base_python())}:
-            return False
-        result = subprocess.run([str(path / "bin/python"), "-B", "-c", "import yaml; print(yaml.__version__)"],
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
-        return result.returncode == 0 and result.stdout.strip() == PIN.split("==", 1)[1]
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return False
-
-
-def _pip(python: Path, *arguments: str, timeout: int) -> subprocess.CompletedProcess:
-    return subprocess.run([str(python), "-m", "pip", "install", "--no-input", "--disable-pip-version-check",
-                           *arguments], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
-
-
-def _install_pin(python: Path) -> None:
-    result = _pip(python, "--only-binary=:all:", PIN, timeout=180)
-    if not result.returncode:
-        return
-    digest = PIN_SOURCE_SHA256.get(PIN)
-    if digest is None or "No matching distribution found" not in result.stderr:
-        raise InstallError(1, "PyYAML installation failed; check network or wheel source")
-    with tempfile.TemporaryDirectory(prefix="pin-source-") as scratch:
-        requirements = Path(scratch) / "requirements.txt"
-        requirements.write_text(f"{PIN} --hash=sha256:{digest}\n")
-        result = _pip(python, "--require-hashes", "--no-binary", PIN.split("==", 1)[0], "-r", str(requirements),
-                      timeout=600)
+def _check_bundle(stage: Path) -> str:
+    result = _run_bundle(stage / "skills", "from pod.skill_validation import main\nraise SystemExit(main([sys.argv[2]]))\n",
+                         str(stage / "skills/pod"))
     if result.returncode:
-        reason = ("the source archive did not match its pinned hash" if "DO NOT MATCH THE HASHES" in result.stderr
-                  else "the source build failed")
-        raise InstallError(1, f"PyYAML has no prebuilt wheel for this Python and {reason}; "
-                              "check network or wait for a wheel")
-
-
-def _venv(paths: dict[str, Path]) -> Path:
-    path = _venv_path(paths)
-    if _venv_ready(path):
-        return path / "bin/python"
-    if path.exists() and (path.is_symlink() or not path.is_dir()):
-        raise InstallError(1, f"Refuse foreign venv path: {path}")
-    building = Path(tempfile.mkdtemp(prefix="venv-build-", dir=paths["data"]))
-    try:
-        shutil.rmtree(building)
-        result = subprocess.run([str(_base_python()), "-m", "venv", str(building)], stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=120)
-        if result.returncode:
-            raise InstallError(1, "Python venv creation failed: " + result.stderr.strip()[:300])
-        _install_pin(building / "bin/python")
-        _atomic(building / ".pod-venv", json.dumps({"pin": PIN, "python": str(_base_python())}).encode())
-        if not _venv_ready(building):
-            raise InstallError(1, "Pinned PyYAML could not be validated")
-        if path.exists():
-            previous = paths["data"] / (path.name + "-preserved")
-            if previous.exists():
-                raise InstallError(1, f"Refuse existing preserved venv path: {previous}")
-            os.replace(path, previous)
-        os.replace(building, path)
-    except subprocess.TimeoutExpired as exc:
-        raise InstallError(1, "Dependency installation timed out") from exc
-    finally:
-        if building.exists():
-            shutil.rmtree(building)
-    return path / "bin/python"
-
-
-def _check_bundle(python: Path, stage: Path) -> str:
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(stage / "skills")
-    for command in ([str(python), "-m", "pod.skill_validation", str(stage / "skills/pod")],
-                    [str(python), "-m", "pod.catalog", "--check"]):
-        result = subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=40)
-        if result.returncode:
-            raise InstallError(1, "Staged bundle validation failed: " + (result.stderr or result.stdout).strip()[:300])
+        raise InstallError(1, "Staged bundle validation failed: " + (result.stdout or result.stderr).strip()[:300])
     return bundle_digest(stage / "skills/pod")
 
 
 def _preserve(paths: dict[str, Path], current: str | None, receipt: dict | None) -> Path | None:
+    """Save a canonical copy that differs from what this installer last placed, before it is replaced."""
     canonical = paths["canonical"]
-    if not canonical.is_dir():
+    known = receipt["target"]["digest"] if receipt and receipt.get("status") == "installed" else None
+    if not canonical.is_dir() or (current is not None and current == known):
         return None
-    known = (receipt or {}).get("target", {}).get("digest") if receipt and receipt.get("status") == "installed" else None
-    if current is not None and current == known:
-        return None
-    suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    base = paths["data"] / "preserved" / ("skill-" + suffix)
-    destination = base
-    serial = 1
+    base = paths["data"] / "preserved" / ("skill-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    destination, serial = base, 1
     while destination.exists():
-        destination = Path(str(base) + f"-{serial}")
-        serial += 1
+        destination, serial = Path(f"{base}-{serial}"), serial + 1
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(canonical, destination, symlinks=True)
     return destination
 
 
-def _duplicates(paths: dict[str, Path]) -> list[str]:
+def duplicates(paths: dict[str, Path]) -> list[str]:
     canonical = paths["canonical"].resolve(strict=False)
-    candidates = [paths["codex"] / "skills/pod", paths["home"] / ".codex/skills/pod",
-                  paths["home"] / ".claude/skills/pod"]
     found = []
-    for path in dict.fromkeys(candidates):
-        if path == paths["canonical"] or path == paths["claude"] / "skills/pod":
+    for path in dict.fromkeys((paths["codex"] / "skills/pod", paths["home"] / ".codex/skills/pod",
+                               paths["home"] / ".claude/skills/pod")):
+        if path in (paths["canonical"], paths["claude"] / "skills/pod"):
             continue
         if (path.exists() or path.is_symlink()) and path.resolve(strict=False) != canonical:
             found.append(str(path))
     return found
 
 
-def doctor_snapshot() -> dict:
-    """Read installation facts without changing the installed tree."""
-    paths = _paths()
-    receipt_path = paths["data"] / "install.json"
-    receipt = read_receipt(receipt_path)
-    venv = _venv_path(paths)
-    launcher = paths["launcher"]
-    from .history import cleanup_inventory
-    from .errors import PodError
+# Preferences: written once when absent, then only ever read.
+
+def default_preferences(source_bundle: Path) -> bytes:
+    """A first preference file: each registry route enabled, except efforts that are never a default."""
+    routes = []
     try:
-        cleanup = cleanup_inventory(_state_root(paths))
-    except (OSError, PodError) as exc:
-        cleanup = [{"record": None, "queued_bytes": None, "untracked": True,
-                    "error": getattr(exc, "code", "storage_unavailable")}]
-    return {"paths": paths, "receipt_path": receipt_path, "receipt": receipt,
-            "canonical_digest": optional_digest(paths["canonical"]), "venv": venv,
-            "venv_ready": _venv_ready(venv), "launcher": launcher,
-            "launcher_ownership": launcher_info(
-                launcher, _launcher_template(venv / "bin/python", paths["canonical"])),
-            "duplicates": _duplicates(paths), "storage_cleanup": cleanup}
+        registry = json.loads((source_bundle / REGISTRY).read_text(encoding="utf-8"))
+        for model in registry["models"]:
+            routes += [f"{model['agent']}/{model['id']}/{effort}" for effort in model["efforts"]
+                       if effort not in NEVER_DEFAULT]
+        if any(not ROUTE.fullmatch(route) for route in routes) or len(set(routes)) != len(routes):
+            routes = []
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+        routes = []
+    lines = ["schema: pod/v2", "routes:" if routes else "routes: {}", *(f"  {route}: enabled" for route in routes),
+             "preferred: null", "pinned: null", "merge_authorization: person"]
+    return ("\n".join(lines) + "\n").encode()
 
 
-def _storage_cleanup(paths, python):
-    """Best-effort cache reclamation with the placed reader; never migrate or edit logical state."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(paths["canonical"].parent)
-    program = ("import json,sys\nfrom pod.history import cleanup_inventory\n"
-               "print(json.dumps(cleanup_inventory(sys.argv[1],collect=True)))\n")
-    try:
-        result = subprocess.run([str(python), "-c", program, str(_state_root(paths))], env=env,
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-        if result.returncode:
-            _say("Storage cleanup deferred; inspect pod doctor for queued cleanup")
-    except (OSError, subprocess.SubprocessError):
-        _say("Storage cleanup deferred; inspect pod doctor for queued cleanup")
-
-
-def _preferences(paths: dict[str, Path], python: Path) -> tuple[str, str | None]:
+def _preferences(paths: dict[str, Path], source_bundle: Path) -> tuple[str, str | None]:
     config = paths["config"] / "config.yaml"
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(paths["canonical"].parent)
-    # An existing file is never rewritten; a kept pod/v1 file waits for its explicit route setup.
-    program = ("import json,sys\nfrom pathlib import Path\n"
-               "from pod.config import load,write_defaults\nfrom pod.errors import PodError\n"
-               "p=Path(sys.argv[1]); made=False\n"
-               "try:\n"
-               " if not p.exists(): write_defaults(p); made=True\n"
-               " s=load(personal=p)\n"
-               " if s['status']=='valid': print(json.dumps({'status':'created' if made else 'kept'}))\n"
-               " elif s['setup']: print(json.dumps({'status':'setup_required','reason':s['setup']['action']}))\n"
-               " else: print(json.dumps({'status':'invalid','reason':s['errors'][0]['message']}))\n"
-               "except PodError as e: print(json.dumps({'status':'invalid','reason':str(e)}))\n")
-    result = subprocess.run([str(python), "-c", program, str(config)], env=env,
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-    if result.returncode:
-        return "failed", "Preferences could not be created or validated"
+    created = not config.exists() and not config.is_symlink()
+    if created:
+        _atomic(config, default_preferences(source_bundle))
+    result = _run_bundle(paths["canonical"].parent,
+                         "import json\nfrom pathlib import Path\nfrom pod import routefile\n"
+                         "p = routefile.load(Path(sys.argv[2]))\n"
+                         "print(json.dumps({'status': p.status, 'problem': p.problem, 'enabled': len(p.enabled())}))\n",
+                         str(config))
     try:
-        response = json.loads(result.stdout)
+        report = json.loads(result.stdout) if not result.returncode else None
     except ValueError:
-        return "failed", "Preferences validation returned no result"
-    return response["status"], response.get("reason")
+        report = None
+    if not isinstance(report, dict):
+        return "failed", "Preferences could not be read by the placed bundle"
+    if report["status"] != "ok":
+        return "invalid", report["problem"] or "the preference file is not readable"
+    return ("created" if created else "kept",
+            None if report["enabled"] else "no route is enabled; choose routes with pod models")
 
 
 def _rc_block() -> str:
@@ -737,21 +511,17 @@ def _rc_block() -> str:
 
 
 def _path(paths: dict[str, Path]) -> tuple[str, list[str]]:
-    launcher_dir = paths["launcher"].parent
+    launcher_dir = paths["launcher"].parent.resolve(strict=False)
     entries = [Path(value).resolve(strict=False) for value in os.environ.get("PATH", "").split(os.pathsep) if value]
-    if launcher_dir.resolve(strict=False) in entries:
-        outcome = "launcher directory is already on PATH"
-    else:
-        outcome = "open a new shell after the PATH addition"
+    outcome = "launcher directory is already on PATH" if launcher_dir in entries else "open a new shell after the PATH addition"
     notes = []
-    if launcher_dir.resolve(strict=False) not in entries:
-        shell = Path(os.environ.get("SHELL", "")).name
-        home = paths["home"]
+    if launcher_dir not in entries:
+        shell, home = Path(os.environ.get("SHELL", "")).name, paths["home"]
         if shell == "zsh":
             files = [_absolute_env("ZDOTDIR", home) / ".zshrc"]
         elif shell == "bash":
             login = next((home / name for name in (".bash_profile", ".bash_login", ".profile")
-                         if (home / name).exists()), home / ".profile")
+                          if (home / name).exists()), home / ".profile")
             files = [home / ".bashrc", login]
         elif shell == "sh":
             files = [home / ".profile"]
@@ -774,93 +544,70 @@ def _path(paths: dict[str, Path]) -> tuple[str, list[str]]:
                 if prior.count(PATH_START) != 1 or prior.count(PATH_END) != 1:
                     notes.append(f"PATH block is malformed; edit {path} manually")
                 continue
-            mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
-            _atomic(path, (prior + _rc_block()).encode(), mode=mode)
+            _atomic(path, (prior + _rc_block()).encode(), mode=stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600)
     command = shutil.which("pod")
     if command is not None and Path(command).resolve(strict=False) != paths["launcher"].resolve(strict=False):
         notes.append(f"A different pod command shadows this launcher: {command}")
-    if any("symlink" in note or "not regular" in note or "not UTF-8" in note
-           or "malformed" in note or "manually" in note or "shadows" in note for note in notes):
+    if notes:
         outcome = "manual PATH step required; inspect the reported path or command"
     return outcome, notes
 
 
-def _print_summary(paths: dict[str, Path], prefs: tuple[str, str | None], path: str,
-                   duplicates: list[str], preserved: Path | None,
-                   notes: list[str] | None = None) -> None:
-    if sys.stdout.isatty():
-        _tty_summary(paths, prefs, path, notes or [], duplicates, preserved)
-        return
-    _say(f"Installed Codex skill: {paths['canonical']}")
-    _say(f"Installed Claude Code skill: {paths['claude'] / 'skills/pod'}")
-    _say(f"Command: {paths['launcher']} ({path})")
-    _say(f"Preferences: {paths['config'] / 'config.yaml'} ({prefs[0]})")
-    if prefs[1]:
-        _say(f"Preferences need route setup: {prefs[1]}" if prefs[0] == "setup_required"
-             else f"Preferences need attention: {prefs[1]}; run pod config edit")
-    if preserved:
-        _say(f"Preserved changed skill at {preserved}")
-    for duplicate in duplicates:
-        _say(f"Duplicate skill at {duplicate}; inspect and remove it manually if unused")
-    _say("In session: $pod <objective>  /  /pod <issue-url>")
-    _say("Orca " + ("found (connection not checked)" if shutil.which("orca") else "not found"))
-    for agent in ("codex", "claude"):
-        _say(agent + (" found (sign-in not checked)" if shutil.which(agent) else " not found"))
-    _say("Existing agent sessions and workers are unchanged")
+def _finish(paths: dict[str, Path], source_bundle: Path, *, fail: int) -> tuple:
+    """Preferences and PATH: the same closing steps for a new copy and a current one."""
+    prefs = _preferences(paths, source_bundle)
+    if prefs[0] == "failed":
+        raise InstallError(fail, prefs[1] + "; rerun the installer")
+    _stage("Preferences", state="ok" if prefs[0] != "invalid" and not prefs[1] else "warn",
+           detail="needs attention" if prefs[0] == "invalid" else prefs[0], plain="Preferences: " + prefs[0])
+    path_status, notes = _path(paths)
+    label = _path_label(path_status, notes)
+    _stage("PATH", state="ok" if label == "ready" else "warn", detail=label, plain="PATH: " + path_status)
+    for note in notes:
+        _say(note)
+    return prefs, path_status, notes
+
+
+def _remove_earlier_environments(data: Path) -> None:
+    """Earlier installers kept a Python environment here, each with a Pod marker. Nothing uses one now."""
+    for child in data.glob("venv-*"):
+        if child.is_dir() and not child.is_symlink() and (child.name.startswith("venv-build-")
+                                                          or (child / ".pod-venv").is_file()):
+            shutil.rmtree(child, ignore_errors=True)
 
 
 def install(stage: Path) -> int:
     paths = _paths()
     source_bundle = stage / "skills/pod"
-    venv_path = _venv_path(paths)
-    template = _launcher_template(venv_path / "bin/python", paths["canonical"])
+    template = _launcher_template(_python(), paths["canonical"])
     _banner(_version(source_bundle))
     _preflight(stage, paths, template)
     _stage("Checking prerequisites", plain="Preflight ready")
     paths["data"].mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_file = paths["data"] / ".install.lock"
-    with lock_file.open("a+b") as lock:
+    with (paths["data"] / ".install.lock").open("a+b") as lock:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise InstallError(1, "Another Pod installer is running") from exc
-        for abandoned in paths["data"].glob("venv-build-*"):
-            if abandoned.is_dir() and not abandoned.is_symlink():
-                shutil.rmtree(abandoned)
         receipt_file = paths["data"] / "install.json"
         receipt = read_receipt(receipt_file)
-        _say("Dependencies: pinned PyYAML")
-        python = _venv(paths)
-        _stage("Preparing Python environment")
         _say("Bundle: validating source")
-        target = {"version": _version(source_bundle), "digest": _check_bundle(python, stage)}
-        canonical = paths["canonical"]
+        target = {"version": _version(source_bundle), "digest": _check_bundle(stage)}
+        canonical, claude_link = paths["canonical"], paths["claude"] / "skills/pod"
         current = optional_digest(canonical)
+        launcher_digest = hashlib.sha256(template).hexdigest()
         if (receipt and receipt.get("status") == "installed" and receipt.get("target") == target
-                and current == target["digest"] and launcher_info(paths["launcher"], template)["owned"]
-                and (paths["claude"] / "skills/pod").resolve(strict=False) == canonical.resolve(strict=False)):
+                and current == target["digest"] and launcher_owned(paths["launcher"], {launcher_digest})["owned"]
+                and claude_link.resolve(strict=False) == canonical.resolve(strict=False)):
             _stage("Installing skills", detail="Already current", plain="Already current")
             _stage("Installing pod command", detail="already present")
-            prefs = _preferences(paths, python)
-            if prefs[0] == "failed":
-                raise InstallError(1, (prefs[1] or "Preferences could not be prepared") + "; rerun the installer")
-            _stage("Preferences", state="ok" if prefs[0] in ("created", "kept") else "warn",
-                   detail=_preference_label(prefs[0]))
-            path_status, notes = _path(paths)
-            _stage("PATH", state="ok" if _path_label(path_status, notes) == "ready" else "warn",
-                   detail=_path_label(path_status, notes), plain="PATH: " + path_status)
-            for note in notes:
-                _say(note)
-            _cutover_notice(paths)
-            _storage_cleanup(paths, python)
-            _print_summary(paths, prefs, path_status, _duplicates(paths), None, notes)
+            prefs, path_status, notes = _finish(paths, source_bundle, fail=1)
+            _summary(paths, prefs, path_status, notes, duplicates(paths), None)
             return 0
-        previous = ({"version": _version(canonical), "digest": current}
-                    if current and (canonical / "VERSION").is_file() else
+        previous = ({"version": _version(canonical), "digest": current} if current else
                     receipt.get("previous") if receipt and receipt["status"] == "installing" else None)
-        record = {"schema": "pod-install/v1", "status": "installing", "previous": previous,
-                  "target": target, "launcher": str(paths["launcher"]),
-                  "launcher_digest": hashlib.sha256(template).hexdigest(),
+        record = {"schema": "pod-install/v1", "status": "installing", "previous": previous, "target": target,
+                  "launcher": str(paths["launcher"]), "launcher_digest": launcher_digest,
                   "updated_at": datetime.now(timezone.utc).isoformat()}
         _write_receipt(receipt_file, record)
         _say("Receipt: installing")
@@ -870,47 +617,27 @@ def install(stage: Path) -> int:
         env.pop("CODEX_HOME", None)
         env.update({"DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1", "CI": "1", "NO_COLOR": "1"})
         try:
-            result = subprocess.run(["npx", "--yes", SKILLS_CLI, "add", str(stage), "--skill", "pod",
-                                     "-a", "codex", "-a", "claude-code", "-g", "-y"],
-                                    cwd=stage, env=env, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=240)
-        except subprocess.TimeoutExpired as exc:
+            failed = subprocess.run(["npx", "--yes", SKILLS_CLI, "add", str(stage), "--skill", "pod",
+                                     "-a", "codex", "-a", "claude-code", "-g", "-y"], cwd=stage, env=env,
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240).returncode
+        except subprocess.TimeoutExpired:
+            failed = "timed out"
+        if failed:
             raise InstallError(3 if optional_digest(canonical) != current else 1,
-                               "Skills CLI timed out; rerun the installer") from exc
-        if result.returncode:
-            raise InstallError(3 if optional_digest(canonical) != current else 1,
-                               "Skills CLI failed; rerun the installer")
+                               f"Skills CLI {'timed out' if failed == 'timed out' else 'failed'}; rerun the installer")
         if optional_digest(canonical) != target["digest"]:
             raise InstallError(3, "Placed skill differs from validated source; rerun the installer")
-        claude_link = paths["claude"] / "skills/pod"
         if not claude_link.is_symlink() or claude_link.resolve(strict=False) != canonical.resolve(strict=False):
             raise InstallError(3, "Claude skill link differs from canonical source; rerun the installer")
-        duplicates = _duplicates(paths)
         _stage("Installing skills", plain="Skills: verified one canonical bundle")
         _atomic(paths["launcher"], template, mode=0o755)
         _stage("Installing pod command", plain="Launcher: installed")
-        prefs = _preferences(paths, python)
-        if prefs[0] == "failed":
-            raise InstallError(3, (prefs[1] or "Preferences could not be prepared") + "; rerun the installer")
-        _stage("Preferences", state="ok" if prefs[0] in ("created", "kept") else "warn",
-               detail=_preference_label(prefs[0]), plain="Preferences: " + prefs[0])
-        path_status, notes = _path(paths)
-        _stage("PATH", state="warn" if _path_label(path_status, notes) != "ready" else "ok",
-               detail=_path_label(path_status, notes), plain="PATH: " + path_status)
-        for note in notes:
-            _say(note)
+        prefs, path_status, notes = _finish(paths, source_bundle, fail=3)
         record["status"] = "installed"
         _write_receipt(receipt_file, record)
         _say("Receipt: installed")
-        for child in paths["data"].glob("venv-*"):
-            if child != venv_path and child.is_dir() and (child / ".pod-venv").is_file():
-                shutil.rmtree(child)
-        for child in paths["data"].glob("venv-*-preserved"):
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
-        _cutover_notice(paths)
-        _storage_cleanup(paths, python)
-        _print_summary(paths, prefs, path_status, duplicates, preserved, notes)
+        _remove_earlier_environments(paths["data"])
+        _summary(paths, prefs, path_status, notes, duplicates(paths), preserved)
         return 0
 
 
@@ -933,6 +660,7 @@ def _extract(archive: Path, destination: Path) -> Path:
 
 
 def update() -> int:
+    """Download the current source and run its own installer, exactly as the one-shot script does."""
     source = os.environ.get("POD_INSTALL_SOURCE", SOURCE)
     if not source.startswith(("https://", "file://", "http://127.0.0.1:", "http://localhost:")):
         raise InstallError(2, "POD_INSTALL_SOURCE must be HTTPS, file, or local loopback HTTP")
@@ -944,8 +672,7 @@ def update() -> int:
         except (OSError, ValueError) as exc:
             raise InstallError(1, "Source download failed; previous installation remains") from exc
         stage = _extract(archive, Path(temporary))
-        staged = stage / "skills/pod/scripts/pod.py"
-        result = subprocess.run([str(_base_python()), str(staged), "__install", str(stage)],
+        result = subprocess.run([str(_python()), str(stage / "skills/pod/scripts/pod.py"), "__install", str(stage)],
                                 stdin=subprocess.DEVNULL, timeout=420)
         if result.returncode == 0:
             _stage("Update", detail="Reload active coordinators; running workers unchanged",
@@ -954,7 +681,7 @@ def update() -> int:
 
 
 def _failure_code(default: int) -> int:
-    """Report post-copy failures as recoverable incomplete installations."""
+    """Report a failure after the copy began as a recoverable incomplete installation."""
     if default in (2, 3, 130):
         return default
     try:
@@ -972,7 +699,7 @@ def _failure_code(default: int) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(args) == 1 and args[0] == "--update":
+        if args == ["--update"]:
             return update()
         if len(args) == 1 and Path(args[0]).is_dir():
             return install(Path(args[0]))

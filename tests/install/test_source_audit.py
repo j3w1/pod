@@ -2,8 +2,16 @@ from pathlib import Path
 import subprocess
 import unittest
 
-from tests.common import fixture
+from contextlib import contextmanager
+import tempfile
+
 from tools.source_audit import audit_source
+
+
+@contextmanager
+def fixture():
+    with tempfile.TemporaryDirectory() as directory:
+        yield Path(directory)
 
 
 def tracked(root: Path, files: dict[str, bytes]) -> None:
@@ -50,6 +58,12 @@ class TrackedSourceAuditTests(unittest.TestCase):
             (root / "leak.txt").write_bytes(leak)
             subprocess.run(["git", "-C", str(root), "add", "leak.txt"], check=True)
             self.assertTrue(any("personal path" in row for row in audit_source(root)))
+
+    def test_a_file_removed_from_the_working_tree_but_not_yet_from_the_index_is_no_finding(self):
+        with fixture() as root:
+            tracked(root, {"kept.txt": b"public", "removed.txt": b"public"})
+            (root / "removed.txt").unlink()
+            self.assertEqual(audit_source(root), [])
 
     def test_credential_findings_never_echo_the_credential(self):
         credential = "gh" + "p_" + "A" * 24
@@ -165,10 +179,10 @@ class TrackedSourceAuditTests(unittest.TestCase):
                 "b.md": b"Pod is " + b"published to PyPI.\n",
                 "c.md": b"Pod " + b"v2.0 is tagged and published.\n",
                 "d.md": b"Install from https://github.com/j3w1/pod/" + b"tree/v2.0.\n",
-                "tests/test_source_audit.py.backup": b"Pod " + b"v2.0 is out\n",
+                "tests/install/test_source_audit.py.backup": b"Pod " + b"v2.0 is out\n",
             })
             self.assertEqual(sorted(row.split(" :: ")[0] for row in audit_source(root)),
-                             ["a.md", "b.md", "c.md", "d.md", "tests/test_source_audit.py.backup"])
+                             ["a.md", "b.md", "c.md", "d.md", "tests/install/test_source_audit.py.backup"])
 
     def test_ordinary_current_wording_is_allowed(self):
         with fixture() as root:
@@ -182,5 +196,5 @@ class TrackedSourceAuditTests(unittest.TestCase):
             self.assertEqual(audit_source(root), [])
 
     def test_repository_tracked_source_is_clean(self):
-        root = Path(__file__).resolve().parents[1]
+        root = Path(__file__).resolve().parents[2]
         self.assertEqual(audit_source(root), [])

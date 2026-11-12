@@ -1,7 +1,10 @@
-"""Real shell/launcher installation in scrubbed homes with an offline wheel and npx double."""
+"""The real shell entry point and launcher, run in scrubbed homes with a stand-in for npx."""
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
+import hashlib
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -12,19 +15,21 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
-from tests.install_support import (ROOT, archive_tree, ignored_sigint, local_server, restore_child_signals,
-                                   run_install, run_install_pty, run_pod, sandbox)
-from pod.installer import BANNER
+from pod.installer import BANNER, bundle_digest, bundle_files
+from tests.install.install_support import (BUNDLE, ROOT, VERSION, archive_tree, doctor, ignored_sigint, local_server,
+                                           restore_child_signals, run_install, run_install_pty, run_pod, sandbox)
+
+SKILL = "skills/pod/SKILL.md"
+REGISTRY = "skills/pod/models/registry.json"
+EXISTING = (b"# mine\nschema: pod/v2\nroutes:\n  codex/gpt-6.1-sol/high: enabled\n  claude/claude-opus-5-5/max: disabled\n"
+            b"preferred: codex/gpt-6.1-sol/high\npinned: null\nworkers:\n  max_active: 6\nrefresh: automatic\n"
+            b"authorization_verifier:\n- /usr/local/bin/verifier\ndecision_policy:\n  preset: hands_off\n"
+            b"  categories:\n    merge_publish: any_agent\n")
 
 
-class InstallerTests(unittest.TestCase):
-    def test_banner_is_small_ascii_orca_pod(self):
-        self.assertEqual(len(BANNER), 6)
-        self.assertGreaterEqual(BANNER[0].count("/\\"), 3)
-        self.assertTrue(all(len(line) <= 64 and all(32 <= ord(char) <= 126 for char in line)
-                            for line in BANNER))
-
+class InstallerCase(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -36,371 +41,286 @@ class InstallerTests(unittest.TestCase):
         self.config = self.home / "config/pod/config.yaml"
         self.receipt = self.home / "data/pod/install.json"
 
-    def installed(self):
-        result = run_install(self.env)
+    def installed(self, env=None):
+        result = run_install(env or self.env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("\x1b", result.stdout + result.stderr)
         return result
 
+    def newer(self, name="newer.tar.gz", **changes):
+        """An archive whose skill text differs by one trailing line, so its digest differs."""
+        changed = (BUNDLE / "SKILL.md").read_bytes() + b"\n"
+        return archive_tree(self.root / name, changes={SKILL: changed, **changes}), changed
+
+
+class TerminalOutputTests(InstallerCase):
     @staticmethod
-    def _plain_screen(raw: bytes) -> str:
+    def screen(raw: bytes) -> str:
         return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw.decode("utf-8", "replace")).replace("\r", "")
 
-    def test_tty_art_stages_and_compact_summary(self):
-        env = {**self.env, "TERM": "xterm-256color"}
+    def colour(self, **extra):
+        env = {**self.env, "TERM": "xterm-256color", **extra}
         env.pop("NO_COLOR")
-        code, raw = run_install_pty(env)
+        return env
+
+    def test_banner_is_small_ascii(self):
+        self.assertEqual(len(BANNER), 6)
+        self.assertTrue(all(len(line) <= 64 and all(32 <= ord(char) <= 126 for char in line) for line in BANNER))
+
+    def test_terminal_shows_art_one_line_per_stage_and_a_compact_summary(self):
+        code, raw = run_install_pty(self.colour())
         self.assertEqual(code, 0, raw.decode("utf-8", "replace"))
-        text = self._plain_screen(raw)
+        text = self.screen(raw)
         lines = text.splitlines()
-        art = lines[:6]
-        self.assertTrue(all(len(line) <= 64 and all(32 <= ord(char) <= 126 for char in line)
-                            for line in art))
-        self.assertGreaterEqual(art[0].count("/\\"), 3)
-        patches = re.findall(r"(#+)\s+\(o\)", "\n".join(art))
-        self.assertGreaterEqual(len(patches), 3)
-        self.assertGreaterEqual(len({len(patch) for patch in patches}), 3)
-        self.assertIn((ROOT / "VERSION").read_text().strip(), lines[6])
-        self.assertIn("\x1b[", raw.decode("utf-8", "replace"))
+        self.assertGreaterEqual(len(re.findall(r"#+\s+\(o\)", "\n".join(lines[:6]))), 3)
+        self.assertIn(VERSION, lines[6])
         self.assertIn(b"38;5;255", raw)
-        self.assertIn(b"38;5;30", raw)
         stage_lines = [line for line in lines if re.match(r"^\s+[✓!✗]\s+", line)]
-        for stage in ("Checking prerequisites", "Preparing Python environment", "Installing skills",
-                      "Installing pod command", "Preferences", "PATH"):
+        for stage in ("Checking prerequisites", "Installing skills", "Installing pod command", "Preferences", "PATH"):
             self.assertEqual(sum(stage in line for line in stage_lines), 1, stage)
-        for label in ("Codex skill", "Claude Code skill", "pod command", "Preferences", "PATH",
-                      "Environment", "Next", "Optional"):
+        for label in ("Codex skill", "Claude Code skill", "pod command", "Environment", "Next", "~/.agents/skills/pod",
+                      "~/.local/bin/pod", "Existing agent sessions and workers unchanged"):
             self.assertIn(label, text)
-        self.assertIn("~/.agents/skills/pod", text)
-        self.assertIn("~/.local/bin/pod", text)
-        self.assertIn("Existing agent sessions and workers unchanged", text)
         self.assertNotIn("pod-install:", text)
 
-    def test_tty_ascii_and_no_color_stay_plain(self):
-        env = {**self.env, "LC_ALL": "C", "TERM": "xterm-256color", "NO_COLOR": "1"}
-        code, raw = run_install_pty(env)
+    def test_ascii_locale_and_no_color_stay_plain(self):
+        code, raw = run_install_pty({**self.env, "LC_ALL": "C", "TERM": "xterm-256color", "NO_COLOR": "1"})
         self.assertEqual(code, 0)
-        text = self._plain_screen(raw)
+        text = self.screen(raw)
         self.assertTrue(text.isascii())
         self.assertNotIn(b"\x1b[", raw)
         self.assertIn("[ok]", text)
         self.assertIn("[!]", text)
-        self.assertNotIn("pod-install:", text)
 
-    def test_tty_failure_names_state_next_action_and_code(self):
-        foreign = self.launcher
-        foreign.parent.mkdir(parents=True)
-        foreign.write_bytes(b"foreign command\n")
-        env = {**self.env, "TERM": "xterm-256color"}
-        env.pop("NO_COLOR")
-        code, raw = run_install_pty(env)
+    def test_a_refusal_names_state_next_action_and_exit_code(self):
+        self.launcher.parent.mkdir(parents=True)
+        self.launcher.write_bytes(b"foreign command\n")
+        code, raw = run_install_pty(self.colour())
         self.assertEqual(code, 1)
-        text = self._plain_screen(raw)
-        self.assertIn("Install stopped", text)
-        self.assertIn("Refuse unrelated pod command", text)
-        self.assertIn("~/.local/bin/pod", text)
-        self.assertIn("State", text)
-        self.assertIn("previous skill and launcher", text)
-        self.assertIn("Next", text)
-        self.assertIn("Exit code 1", text)
-        self.assertNotIn("pod-install:", text)
-        self.assertEqual(foreign.read_bytes(), b"foreign command\n")
+        text = self.screen(raw)
+        for phrase in ("Install stopped", "Refuse unrelated pod command", "~/.local/bin/pod", "State",
+                       "previous skill and launcher", "Next", "Exit code 1"):
+            self.assertIn(phrase, text)
+        self.assertEqual(self.launcher.read_bytes(), b"foreign command\n")
         self.assertFalse(self.receipt.exists())
 
-    def test_tty_bootstrap_failure_uses_the_same_failure_layout(self):
+    def test_a_bootstrap_refusal_uses_the_same_layout(self):
         uname = self.root / "bin/uname"
         uname.write_text("#!/bin/sh\necho Darwin\n")
         uname.chmod(0o755)
-        env = {**self.env, "TERM": "xterm-256color"}
-        env.pop("NO_COLOR")
-        code, raw = run_install_pty(env)
+        code, raw = run_install_pty(self.colour())
         self.assertEqual(code, 1)
-        text = self._plain_screen(raw)
         for phrase in ("Install stopped", "Linux is required", "State", "Next", "Exit code 1"):
-            self.assertIn(phrase, text)
-        self.assertNotIn("pod-install:", text)
+            self.assertIn(phrase, self.screen(raw))
         self.assertFalse(self.receipt.exists())
 
-    def test_tty_invalid_preferences_and_ready_path_are_explicit(self):
+    def test_unreadable_preferences_and_a_ready_path_are_explicit(self):
         self.config.parent.mkdir(parents=True)
-        invalid = b"schema: [\n"
-        self.config.write_bytes(invalid)
-        env = {**self.env, "PATH": str(self.launcher.parent) + ":" + self.env["PATH"],
-               "TERM": "xterm-256color"}
+        self.config.write_bytes(b"schema: [\n")
+        env = {**self.env, "PATH": str(self.launcher.parent) + ":" + self.env["PATH"], "TERM": "xterm-256color"}
         code, raw = run_install_pty(env)
         self.assertEqual(code, 0)
-        text = self._plain_screen(raw)
+        text = self.screen(raw)
         self.assertIn("Preferences  needs attention", text)
         self.assertIn("PATH  ready", text)
         self.assertIn("pod config edit", text)
-        self.assertEqual(self.config.read_bytes(), invalid)
-        self.assertNotIn("pod-install:", text)
+        self.assertEqual(self.config.read_bytes(), b"schema: [\n")
 
-    def test_tty_partial_copy_reports_exit_three_and_recovery(self):
+    def test_a_partial_copy_reports_exit_three_and_recovery(self):
         self.installed()
-        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n"
-        newer = archive_tree(self.root / "tty-partial.tar.gz", changes={"skills/pod/SKILL.md": changed})
-        env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri(),
-               "POD_TEST_NPX_MODE": "partial_fail", "TERM": "xterm-256color"}
-        env.pop("NO_COLOR")
-        code, raw = run_install_pty(env)
+        newer, _ = self.newer()
+        code, raw = run_install_pty(self.colour(POD_INSTALL_SOURCE=newer.as_uri(), POD_TEST_NPX_MODE="partial_fail"))
         self.assertEqual(code, 3)
-        text = self._plain_screen(raw)
-        for phrase in ("Install stopped", "State", "Skill copy may be incomplete",
-                       "receipt remains installing", "Next", "Exit code 3"):
-            self.assertIn(phrase, text)
-        self.assertNotIn("pod-install:", text)
+        for phrase in ("Install stopped", "Skill copy may be incomplete", "receipt remains installing", "Exit code 3"):
+            self.assertIn(phrase, self.screen(raw))
 
-    def test_fresh_rerun_placements_receipt_and_untouched_agent_configs(self):
-        codex = self.home / "codex/config.toml"
-        claude = self.home / "claude/settings.json"
-        codex.parent.mkdir(parents=True); claude.parent.mkdir(parents=True)
-        codex.write_bytes(b"agent setting\n"); claude.write_bytes(b'{"private":true}\n')
-        from pod.history import ChunkStore
-        from pod.ledger import _write
-        from pod.util import encoded
-        from tests.history_support import synthetic_state
-        import hashlib
-        authority = Path(self.env["XDG_STATE_HOME"]) / "pod" / ("e" * 64) / "context.json"
-        _write(authority, synthetic_state(1))
-        before_authority = authority.read_bytes()
-        store = ChunkStore(authority.parent)
-        orphan = encoded({"fixture": "unpublished bytes"}, compact=True)
-        address = hashlib.sha256(orphan).hexdigest()
-        store.put({address: orphan})
+
+class PlacementTests(InstallerCase):
+    def test_fresh_install_places_one_bundle_and_leaves_everything_else_alone(self):
+        codex, claude = self.home / "codex/config.toml", self.home / "claude/settings.json"
+        state = self.home / "state/pod/objectives/record.jsonl"
+        for path, data in ((codex, b"agent setting\n"), (claude, b'{"private":true}\n'), (state, b'{"kept":1}\n')):
+            path.parent.mkdir(parents=True)
+            path.write_bytes(data)
         first = self.installed()
-        self.assertEqual(authority.read_bytes(), before_authority)
-        self.assertFalse((store.root / (address + ".json")).exists())
         self.assertIn("pod-install: Preflight ready", first.stdout)
-        self.assertIn("pod-install: Installed Codex skill:", first.stdout)
-        from pod.bundle import BUNDLE_FILES
-        from pod.catalog import route_keys
-        from pod.installer import bundle_digest
-        from pod.config import load
-        fresh = load(personal=self.config)
-        self.assertEqual(fresh["eligible"], list(route_keys()))
-        self.assertEqual((fresh["schema"], fresh["preferred"], fresh["pinned"], fresh["max_active"], fresh["refresh"]),
-                         ("pod/v2", None, None, 2, "automatic"))
-        self.assertEqual(self.launcher.stat().st_mode & 0o777, 0o755)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT / "VERSION").read_text().strip())
-        self.assertEqual(self.receipt.is_file(), True)
-        record = json.loads(self.receipt.read_text())
-        self.assertEqual(record["status"], "installed")
-        self.assertEqual(record["target"]["digest"], bundle_digest(self.canonical))
-        doctor = json.loads(run_pod(self.env, "doctor", "--json").stdout)
-        self.assertTrue(doctor["installation_checks"]["healthy"])
-        self.assertTrue(doctor["launcher"]["ownership"]["owned"])
-        self.assertTrue(doctor["installation_checks"]["venv"]["ready"])
-        self.assertEqual(doctor["installation_checks"]["storage_cleanup"], [])
-        self.assertEqual({p.relative_to(self.canonical).as_posix() for p in self.canonical.rglob("*")
-                          if p.is_file() and "__pycache__" not in p.parts}, set(BUNDLE_FILES))
+        self.assertEqual((codex.read_bytes(), claude.read_bytes(), state.read_bytes()),
+                         (b"agent setting\n", b'{"private":true}\n', b'{"kept":1}\n'))
+        self.assertEqual(sorted(path.name for path in (self.home / "state/pod").rglob("*")), ["objectives", "record.jsonl"])
+        self.assertEqual(bundle_files(self.canonical), bundle_files(BUNDLE))
+        self.assertFalse((self.canonical / "VERSION").is_symlink())
         self.assertEqual((self.home / "claude/skills/pod").resolve(), self.canonical.resolve())
         self.assertFalse((self.home / "codex/skills/pod").exists())
-        npx_args = json.loads((self.root / "npx.json").read_text())
-        self.assertEqual(npx_args[:3], ["--yes", "skills@1.7.0", "add"])
-        self.assertEqual(npx_args[4:], ["--skill", "pod", "-a", "codex", "-a", "claude-code", "-g", "-y"])
-        self.assertEqual(codex.read_bytes(), b"agent setting\n")
-        self.assertEqual(claude.read_bytes(), b'{"private":true}\n')
+        self.assertEqual(self.launcher.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), VERSION)
+        record = json.loads(self.receipt.read_text())
+        self.assertEqual((record["status"], record["target"]),
+                         ("installed", {"version": VERSION, "digest": bundle_digest(self.canonical)}))
+        self.assertEqual(record["launcher_digest"], hashlib.sha256(self.launcher.read_bytes()).hexdigest())
+        report = doctor(self.env)
+        self.assertTrue(report["installation"]["healthy"])
+        self.assertEqual((report["preferences"]["status"], report["version"]), ("ok", VERSION))
+        npx = json.loads((self.root / "npx.json").read_text())
+        self.assertEqual(npx[:3] + npx[4:], ["--yes", "skills@1.7.0", "add", "--skill", "pod", "-a", "codex",
+                                             "-a", "claude-code", "-g", "-y"])
         before = self.receipt.read_bytes()
-        second = self.installed()
-        self.assertIn("Already current", second.stdout)
+        self.assertIn("Already current", self.installed().stdout)
         self.assertEqual(self.receipt.read_bytes(), before)
-        self.assertEqual(self.env["POD_INSTALL_SOURCE"], self.archive.as_uri())
 
-    def test_local_http_404_and_truncated_archive_leave_home_uninstalled(self):
+    def test_a_failed_download_or_damaged_archive_changes_nothing(self):
         with local_server(self.root) as base:
             failed = run_install({**self.env, "POD_INSTALL_SOURCE": base + "/missing.tar.gz"})
             self.assertEqual(failed.returncode, 1)
-            self.assertFalse(self.receipt.exists())
-            self.assertFalse(self.launcher.exists())
-            good = run_install({**self.env, "POD_INSTALL_SOURCE": base + "/source.tar.gz"})
-            self.assertEqual(good.returncode, 0, good.stderr)
+            self.assertFalse(self.receipt.exists() or self.launcher.exists())
+            self.installed({**self.env, "POD_INSTALL_SOURCE": base + "/source.tar.gz"})
         damaged = self.root / "damaged.tar.gz"
         damaged.write_bytes(self.archive.read_bytes()[:80])
         after = self.receipt.read_bytes()
-        failed = run_install({**self.env, "POD_INSTALL_SOURCE": damaged.as_uri()})
-        self.assertEqual(failed.returncode, 1)
+        for source in (damaged.as_uri(), "ftp://example.invalid/pod.tar.gz"):
+            self.assertNotEqual(run_install({**self.env, "POD_INSTALL_SOURCE": source}).returncode, 0)
         self.assertEqual(self.receipt.read_bytes(), after)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT / "VERSION").read_text().strip())
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), VERSION)
 
-    def test_foreign_launcher_refused_before_owned_changes(self):
+    def test_a_source_that_fails_validation_is_never_placed(self):
+        broken = archive_tree(self.root / "broken.tar.gz", changes={"skills/pod/errors.py": b"def broken(:\n"})
+        failed = run_install({**self.env, "POD_INSTALL_SOURCE": broken.as_uri()})
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("Staged bundle validation failed", failed.stderr)
+        self.assertFalse(self.receipt.exists() or self.canonical.exists() or self.launcher.exists())
+
+    def test_a_placed_copy_that_differs_from_the_validated_source_is_not_accepted(self):
+        failed = run_install({**self.env, "POD_TEST_NPX_MODE": "tamper"})
+        self.assertEqual(failed.returncode, 3, failed.stdout + failed.stderr)
+        self.assertIn("Placed skill differs from validated source", failed.stderr)
+        self.assertEqual(json.loads(self.receipt.read_text())["status"], "installing")
+        self.assertFalse(self.launcher.exists())
+        self.installed()
+
+    def test_a_foreign_launcher_is_refused_before_any_owned_change(self):
         self.launcher.parent.mkdir(parents=True)
         self.launcher.write_bytes(b"foreign command\n")
         failed = run_install(self.env)
         self.assertEqual(failed.returncode, 1)
         self.assertIn("unrelated pod command", failed.stderr)
         self.assertEqual(self.launcher.read_bytes(), b"foreign command\n")
-        self.assertFalse(self.receipt.exists())
-        self.assertFalse(self.config.exists())
+        self.assertFalse(self.receipt.exists() or self.config.exists() or self.canonical.exists())
 
-    def test_valid_and_old_shape_preferences_are_preserved(self):
-        from pod.config import defaults
-        import yaml
+    def test_foreign_skill_paths_and_redirected_directories_are_refused(self):
+        for prepare, message in (
+                (lambda: (self.canonical.parent.mkdir(parents=True), self.canonical.symlink_to(self.root)), "foreign canonical"),
+                (lambda: (self.home / "claude/skills/pod").mkdir(parents=True), "foreign Claude skill"),
+                (lambda: (self.root / "elsewhere").mkdir() or (self.home / "data").mkdir()
+                 or (self.home / "data/pod").symlink_to(self.root / "elsewhere"), "redirected directory")):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                self.env, _ = sandbox(self.root)
+                self.home = Path(self.env["HOME"])
+                self.canonical = self.home / ".agents/skills/pod"
+                prepare()
+                failed = run_install(self.env)
+                self.assertEqual(failed.returncode, 1)
+                self.assertIn(message, failed.stderr)
+                self.assertFalse((self.home / ".local/bin/pod").exists())
+
+
+class PreferenceTests(InstallerCase):
+    def test_an_existing_file_is_byte_identical_after_install_and_update(self):
         self.config.parent.mkdir(parents=True)
-        original = b"# mine\n" + yaml.safe_dump({**defaults(), "routes": {}}, sort_keys=False).encode()
-        self.config.write_bytes(original)
-        self.installed()
-        self.assertEqual(self.config.read_bytes(), original)
-        with tempfile.TemporaryDirectory() as directory:
-            env, _ = sandbox(Path(directory))
-            path = Path(env["HOME"]) / "config/pod/config.yaml"
-            path.parent.mkdir(parents=True)
-            incompatible = b"schema: pod/v1\nmodel_approvals: {}\n"
-            path.write_bytes(incompatible)
-            result = run_install(env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Preferences need attention", result.stdout)
-            self.assertEqual(path.read_bytes(), incompatible)
-            report = json.loads(run_pod(env, "config", "--json").stdout)
-            self.assertEqual(report["eligible"], [])
-            # A valid 0.6.x file is kept byte for byte and waits for its explicit route setup.
-            kept = (b"schema: pod/v1 # mine\nselection: custom\nmodels:\n  gpt-6-luna: disabled\n"
-                    b"workers: {max_active: 4}\n")
-            path.write_bytes(kept)
-            result = run_install(env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Preferences need route setup", result.stdout)
-            self.assertEqual(path.read_bytes(), kept)
-            report = json.loads(run_pod(env, "config", "--json").stdout)
-            self.assertEqual((report["status"], report["eligible"], report["setup"]["from_schema"]),
-                             ("setup_required", [], "pod/v1"))
+        self.config.write_bytes(EXISTING)
+        mode = self.config.stat().st_mode
+        self.assertIn("(kept)", self.installed().stdout)
+        newer, _ = self.newer()
+        updated = run_pod({**self.env, "POD_INSTALL_SOURCE": newer.as_uri()}, "update")
+        self.assertEqual(updated.returncode, 0, updated.stdout + updated.stderr)
+        self.assertEqual((self.config.read_bytes(), self.config.stat().st_mode), (EXISTING, mode))
+        report = doctor(self.env)["preferences"]
+        self.assertEqual((report["status"], report["enabled"], report["preferred"]), ("ok", 1, "codex/gpt-6.1-sol/high"))
 
-    def test_exact_public_065_upgrade_preserves_no_pin_and_066_preserves_a_pin(self):
-        # Both installers run only in a scrubbed home with offline dependencies/npx.
-        old_tar = self.root / "public-065.tar.gz"
-        subprocess.run(["git", "archive", "--format=tar.gz", "--prefix=pod-source/",
-                        "-o", str(old_tar), "6a7b2ba79e8883946f0f880d55c8dcebe3cf086c"],
-                       cwd=ROOT, check=True)
-        old_script = self.root / "install-065.sh"
-        old_script.write_bytes(subprocess.check_output(["git", "show",
-            "6a7b2ba79e8883946f0f880d55c8dcebe3cf086c:install.sh"], cwd=ROOT))
-        old_env = {**self.env, "POD_INSTALL_SOURCE": old_tar.as_uri()}
-        result = subprocess.run(["sh", str(old_script)], env=old_env, cwd=self.root/"work",
-                                capture_output=True, text=True, timeout=90)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), "0.6.5")
-        self.assertNotIn("pinned_model", self.config.read_text())
-        before = self.config.read_bytes()
-        upgraded = run_pod(self.env, "update")
-        self.assertEqual(upgraded.returncode, 0, upgraded.stdout + upgraded.stderr)
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT/"VERSION").read_text().strip())
-        report = json.loads(run_pod(self.env,"config","--json").stdout)
-        self.assertEqual((report["status"], report["eligible"], report["pin_diagnostic"]), ("setup_required", [], None))
-        self.config.write_bytes(before + b"pinned_model: gpt-6-sol\n")
-        pinned = self.config.read_bytes()
-        self.installed()
-        self.assertEqual(self.config.read_bytes(), pinned)
-        report = json.loads(run_pod(self.env,"config","--json").stdout)
-        self.assertEqual((report["status"], report["pinned"], report["pin_diagnostic"]),
-                         ("setup_required", None, "gpt-6-sol"))
+    def test_an_unreadable_file_and_a_linked_file_are_kept_and_reported(self):
+        self.config.parent.mkdir(parents=True)
+        self.config.write_bytes(b"schema: pod/v1\nmodel_approvals: {}\n")
+        result = self.installed()
+        self.assertIn("Preferences need attention", result.stdout)
+        self.assertIn("pod config edit", result.stdout)
+        self.assertEqual(self.config.read_bytes(), b"schema: pod/v1\nmodel_approvals: {}\n")
+        self.config.unlink()
+        target = self.root / "elsewhere.yaml"
+        self.config.symlink_to(target)
+        self.assertIn("Preferences need attention", self.installed().stdout)
+        self.assertTrue(self.config.is_symlink())
+        self.assertFalse(target.exists())
 
-    def test_exact_public_066_update_installs_the_current_version_and_keeps_preferences(self):
-        # The 0.6.6 installer and update path run only in a scrubbed home with offline dependencies/npx.
-        old_tar = self.root / "public-066.tar.gz"
-        subprocess.run(["git", "archive", "--format=tar.gz", "--prefix=pod-source/",
-                        "-o", str(old_tar), "f4101feb8e517382cb4cc626a1afc702c6429f37"],
-                       cwd=ROOT, check=True)
-        old_script = self.root / "install-066.sh"
-        old_script.write_bytes(subprocess.check_output(["git", "show",
-            "f4101feb8e517382cb4cc626a1afc702c6429f37:install.sh"], cwd=ROOT))
-        old_env = {**self.env, "POD_INSTALL_SOURCE": old_tar.as_uri()}
-        result = subprocess.run(["sh", str(old_script)], env=old_env, cwd=self.root/"work",
-                                capture_output=True, text=True, timeout=90)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), "0.6.6")
-        self.config.write_bytes(self.config.read_bytes() + b"pinned_model: gpt-6-sol\n")
-        pinned = self.config.read_bytes()
-        upgraded = run_pod(self.env, "update")
-        self.assertEqual(upgraded.returncode, 0, upgraded.stdout + upgraded.stderr)
-        self.assertEqual(self.config.read_bytes(), pinned)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT/"VERSION").read_text().strip())
-        report = json.loads(run_pod(self.env,"config","--json").stdout)
-        self.assertEqual((report["status"], report["pin_diagnostic"]), ("setup_required", "gpt-6-sol"))
+    def test_a_first_file_enables_registry_routes_but_never_ultra(self):
+        registry = {"schema": "fixture", "models": [
+            {"id": "model-a", "agent": "codex", "efforts": ["low", "high", "ultra"]},
+            {"id": "model-b", "agent": "claude", "efforts": ["medium"]}]}
+        source = archive_tree(self.root / "registry.tar.gz", changes={REGISTRY: json.dumps(registry).encode()})
+        self.assertIn("(created)", self.installed({**self.env, "POD_INSTALL_SOURCE": source.as_uri()}).stdout)
+        self.assertEqual(self.config.read_text(), "schema: pod/v2\nroutes:\n  codex/model-a/low: enabled\n"
+                         "  codex/model-a/high: enabled\n  claude/model-b/medium: enabled\npreferred: null\n"
+                         "pinned: null\nmerge_authorization: person\n")
+        self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
 
-    def test_path_blocks_symlink_and_real_shell_resolution(self):
+    def test_without_a_readable_registry_the_first_file_enables_nothing_and_says_so(self):
+        source = archive_tree(self.root / "bare.tar.gz", changes={REGISTRY: b"not json"})
+        result = self.installed({**self.env, "POD_INSTALL_SOURCE": source.as_uri()})
+        self.assertIn("no route is enabled; choose routes with pod models", result.stdout)
+        self.assertEqual(self.config.read_text(), "schema: pod/v2\nroutes: {}\npreferred: null\npinned: null\n"
+                                                  "merge_authorization: person\n")
+        self.assertEqual(doctor(self.env)["preferences"]["enabled"], 0)
+
+
+class PathTests(InstallerCase):
+    def test_guarded_block_real_shell_resolution_and_untouched_linked_files(self):
         self.installed()
         for file in (self.home / ".bashrc", self.home / ".profile"):
             self.assertEqual(file.read_text().count("# >>> pod path >>>"), 1)
-        # Some managed hosts force HOME to their real account in /etc/profile.
-        # On those hosts use an isolated login-equivalent so the test cannot
-        # read the real profile; hosted Linux without that override runs -lc.
-        profile_paths = [Path("/etc/profile"), *Path("/etc/profile.d").glob("*.sh")]
+        # Some hosts set HOME in /etc/profile; there a login-equivalent shell reads only the sandbox profile.
+        profiles = [Path("/etc/profile"), *Path("/etc/profile.d").glob("*.sh")]
         redirects = any(re.search(r"(?m)^\s*(?:export\s+)?(?:HOME|XDG_[A-Z_]+)\s*=", path.read_text(errors="replace"))
-                        for path in profile_paths if path.is_file())
-        if redirects:
-            shells = ((["bash", "-ic", "command -v pod"], None),
-                      (["bash", "--noprofile", "-lc", "command -v pod"], self.home / ".profile"),
-                      (["sh", "-c", '. "$HOME/.profile"; command -v pod'], None))
-        else:
-            shells = ((["bash", "-ic", "command -v pod"], None),
-                      (["bash", "-lc", "command -v pod"], None),
-                      (["sh", "-lc", "command -v pod"], None))
+                        for path in profiles if path.is_file())
+        shells = [(["bash", "-ic", "command -v pod"], None)]
+        shells += ([(["bash", "--noprofile", "-lc", "command -v pod"], self.home / ".profile"),
+                    (["sh", "-c", '. "$HOME/.profile"; command -v pod'], None)] if redirects else
+                   [(["bash", "-lc", "command -v pod"], None), (["sh", "-lc", "command -v pod"], None)])
         for command, bash_env in shells:
             env = {**self.env, **({"BASH_ENV": str(bash_env)} if bash_env else {})}
-            result = subprocess.run(command, env=env, cwd=self.root / "work",
-                                    capture_output=True, text=True, timeout=10)
+            result = subprocess.run(command, env=env, cwd=self.root / "work", capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, (command, result.stdout, result.stderr))
             self.assertIn(str(self.launcher), result.stdout)
         with tempfile.TemporaryDirectory() as directory:
             env, _ = sandbox(Path(directory))
             env["SHELL"] = "/usr/bin/zsh"
-            result = run_install(env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            expected = Path(env["HOME"]) / ".local/bin/pod"
-            resolved = subprocess.run(["zsh", "-ic", "command -v pod"], env=env,
-                                      capture_output=True, text=True, timeout=10)
-            self.assertEqual(resolved.returncode, 0, resolved.stderr)
-            self.assertIn(str(expected), resolved.stdout)
+            self.installed(env)
+            resolved = subprocess.run(["zsh", "-ic", "command -v pod"], env=env, capture_output=True, text=True, timeout=10)
+            self.assertIn(str(Path(env["HOME"]) / ".local/bin/pod"), resolved.stdout, resolved.stderr)
         with tempfile.TemporaryDirectory() as directory:
             env, _ = sandbox(Path(directory))
-            home = Path(env["HOME"])
             target = Path(directory) / "foreign-rc"
             target.write_bytes(b"my rc\n")
-            (home / ".bashrc").symlink_to(target)
-            result = run_install(env)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            (Path(env["HOME"]) / ".bashrc").symlink_to(target)
+            result = self.installed(env)
             self.assertIn("symlink and was not edited", result.stdout)
+            self.assertIn("manual PATH step required", result.stdout)
             self.assertEqual(target.read_bytes(), b"my rc\n")
-        with tempfile.TemporaryDirectory() as directory:
-            env, _ = sandbox(Path(directory))
-            env["PATH"] = str(Path(env["HOME"]) / ".local/bin") + ":" + env["PATH"]
-            result = run_install(env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse((Path(env["HOME"]) / ".bashrc").exists())
 
-    def test_already_current_repairs_missing_path_block_or_names_manual_step(self):
-        present={**self.env,"PATH":str(self.launcher.parent)+":"+self.env["PATH"]}
-        first=run_install(present)
-        self.assertEqual(first.returncode,0,first.stdout+first.stderr)
-        self.assertFalse((self.home/'.bashrc').exists())
-        self.assertFalse((self.home/'.profile').exists())
-        receipt=self.receipt.read_bytes()
-        repaired=run_install(self.env)
-        self.assertEqual(repaired.returncode,0,repaired.stdout+repaired.stderr)
-        self.assertIn('Already current',repaired.stdout)
-        self.assertIn('PATH: open a new shell',repaired.stdout)
-        for file in (self.home/'.bashrc',self.home/'.profile'):
-            self.assertEqual(file.read_text().count('# >>> pod path >>>'),1)
-        self.assertEqual(self.receipt.read_bytes(),receipt)
-        self.assertEqual(run_install(self.env).returncode,0)
-        self.assertEqual((self.home/'.bashrc').read_text().count('# >>> pod path >>>'),1)
-        with tempfile.TemporaryDirectory() as directory:
-            env,_=sandbox(Path(directory))
-            home=Path(env['HOME']);launcher=home/'.local/bin/pod'
-            ready={**env,'PATH':str(launcher.parent)+':'+env['PATH']}
-            self.assertEqual(run_install(ready).returncode,0)
-            target=Path(directory)/'foreign-rc';target.write_bytes(b'keep me\n')
-            (home/'.bashrc').symlink_to(target)
-            held=run_install(env)
-            self.assertEqual(held.returncode,0,held.stdout+held.stderr)
-            self.assertIn('manual PATH step required',held.stdout)
-            self.assertIn('symlink and was not edited',held.stdout)
-            self.assertEqual(target.read_bytes(),b'keep me\n')
+    def test_a_ready_path_edits_nothing_and_a_later_run_repairs_a_missing_block_once(self):
+        ready = {**self.env, "PATH": str(self.launcher.parent) + ":" + self.env["PATH"]}
+        self.installed(ready)
+        self.assertFalse((self.home / ".bashrc").exists() or (self.home / ".profile").exists())
+        receipt = self.receipt.read_bytes()
+        repaired = self.installed()
+        self.assertIn("Already current", repaired.stdout)
+        self.assertIn("PATH: open a new shell", repaired.stdout)
+        self.installed()
+        for file in (self.home / ".bashrc", self.home / ".profile"):
+            self.assertEqual(file.read_text().count("# >>> pod path >>>"), 1)
+        self.assertEqual(self.receipt.read_bytes(), receipt)
 
-    def test_shadowing_duplicate_and_drift_are_reported(self):
+    def test_a_shadowing_command_a_duplicate_and_a_local_edit_are_reported_not_changed(self):
         foreign = self.root / "bin/pod"
-        foreign.write_text("#!/bin/sh\nexit 0\n"); foreign.chmod(0o755)
+        foreign.write_text("#!/bin/sh\nexit 0\n")
+        foreign.chmod(0o755)
         duplicate = self.home / "codex/skills/pod"
         duplicate.mkdir(parents=True)
         (duplicate / "SKILL.md").write_text("foreign")
@@ -408,142 +328,137 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("shadows this launcher", result.stdout)
         self.assertIn("Duplicate skill", result.stdout)
         self.assertEqual((duplicate / "SKILL.md").read_text(), "foreign")
-        doctor = json.loads(run_pod(self.env, "doctor", "--json").stdout)
-        self.assertTrue(doctor["launcher"]["shadowed"])
-        self.assertIn(str(duplicate), doctor["installation_checks"]["duplicates"])
+        report = doctor(self.env)["installation"]
+        self.assertTrue(report["launcher"]["shadowed"])
+        self.assertEqual((report["duplicates"], report["healthy"]), ([str(duplicate)], True))
         (self.canonical / "SKILL.md").write_text((self.canonical / "SKILL.md").read_text() + "\n# local edit\n")
-        doctor = json.loads(run_pod(self.env, "doctor", "--json").stdout)
-        self.assertFalse(doctor["installation_checks"]["digest_matches"])
-        self.assertEqual(doctor["installation_checks"]["receipt_status"], "installed")
+        report = doctor(self.env)["installation"]
+        self.assertEqual((report["digest_matches"], report["healthy"], report["receipt_status"]), (False, False, "installed"))
+        self.assertIn("one-shot installer", report["next"])
 
-    def test_update_a_to_b_preserves_edit_and_fast_path(self):
+
+class UpdateAndRecoveryTests(InstallerCase):
+    def test_update_replaces_the_bundle_preserves_a_local_edit_and_is_then_current(self):
         self.installed()
         prior = json.loads(self.receipt.read_text())["target"]["digest"]
-        skill = (ROOT / "skills/pod/SKILL.md").read_bytes()
-        # Change bundle bytes while preserving valid skill structure.
-        changed = skill + b"\n"
-        newer = archive_tree(self.root / "newer.tar.gz", changes={"skills/pod/SKILL.md": changed})
+        newer, changed = self.newer()
         env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri()}
         result = run_pod(env, "update")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Reload active coordinators", result.stdout)
-        current = json.loads(self.receipt.read_text())["target"]["digest"]
-        self.assertNotEqual(current, prior)
+        self.assertNotEqual(json.loads(self.receipt.read_text())["target"]["digest"], prior)
         self.assertEqual((self.canonical / "SKILL.md").read_bytes(), changed)
         self.assertIn("Already current", run_pod(env, "update").stdout)
         (self.canonical / "SKILL.md").write_bytes(changed + b"\n# my edit\n")
         result = run_pod(env, "update")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Preserved changed skill", result.stdout)
         preserved = list((self.home / "data/pod/preserved").glob("skill-*/SKILL.md"))
         self.assertTrue(any(b"my edit" in path.read_bytes() for path in preserved))
         self.assertEqual((self.canonical / "SKILL.md").read_bytes(), changed)
 
-    def test_update_from_the_previous_release_line_notices_superseded_objectives(self):
-        """The installed 0.5 updater runs the staged 0.6 installer, which lists and blocks old records."""
-        prior = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--verify", "--quiet",
-                                   "c77546d^{commit}"], capture_output=True, text=True)
-        if prior.returncode:
-            self.skipTest("the 0.5 commit is not in this checkout")
-        old = self.root / "prior.tar.gz"
-        subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar.gz", "--prefix=pod-source/",
-                        "-o", str(old), prior.stdout.strip()], check=True)
-        first = run_install({**self.env, "POD_INSTALL_SOURCE": old.as_uri()})
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        record = self.home / "state/pod/old-objective/context.json"
-        record.parent.mkdir(parents=True)
-        record.write_text(json.dumps({"schema": "pod-context/v4", "revision": 3, "owner": "owner",
-                                      "checkpoint": {"schema": "pod-checkpoint/v2", "objective": "prior-objective"},
-                                      "admissions": {"a": {"schema": "pod-admission/v3", "run_id": "r"}},
-                                      "interventions": {}, "source_rejections": {}, "constraints": []}))
-        before = record.read_bytes()
-        updated = run_pod(self.env, "update")
-        self.assertEqual(updated.returncode, 0, updated.stdout + updated.stderr)
-        self.assertIn("superseded state schemas and are blocked; nothing was converted", updated.stdout)
-        self.assertIn("prior-objective: pod-admission/v3, pod-checkpoint/v2", updated.stdout)
-        self.assertEqual(record.read_bytes(), before)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT / "VERSION").read_text().strip())
-        doctor = json.loads(run_pod(self.env, "doctor", "--json").stdout)
-        self.assertEqual(doctor["state"]["superseded"],
-                         [{"record": "old-objective", "objective": "prior-objective",
-                           "schemas": ["pod-admission/v3", "pod-checkpoint/v2"],
-                           "blocked": True, "converted": False}])
-        self.assertEqual(record.read_bytes(), before)
-
-    def test_missing_wheel_keeps_previous_bundle_and_half_copy_recovers(self):
+    def test_update_repairs_a_bundle_whose_package_cannot_start(self):
         self.installed()
-        before = self.receipt.read_bytes()
-        empty = self.root / "empty-wheelhouse"
-        empty.mkdir()
-        original_installer = (ROOT / "skills/pod/installer.py").read_bytes()
-        changed_pin = original_installer.replace(b'PIN = "PyYAML==6.0.3"', b'PIN = "PyYAML==6.0.2"')
-        self.assertNotEqual(changed_pin, original_installer)
-        pin_archive = archive_tree(self.root / "new-pin.tar.gz", changes={"skills/pod/installer.py": changed_pin})
-        failed = run_pod({**self.env, "POD_INSTALL_SOURCE": pin_archive.as_uri(),
-                          "PIP_FIND_LINKS": str(empty)}, "update")
-        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
-        self.assertIn("PyYAML installation failed", failed.stderr)
-        self.assertEqual(self.receipt.read_bytes(), before)
-        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), (ROOT / "VERSION").read_text().strip())
-        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n"
-        newer = archive_tree(self.root / "changed.tar.gz", changes={"skills/pod/SKILL.md": changed})
+        (self.canonical / "errors.py").unlink()
+        blocked = run_pod(self.env, "doctor", "--json")
+        self.assertEqual(blocked.returncode, 2)
+        self.assertEqual(json.loads(blocked.stdout)["error"]["code"], "bundle_incomplete")
+        self.assertNotIn("Traceback", blocked.stderr)
+        repaired = run_pod(self.env, "update")
+        self.assertEqual(repaired.returncode, 0, repaired.stdout + repaired.stderr)
+        self.assertTrue(doctor(self.env)["installation"]["healthy"])
+
+    def test_an_earlier_installation_with_its_own_environment_is_replaced_cleanly(self):
+        data = self.home / "data/pod"
+        environment, unrelated = data / "venv-0123456789ab", data / "venv-of-mine"
+        for path in (environment / "bin", unrelated):
+            path.mkdir(parents=True)
+        (environment / ".pod-venv").write_text("{}")
+        (unrelated / "keep").write_text("mine")
+        earlier = b"#!/bin/sh\n# pod-launcher/v1\nexec " + str(environment).encode() + b"/bin/python -I script \"$@\"\n"
+        self.launcher.parent.mkdir(parents=True)
+        self.launcher.write_bytes(earlier)
+        self.receipt.write_text(json.dumps({
+            "schema": "pod-install/v1", "status": "installed", "previous": None,
+            "target": {"version": "0.21.54", "digest": "a" * 64}, "launcher": str(self.launcher),
+            "launcher_digest": hashlib.sha256(earlier).hexdigest(), "updated_at": "2026-01-01T00:00:00+00:00"}))
+        self.config.parent.mkdir(parents=True)
+        self.config.write_bytes(EXISTING)
+        self.installed()
+        self.assertNotEqual(self.launcher.read_bytes(), earlier)
+        self.assertNotIn(b"venv", self.launcher.read_bytes())
+        self.assertFalse(environment.exists())
+        self.assertEqual((unrelated / "keep").read_text(), "mine")
+        self.assertEqual(self.config.read_bytes(), EXISTING)
+        self.assertEqual(run_pod(self.env, "--version").stdout.strip(), VERSION)
+        self.assertTrue(doctor(self.env)["installation"]["healthy"])
+
+    def test_a_killed_copy_blocks_the_launcher_until_a_rerun_recovers_it(self):
+        self.installed()
+        newer, changed = self.newer()
         env = {**self.env, "POD_INSTALL_SOURCE": newer.as_uri(), "POD_TEST_NPX_MODE": "half_copy"}
         process = subprocess.Popen([str(self.launcher), "update"], env=env, cwd=self.root / "work",
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, start_new_session=True)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
             deadline = time.monotonic() + 12
             while time.monotonic() < deadline and (self.canonical / "scripts/pod.py").exists():
                 time.sleep(.05)
             self.assertFalse((self.canonical / "scripts/pod.py").exists())
+        finally:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate(timeout=3)
-        finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.communicate(timeout=3)
         self.assertEqual(json.loads(self.receipt.read_text())["status"], "installing")
         incomplete = run_pod(self.env, "doctor", "--json")
         self.assertEqual(incomplete.returncode, 2)
         self.assertIn("installation incomplete", incomplete.stderr)
-        recovered = run_install({**self.env, "POD_INSTALL_SOURCE": newer.as_uri()})
-        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+        self.installed({**self.env, "POD_INSTALL_SOURCE": newer.as_uri()})
         self.assertEqual(json.loads(self.receipt.read_text())["status"], "installed")
         self.assertEqual((self.canonical / "SKILL.md").read_bytes(), changed)
 
-    def test_receipt_backed_empty_and_partial_copy_recover_but_foreign_content_does_not(self):
+    def test_a_failed_copy_returns_three_and_the_gate_answers_in_json(self):
         self.installed()
+        newer, changed = self.newer()
+        failed = run_install({**self.env, "POD_INSTALL_SOURCE": newer.as_uri(), "POD_TEST_NPX_MODE": "partial_fail"})
+        self.assertEqual(failed.returncode, 3, failed.stdout + failed.stderr)
+        self.assertEqual(json.loads(self.receipt.read_text())["status"], "installing")
+        self.installed({**self.env, "POD_INSTALL_SOURCE": newer.as_uri()})
+        receipt = json.loads(self.receipt.read_text())
+        self.receipt.write_text(json.dumps({**receipt, "status": "installing"}))
+        (self.canonical / "SKILL.md").write_bytes(changed + b"\n# neither previous nor target\n")
+        gate = run_pod(self.env, "doctor", "--json")
+        self.assertEqual(gate.returncode, 2)
+        self.assertEqual(json.loads(gate.stdout), {"status": "blocked", "error": json.loads(gate.stdout)["error"]})
+        self.assertEqual(json.loads(gate.stdout)["error"]["code"], "install_incomplete")
+        untouched = run_install({**self.env, "POD_TEST_NPX_MODE": "fail"})
+        self.assertEqual(untouched.returncode, 1, "a copy that never began leaves the placed bundle as it was")
+
+    def test_only_the_recorded_target_may_replace_an_interrupted_copy(self):
+        self.installed()
+
         def interrupt(contents: dict[str, bytes]) -> None:
-            receipt=json.loads(self.receipt.read_text())
-            receipt['status']='installing'
-            self.receipt.write_text(json.dumps(receipt))
+            self.receipt.write_text(json.dumps({**json.loads(self.receipt.read_text()), "status": "installing"}))
             shutil.rmtree(self.canonical)
             self.canonical.mkdir()
-            for name,data in contents.items():
-                target=self.canonical/name
-                target.parent.mkdir(parents=True,exist_ok=True)
-                target.write_bytes(data)
-        interrupt({})
-        self.assertEqual(run_install(self.env).returncode,0)
-        self.assertEqual(json.loads(self.receipt.read_text())['status'],'installed')
-        self.assertEqual(run_pod(self.env,'--version').stdout.strip(),(ROOT/'VERSION').read_text().strip())
-        interrupt({'catalog.json':b'partial catalog copy'})
-        self.assertEqual(run_install(self.env).returncode,0)
-        self.assertEqual(json.loads(self.receipt.read_text())['status'],'installed')
-        interrupt({'foreign.txt':b'unrelated contents'})
-        refused=run_install(self.env)
-        self.assertEqual(refused.returncode,1,refused.stdout+refused.stderr)
-        self.assertIn('foreign canonical skill path',refused.stderr)
-        self.assertEqual((self.canonical/'foreign.txt').read_bytes(),b'unrelated contents')
-        self.assertEqual(json.loads(self.receipt.read_text())['status'],'installing')
+            for name, data in contents.items():
+                (self.canonical / name).parent.mkdir(parents=True, exist_ok=True)
+                (self.canonical / name).write_bytes(data)
+        for contents in ({}, {"references/pes-template.md": b"partial copy"}):
+            interrupt(contents)
+            self.installed()
+            self.assertEqual(json.loads(self.receipt.read_text())["status"], "installed")
+        interrupt({"foreign.txt": b"unrelated contents"})
+        refused = run_install(self.env)
+        self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+        self.assertIn("foreign canonical skill path", refused.stderr)
+        self.assertEqual((self.canonical / "foreign.txt").read_bytes(), b"unrelated contents")
+        self.assertEqual(json.loads(self.receipt.read_text())["status"], "installing")
 
-    def test_concurrent_installer_and_sigint(self):
+    def test_a_second_installer_is_refused_and_an_interrupt_claims_nothing(self):
         started = self.root / "npx-started"
         env = {**self.env, "POD_TEST_NPX_MODE": "sleep", "POD_TEST_NPX_STARTED": str(started)}
         with ignored_sigint():
             first = subprocess.Popen(["sh", str(ROOT / "install.sh")], env=env, cwd=self.root / "work",
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     text=True, start_new_session=True, preexec_fn=restore_child_signals)
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                     start_new_session=True, preexec_fn=restore_child_signals)
         try:
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline and not started.exists():
@@ -560,108 +475,69 @@ class InstallerTests(unittest.TestCase):
                 os.killpg(first.pid, signal.SIGKILL)
                 first.communicate(timeout=3)
         self.assertEqual(json.loads(self.receipt.read_text())["status"], "installing")
-        self.assertEqual(run_install(self.env).returncode, 0)
+        self.installed()
 
-    def test_preflight_refusals_half_pipe_and_no_profile_mutation(self):
-        short = (ROOT / "install.sh").read_bytes()
-        cut = short[:short.index(b"main \"$@\"") // 2]
-        result = subprocess.run(["sh"], input=cut, env=self.env, cwd=self.root / "work",
-                                capture_output=True, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self.receipt.exists())
-        for command, body in (("uname", "#!/bin/sh\necho Darwin\n"),
-                              ("id", "#!/bin/sh\necho 0\n")):
+
+class BootstrapTests(InstallerCase):
+    def uninstalled(self):
+        self.assertFalse(self.receipt.exists() or self.launcher.exists() or self.canonical.exists())
+
+    def test_other_systems_root_and_missing_node_are_refused(self):
+        for command, body in (("uname", "#!/bin/sh\necho Darwin\n"), ("id", "#!/bin/sh\necho 0\n")):
             path = self.root / "bin" / command
-            path.write_text(body); path.chmod(0o755)
-            failed = run_install(self.env)
-            self.assertEqual(failed.returncode, 1)
-            self.assertFalse(self.receipt.exists())
+            path.write_text(body)
+            path.chmod(0o755)
+            self.assertEqual(run_install(self.env).returncode, 1)
             path.unlink()
-        npx = self.root / "bin/npx"
-        npx.unlink()
+            self.uninstalled()
+        (self.root / "bin/npx").unlink()
         for command in ("sh", "uname", "id"):
             (self.root / "bin" / command).symlink_to(shutil.which(command))
         failed = run_install({**self.env, "PATH": str(self.root / "bin")})
         self.assertEqual(failed.returncode, 1)
-        self.assertFalse(self.receipt.exists())
-        path = self.root / "bin" / "python3"
-        if path.is_symlink(): path.unlink()
-        path.write_text("#!/bin/sh\nexit 1\n")
-        path.chmod(0o755)
-        failed = run_install({**self.env, "PATH": str(self.root / "bin")})
-        self.assertEqual(failed.returncode, 1)
-        self.assertIn("stable python3", failed.stderr)
-        # No named minor is tried instead: an older interpreter on PATH is never a fallback.
-        older = self.root / "bin" / "python3.9"
-        older.symlink_to(shutil.which("python3"))
-        failed = run_install({**self.env, "PATH": str(self.root / "bin")})
-        self.assertEqual(failed.returncode, 1)
-        self.assertIn("stable python3", failed.stderr)
+        self.assertIn("npx", failed.stderr)
+        self.uninstalled()
 
-    def test_truncated_pipe_prefixes_cannot_report_success_or_install(self):
-        script=(ROOT/'install.sh').read_bytes()
-        self.assertEqual((script[:1],script[-1:]),(b'{',b'}'))
-        length=len(script)
-        prefixes=sorted(set(range(1,min(80,length)))
-                        | set(range(80,length,max(1,length//160)))
-                        | set(range(max(1,length-256),length)))
+    def test_only_a_stable_python3_is_used_and_no_named_minor_is_a_fallback(self):
+        for command in ("sh", "uname", "id"):
+            (self.root / "bin" / command).symlink_to(shutil.which(command))
+        python = self.root / "bin/python3"
+        python.unlink()
+        # A prerelease interpreter fails the bootstrap's own assertion, as this stand-in does.
+        python.write_text("#!/bin/sh\nexit 1\n")
+        python.chmod(0o755)
+        (self.root / "bin/python3.9").symlink_to(shutil.which("python3"))
+        failed = run_install({**self.env, "PATH": str(self.root / "bin")})
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("stable python3", failed.stderr)
+        self.uninstalled()
+
+    def test_the_staged_installer_repeats_the_refusals_for_the_update_path(self):
+        """`pod update` reaches the installer without the shell bootstrap, so it checks for itself."""
+        from pod import installer
+        stage = self.root / "stage"
+        (stage / "skills/pod").mkdir(parents=True)
+        (stage / "skills/pod/SKILL.md").write_text("text")
+        (stage / "skills/pod/VERSION").write_text("1.2.3\n")
+        prerelease = type("V", (), {"releaselevel": "candidate"})()
+        for target, value, message in (("platform.system", lambda: "Darwin", "non-root user on Linux"),
+                                       ("os.geteuid", lambda: 0, "non-root user on Linux"),
+                                       ("sys.version_info", prerelease, "stable CPython")):
+            errors = StringIO()
+            with self.subTest(target=target), patch.dict(os.environ, self.env, clear=True), \
+                    patch("pod.installer." + target, value), redirect_stderr(errors), redirect_stdout(StringIO()):
+                self.assertEqual(installer.main([str(stage)]), 1)
+            self.assertIn(message, errors.getvalue())
+            self.uninstalled()
+
+    def test_no_prefix_of_the_piped_script_can_install_or_report_success(self):
+        script = (ROOT / "install.sh").read_bytes()
+        self.assertEqual((script[:1], script[-1:]), (b"{", b"}"))
+        length = len(script)
+        prefixes = sorted(set(range(1, min(80, length))) | set(range(80, length, max(1, length // 160)))
+                          | set(range(max(1, length - 256), length)))
         for count in prefixes:
-            with self.subTest(prefix=count):
-                result=subprocess.run(['/bin/sh'],input=script[:count],env=self.env,
-                                      cwd=self.root/'work',capture_output=True,timeout=3)
-                self.assertNotEqual(result.returncode,0)
-                self.assertFalse(self.receipt.exists())
-                self.assertFalse(self.launcher.exists())
-                self.assertFalse(self.canonical.exists())
-
-    def test_partial_copy_returns_three_and_integrity_gate_is_json(self):
-        self.installed()
-        changed = (ROOT / "skills/pod/SKILL.md").read_bytes() + b"\n"
-        newer = archive_tree(self.root / "partial.tar.gz", changes={"skills/pod/SKILL.md": changed})
-        failed = run_install({**self.env, "POD_INSTALL_SOURCE": newer.as_uri(),
-                              "POD_TEST_NPX_MODE": "partial_fail"})
-        self.assertEqual(failed.returncode, 3, failed.stdout + failed.stderr)
-        self.assertEqual(json.loads(self.receipt.read_text())["status"], "installing")
-        self.assertEqual(run_pod(self.env, "doctor", "--json").returncode, 2)
-        recovered = run_install({**self.env, "POD_INSTALL_SOURCE": newer.as_uri()})
-        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
-        receipt = json.loads(self.receipt.read_text())
-        receipt["status"] = "installing"
-        self.receipt.write_text(json.dumps(receipt))
-        (self.canonical / "SKILL.md").write_bytes(changed + b"\n# middle state\n")
-        gate = run_pod(self.env, "doctor", "--json")
-        self.assertEqual(gate.returncode, 2)
-        self.assertEqual(json.loads(gate.stdout)["error"]["code"], "install_incomplete")
-
-    def test_sigkill_during_dependency_download_recovers(self):
-        import http.server
-        import threading
-        request = threading.Event()
-        release = threading.Event()
-        class SlowWheel(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                request.set()
-                release.wait(30)
-            def log_message(self, *_args):
-                pass
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SlowWheel)
-        worker = threading.Thread(target=server.serve_forever, daemon=True)
-        worker.start()
-        env = {**self.env, "PIP_FIND_LINKS": f"http://127.0.0.1:{server.server_port}/"}
-        process = subprocess.Popen(["sh", str(ROOT / "install.sh")], env=env, cwd=self.root / "work",
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, start_new_session=True)
-        try:
-            self.assertTrue(request.wait(12), "pip never requested the local wheel index")
-            os.killpg(process.pid, signal.SIGKILL)
-            process.communicate(timeout=3)
-            self.assertFalse(self.receipt.exists())
-            self.assertFalse(self.launcher.exists())
-        finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.communicate(timeout=3)
-            release.set()
-            server.shutdown(); server.server_close()
-        recovered = run_install(self.env)
-        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+            result = subprocess.run(["/bin/sh"], input=script[:count], env=self.env, cwd=self.root / "work",
+                                    capture_output=True, timeout=3)
+            self.assertNotEqual(result.returncode, 0, count)
+        self.uninstalled()

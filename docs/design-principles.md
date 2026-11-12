@@ -180,8 +180,10 @@ separate policy-enforcement system, no ceiling on counts and no compliance repor
 
 | What | Where |
 | --- | --- |
-| The Python decision | `tests/test_suite_lanes.py`, against `.github/workflows/ci.yml` |
-| `AGENTS.md` points here | `tests/test_inventory.py` |
+| The Python decision | `tests/install/test_workflow.py`, against `.github/workflows/ci.yml` |
+| `AGENTS.md` points here | `tests/install/test_documents.py` |
+| Coordination loads no model, terminal or network code | `tests/core/test_routefile.py` |
+| Only the five concepts are persisted | `tests/core/test_log.py` |
 
 ## What is not here
 

@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Pod helper launcher: runs the package bundled beside this script. It installs nothing.
+"""Pod launcher: runs the package bundled beside this script. It installs nothing.
 
-Deliberately importable by any Python 3, so an old interpreter reports a clear
-prerequisite instead of a syntax error. Nothing from the Pod package or PyYAML is
-imported until the prerequisites hold.
+Deliberately importable by any Python 3, so an old or prerelease interpreter reports a clear
+prerequisite instead of a syntax error. Nothing from the Pod package is imported until the
+prerequisites hold.
 """
 
 import importlib.util
-import ast
 import json
 import os
 import sys
 
 REINSTALL = "curl -fsSL https://raw.githubusercontent.com/j3w1/pod/main/install.sh | sh"
+# What must exist before the package can even report its own problems.
+ENTRY_FILES = ("__init__.py", "cli.py", "errors.py", "VERSION")
 
 
 def bundle_dir(script=None):
@@ -21,42 +22,8 @@ def bundle_dir(script=None):
     return os.path.dirname(os.path.dirname(os.path.realpath(target)))
 
 
-def _yaml_importable():
-    try:
-        import yaml  # noqa: F401
-    except Exception:
-        return False
-    return True
-
-
-def _inventory(root):
-    """Read the one authored bundle inventory without importing Pod or PyYAML."""
-    path = os.path.join(root, "bundle.py")
-    with open(path, encoding="utf-8") as stream:
-        source = stream.read(64 * 1024 + 1)
-    if len(source) > 64 * 1024:
-        raise ValueError("bundle inventory is oversized")
-    entries = {}
-    for node in ast.parse(source).body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            name = node.targets[0].id
-            if name in ("BUNDLE_TEXT", "BUNDLE_MODULES"):
-                entries[name] = ast.literal_eval(node.value)
-    if set(entries) != {"BUNDLE_TEXT", "BUNDLE_MODULES"}:
-        raise ValueError("bundle inventory is incomplete")
-    names = tuple(entries["BUNDLE_TEXT"]) + tuple(entries["BUNDLE_MODULES"])
-    if (not names or any(not isinstance(name, str) or not name or name.startswith("/")
-                         or ".." in name.split("/") for name in names) or len(set(names)) != len(names)):
-        raise ValueError("bundle inventory has unsafe names")
-    return names
-
-
-def preflight(version_info=None, find_spec=None, bundle=None):
-    """Return None when the helper can run, else one actionable failure record.
-
-    Nothing from the Pod package is imported until every prerequisite holds, so a
-    missing one produces guidance rather than a traceback.
-    """
+def preflight(version_info=None, bundle=None):
+    """Return None when the package can run, else one actionable failure record."""
     version = sys.version_info if version_info is None else version_info
     if len(version) > 3 and version[3] != "final":
         running = ".".join(str(part) for part in version[:3]) + "-" + str(version[3])
@@ -65,33 +32,22 @@ def preflight(version_info=None, find_spec=None, bundle=None):
                             "latest stable interpreter: python3 %s"
                             % (running, sys.executable, os.path.realpath(__file__)))}
     root = bundle_dir() if bundle is None else bundle
-    try:
-        names = _inventory(root)
-    except (OSError, UnicodeError, SyntaxError, ValueError, TypeError) as exc:
-        return {"code": "bundle_incomplete",
-                "message": ("Pod bundle inventory is unavailable (%s). Rerun the one-shot installer: %s"
-                            % (type(exc).__name__, REINSTALL))}
-    missing = [name for name in names if not os.path.isfile(os.path.join(root, *name.split("/")))]
+    missing = [name for name in ENTRY_FILES if not os.path.isfile(os.path.join(root, name))]
     if missing:
         return {"code": "bundle_incomplete",
                 "message": ("Pod bundle at %s is incomplete (missing %s). Reinstall it: %s"
                             % (root, ", ".join(missing), REINSTALL))}
-    probe = _yaml_importable if find_spec is None else find_spec
-    if not probe():
-        return {"code": "pyyaml_missing",
-                "message": ("PyYAML is not available in this Pod environment; rerun the one-shot "
-                            "installer: %s" % REINSTALL)}
     return None
 
 
 def load_pod(bundle):
-    """Import the bundled package as `pod`, ahead of any installed copy."""
+    """Import the bundled package as `pod`, ahead of any other copy on the path."""
     if sys.modules.get("pod") is not None:
         return sys.modules["pod"]
     spec = importlib.util.spec_from_file_location(
         "pod", os.path.join(bundle, "__init__.py"), submodule_search_locations=[bundle])
     if spec is None or spec.loader is None:
-        raise SystemExit("pod: bundle at %s cannot be loaded" % bundle)
+        raise ImportError("bundle at %s cannot be loaded" % bundle)
     module = importlib.util.module_from_spec(spec)
     sys.modules["pod"] = module
     spec.loader.exec_module(module)
@@ -99,9 +55,8 @@ def load_pod(bundle):
 
 
 def _installer(bundle):
-    """Load the stdlib installer before any package or PyYAML import."""
-    path = os.path.join(bundle, "installer.py")
-    spec = importlib.util.spec_from_file_location("pod_installer", path)
+    """Load the standard-library installer on its own, without the package."""
+    spec = importlib.util.spec_from_file_location("pod_installer", os.path.join(bundle, "installer.py"))
     if spec is None or spec.loader is None:
         raise OSError("installer is missing")
     module = importlib.util.module_from_spec(spec)
@@ -110,8 +65,9 @@ def _installer(bundle):
 
 
 def _integrity_failure(bundle):
+    """An installation that stopped mid-copy is neither its previous bundle nor its target."""
     if not os.path.isfile(os.path.join(bundle, "installer.py")):
-        return None  # The ordinary inventory check reports a missing module.
+        return None  # The ordinary entry-file check reports a missing module.
     try:
         installer = _installer(bundle)
         receipt = installer.read_receipt(installer.receipt_path())
@@ -123,68 +79,54 @@ def _integrity_failure(bundle):
         if actual in allowed and actual is not None:
             return None
     except Exception:
-        return {"code": "install_incomplete", "message": "Installation receipt or bundle is incomplete; rerun: " + REINSTALL}
+        return {"code": "install_incomplete",
+                "message": "Installation receipt or bundle is incomplete; rerun: " + REINSTALL}
     return {"code": "install_incomplete", "message": "Installation stopped during skill copy; rerun: " + REINSTALL}
+
+
+def _blocked(arguments, failure):
+    if "--json" in arguments:
+        print(json.dumps({"status": "blocked", "error": failure}, indent=2, sort_keys=True))
+    else:
+        print("pod: " + failure["message"], file=sys.stderr)
+    return 2
 
 
 def main(argv=None):
     sys.dont_write_bytecode = True
     arguments = list(sys.argv[1:] if argv is None else argv)
     root = bundle_dir()
-    if arguments[:1] == ["__install"]:
+    # Installing and updating need only the installer, so they can repair a damaged bundle.
+    if arguments[:1] == ["__install"] or arguments == ["update"]:
         try:
-            return _installer(root).main(arguments[1:])
-        except (OSError, ValueError):
-            print("pod-install: installer bundle is incomplete", file=sys.stderr)
+            return _installer(root).main(arguments[1:] if arguments[0] == "__install" else ["--update"])
+        except (OSError, ValueError, SyntaxError):
+            print("pod-install: installer bundle is incomplete; rerun: " + REINSTALL, file=sys.stderr)
             return 2
     integrity = _integrity_failure(root)
     if integrity is not None:
-        if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": integrity}, sort_keys=True))
-        else:
-            print("pod: " + integrity["message"], file=sys.stderr)
-        return 2
+        return _blocked(arguments, integrity)
     if arguments == ["--version"]:
         try:
             with open(os.path.join(root, "VERSION"), encoding="ascii") as stream:
-                value = stream.read().strip()
+                print(stream.read().strip())
         except (OSError, UnicodeError):
             print("pod: bundle VERSION is unavailable", file=sys.stderr)
             return 2
-        print(value)
         return 0
     failure = preflight(bundle=root)
     if failure is not None:
-        if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": failure},
-                             indent=2, sort_keys=True))
-        else:
-            print("pod: " + failure["message"], file=sys.stderr)
-        return 2
+        return _blocked(arguments, failure)
     try:
         load_pod(root)
-        if arguments[:1] == ["internal"]:
-            from pod.internal import main as internal_main
-
-            entry = internal_main
-        else:
-            from pod.cli import main as cli_main
-
-            entry = cli_main
+        from pod.cli import main as entry
     except ImportError as exc:
-        # The name check above covers the files needed to start. A module missing deeper in
-        # the package would otherwise surface as a traceback, which is the one thing a
-        # prerequisite failure must never look like.
-        failure = {"code": "bundle_incomplete",
-                   "message": ("Pod bundle at %s is incomplete (%s). Reinstall it: %s"
-                               % (root, exc, REINSTALL))}
-        if "--json" in arguments:
-            print(json.dumps({"schema": "pod-cli/v5", "status": "blocked", "error": failure},
-                             indent=2, sort_keys=True))
-        else:
-            print("pod: " + failure["message"], file=sys.stderr)
-        return 2
-    return entry(arguments[1:] if arguments[:1] == ["internal"] else arguments)
+        # The entry-file check covers what is needed to start. A module missing deeper in the
+        # package would otherwise surface as a traceback, which a prerequisite failure must never be.
+        return _blocked(arguments, {"code": "bundle_incomplete",
+                                    "message": ("Pod bundle at %s is incomplete (%s). Reinstall it: %s"
+                                                % (root, exc, REINSTALL))})
+    return entry(arguments)
 
 
 if __name__ == "__main__":

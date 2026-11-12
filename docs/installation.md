@@ -1,14 +1,13 @@
 # Installing Pod on Linux
 
-Pod's one-shot installer downloads the current `main` source, validates the `skills/pod` bundle, installs it through the pinned skills CLI for Codex and Claude Code, and places a user-local `pod` launcher. Installation does not test account sign-in, connect Orca, start workers, call a model, or edit an agent's settings.
+Pod's one-shot installer downloads the current `main` source, validates the `skills/pod` bundle, places it through the pinned skills CLI for Codex and Claude Code, and writes a user-local `pod` launcher. Installation does not test account sign-in, connect Orca, start workers, call a model, or edit an agent's settings. It never reads or writes Pod's state directory.
 
 ## Prerequisites
 
 - Linux and a non-root user.
-- The latest stable CPython as `python3` on PATH, with `venv`, `ensurepip`, and curses. The installer uses that `python3` and refuses a prerelease or a missing module; it never falls back to another interpreter. On Debian-derived systems the matching `venv` package may be needed. Provision the interpreter through the host's approved runtime provisioning, not through the installer.
-- PyYAML is installed from a prebuilt wheel. Only when pip finds no wheel for the running interpreter (a new CPython often precedes its wheels), and only for the exact pinned `PyYAML==6.0.3`, the installer builds PyPI's source archive `pyyaml-6.0.3.tar.gz`, accepted solely by its pinned SHA-256; a hash mismatch or a failed build refuses. That build downloads its build tools from PyPI.
+- The latest stable CPython as `python3` on PATH, with curses (used by `pod models`). The installer uses that `python3` and refuses a prerelease; it never falls back to another interpreter. Pod needs nothing beyond the standard library, so there is no virtual environment and nothing is installed from PyPI.
 - Node and `npx`, plus curl or wget.
-- Network access to `raw.githubusercontent.com` for the bootstrap script, `codeload.github.com` for source, PyPI for the pinned PyYAML wheel, and npm for `skills@1.7.0`.
+- Network access to `raw.githubusercontent.com` for the bootstrap script, `codeload.github.com` for the source, and npm for `skills@1.7.0`.
 - Orca and an authenticated Codex or Claude Code session for live delegation. Installation itself does not require them to be running.
 
 ## One command or inspect first
@@ -27,7 +26,20 @@ less pod-install.sh
 sh pod-install.sh
 ```
 
-The script refuses root and non-Linux systems. It downloads one tarball, rejects unsafe archive paths, then runs the staged stdlib installer. The installer checks prerequisites and ownership before changing Pod-owned paths, creates a keyed venv with the PyYAML pin declared in `skills/pod/installer.py`, validates the staged skill/catalog, and writes an `installing` receipt before the skills CLI copies the canonical skill. It verifies the copy, Claude link and launcher, creates default preferences only when absent, handles PATH, and writes `installed` last. An incomplete copy blocks the launcher until a rerun repairs it. Output is plain in pipes and logs; a terminal also gets one small ASCII orca-pod banner.
+The script refuses root and other systems. It downloads one tarball, rejects unsafe archive paths, then runs the staged installer, which uses only the standard library. In order, the installer:
+
+1. Checks prerequisites and ownership before changing anything: a `pod` command, skill directory or Claude link it did not place is refused, not replaced.
+2. Validates the staged bundle.
+3. Writes a receipt marked `installing`.
+4. Lets the skills CLI copy the skill, then verifies that the copy's digest equals the validated source and that the Claude link points at it.
+5. Writes the launcher.
+6. Creates the preference file only when none exists.
+7. Adds the PATH block where needed.
+8. Marks the receipt `installed`.
+
+An incomplete copy blocks the launcher until a rerun repairs it. Output is plain in pipes and logs; a terminal also gets one small ASCII banner.
+
+The bundle is whatever the skill directory holds: every Python, Markdown, JSON and YAML file under `skills/pod`, plus `VERSION`. No list names its files, so a new module is part of the bundle as soon as it is added. `python -m pod.skill_validation` checks the source tree, and `python -m pod.skill_validation --installed PATH` proves a placed copy carries the same bytes.
 
 ## Paths and ownership
 
@@ -35,56 +47,28 @@ The script refuses root and non-Linux systems. It downloads one tarball, rejects
 | --- | --- |
 | `~/.agents/skills/pod` | Canonical skills-CLI copy used by Codex. |
 | `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/pod` | Relative link to the canonical copy for Claude Code. |
-| `${XDG_DATA_HOME:-~/.local/share}/pod/venv-*` | Isolated, keyed PyYAML environment with a Pod marker. |
 | `${XDG_DATA_HOME:-~/.local/share}/pod/install.json` | Version and digest receipt; `installed` is written last. |
 | `${XDG_DATA_HOME:-~/.local/share}/pod/preserved/skill-*` | A changed canonical copy saved before replacement. |
-| `~/.local/bin/pod` | Owned shell launcher into the one installed bundle. |
-| `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` | Personal `pod/v2` route preferences, Preferred and Pin, worker ceiling and refresh setting; written only when absent, never rewritten by the installer. |
-| `${XDG_CACHE_HOME:-~/.cache}/pod/models/` | Cached public model observations: `current.json`, `previous.json`, `refresh.json` and a lock. Disposable. |
+| `~/.local/bin/pod` | Owned shell launcher: it runs the placed bundle with the `python3` the installer verified. |
+| `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` | Personal route preferences, Preferred, Pin and who may authorize a merge. Written only when absent; never rewritten by an install or an update. |
+| `${XDG_CACHE_HOME:-~/.cache}/pod/` | Cached public model observations. Disposable. |
 
-The installer may append one guarded PATH block to `.zshrc`, `.bashrc` and a Bash login file, or `.profile`, according to `$SHELL`. It never follows a symlinked rc file. It prints a `fish_add_path` instruction for fish instead of editing fish configuration. Reopen the shell when it adds a block; a child installer cannot change its parent shell. A different `pod` earlier on PATH and any duplicate skill copy are reported for inspection, never removed automatically. `CODEX_HOME` is not a second installation destination.
+A first preference file enables each route the shipped registry lists, except `ultra` efforts, which are never enabled by default. If the registry cannot be read it enables nothing and says so. An existing file is byte-identical after every install and update, including a file this version cannot read: that one is reported, yields no eligible route, and waits for `pod config edit`.
+
+The installer may append one guarded PATH block to `.zshrc`, `.bashrc` and a Bash login file, or `.profile`, according to `$SHELL`. It never follows a symlinked rc file. It prints a `fish_add_path` instruction for fish instead of editing fish configuration. Reopen the shell when it adds a block; a child process cannot change its parent shell. A different `pod` earlier on PATH and any duplicate skill copy are reported for inspection, never removed. `CODEX_HOME` is not a second installation destination.
+
+Earlier installers kept a Python environment under `${XDG_DATA_HOME:-~/.local/share}/pod/venv-*`, each with a Pod marker file. A successful install removes those marked directories, because nothing uses them now, and leaves any unmarked directory alone.
 
 ## Updating and recovery
 
-`pod update` downloads `main`, runs the same staged checks, and returns “Already current” when the receipt, launcher and copy match. A change to the canonical skill is preserved under `preserved/` before the skills CLI replaces it. Running native workers remain untouched; reload active coordinator conversations before new starts.
+`pod update` downloads `main`, runs the same staged checks, and reports “Already current” when the receipt, launcher and copy match. A change someone made to the canonical skill is preserved under `preserved/` before the skills CLI replaces it. Running workers are untouched; reload active coordinator conversations before new starts. `pod update` needs only the installer, so it also repairs a bundle whose package can no longer start.
 
-Status and doctor list objective state in an older schema, block only that objective and never convert it; existing native workers remain Orca-owned.
+If a download or a copy is interrupted, rerun the one-shot installer or `pod update`. A receipt still marked `installing` records the previous and the target digests; a copy that matches neither makes every other command answer `install_incomplete` instead of running. Only a copy made for the recorded target is replaced automatically; anything else in that directory is refused and left as it is.
 
-If a download, dependency install, or copy is interrupted, rerun the one-shot installer or `pod update`. A receipt still marked `installing` records the previous and target digests. A bundle with neither digest yields `install_incomplete` instead of false readiness. `pod doctor --json` reports the receipt, canonical digest, venv, launcher ownership, placements, duplicates, and relevant next action.
+`pod doctor` reads and reports the version, the interpreter, the bundle and its digest, the receipt, launcher ownership, the Claude link, duplicates, whether `orca`, `git` and `gh` are present and what version each prints, the preference file's status, and where configuration, state and cache live. It uses no network and changes nothing. What it cannot observe it reports as unknown.
 
-An invalid preference file is kept untouched, with no eligible routes; use `pod config edit` to correct it. A 0.6.x `pod/v1` file is also kept byte for byte and reported as needing route setup: until you confirm the setup, no route is eligible for new delegation, while diagnosis and recovery of existing native work continue. Open `pod` in a terminal to review the proposed exact routes, the notes and the choices you still have to make, such as an exact effort for an earlier pin; saving keeps the original as `config.yaml.pod-v1` next to the new file. The setup never infers a Preferred route, invents a pin effort or carries a choice over to a replacement model generation; Sonnet 5.5 and GPT-6.1 Sol are not enabled from earlier Sonnet 5 or GPT-6 Sol choices. `pod config edit` remains the manual path. The installer never overwrites a foreign `~/.local/bin/pod` or a redirected rc file. If `pod` resolves to another command, inspect `command -v pod` and your PATH order before removing anything.
+The installer never overwrites a `~/.local/bin/pod` it did not write or a redirected rc file. If `pod` resolves to another command, inspect `command -v pod` and your PATH order before removing anything.
 
 ## Removal
 
-Run `pod doctor --json` first to identify owned paths. Remove the Pod skill through your skills manager or remove only the canonical copy and Claude link identified above; inspect any reported duplicate before touching it. Remove the launcher only when its content matches the Pod-owned template. Remove the `pod` data directory for the venv, receipt, lock, and preserved copies only after deciding whether to keep those backups. Remove only the guarded PATH block between `# >>> pod path >>>` and `# <<< pod path <<<` from files that contain it. Keep or remove the personal config, and any `config.yaml.pod-v1` copy, separately according to whether you want to retain your choices. The model observation cache under `${XDG_CACHE_HOME:-~/.cache}/pod/models/` holds only public data and can be removed at any time. Do not delete an unrelated executable, another skill copy, or agent application settings.
-
-## Model data and refresh
-
-`pod models` shows shipped routes and newly discovered or unsupported Anthropic and OpenAI observations by default. Press `o` to cycle discovery filters, including supported routes only; `F` clears filters back to the inclusive view. Press `R` to fetch public data now; the result reports AA rows added, changed and removed. Observations stay read-only until Pod ships verified routes. Claude Haiku 5.5 and GPT-6.1 Terra are supported at all five efforts; an existing installation leaves newly added routes not set until you explicitly enable them. “Native access unknown” is informational and does not block editing supported routes. Update Pod and reload your coordinators before enabling newly supported routes; an older reader rejects unsupported route keys. With the default `refresh: automatic`, opening the workspace in a terminal starts one bounded background refresh when there is no local observation cache or the cached data is at least 24 hours old. It reads three fixed public HTTPS pages: the Artificial Analysis leaderboard at `artificialanalysis.ai` (required), Anthropic's models overview at `platform.claude.com` and OpenAI's models page at `developers.openai.com`. The whole refresh is bounded to about 20 seconds. It honors a server's Retry-After, waits six hours after a failed attempt (ten minutes after a cancelled one), and writes only the observation cache; it never writes preferences, starts workers or calls a model. The workspace renders cached data first and shows data at least seven days old as stale. Set `refresh: manual` in the personal file to disable automatic network access; `pod models refresh` then remains an explicit command, and `pod models refresh --check` validates and compares without saving. `pod config`, `pod status`, `pod doctor` and worker admission never fetch. Without a cache Pod uses the small bundled snapshot.
-
-## Registry and observation maintenance
-
-The supported models live in the `pod-catalog/v3` registry `skills/pod/catalog.json`: exact ids, verified efforts, explicit per-source aliases, attributed provider guidance of 20–70 words, provider sources with checked dates, guide profiles and documented context ceilings. It holds no benchmark measurements. Verify an id and its efforts against the provider page and the installed adapter's help or bundled catalog before editing; adding an ordinary model is a registry edit. Run `PYTHONPATH=skills python -m pod.catalog --check`, the focused registry, route and workspace tests, visual snapshots and the repository gates.
-
-The bundled fallback `skills/pod/observations.json` comes from one real refresh. To regenerate it, run one `pod models refresh` into a disposable `POD_CACHE_HOME`, copy that run's `current.json` unchanged, and keep it under the 64 KB bundle text limit. Observations never prove native access, billing or effective model settings.
-
-## Decision records and rollback
-
-An admission carrying `abandoned_accounting` requires a reader that supports fenced abandoned-assignment accounting. Preceding readers refuse that explicit field without changing the record; they must not reinterpret it as a started worker or a reusable terminal. Admissions without the field retain their existing representation and readability. Preserve the evidence and use a compatible reader rather than deleting the field for rollback.
-
-A delivery recorded from a host's protected local append (`checkpoint.delivery` with `kind: local_append`, [R209](spec/delivery.md#r209--record-a-host-verified-local-append-as-a-typed-delivery)) requires a reader that supports it. Every earlier reader validates the delivery record as exactly the remote-merge shape, so it refuses that record `state_unsupported` without changing it, refuses a `closure-evidence.json` carrying `local_delivery` as malformed while still reading the objective closed, and in repository scans (`pod status --list`, admission discovery, `pod sweep`) shows that one record as an unsupported, unavailable row while every other record reads normally. None of these writes. Do not delete or rewrite the delivery to roll back; use a compatible reader. Records without it keep their existing representation and readability.
-
-A closure that records its settled set (`settlement_digest` and `settlement_admissions`) requires a reader that supports the recorded settled set. Preceding readers refuse that closure without changing the record. Do not delete or rewrite those fields to roll back: the replay needs them to prove what the closure accepted, so removing them would only let a preceding reader accept a closure it cannot check. Preserve the record and use a compatible reader. Closures recorded without the fields keep their existing representation and readability ([R155](spec/delivery.md#r155--close-the-bound-source-after-pod-closure-and-retry-by-sweep)).
-
-Machine decision policy and remembered sensitive tool permissions are chosen by answering Pod, using `pod policy` and the tool decision flow; installation does not answer for the person. They live alongside route preferences in the existing personal config. A skipped first setup retains Careful. Existing session authentication, tool access and host policy remain external to Pod.
-
-New decision records carry `decision_channels: 5`. Once marker 5 is actually written, the records require Pod 0.21.18 or newer; preceding readers refuse them without rewriting. That semantic marker is independent of the current physical storage format below; current physical publications deliberately require its compatible reader. Lossless placement preserves all existing decision markers and their semantic floors. It cannot remove an existing marker or its floor. The new personal fields `decision_policy`, `decision_generation`, `tool_permissions` and `pending_decisions` also require a compatible config reader. Removing those keys does not downgrade records already written. Preserve authority history and use a compatible reader; the installer performs no record migration or rollback conversion. Older supported records remain readable without rewriting.
-
-
-## Retained evidence storage
-
-Install a bundle implementing `pod-history-record/v1` (kind `context` or `governor`) before using `pod internal storage` to migrate an objective context or Governor journal. Inspection and full byte/structure audit are read-only; migration binds the exact inspected source revision and SHA256, preserves every logical value and retains the source revision and SHA256 as migration identity, and switches only that record's authoritative file. The installer never migrates records. Its schema-family notice recognizes the implemented format without certifying chunks, proof or live readiness.
-
-Migrated records deliberately refuse preceding readers and normal writers. A version label alone does not establish compatibility: retain the exact compatible bundle identity. Restoring an older source after accepted new revisions would discard evidence and is not a supported downgrade. Use a compatible reader or an independently reviewed lossless export. The detailed format, attribution unknowns, operating budgets and fault behavior are [R180](spec/interface.md#r180--grow-retained-evidence-through-immutable-revisions).
-
-Install/update also attempts queued immutable-cache reclamation outside objective writer locks. It never migrates a record or changes logical state. Deferred cleanup and queued bytes remain visible in `pod doctor`; explicit `storage` action `gc` retries a corruption-safe sweep. Earlier binaries may advise starting another objective or archiving/removing the record when they refuse this format. Do not follow that obsolete advice; continue with a compatible reader.
+Run `pod doctor` first to identify owned paths. Remove the Pod skill through your skills manager, or remove only the canonical copy and the Claude link named above; inspect any reported duplicate before touching it. Remove the launcher only when `pod doctor` reports it as owned. Remove the `pod` data directory, with its receipt, lock and preserved copies, only after deciding whether to keep those copies. Remove only the guarded PATH block between `# >>> pod path >>>` and `# <<< pod path <<<` from files that contain it. Keep or remove the preference file according to whether you want to retain your choices. The cache holds only public data and can be removed at any time. Do not delete an unrelated executable, another skill copy, or agent application settings.

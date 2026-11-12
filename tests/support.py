@@ -22,11 +22,16 @@ class PodCase(unittest.TestCase):
         homes = {name: str(self.tmp / name.lower()) for name in ("POD_STATE_HOME", "POD_CONFIG_HOME", "POD_CACHE_HOME")}
         path = os.pathsep.join([str(self.bin), "/usr/bin", "/bin"])
         env = patch.dict(os.environ, {**homes, "PATH": path, "HOME": str(self.tmp / "home"),
-                                      "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull})
+                                      "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
+                                      # No detached maintenance: a background Git process outlives the test.
+                                      "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "maintenance.auto",
+                                      "GIT_CONFIG_VALUE_0": "false", "GIT_CONFIG_KEY_1": "gc.auto",
+                                      "GIT_CONFIG_VALUE_1": "0"})
         env.start()
         self.addCleanup(env.stop)
         (self.tmp / "home").mkdir()
-        for name in ("ORCA_TERMINAL_HANDLE", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        for name in ("ORCA_TERMINAL_HANDLE", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "CODEX_HOME",
+                     "CLAUDE_CONFIG_DIR"):
             os.environ.pop(name, None)
 
     def write_routes(self, text: str) -> Path:

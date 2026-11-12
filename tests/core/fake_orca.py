@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""A stand-in `orca` for tests. It keeps Runs, Tasks and Dispatches in one JSON file and
+reproduces the two behaviours Pod relies on: a coordinator that no longer holds the Run is
+refused, and a repeated request returns the first outcome instead of starting a second worker."""
+
+import json
+import os
+import sys
+
+STATE = os.environ["FAKE_ORCA_STATE"]
+ME = os.environ.get("FAKE_ORCA_CALLER", "term_one")
+
+
+def load():
+    try:
+        with open(STATE) as stream:
+            return json.load(stream)
+    except FileNotFoundError:
+        return {"runs": {}, "tasks": {}, "workers": {}, "requests": {}, "bound": {}, "starts": 0, "fail": None}
+
+
+def reply(ok, value, state=None):
+    if state is not None:
+        with open(STATE, "w") as stream:
+            json.dump(state, stream)
+    print(json.dumps({"ok": True, "result": value} if ok else {"ok": False, "error": value}))
+    raise SystemExit(0 if ok else 1)
+
+
+def option(args, name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def main():
+    args = [item for item in sys.argv[1:] if item not in ("--json", "--full")]
+    state = load()
+    command = args[1] if args[:1] == ["orchestration"] else None
+    if state.get("fail") == command:
+        state["fail"] = None
+        with open(STATE, "w") as stream:
+            json.dump(state, stream)
+        print("not json")
+        raise SystemExit(1)
+    if command == "run-current":
+        reply(True, {"run": {"id": state["bound"][ME]} if ME in state["bound"] else None})
+    if command == "run-create":
+        run = f"run_{len(state['runs']) + 1}"
+        state["runs"][run] = {"id": run, "coordinator_handle": ME, "consumer_generation": 1}
+        state["bound"][ME] = run
+        reply(True, {"run": state["runs"][run]}, state)
+    if command in ("run-use", "run-show"):
+        run = state["runs"].get(option(args, "--id"))
+        if not run:
+            reply(False, {"code": "run_not_found", "message": "no such Run"})
+        if command == "run-use" and run["coordinator_handle"] != ME:
+            run.update(coordinator_handle=ME, consumer_generation=run["consumer_generation"] + 1)
+            state["bound"][ME] = run["id"]
+        reply(True, {"run": run}, state)
+    if command == "worker-start":
+        run = state["runs"].get(option(args, "--run"))
+        request = option(args, "--retry-request")
+        spec = sys.stdin.read() if option(args, "--spec-file") == "-" else option(args, "--spec", "")
+        if request in state["requests"]:
+            first = state["requests"][request]
+            if first["spec"] != spec:
+                reply(False, {"code": "request_mismatch", "message": "already used with different input"})
+            reply(True, {**first["receipt"], "mutation": {"requestId": request, "replayed": True}})
+        if not run or run["coordinator_handle"] != ME:
+            reply(False, {"code": "consumer_fenced", "message": "worker-start needs the coordinator bound to the Run"})
+        state["starts"] += 1
+        number = len(state["tasks"]) + 1
+        task, dispatch = f"task_{number}", f"ctx_{number}"
+        state["tasks"][task] = {"id": task, "run_id": run["id"], "task_title": option(args, "--task-title"),
+                                "status": "dispatched", "result": None, "spec": spec}
+        state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
+                                      "dispatchStatus": "dispatched", "terminalState": "active"}
+        route = {"agent": option(args, "--agent"), "model": option(args, "--model"), "effort": option(args, "--effort")}
+        receipt = {"taskId": task, "dispatchId": dispatch, "launch": {"requested": route, "effective": state.get("effective") or route}}
+        state["requests"][request] = {"spec": spec, "receipt": receipt}
+        if state.get("lose_reply"):
+            state["lose_reply"] = False
+            with open(STATE, "w") as stream:
+                json.dump(state, stream)
+            raise SystemExit(1)
+        reply(True, {**receipt, "mutation": {"requestId": request, "replayed": False}}, state)
+    if command == "request-show":
+        request = option(args, "--request")
+        reply(True, {"requestId": request, "state": "completed" if request in state["requests"] else "absent"})
+    if command == "worker-list":
+        rows = [row for row in state["workers"].values() if row["runId"] == option(args, "--run")]
+        reply(True, {"workers": rows, "page": {"hasMore": False, "nextCursor": None}})
+    if command == "task-list":
+        rows = [{key: value for key, value in row.items() if key != "spec"} for row in state["tasks"].values()
+                if row["run_id"] == option(args, "--run")]
+        reply(True, {"tasks": rows})
+    reply(False, {"code": "unknown_command", "message": " ".join(args)})
+
+
+main()
