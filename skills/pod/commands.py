@@ -452,8 +452,8 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
         writer.append(*entries)
         result = {"recorded": done, "entries": [row["n"] for row in writer.entries[-len(entries):]]}
         after = fold(writer.entries)
-        if after.closed and not state.closed:          # an objective that needs no delivery just ended
-            result.update(cleanup.tidy(writer, root, after, target_head=_target_head(root, after)))
+        if after.closed:           # its last criterion is met: tidy now, and again on any later record or deliver
+            result.update(cleanup.tidy(writer, root, after, target_head=_target_head(root, after), again="pod deliver"))
         return result
 
 
@@ -588,4 +588,5 @@ def drop(cwd: Path, objective: str | None, *, why: str) -> dict:
             writer.append({"kind": "objective", "dropped": True, "why": why})
         state = fold(writer.entries)
         return {"objective": state.id, "state": "dropped",
-                **cleanup.tidy(writer, root, state, target_head=_target_head(root, state))}
+                **cleanup.tidy(writer, root, state, target_head=_target_head(root, state),
+                               again=f"pod drop --objective {state.id} --why …")}

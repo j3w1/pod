@@ -75,8 +75,9 @@ review by a worker that changed nothing.
   the changed paths (`--paths`); after merging the target branch, only files whose content
   changed in the candidate. `pod status` lists what is still uncovered. Name `--context` paths
   (a file, a directory or `.`) when a review depends on something it does not cover.
-- A required finding stays open until a later review passes on the corrected file, or the
-  person waives it; a second reviewer's pass on the same content does not close it: `pod record --waive a2.1 --why "…" --words "what they said"`.
+- A required finding stays open until a later review raises nothing required on the corrected
+  file, or the person waives it; a second reviewer's pass on the same content does not close
+  it: `pod record --waive a2.1 --why "…" --words "what they said"`.
 
 ## Evidence
 
@@ -99,10 +100,13 @@ review by a worker that changed nothing.
   GitHub first and never merges twice.
 - An objective closes by itself when its delivery is merged and no criterion is open. Nothing
   closes it by hand. `pod drop --why "…"` stops one that will not be delivered.
-- Cleanup needs nothing from you. The command that ends an objective releases its settled
-  workers and removes the worktrees it had Orca create, when they are clean and fully
-  delivered. It lists what it kept and why (still running, kept open, uncommitted or unmerged
-  work); deal with those and run the same command again, or leave them. Never force a removal.
+- Cleanup needs nothing from you. The command that ends an objective (`pod deliver`, the
+  `pod record` that meets its last criterion, or `pod drop`) releases its finished workers
+  and removes the worktrees it had Orca create, when they are clean and fully delivered. A
+  worker's own terminal in such a worktree goes with it; any other kept terminal stays. It
+  lists what it kept and why (still running, not shown as finished, uncommitted or unmerged
+  work, in use); deal with those and run `pod deliver` again, or leave them. Never force a
+  removal.
 
 ## Routes and models
 

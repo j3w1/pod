@@ -18,8 +18,8 @@ from .. import routefile
 
 VALUE_TOLERANCE_POINTS = 2     # a cheaper route within this many index points beats the row
 VALUE_FLOOR_QUANTILE = 0.5     # the row's index must reach this quantile of routable routes
-VALUE_EXPLANATION = ("High value, benchmark-relative: no routable route costs less while scoring within "
-                     f"{VALUE_TOLERANCE_POINTS} index points, and its index is at or above the routable median. "
+VALUE_EXPLANATION = ("High value, benchmark-relative: no routable route costs less while scoring no more than "
+                     f"{VALUE_TOLERANCE_POINTS} index points lower, and its index is at or above the routable median. "
                      "Decision support only.")
 COST_STATEMENT = ("Cost per task is a public benchmark measurement. It is not a subscription charge, "
                   "a quota or how long your task will take.")

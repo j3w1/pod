@@ -85,7 +85,7 @@ def fetch(url: str = URL, *, max_bytes: int = MAX_BYTES, timeout: float = TIMEOU
             while size <= max_bytes:              # bounded in bytes and in total time, however slowly the source sends
                 if time.monotonic() > deadline:
                     raise RefreshError(f"The source did not finish answering within {int(DEADLINE_S)} seconds")
-                chunk = response.read(min(65536, max_bytes + 1 - size))
+                chunk = response.read1(min(65536, max_bytes + 1 - size))     # whatever has arrived, so the deadline is seen
                 if not chunk:
                     break
                 chunks.append(chunk)

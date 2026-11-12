@@ -109,6 +109,8 @@ def main():
         row = state["workers"][option(args, "--dispatch")]
         if row["terminalState"] not in ("reclaimable", "retained"):      # an explicit release also ends a kept terminal
             reply(False, {"code": "worker_not_releasable", "message": f"terminal is {row['terminalState']}"})
+        if state.get("release_stays"):              # Orca answers ok and the terminal is still there
+            reply(True, {"dispatchId": row["dispatchId"], "state": state["release_stays"]}, state)
         row["terminalState"] = "released"
         state["releases"] = state.get("releases", 0) + 1
         reply(True, {"dispatchId": row["dispatchId"], "state": "released"}, state)

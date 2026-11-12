@@ -501,6 +501,11 @@ def default_preferences(source_bundle: Path) -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
+def _first_install(receipt: dict | None) -> bool:
+    """No earlier installation finished here: no receipt, or one from a first attempt that stopped part way."""
+    return receipt is None or (receipt.get("status") == "installing" and receipt.get("previous") is None)
+
+
 def _preferences(paths: dict[str, Path], source_bundle: Path, *, first: bool) -> tuple[str, str | None]:
     """Report the preference file. Only a first install may create it; an update never creates or changes it."""
     config = paths["config"] / "config.yaml"
@@ -655,7 +660,7 @@ def install(stage: Path) -> int:
         _stage("Installing skills", plain="Skills: verified one canonical bundle")
         _atomic(paths["launcher"], template, mode=0o755)
         _stage("Installing pod command", plain="Launcher: installed")
-        prefs, path_status, notes = _finish(paths, source_bundle, fail=3, first=receipt is None)
+        prefs, path_status, notes = _finish(paths, source_bundle, fail=3, first=_first_install(receipt))
         record["status"] = "installed"
         _write_receipt(receipt_file, record)
         _say("Receipt: installed")

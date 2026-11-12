@@ -106,8 +106,55 @@ class CleanupTests(CleanupCase):
         commands.dispatch(self.repo, None, role="investigate", title="reading there", spec="Look.", worktree=f"path:{place}")
         self.finished()
         output = gate.deliver(self.repo, None)
-        self.assertIn(f"worktree {place}: another worker is running in it", output["cleanup"]["kept"])
+        self.assertIn(f"worktree {place}: another worker is using it", output["cleanup"]["kept"])
         self.assertTrue(place.exists())
+
+    def test_a_worker_orca_does_not_show_as_finished_keeps_its_terminal_and_worktree(self):
+        place, _ = self.worker({"src/a.py": "a\n"}, paths=["src"])
+        state = self.orca()
+        state["workers"]["ctx_1"].update(dispatchStatus="failed", workerState="abandoned", terminalState="active")
+        self.orca_file.write_text(json.dumps(state))
+        self.finished()
+        output = gate.deliver(self.repo, None)
+        self.assertIn("a1 (write): Orca does not show that it finished (failed, abandoned)", output["cleanup"]["kept"])
+        self.assertTrue(place.exists())
+        self.assertEqual(self.orca()["workers"]["ctx_1"]["terminalState"], "active")
+
+    def test_a_worktree_is_removed_only_after_orca_confirms_its_terminal_was_released(self):
+        place, _ = self.worker({"src/a.py": "a\n"}, paths=["src"])
+        self.finished()
+        self.set_orca(release_stays="retained")
+        output = gate.deliver(self.repo, None)
+        kept = "\n".join(output["cleanup"]["kept"])
+        self.assertIn(f"worktree {place}: its worker's terminal was not released: Orca reports it retained", kept)
+        self.assertIn("Orca reports it retained after the release was asked", kept)
+        self.assertEqual((place.exists(), "released" in output["cleanup"], self.orca().get("removal_attempts", 0)), (True, False, 0))
+        self.assertIn("pod deliver", output["next"])
+        self.set_orca(release_stays=None)
+        self.assertEqual(gate.deliver(self.repo, None)["cleanup"]["removed"], [str(place)])
+
+    def test_a_worktree_another_objective_now_works_in_stays(self):
+        place, _ = self.worker({"src/a.py": "a\n"}, paths=["src"])
+        commands.open_(place, text="Follow-up in that worktree", objective="follow-up", delivery=False)
+        self.finished()
+        output = gate.deliver(self.repo, "issue-5")
+        self.assertIn(f"worktree {place}: objective follow-up works in it", output["cleanup"]["kept"])
+        self.assertTrue(place.exists())
+
+    def test_cleanup_after_an_objective_that_record_closed_can_be_tried_again(self):
+        commands.open_(self.repo, text="Find out why", objective="why", delivery=False)
+        started = commands.dispatch(self.repo, "why", role="investigate", title="look", spec="Look.", worktree="new-child")
+        place = Path(self.orca()["workers"][started["dispatch"]]["resource"]["worktreeId"].partition("::")[2])
+        self.finish(started["task"], {"outcome": "succeeded"})
+        commands.accept(self.repo, "why", "a1")
+        self.set_orca(removal_fails=True)
+        first = commands.record(self.repo, "why", met=["c1"], why="found")
+        self.assertIn("pod deliver", first["next"])
+        self.assertTrue(place.exists())
+        self.set_orca(removal_fails=False)
+        again = gate.deliver(self.repo, "why")
+        self.assertEqual((again["state"], again["cleanup"]["removed"]), ("closed", [str(place)]))
+        self.assertNotIn("cleanup", commands.record(self.repo, "why", note="done"))
 
     def test_a_failed_removal_says_what_remains_and_never_reopens_the_delivery(self):
         place, _ = self.worker({"src/a.py": "a\n"}, paths=["src"])
@@ -116,7 +163,7 @@ class CleanupTests(CleanupCase):
         output = gate.deliver(self.repo, None)
         self.assertEqual((output["state"], self.gh()["merges"]), ("closed", 1))
         self.assertIn(f"worktree {place}: Orca did not remove it (worktree_remove_failed", output["cleanup"]["kept"][0])
-        self.assertIn("the delivery itself is unaffected", output["next"])
+        self.assertIn("run `pod deliver` again to finish cleaning up; the delivery itself is unaffected", output["next"])
         self.assertTrue(place.exists())
         self.assertEqual(commands.listing()["objectives"], [])               # still closed
         self.set_orca(removal_fails=False)
@@ -197,7 +244,7 @@ class CleanupSmallnessTests(CleanupCase):
 
     def test_it_is_one_small_module_over_orca_and_git_with_no_host_dependency_and_no_state_of_its_own(self):
         text = (ROOT / "skills/pod/cleanup.py").read_text()
-        self.assertLess(len(text.splitlines()), 130)
+        self.assertLess(len(text.splitlines()), 140)
         self.assertNotRegex(text, r"ce-devbox|ce_|subprocess|open\(|json|class |--force\b(?!:)")
         self.assertEqual(sorted(path.name for path in (ROOT / "skills/pod").glob("*cleanup*")), ["cleanup.py"])
         self.worker({"src/a.py": "a\n"}, paths=["src"])

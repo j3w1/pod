@@ -84,7 +84,7 @@ def evaluate(root: Path, state: State, *, commit: str | None = None, remote: boo
             shown = ", ".join(cover["uncovered"][:8]) + (f" and {len(cover['uncovered']) - 8} more" if len(cover["uncovered"]) > 8 else "")
             needs.append(f"an independent passing review of {len(cover['uncovered'])} changed paths: {shown}")
     for finding in proof.open_required(root, state, candidate):
-        needs.append(f"finding {finding['id']} resolved by a passing review of the corrected "
+        needs.append(f"finding {finding['id']} resolved by a review that raises nothing required on the corrected "
                      f"{finding['path'] or 'paths it covers'}, or waived")
     # 4. Every criterion that can be proved before the merge.
     for row in state.open_criteria(before_merge_only=True):
@@ -168,6 +168,10 @@ def deliver(cwd: Path, objective: str | None, *, check: bool = False, commit: st
         state = fold(writer.entries)
         if state.dropped:
             raise PodError("objective_closed", f"Objective {state.id} was dropped.", fix="open a new objective")
+        if state.closed and state.objective.get("delivery") == "none":      # nothing to merge: only finish cleaning up
+            from .commands import _target_head
+            return {"objective": state.id, "state": "closed",
+                    **cleanup.tidy(writer, root, state, target_head=_target_head(root, state), again="pod deliver")}
         verdict = evaluate(root, state)
         request, candidate, info = verdict["pr"], verdict["candidate"], state.objective
         # Settle before acting: a merge that already happened is recorded, never repeated.
@@ -221,7 +225,7 @@ def _report(writer, root: Path, candidate: str, request: dict | None, target_hea
     state = fold(writer.entries)
     result["state"] = "closed" if state.closed else "open"
     if state.closed:
-        tidied = cleanup.tidy(writer, root, state, target_head=target_head)
+        tidied = cleanup.tidy(writer, root, state, target_head=target_head, again="pod deliver")
         result.update({**tidied, **({"next": result.get("next") or tidied["next"]} if tidied.get("next") else {})})
     return result
 

@@ -50,7 +50,8 @@ Nothing about applicability is declared (`skills/pod/proof.py`).
 - A candidate is reviewed when every path it changes against its merge base with the target is
   covered by an applicable completed review, by a reviewer who changed nothing, that raised no
   required finding on that path (and none without a path). A review that fails over two files
-  therefore still covers the others. A project may also require the review at the exact final
+  therefore still covers the others; one that fails without naming any required finding covers
+  nothing. A project may also require the review at the exact final
   tree. A context path may be a directory, or `.` for the whole tree.
 - A required finding is open until a later review raises nothing required on corrected content
   at its path that the candidate still holds, or a waiver names it. A second opinion on the same
@@ -118,24 +119,31 @@ person authorizes again.
 
 ## Cleanup when an objective ends
 
-Pod plans nothing and keeps no list of resources (`skills/pod/cleanup.py`). When an objective
-closes or is dropped, the command that ended it (`deliver`, a `record` that meets the last
-criterion of an objective without a delivery, or `drop`) reads the objective's workers from
-Orca and:
+Pod plans nothing and keeps no list of resources (`skills/pod/cleanup.py`). The command that
+ends an objective (`deliver`, a `record` after which no criterion is open and the objective is
+closed, or `drop`) reads the objective's workers from Orca and:
 
-- asks Orca to release each settled worker whose terminal Orca reports as reclaimable;
+- asks Orca to release each worker Orca shows as finished whose terminal it reports as
+  reclaimable;
 - asks Orca to remove each worktree the objective itself asked Orca to create for an assignment
-  (`pod dispatch --worktree new-…`), when Git shows it is clean and every commit it holds was
-  delivered or is on the target, and then deletes that worktree's branch.
+  (`pod dispatch --worktree new-…`), when its worker is shown as finished, Git shows it is
+  clean and every commit it holds was delivered or is on the target, no other worker,
+  objective or terminal is using it, and Orca has confirmed the release of its worker's
+  terminal; it then deletes that worktree's branch.
 
-Nothing is forced. A worker still running, a terminal kept open, a worktree with uncommitted,
-untracked or undelivered work, one another worker or a person's terminal is using, anything
-Orca cannot be read about, the objective's own worktree and branch, and everything belonging
-to another objective are left exactly as they are and named with the reason. A removal that
-fails says what remains and never changes the delivery; running the same command again tries
-again. The only record is one effect entry saying what was released and removed. There is no
-cleanup command, plan, state or host dependency; a host that manages worktrees itself still
-reads `pod status --all --json`, in which a closed or dropped objective holds nothing.
+Orca keeps the terminal of a worker that got its own worktree open and reports it exactly like
+one a person kept open, so that terminal goes with its worktree and is released only when the
+worktree may be removed. Any other terminal kept open is never released.
+
+Nothing is forced. A worker still running or not shown as finished, a worktree with
+uncommitted, untracked or undelivered work or in use by anyone else, anything Orca cannot be
+read about, the objective's own worktree and branch, and everything belonging to another
+objective are left exactly as they are and named with the reason. A removal that fails says
+what remains and never changes the delivery; `pod deliver` (or `pod drop` for a dropped
+objective) run again tries again. The only record is one cleanup effect, an intent and its
+outcome, saying what was released and removed. There is no cleanup command, plan, state or
+host dependency; a host that manages worktrees itself still reads `pod status --all --json`,
+in which a closed or dropped objective holds nothing.
 
 ## Interfaces other tools may use
 
@@ -196,10 +204,10 @@ the person changes it, through `pod models` or an editor. Coordination reads it 
   disable, Preferred, Pin, a bulk change per model, one detail panel. It prints a plain table
   when there is no terminal. A public observation never makes a route, and no refresh or
   update changes a preference.
-- **High-value mark.** A cost is marked when no other routable route costs less within 2 index
-  points, and its index is at or above the median of routable routes with both measurements.
-  Rows with an estimated index or a fallback profile are left out.
-  It is benchmark-relative decision support and changes no state.
+- **High-value mark.** A cost is marked when no other routable route costs less while scoring
+  no more than 2 index points lower, and its index is at or above the median of routable
+  routes with both measurements. Rows with an estimated index or a fallback profile are left
+  out. It is benchmark-relative decision support and changes no state.
 
 ## Tests and CI
 

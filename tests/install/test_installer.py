@@ -314,6 +314,20 @@ class PreferenceTests(InstallerCase):
         report = doctor(self.env)["preferences"]
         self.assertEqual((report["status"], report["enabled"], report["preferred"]), ("ok", 1, "codex/gpt-6.1-sol/high"))
 
+    def test_a_first_install_that_stopped_part_way_still_creates_the_file_when_it_is_run_again(self):
+        from pod import installer
+        self.assertTrue(installer._first_install(None))
+        self.assertTrue(installer._first_install({"status": "installing", "previous": None}))
+        self.assertFalse(installer._first_install({"status": "installing", "previous": {"version": "0.21.54"}}))
+        self.assertFalse(installer._first_install({"status": "installed", "previous": None}))
+        failed = run_install({**self.env, "POD_TEST_NPX_MODE": "fail"})           # the first attempt stops after its receipt
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertFalse(self.config.exists())
+        again = run_install(self.env)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertTrue(self.config.exists())
+        self.assertGreater(doctor(self.env)["preferences"]["enabled"], 0)
+
     def test_an_update_never_creates_a_preference_file_the_person_removed(self):
         self.assertIn("(created)", self.installed().stdout)
         self.config.unlink()
