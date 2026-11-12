@@ -74,8 +74,8 @@ review by a worker that changed nothing.
   review only the changed paths (`--paths`); after merging the target branch, only files whose
   content changed in the candidate. Name `--context` paths when a review depends on a file it
   does not cover.
-- A required finding stays open until a later review of its path passes, or the person waives
-  it: `pod record --waive a2.1 --why "…" --words "what they said"`.
+- A required finding stays open until a later review passes on the corrected file, or the
+  person waives it; a second reviewer's pass on the same content does not close it: `pod record --waive a2.1 --why "…" --words "what they said"`.
 
 ## Evidence
 

@@ -50,7 +50,8 @@ Nothing about applicability is declared (`skills/pod/proof.py`).
 - A candidate is reviewed when every path it changes against its merge base with the target is
   covered by an applicable passing review whose reviewer changed nothing. A project may also
   require the review at the exact final tree.
-- A required finding is open until a later review of its path passes, or a waiver names it.
+- A required finding is open until a later review passes on corrected content at its path, or
+  a waiver names it. A second opinion on the same content and a carried review close nothing.
 
 So a review of only the corrected paths composes with an earlier full review, and merging the
 target branch reopens only files whose content changed in the candidate.
@@ -91,6 +92,7 @@ Without a verdict no review is recorded; without a commit nothing about content 
 
 1. The candidate is the local branch head, with a clean tree, and the pull request's head.
 2. The required checks are green on that head, read from GitHub (or the project's own list).
+   When no check has reported, GitHub's own merge state must allow the merge.
 3. If the project requires review, coverage holds; no required finding is open either way.
 4. Every criterion that can be proved before the merge is met or dropped.
 5. An authorization covers this repository, target and candidate: the person's words recorded
@@ -103,7 +105,9 @@ comments the evidence. Boxes are never unticked.
 
 `pod deliver --check [--commit SHA]` prints the same verdict and changes nothing, for a host
 that performs delivery itself. A delivery someone else performed is recorded once the pull
-request shows merged at the candidate, or Git shows the candidate on the target.
+request shows merged into the target at the candidate, or, for a commit the objective recorded
+work or proof for, Git shows it on the target. A withdrawal of authorization holds until the
+person authorizes again.
 
 ## Interfaces other tools may use
 
