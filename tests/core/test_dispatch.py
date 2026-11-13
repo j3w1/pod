@@ -100,6 +100,20 @@ class DispatchTests(CoreCase):
         self.assertIn(f"Review commit {commit}", self.orca()["tasks"][started["task"]]["spec"])
         self.refused("nothing_to_review", commands.dispatch, self.repo, None, role="review", title="r", spec="x", paths_=["nowhere"])
 
+    def test_deleted_finding_paths_can_be_the_entire_review_scope(self):
+        names = ["src/a.py", "src/a.py:111"]
+        self.commit(dict.fromkeys(names, "bad\n"))
+        self.review("fail", [{"path": p, "required": True, "text": "remove this"}
+                             for p in ("src/a.py:12:2", "src/a.py:111")])
+        self.commit(dict.fromkeys(names))
+        self.assertEqual(self.git(self.repo, "diff", "--name-only", "origin/main", "HEAD"), "")
+        for requested, expected in (([names[0]], [names[0]]), ([names[1]], [names[1]]), (["src"], names), (None, names)):
+            with self.subTest(requested=requested):
+                self.review("pass", paths_=requested)
+                self.assertEqual(self.entries("widget")[-1]["paths"], expected)
+        self.refused("nothing_to_review", commands.dispatch, self.repo, None, role="review", title="r", spec="Review.",
+                     paths_=["missing.py"])
+
     def test_a_new_worktree_starts_from_the_objectives_branch(self):
         here = self.start(paths_=["src"])
         there = self.start(paths_=["docs"], worktree="new-child")

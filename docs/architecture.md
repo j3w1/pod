@@ -59,6 +59,8 @@ Nothing about applicability is declared (`skills/pod/proof.py`).
 - Finding locations `P:LINE` and `P:LINE:COL` match the unique file `P` in the original reviewed
   tree; a literal tracked filename takes precedence. Unknown or ambiguous locations stay open
   and prevent that review from covering paths. Recorded locations remain unchanged.
+- Review dispatch includes required finding paths changed since their original review, within
+  the requested scope, even when their correction leaves no net diff against the target.
 - A review Orca did not report as completed keeps its findings, covers nothing and closes
   nothing.
 
