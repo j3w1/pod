@@ -83,6 +83,41 @@ class GateTests(GateCase):
         self.pull_request()
         self.assertTrue(any("finding a2.1" in need for need in self.needs()))
 
+    def test_a_review_can_close_a_finding_on_a_file_added_then_deleted_in_the_pr(self):
+        path = "tests/live/retry.mjs"
+        self.implement({path: "bad\n", "keep.py": "keep\n"})
+        self.review("fail", [{"path": path + ":12:2", "required": True, "text": "remove this"}])
+        original = self.entries("issue-5")
+        commands.record(self.repo, None, met=["c1", "c2"], why="fixture criteria observed")
+        self.review("pass", paths_=[path])
+        self.pull_request()
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))  # unchanged content
+
+        deleted = self.commit({path: None})
+        self.assertEqual(self.git(self.repo, "diff", "--name-only", "origin/main", deleted), "keep.py")
+        self.pull_request()
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))  # deletion alone
+        self.review("pass", paths_=["keep.py"])
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))  # omitted deletion
+
+        started = commands.dispatch(self.repo, None, role="review", title="deletion", spec="Review the removal.",
+                                    paths_=["keep.py", path])
+        assignment = self.entries("issue-5")[-2]
+        self.assertEqual(assignment["paths"], ["keep.py", path])
+        self.assertIn(path, self.orca()["tasks"][started["task"]]["spec"])
+        self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        accepted = commands.accept(self.repo, None, started["assignment"])
+        self.assertEqual(accepted["verdict"], "pass")
+        review = self.entries("issue-5")[-1]
+        self.assertEqual((review["commit"], review["paths"], review["completed"], review["wrote"]),
+                         (deleted, ["keep.py", path], True, False))
+        self.assertTrue(gate.deliver(self.repo, None, check=True)["pass"])
+        self.assertEqual(self.entries("issue-5")[:len(original)], original)
+
+        self.commit({path: "bad\n"})
+        self.pull_request()
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))  # offending content returns
+
     def test_an_open_criterion_is_refused_unless_it_is_proved_after_the_merge(self):
         self.implement({"src/a.py": "a\n"})
         self.review("pass")

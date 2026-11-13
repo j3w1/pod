@@ -161,8 +161,15 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
             if not against:
                 raise PodError("target_unknown", f"The target branch {state.objective['target']} is not in this repository.",
                                fix="fetch it, then dispatch the review again")
-            changed = gitio.changed(root, against, base)
-            paths_ = [item for item in changed if not paths_ or gitio.under(item, paths_)]
+            changed = set(gitio.changed(root, against, base))
+            for review in state.of("review"):
+                locations = proof.finding_paths(root, review)
+                wanted = {locations[item["path"]] for item in review.get("findings", [])
+                          if item.get("required") and item.get("path")}
+                if wanted - {None}:
+                    # A correction can have no net target diff, including an added file's removal.
+                    changed.update(wanted.intersection(gitio.changed(root, review["commit"], base)))
+            paths_ = [item for item in sorted(changed) if not paths_ or gitio.under(item, paths_)]
             if not paths_:
                 raise PodError("nothing_to_review", f"Commit {base[:12]} changes none of the named paths against the target.",
                                fix="name the commit and paths that hold the change")

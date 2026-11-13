@@ -19,7 +19,7 @@ def checks(state: State, tree: str) -> list[dict]:
     return [fact for fact in state.of("check") if fact.get("tree") == tree]
 
 
-def _finding_paths(cwd: Path, review: dict) -> dict:
+def finding_paths(cwd: Path, review: dict) -> dict:
     """Resolve locations in their original reviewed tree without changing recorded evidence."""
     options = {}
     for finding in review.get("findings", []):
@@ -71,7 +71,7 @@ def findings(cwd: Path, state: State, candidate: str) -> list[dict]:
     waiver closes it.
     """
     reviews = state.of("review")
-    locations = {review["n"]: _finding_paths(cwd, review) for review in reviews}
+    locations = {review["n"]: finding_paths(cwd, review) for review in reviews}
     waived = {fact["finding"]: fact for fact in state.of("waiver")}
     rows, now = [], {}
     for review in reviews:
@@ -109,7 +109,7 @@ def coverage(cwd: Path, state: State, candidate: str, base: str, *, final_tree: 
     tree = gitio.tree(cwd, candidate)
     current = gitio.blobs(cwd, candidate, changed)
     covered: dict = {}
-    locations = {review["n"]: _finding_paths(cwd, review) for review in state.of("review")}
+    locations = {review["n"]: finding_paths(cwd, review) for review in state.of("review")}
     for review in state.of("review"):
         if final_tree and review.get("tree") != tree:
             continue
