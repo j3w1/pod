@@ -8,6 +8,7 @@ required finding on that path.
 """
 
 from pathlib import Path
+import re
 
 from . import gitio
 from .errors import PodError
@@ -18,7 +19,36 @@ def checks(state: State, tree: str) -> list[dict]:
     return [fact for fact in state.of("check") if fact.get("tree") == tree]
 
 
-def _clean(review: dict, name: str) -> bool:
+def _finding_paths(cwd: Path, reviews: list[dict], candidate: str) -> dict:
+    """Resolve locations against real candidate paths, leaving the recorded evidence intact."""
+    options, literals = {}, set()
+    for review in reviews:
+        names = [f["path"] for f in review.get("findings", []) if f.get("path") and ":" in f["path"]]
+        try:
+            literals.update(p for p, blob in gitio.blobs(cwd, review["commit"], names).items() if blob is not None)
+        except PodError:
+            literals.update(names)  # an unavailable original tree cannot justify stripping its paths
+        for finding in review.get("findings", []):
+            name = finding.get("path")
+            if not name:
+                continue
+            options[name] = {name}
+            for count in (1, 2):
+                parts = name.rsplit(":", count)
+                if len(parts) == count + 1 and all(re.fullmatch(r"[1-9][0-9]*", p) for p in parts[1:]):
+                    options[name].add(parts[0])
+    blobs = gitio.blobs(cwd, candidate, list({p for names in options.values() for p in names}))
+    result = {}
+    for name, names in options.items():
+        matches = [p for p in names if blobs[p] is not None]
+        if name in literals or blobs[name] is not None or len(names) == 1:
+            result[name] = name
+        else:
+            result[name] = matches[0] if len(matches) == 1 else None
+    return result
+
+
+def _clean(review: dict, name: str, locations: dict) -> bool:
     """Whether a review examined this path and left nothing on it that must be fixed.
 
     The review was completed by a worker that changed nothing, raised no required finding on the
@@ -29,7 +59,7 @@ def _clean(review: dict, name: str) -> bool:
     if not review.get("completed", True) or review.get("wrote"):
         return False
     required = [finding for finding in review.get("findings", []) if finding.get("required")]
-    if any(not finding.get("path") or finding["path"] == name for finding in required):
+    if any(not finding.get("path") or locations[finding["path"]] in (None, name) for finding in required):
         return False
     return review["verdict"] == "pass" or bool(required)
 
@@ -44,14 +74,15 @@ def findings(cwd: Path, state: State, candidate: str) -> list[dict]:
     waiver closes it.
     """
     reviews = state.of("review")
+    locations = _finding_paths(cwd, reviews, candidate)
     waived = {fact["finding"]: fact for fact in state.of("waiver")}
     rows, now = [], {}
     for review in reviews:
         later = [other for other in reviews if other["n"] > review["n"] and not other.get("carried")]
         for finding in review.get("findings", []):
-            wanted = [finding["path"]] if finding.get("path") else review["paths"]
+            wanted = [locations[finding["path"]]] if finding.get("path") else review["paths"]
             closing = next((other for other in later if set(wanted) <= set(other["paths"])
-                            and all(_clean(other, name) for name in wanted)
+                            and all(_clean(other, name, locations) for name in wanted)
                             and _corrected(cwd, review["commit"], other["commit"], wanted, candidate, now)), None)
             closed = (f"waived in entry {waived[finding['id']]['n']}" if finding["id"] in waived
                       else f"passed in entry {closing['n']}" if closing else None)
@@ -81,11 +112,12 @@ def coverage(cwd: Path, state: State, candidate: str, base: str, *, final_tree: 
     tree = gitio.tree(cwd, candidate)
     current = gitio.blobs(cwd, candidate, changed)
     covered: dict = {}
+    locations = _finding_paths(cwd, state.of("review"), candidate)
     for review in state.of("review"):
         if final_tree and review.get("tree") != tree:
             continue
         context = review.get("context") or []
-        wanted = [name for name in review["paths"] if name in current and name not in covered and _clean(review, name)]
+        wanted = [name for name in review["paths"] if name in current and name not in covered and _clean(review, name, locations)]
         if not wanted:
             continue
         try:

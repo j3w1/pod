@@ -110,6 +110,75 @@ class ProofTests(CoreCase):
         self.commit({"x": "x\n"})
         self.assertEqual(proof.checks(state, self.git(self.repo, "rev-parse", "HEAD^{tree}")), [])
 
+    def test_existing_line_and_column_findings_close_without_rewriting_evidence(self):
+        self.implement({"f.mjs": "bad\n", "colon:name.mjs": "bad\n"})
+        self.review("fail", [{"path": p, "required": True, "text": "wrong"}
+                             for p in ("f.mjs:111", "f.mjs:111:2", "colon:name.mjs:2:3")])
+        self.implement({"f.mjs": "fixed\n", "colon:name.mjs": "fixed\n"})
+        self.review("pass", paths_=["f.mjs", "colon:name.mjs"])
+        before = self.entries("widget")
+        self.assertEqual(proof.open_required(self.repo, fold(before), self.git(self.repo, "rev-parse", "HEAD")), [])
+        self.assertEqual(self.entries("widget"), before)
+
+    def test_recorded_locations_resolve_only_after_reviewing_current_corrected_content(self):
+        self.implement({"src/a.py": "bad\n", "src/b.py": "b\n"})
+        locations = ["src/a.py", "src/a.py:111", "src/a.py:111:2"]
+        self.review("fail", [{"path": p, "required": True, "text": "wrong"} for p in locations])
+        recorded = self.entries("widget")
+        rows = lambda: proof.findings(self.repo, fold(self.entries("widget")), self.git(self.repo, "rev-parse", "HEAD"))
+        self.assertEqual(self.uncovered(), ["src/a.py"])
+        self.review("pass", paths_=["src/a.py"])
+        self.assertTrue(all(row["open"] for row in rows()))  # a second opinion is no correction
+        self.implement({"src/a.py": "fixed\n"})
+        self.review("pass", paths_=["src/b.py"])
+        self.assertTrue(all(row["open"] for row in rows()))
+        self.review("fail", [{"path": "src/a.py:112:3", "required": True, "text": "still wrong"}])
+        self.assertTrue(all(row["open"] for row in rows()))
+        self.assertEqual(self.uncovered(), ["src/a.py"])
+        self.implement({"src/a.py": "really fixed\n"})
+        self.review("pass", paths_=["src/a.py"])
+        self.assertTrue(all(not row["open"] for row in rows()))
+        self.assertEqual([row["path"] for row in rows()][:3], locations)
+        self.assertEqual(self.entries("widget")[:len(recorded)], recorded)  # old facts stay untouched
+        self.assertFalse(any("finding " in need for need in gate.evaluate(
+            self.repo, fold(self.entries("widget")), remote=False)["needs"]))
+        self.commit({"src/a.py": "bad\n"})
+        self.assertTrue(all(row["open"] for row in rows()))
+
+    def test_unknown_malformed_and_ambiguous_locations_do_not_resolve(self):
+        self.implement({"src/a.py": "bad\n", "src/a.py:111": "literal\n"})
+        locations = ["missing:1", "src/a.py:0", "src/a.py:-1", "src/a.py:1:x",
+                     "src/a.py:1:2:3", "src/a.py:111:2"]  # last could name either tracked file
+        self.review("fail", [{"path": p, "required": True, "text": "wrong"} for p in locations])
+        self.implement({"src/a.py": "fixed\n", "src/a.py:111": "literal fixed\n"})
+        self.review("pass")
+        opened = proof.open_required(self.repo, fold(self.entries("widget")), self.git(self.repo, "rev-parse", "HEAD"))
+        self.assertEqual([row["path"] for row in opened], locations)
+
+    def test_a_tracked_colon_filename_keeps_its_identity(self):
+        self.implement({"src/a.py": "bad\n", "src/a.py:111": "literal bad\n"})
+        self.review("fail", [{"path": "src/a.py:111", "required": True, "text": "wrong literal"}])
+        self.assertEqual(self.uncovered(), ["src/a.py:111"])
+        self.implement({"src/a.py": "fixed\n"})
+        self.review("pass", paths_=["src/a.py"])
+        state = lambda: fold(self.entries("widget"))
+        head = lambda: self.git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(len(proof.open_required(self.repo, state(), head())), 1)
+        self.implement({"src/a.py:111": "literal fixed\n"})
+        self.review("pass", paths_=["src/a.py:111"])
+        self.assertEqual(proof.open_required(self.repo, state(), head()), [])
+        self.commit({"src/a.py:111": None})
+        self.review("pass", paths_=["src/a.py"])
+        self.assertEqual(len(proof.open_required(self.repo, state(), head())), 1)
+
+    def test_a_plain_path_finding_can_still_be_corrected_by_deleting_the_file(self):
+        self.implement({"README.md": "bad\n"})
+        self.review("fail", [{"path": "README.md", "required": True, "text": "remove this"}])
+        self.implement({"README.md": None})
+        self.review("pass", paths_=["README.md"])
+        self.assertEqual(proof.open_required(self.repo, fold(self.entries("widget")),
+                                             self.git(self.repo, "rev-parse", "HEAD")), [])
+
     def test_a_check_run_on_uncommitted_changes_binds_to_no_commit_and_a_failure_is_recorded_as_one(self):
         (self.repo / "scratch.txt").write_text("not committed\n")
         output = commands.record(self.repo, None, check="exit 3")
