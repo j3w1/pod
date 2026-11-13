@@ -56,6 +56,9 @@ Nothing about applicability is declared (`skills/pod/proof.py`).
 - A required finding is open until a later review of corrected content at its path, content
   the candidate still holds, passes or fails only over other paths, or a waiver names it. A second opinion on the same
   content and a carried review close nothing, and bringing the content back reopens it.
+- Finding locations `P:LINE` and `P:LINE:COL` match the unique file `P` in the original reviewed
+  tree; a literal tracked filename takes precedence. Unknown or ambiguous locations stay open
+  and prevent that review from covering paths. Recorded locations remain unchanged.
 - A review Orca did not report as completed keeps its findings, covers nothing and closes
   nothing.
 

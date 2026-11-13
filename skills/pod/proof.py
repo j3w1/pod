@@ -19,29 +19,26 @@ def checks(state: State, tree: str) -> list[dict]:
     return [fact for fact in state.of("check") if fact.get("tree") == tree]
 
 
-def _finding_paths(cwd: Path, reviews: list[dict], candidate: str) -> dict:
-    """Resolve locations against real candidate paths, leaving the recorded evidence intact."""
-    options, literals = {}, set()
-    for review in reviews:
-        names = [f["path"] for f in review.get("findings", []) if f.get("path") and ":" in f["path"]]
-        try:
-            literals.update(p for p, blob in gitio.blobs(cwd, review["commit"], names).items() if blob is not None)
-        except PodError:
-            literals.update(names)  # an unavailable original tree cannot justify stripping its paths
-        for finding in review.get("findings", []):
-            name = finding.get("path")
-            if not name:
-                continue
-            options[name] = {name}
-            for count in (1, 2):
-                parts = name.rsplit(":", count)
-                if len(parts) == count + 1 and all(re.fullmatch(r"[1-9][0-9]*", p) for p in parts[1:]):
-                    options[name].add(parts[0])
-    blobs = gitio.blobs(cwd, candidate, list({p for names in options.values() for p in names}))
+def _finding_paths(cwd: Path, review: dict) -> dict:
+    """Resolve locations in their original reviewed tree without changing recorded evidence."""
+    options = {}
+    for finding in review.get("findings", []):
+        name = finding.get("path")
+        if not name:
+            continue
+        options[name] = {name}
+        for count in (1, 2):
+            parts = name.rsplit(":", count)
+            if len(parts) == count + 1 and all(re.fullmatch(r"[1-9][0-9]*", p) for p in parts[1:]):
+                options[name].add(parts[0])
+    try:
+        blobs = gitio.blobs(cwd, review["commit"], list({p for names in options.values() for p in names}))
+    except PodError:
+        return dict.fromkeys(options)  # an unavailable original tree proves no path identity
     result = {}
     for name, names in options.items():
         matches = [p for p in names if blobs[p] is not None]
-        if name in literals or blobs[name] is not None or len(names) == 1:
+        if blobs[name] is not None:
             result[name] = name
         else:
             result[name] = matches[0] if len(matches) == 1 else None
@@ -59,7 +56,7 @@ def _clean(review: dict, name: str, locations: dict) -> bool:
     if not review.get("completed", True) or review.get("wrote"):
         return False
     required = [finding for finding in review.get("findings", []) if finding.get("required")]
-    if any(not finding.get("path") or locations[finding["path"]] in (None, name) for finding in required):
+    if any(not finding.get("path") or locations[review["n"]][finding["path"]] in (None, name) for finding in required):
         return False
     return review["verdict"] == "pass" or bool(required)
 
@@ -74,13 +71,13 @@ def findings(cwd: Path, state: State, candidate: str) -> list[dict]:
     waiver closes it.
     """
     reviews = state.of("review")
-    locations = _finding_paths(cwd, reviews, candidate)
+    locations = {review["n"]: _finding_paths(cwd, review) for review in reviews}
     waived = {fact["finding"]: fact for fact in state.of("waiver")}
     rows, now = [], {}
     for review in reviews:
         later = [other for other in reviews if other["n"] > review["n"] and not other.get("carried")]
         for finding in review.get("findings", []):
-            wanted = [locations[finding["path"]]] if finding.get("path") else review["paths"]
+            wanted = [locations[review["n"]][finding["path"]]] if finding.get("path") else review["paths"]
             closing = next((other for other in later if set(wanted) <= set(other["paths"])
                             and all(_clean(other, name, locations) for name in wanted)
                             and _corrected(cwd, review["commit"], other["commit"], wanted, candidate, now)), None)
@@ -112,7 +109,7 @@ def coverage(cwd: Path, state: State, candidate: str, base: str, *, final_tree: 
     tree = gitio.tree(cwd, candidate)
     current = gitio.blobs(cwd, candidate, changed)
     covered: dict = {}
-    locations = _finding_paths(cwd, state.of("review"), candidate)
+    locations = {review["n"]: _finding_paths(cwd, review) for review in state.of("review")}
     for review in state.of("review"):
         if final_tree and review.get("tree") != tree:
             continue

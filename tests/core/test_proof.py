@@ -171,13 +171,26 @@ class ProofTests(CoreCase):
         self.review("pass", paths_=["src/a.py"])
         self.assertEqual(len(proof.open_required(self.repo, state(), head())), 1)
 
-    def test_a_plain_path_finding_can_still_be_corrected_by_deleting_the_file(self):
-        self.implement({"README.md": "bad\n"})
-        self.review("fail", [{"path": "README.md", "required": True, "text": "remove this"}])
+    def test_plain_and_location_findings_can_be_corrected_by_deleting_the_file(self):
+        self.implement({"README.md": "bad\n", "keep.py": "keep\n"})
+        self.review("fail", [{"path": p, "required": True, "text": "remove this"}
+                             for p in ("README.md", "README.md:12", "README.md:12:2")])
         self.implement({"README.md": None})
+        self.assertEqual(self.uncovered(), ["README.md"])
         self.review("pass", paths_=["README.md"])
         self.assertEqual(proof.open_required(self.repo, fold(self.entries("widget")),
                                              self.git(self.repo, "rev-parse", "HEAD")), [])
+        self.assertEqual(self.uncovered(), [])
+
+    def test_a_later_literal_filename_does_not_change_an_earlier_locations_identity(self):
+        self.implement({"a": "bad\n"})
+        self.review("fail", [{"path": "a:1", "required": True, "text": "wrong a"}])
+        self.implement({"a:1": "literal bad\n"})
+        self.review("fail", [{"path": "a:1", "required": True, "text": "wrong literal"}], paths_=["a:1"])
+        self.implement({"a:1": "literal fixed\n"})
+        self.review("pass", paths_=["a:1"])
+        opened = proof.open_required(self.repo, fold(self.entries("widget")), self.git(self.repo, "rev-parse", "HEAD"))
+        self.assertEqual([(row["id"], row["text"]) for row in opened], [("a2.1", "wrong a")])
 
     def test_a_check_run_on_uncommitted_changes_binds_to_no_commit_and_a_failure_is_recorded_as_one(self):
         (self.repo / "scratch.txt").write_text("not committed\n")
