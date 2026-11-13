@@ -57,7 +57,7 @@ def parser() -> argparse.ArgumentParser:
     one = command("accept", "Read a finished worker's result and record it with your decision.")
     one.add_argument("assignment")
     one.add_argument("--integrated", metavar="COMMIT", help="the commit that now holds its work")
-    one.add_argument("--discarded", action="store_true", help="its work is not used")
+    one.add_argument("--discarded", action="store_true", help="its work is not used; also settles a worker Orca shows stopped")
     one.add_argument("--why", help="reason, when discarding")
 
     one = command("record", "Record what only you know: a criterion met, a decision, a person's words, the note.")

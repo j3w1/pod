@@ -280,10 +280,18 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
             return {"assignment": ident, "already": True, "decision": state.result(ident)["decision"]}
         if not row.get("task"):
             raise PodError("start_unknown", f"Whether {ident} started is not known yet.", fix=f"run `pod dispatch --retry {ident}`")
-        task = orca.tasks(state.objective["run"]).get(row["task"])
+        run = state.objective["run"]
+        task = orca.tasks(run).get(row["task"])
         if not task or task["status"] not in ("completed", "failed"):
-            raise PodError("not_finished", f"{ident} has not reported a result (Orca says {task and task['status']}).",
-                           fix="wait for Orca to wake you, or stop the worker through Orca and accept with --discarded")
+            # Orca blocks the Task of a worker it is stopping; only its stopped worker proves the work can no longer
+            # change, and then only to be discarded. A hold, a stop in progress or an unproven stop is not that.
+            asked = bool(task and discarded and row.get("dispatch"))
+            worker = next((item for item in orca.workers(run) if item["dispatch"] == row.get("dispatch")), {}) if asked else {}
+            if worker.get("state") != "stopped":
+                raise PodError("not_finished", f"{ident} has not reported a result (Orca says {task and task['status']}"
+                               + (f", its worker {worker.get('state') or 'not listed'}" if asked else "") + ").",
+                               fix="wait for Orca to wake you, or stop the worker through Orca and, once Orca shows it "
+                                   "stopped, accept with --discarded")
         report = task["report"] or {}
         stated = parse_result(report.get("body"))
         outcome = report.get("outcome") if report.get("outcome") in ("succeeded", "failed") else "unknown"
