@@ -1,3 +1,5 @@
+import json
+
 from pod import commands
 from tests.core.support import CoreCase
 
@@ -89,6 +91,52 @@ class AcceptTests(CoreCase):
         self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "commit": fixed})
         self.assertIn("covers nothing", commands.accept(self.repo, None, "a3")["note"])
         self.assertTrue(self.facts("review")[0]["wrote"])
+
+    def stop(self, task, worker="stopped"):
+        """What Orca 1.4.251 shows after `orchestration worker-stop`: the Task is blocked at once; a proven stop settles
+        the worker as stopped and fails its Dispatch, a pending or unproven one leaves it stopping or stop_unknown.
+        An abandon also fails the Dispatch without proving that the process ended."""
+        state = self.orca()
+        state["tasks"][task]["status"] = "blocked"
+        row = next(item for item in state["workers"].values() if item["taskId"] == task)
+        row.update(workerState=worker, **({"dispatchStatus": "failed"} if worker in ("stopped", "abandoned") else {}))
+        row["terminalState"] = "retained" if worker == "stopped" else row["terminalState"]
+        self.orca_file.write_text(json.dumps(state))
+
+    def test_a_worker_orca_shows_stopped_before_it_reported_can_be_discarded_and_its_output_never_used(self):
+        self.implement({"src/a.py": "a\n"})
+        review = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.", route="codex/sol/high")
+        writer = commands.dispatch(self.repo, None, role="implement", title="w", spec="Do.", paths_=["src"])
+        head = self.commit({"src/a.py": "half done\n"})
+        for started in (review, writer):
+            self.stop(started["task"])
+        self.refused("not_finished", commands.accept, self.repo, None, "a2")
+        self.refused("not_finished", commands.accept, self.repo, None, "a3", integrated=head)
+        output = commands.accept(self.repo, None, "a2", discarded=True, why="stopped by j3w1's decision")
+        self.assertEqual((output["decision"], output["outcome"]), ("discarded", "unknown"))
+        self.assertEqual(self.facts("review"), [])
+        output = commands.accept(self.repo, None, "a3", discarded=True)
+        self.assertEqual((output["decision"], output["outcome"]), ("discarded", "unknown"))
+        result = self.facts("result")[-1]
+        self.assertEqual((result["assignment"], result["commit"], result["paths"]), ("a3", None, []))
+        self.assertEqual(self.facts("check"), [])
+
+    def test_a_blocked_task_or_a_stop_orca_has_not_proven_is_not_a_stopped_worker(self):
+        held = commands.dispatch(self.repo, None, role="investigate", title="asks", spec="Look.")
+        state = self.orca()
+        state["tasks"][held["task"]]["status"] = "blocked"          # waiting on a question or a permission
+        self.orca_file.write_text(json.dumps(state))
+        for worker in ("stopping", "stop_unknown", "abandoned", "stopped"):
+            last = commands.dispatch(self.repo, None, role="investigate", title=worker, spec="Look.")
+            self.stop(last["task"], worker=worker)
+        state = self.orca()
+        del state["workers"][last["dispatch"]]                      # a5 was stopped, and Orca no longer lists its worker
+        self.orca_file.write_text(json.dumps(state))
+        for ident in ("a1", "a2", "a3", "a4", "a5"):
+            self.refused("not_finished", commands.accept, self.repo, None, ident, discarded=True)
+        self.set_orca(fail="worker-list")
+        self.refused("orca_unknown", commands.accept, self.repo, None, "a3", discarded=True)
+        self.assertEqual(self.facts("result"), [])
 
     def test_the_result_object_is_the_last_one_that_states_an_outcome(self):
         text = 'I ran {"x": 1} first.\n{"outcome": "failed"}\nthen fixed it\n{"outcome": "succeeded", "commit": null}\ntrailing {'
