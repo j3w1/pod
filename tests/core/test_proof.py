@@ -171,13 +171,13 @@ class ProofTests(CoreCase):
         self.review("pass", paths_=["src/a.py"])
         self.assertEqual(len(proof.open_required(self.repo, state(), head())), 1)
 
-    def test_plain_and_location_findings_can_be_corrected_by_deleting_the_file(self):
+    def test_findings_can_be_corrected_by_deleting_a_file_and_adding_a_missing_plain_path(self):
         self.implement({"README.md": "bad\n", "keep.py": "keep\n"})
         self.review("fail", [{"path": p, "required": True, "text": "remove this"}
-                             for p in ("README.md", "README.md:12", "README.md:12:2")])
-        self.implement({"README.md": None})
-        self.assertEqual(self.uncovered(), ["README.md"])
-        self.review("pass", paths_=["README.md"])
+                             for p in ("README.md", "README.md:12", "README.md:12:2", "tests/test_a.py")])
+        self.implement({"README.md": None, "tests/test_a.py": "test\n"})
+        self.assertEqual(self.uncovered(), ["README.md", "tests/test_a.py"])
+        self.review("pass", paths_=["README.md", "tests/test_a.py"])
         self.assertEqual(proof.open_required(self.repo, fold(self.entries("widget")),
                                              self.git(self.repo, "rev-parse", "HEAD")), [])
         self.assertEqual(self.uncovered(), [])

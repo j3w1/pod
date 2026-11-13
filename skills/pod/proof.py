@@ -38,7 +38,7 @@ def _finding_paths(cwd: Path, review: dict) -> dict:
     result = {}
     for name, names in options.items():
         matches = [p for p in names if blobs[p] is not None]
-        if blobs[name] is not None:
+        if blobs[name] is not None or len(names) == 1:
             result[name] = name
         else:
             result[name] = matches[0] if len(matches) == 1 else None
