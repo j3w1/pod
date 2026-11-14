@@ -62,6 +62,9 @@ number, state or wait to maintain.
 `pod record --check "COMMAND"` runs a check and records the exit it observed, bound to the
 commit when the tree is clean. Prefer it to describing a run in words.
 
+Repeating `pod accept` for an accepted assignment is idempotent: it returns the recorded
+decision without reading another result or changing the earlier facts and findings.
+
 ## Review
 
 Whether review is required is the project's rule (`.pod/config.yaml` on the target branch),
@@ -78,6 +81,14 @@ review by a worker that changed nothing.
 - A required finding stays open until a later review of the corrected file passes, or fails
   only over other files, or the person waives it; a second reviewer's pass on the same content
   does not close it: `pod record --waive a2.1 --why "…" --words "what they said"`.
+- For a correction review, commit the fixes, use `pod dispatch --role review --paths …` on
+  the corrected paths, then `pod accept` the new assignment when Orca reports completion.
+  The review must cover applicable corrected content and the reviewer must have changed nothing.
+- A native Orca follow-up creates a different Task/Dispatch, even for the same reviewer.
+  Re-accepting the original Pod assignment does not import that follow-up's result. Use the
+  Pod correction-review path above; native follow-up intake is unsupported. Recording its
+  PASS with `pod record --carried` cannot close required findings, even when it names the
+  same reviewer and corrected commit.
 
 ## Evidence
 
