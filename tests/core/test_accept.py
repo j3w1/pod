@@ -138,6 +138,28 @@ class AcceptTests(CoreCase):
         self.refused("orca_unknown", commands.accept, self.repo, None, "a3", discarded=True)
         self.assertEqual(self.facts("result"), [])
 
+    def test_a_restart_abandoned_worker_is_refused_without_repeating_an_ineffective_stop(self):
+        self.commit({"src/a.py": "candidate\n"})
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        state = self.orca()
+        state["tasks"][started["task"]]["status"] = "ready"
+        state["workers"][started["dispatch"]].update(
+            workerState="abandoned", dispatchStatus="failed", stage="terminal_missing",
+            liveness="unverifiable", terminalState="retained")
+        self.orca_file.write_text(json.dumps(state))
+        before = self.entries("widget")
+        for _ in range(2):
+            error = self.refused("not_finished", commands.accept, self.repo, None, "a1", discarded=True)
+            self.assertIn("its worker abandoned", str(error))
+            self.assertIn("abandonment does not prove process exit", error.fix)
+            self.assertIn("Pod cannot discard this unfinished Task", error.fix)
+            self.assertIn(f"orca orchestration worker-show --dispatch {started['dispatch']}", error.fix)
+            self.assertIn("follow Orca's recovery guidance", error.fix)
+            self.assertIn("retain resources whose exit is unproven", error.fix)
+            self.assertNotIn("stop the worker", error.fix)
+        self.assertEqual(self.entries("widget"), before)
+        self.assertEqual(self.orca(), state)
+
     def test_the_result_object_is_the_last_one_that_states_an_outcome(self):
         text = 'I ran {"x": 1} first.\n{"outcome": "failed"}\nthen fixed it\n{"outcome": "succeeded", "commit": null}\ntrailing {'
         self.assertEqual(commands.parse_result(text), {"outcome": "succeeded", "commit": None})

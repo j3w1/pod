@@ -295,10 +295,15 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
             asked = bool(task and discarded and row.get("dispatch"))
             worker = next((item for item in orca.workers(run) if item["dispatch"] == row.get("dispatch")), {}) if asked else {}
             if worker.get("state") != "stopped":
+                fix = ("wait for Orca to wake you, or stop the worker through Orca and, once Orca shows it "
+                       "stopped, accept with --discarded")
+                if worker.get("state") == "abandoned":
+                    fix = ("abandonment does not prove process exit; Pod cannot discard this unfinished Task; "
+                           f"inspect `orca orchestration worker-show --dispatch {row['dispatch']}` and follow Orca's "
+                           "recovery guidance; retain resources whose exit is unproven")
                 raise PodError("not_finished", f"{ident} has not reported a result (Orca says {task and task['status']}"
                                + (f", its worker {worker.get('state') or 'not listed'}" if asked else "") + ").",
-                               fix="wait for Orca to wake you, or stop the worker through Orca and, once Orca shows it "
-                                   "stopped, accept with --discarded")
+                               fix=fix)
         report = task["report"] or {}
         stated = parse_result(report.get("body"))
         outcome = report.get("outcome") if report.get("outcome") in ("succeeded", "failed") else "unknown"
