@@ -143,6 +143,35 @@ class PublishedProfileTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
 
+    def test_independently_framed_pushes_share_a_script(self):
+        controls = "self.__next_f.push([0]);self.__next_f.push([2,null])"
+        self.assertEqual(leaderboard.parse(page() + f"<script>{controls}</script>"), leaderboard.parse(page()))
+        combined = self.source.replace("</script>\n<script>", ";").replace("<script>", f"<script>{controls};", 1)
+        self.assertEqual(leaderboard.parse(combined), leaderboard.parse(self.source))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(combined.replace("21:[", "21:[[", 1))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source.replace(")</script>", ")broken</script>", 1))
+
+    def test_named_release_members_must_match_profiles_and_multiplicity(self):
+        member = r'GPT-6.2 Astra (Max)\"'
+        for replacement in (r'GPT-6.2 Astra (Medium)\"', member + r',\"' + member):
+            with self.subTest(replacement=replacement), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(member, replacement, 1))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source.replace(r'\"modelNames\":[', r'\"modelNames\":null,\"other\":[', 1))
+
+    def test_expandable_control_does_not_impose_a_minimum_profile_count(self):
+        source = self.source.replace(r',\"Claude Fable 5.2 (Low, Default Fallback)\"', "", 1)
+        source = "\n".join(line for line in source.splitlines() if "Claude Fable 5.2 (Low, Default Fallback)" not in line)
+        rows = leaderboard.parse(source)["rows"]
+        self.assertEqual([row["profile"] for row in rows if row["release"] == "claude-fable-5-2"],
+                         ["Max, Default Fallback"])
+
+    def test_unrelated_release_list_does_not_change_a_standalone_table(self):
+        unrelated = r'<script>self.__next_f.push([1,"8:[\"$\",\"nav\",null,{\"releases\":[]}]\n"])</script>'
+        self.assertEqual(leaderboard.parse(page() + unrelated), leaderboard.parse(page()))
+
     def test_measures_each_published_profile_with_its_own_identity_precision_and_units(self):
         parsed = leaderboard.parse(self.source)
         rows = {row["name"]: row for row in parsed["rows"]}

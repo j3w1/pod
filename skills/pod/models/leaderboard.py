@@ -6,7 +6,7 @@ column Pod does not know is reported and not shown. A renamed column is therefor
 unknown column: no metric is ever read from a header it was not defined for.
 """
 
-from collections import Counter
+from collections import Counter, defaultdict
 from html.parser import HTMLParser
 import http.client
 import io
@@ -55,6 +55,8 @@ UNITS.update({name: "US dollars per million tokens" for name in _PROFILE_FIELDS 
 _MISSING = ("", "--", "—", "–", "-", "n/a")
 _NUMBER = re.compile(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,9})(?:\.[0-9]{1,6})?")
 _METHOD = re.compile(r"Intelligence Index v([0-9]{1,2}(?:\.[0-9]{1,3}){0,3})\b")
+_PUSH = re.compile(r"\s*self\.__next_f\.push\(\s*")
+_END_PUSH = re.compile(r"\s*\)\s*;?")
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 
 
@@ -200,17 +202,21 @@ class _Tables(HTMLParser):
             self._row = self._cell = None
 
     def handle_data(self, data):
-        if self._inline_script and data.lstrip().startswith("self.__next_f.push("):
-            call = data.strip().removesuffix(";")
-            if not call.endswith(")"):
+        pos = 0
+        while self._inline_script and (start := _PUSH.match(data, pos)):
+            chunk, end = json.JSONDecoder().raw_decode(data, start.end())
+            close = _END_PUSH.match(data, end)
+            if not close:
                 raise RefreshError("Incomplete leaderboard data chunk")
-            chunk = json.loads(call[len("self.__next_f.push("):-1])
+            pos = close.end()
             if not isinstance(chunk, list) or not chunk or type(chunk[0]) is not int:
                 raise RefreshError("Unreadable leaderboard data chunk")
             if chunk[0] == 1:
                 if len(chunk) != 2 or not isinstance(chunk[1], str) or len(self.chunks) >= 4096:
                     raise RefreshError("Invalid leaderboard text chunks")
                 self.chunks.append(chunk[1])
+        if pos and data[pos:].strip():
+            raise RefreshError("Unreadable leaderboard data after a push")
         if self._cell is not None and not self._skip and self._size < MAX_CELL_TEXT * 4:
             self._cell.append(data)
             self._size += len(data)
@@ -299,11 +305,11 @@ def _unique_fields(pairs):
     return fields
 
 
-def _models_from_chunks(chunks):
-    """Read initialModels only from component props in a complete JSON Flight record."""
-    found = []
+def _published_lists(chunks):
+    """Read the model measurements and release memberships from component props."""
+    found = defaultdict(list)
     for line in io.StringIO("".join(chunks)):
-        if '"initialModels"' not in line:
+        if '"initialModels"' not in line and '"releases"' not in line:
             continue
         number, _, body = line.partition(":")
         if not re.fullmatch(r"[0-9a-f]+", number) or not body.lstrip().startswith("["):
@@ -318,17 +324,19 @@ def _models_from_chunks(chunks):
                 continue
             if len(node) == 4 and node[0] == "$" and isinstance(node[3], dict):
                 props = node[3]
-                if "initialModels" in props:
-                    found.append(props["initialModels"])
+                for key in ("initialModels", "releases"):
+                    if key in props:
+                        found[key].append(props[key])
                 if "children" in props:
                     pending.append(props["children"])
             else:
                 pending.extend(node)
-    if not found:
-        return None
-    if len(found) != 1 or not isinstance(found[0], list) or not 0 < len(found[0]) <= MAX_ROWS:
-        raise RefreshError("The page does not contain one complete grouped leaderboard")
-    return found[0]
+    if "initialModels" not in found:
+        return {}
+    for key, matches in found.items():
+        if len(matches) != 1 or not isinstance(matches[0], list) or not 0 < len(matches[0]) <= MAX_ROWS:
+            raise RefreshError(f"The grouped leaderboard has an invalid {key} list")
+    return {key: matches[0] for key, matches in found.items()}
 
 
 def _identity_text(value):
@@ -401,11 +409,32 @@ def _read_profile_metrics(model, row, supplied):
     return unread
 
 
-def _profile_rows(models, visible, expandable):
+def _check_memberships(releases, observed):
+    seen = set()
+    for release in releases:
+        if not isinstance(release, dict) or not isinstance(release.get("creator"), dict):
+            raise RefreshError("The published release list has an unreadable identity")
+        key = (_identity_text(release["creator"].get("name")), _identity_text(release.get("slug")))
+        if key in seen:
+            raise RefreshError("The published release list repeats a release")
+        seen.add(key)
+        if key not in observed or "modelNames" not in release:
+            continue
+        names = release["modelNames"]
+        if not isinstance(names, list) or len(names) > MAX_ROWS:
+            raise RefreshError("A published release has an unreadable model name list")
+        # Releases without named variants publish their base name and an empty list.
+        expected = Counter(_identity_text(name) for name in names or [release.get("name")])
+        if observed[key] != expected:
+            raise RefreshError("The profile measurements disagree with the published release membership")
+
+
+def _profile_rows(models, visible, releases):
     visible_by_name = {(row["creator"], row["name"]): row for row in visible}
     if len(visible_by_name) != len(visible):
         raise RefreshError("The visible leaderboard repeats a profile identity")
     rows, seen, matched, supplied = [], set(), set(), set()
+    observed = defaultdict(Counter)
     unread = 0
     for model in models:
         row = _profile_identity(model)
@@ -413,6 +442,7 @@ def _profile_rows(models, visible, expandable):
         if identity in seen:
             raise RefreshError("The grouped leaderboard repeats a release profile")
         seen.add(identity)
+        observed[row["creator"], row["release"]][model["name"]] += 1
         unread += _read_profile_metrics(model, row, supplied)
         visible_key = (row["creator"], row["name"])
         rendered = visible_by_name.get(visible_key)
@@ -426,10 +456,7 @@ def _profile_rows(models, visible, expandable):
         rows.append(row)
     if visible_by_name.keys() != matched:
         raise RefreshError("The grouped leaderboard is missing a visible profile")
-    counts = Counter((creator, release) for creator, release, _ in seen)
-    for row in rows:
-        if (row["creator"], row["name"]) in expandable and counts[row["creator"], row["release"]] < 2:
-            raise RefreshError("An expandable release is missing its additional profiles")
+    _check_memberships(releases, observed)
     absent = sorted(UNITS.keys() - supplied - {"intelligence_index", "cost_per_task_usd"})
     return rows, absent, unread
 
@@ -475,7 +502,7 @@ def parse(text: str) -> dict:
     body = table[header + 1:]
     if not body:
         raise RefreshError("Leaderboard has no rows")
-    rows, unread, expandable = [], 0, set()
+    rows, unread, expandable = [], 0, False
     for number, cells in enumerate(body, 1):
         if len(cells) != len(keys):
             raise RefreshError(f"Leaderboard row {number} has the wrong number of cells")
@@ -484,7 +511,7 @@ def parse(text: str) -> dict:
         if not name or not creator or len(name) > 120:
             raise RefreshError(f"Leaderboard row {number} has no usable model or creator name")
         if cells[columns["name"]].expandable:
-            expandable.add((creator, name))
+            expandable = True
         score = cells[columns["intelligence_index"]]
         estimated = score.endswith("*")
         try:
@@ -501,9 +528,9 @@ def parse(text: str) -> dict:
                 except ValueError:
                     unread += 1     # shown as unavailable and counted, never guessed
         rows.append(row)
-    models = _models_from_chunks(parser.chunks)
-    if models is not None:
-        rows, absent, unread = _profile_rows(models, rows, expandable)
+    lists = _published_lists(parser.chunks)
+    if "initialModels" in lists:
+        rows, absent, unread = _profile_rows(lists["initialModels"], rows, lists.get("releases", []))
     elif expandable:
         raise RefreshError("The expandable leaderboard is missing its grouped profile data")
     methodology = _methodology(text)
