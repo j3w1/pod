@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from pod import routefile
 from pod.models import snapshot, table, view, workspace
-from tests.models.support import ModelCase, ROUTES, current_page, live_page, page, without
+from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live_page, page, without
 from tests.support import ROOT
 
 
@@ -128,16 +128,73 @@ class KeyTests(WorkspaceCase):
         self.keys("/", "escape")
         self.assertEqual(self.space.search, "")
         self.assertEqual(self.space.provider, "all")
-        self.assertCountEqual(self.space.rows, [row for row in self.space.view.rows if row.provider == "OpenAI" or (row.provider == "Anthropic" and "Opus" in row.name)])
+        self.assertCountEqual(self.space.rows, [row for row in self.space.view.rows if row.routable or row.observed])
         self.keys("f")
         self.assertEqual({row.provider for row in self.space.rows}, {"Anthropic"})
         self.keys("s")
         self.assertEqual(self.space.sort, "cost")
-        self.assertEqual(self.space.rows[0].name, "Claude Opus 5.5 (low)")
+        self.assertEqual(self.space.rows[0].name, "Claude Haiku 5.5 (low)")
         self.assertEqual(self.space.handle("q"), "quit")
 
 
 class DrawTests(WorkspaceCase):
+    def test_first_frame_identifies_the_profile_and_its_guidance_in_the_inspector(self):
+        self.refresh_from(current_page())
+        for width, height in ((120, 24), (40, 16)):
+            space = workspace.Workspace()
+            lines = text(space.lines(width, height))
+            if width == 120:
+                pane = [line.split(" │ ", 1)[1] for line in lines if " │ " in line]
+            else:
+                divider = next(i for i, line in enumerate(lines) if line.startswith("─"))
+                pane = lines[divider + 1:]
+            self.assertEqual(pane[0], "Claude Fable 5.2 (max)")
+            self.assertIn("fallback", " ".join(pane).casefold())
+            self.assertIn(table.guidance(space.current)[0].split(".")[0][:25], " ".join(pane))
+
+    def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
+        self.refresh_from(current_page())
+        space = workspace.Workspace()
+        screen = "\n".join(text(space.lines(200, 50)))
+        self.assertIn("Model", screen)
+        self.assertIn("Index", screen)
+        self.assertIn("$/task", screen)
+        self.assertIn("█", screen)
+        self.assertEqual(space.current.model_id, "claude-fable-5-2")
+        space.handle("down")
+        self.assertEqual(space.current.name, "GPT-6.2 Astra (max)")
+        seen = {}
+        for _ in range(6):
+            row = space.current
+            seen[row.route] = row.metrics["intelligence_index"]
+            self.assertIn(row.route, "\n".join(text(space.lines(100, 28))))
+            space.handle("right")
+        self.assertEqual(seen, {f"codex/gpt-6.2-astra/{effort}": 62 if effort == "max" else None
+                                for effort in ("low", "medium", "high", "xhigh", "max", "ultra")})
+        self.assertEqual(space.current.effort, "max")
+        space.handle("left")
+        self.assertEqual(space.current.effort, "xhigh")
+
+    def test_expanded_profile_scores_follow_keyboard_navigation_without_changing_routes(self):
+        self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
+        space = workspace.Workspace()
+        self.assertEqual(space.current.name, "Claude Fable 5.2 (max with fallback)")
+        self.assertIsNone(space.current.route)
+        self.assertEqual(space.current.profile, "Max, Default Fallback")
+        space.handle("down")
+        self.assertEqual(space.current.route, "codex/gpt-6.2-astra/max")
+        space.handle("left")
+        self.assertEqual(space.current.route, "codex/gpt-6.2-astra/xhigh")
+        lines = text(space.lines(100, 28))
+        self.assertIn("61.6", next(line for line in lines if line.startswith("▸")))
+        space.handle("enter")
+        self.assertIn("61.5602325371388", "\n".join(text(space.lines(100, 60))))
+        space.handle("right")
+        space.handle("right")
+        self.assertEqual(space.current.effort, "ultra")
+        self.assertIsNone(space.current.metrics["intelligence_index"])
+        self.assertEqual(self.target.read_text(), ROUTES)
+
     def test_selected_details_follow_navigation_and_fit_the_terminal(self):
         for width, height in ((120, 24), (60, 20), (40, 16)):
             with self.subTest(width=width):
@@ -145,23 +202,30 @@ class DrawTests(WorkspaceCase):
                 for move in ("down", "end", "up"):
                     self.keys(move)
                     lines = text(self.space.lines(width, height))
-                    self.assertIn("Selected · " + self.space.current.name, "\n".join(lines))
+                    self.assertIn(self.space.current.name, " ".join(part.strip() for part in lines))
                     self.assertLessEqual(len(lines), height)
                     self.assertTrue(all(len(line) <= width for line in lines))
                     self.assertIn("/ search", "\n".join(lines))
-                    self.assertIn("P Pin", "\n".join(lines))
+                    self.assertIn("? keys", "\n".join(lines))
+                    self.keys("?")
+                    self.assertIn("P Pin", "\n".join(text(self.space.lines(width, height))))
+                    self.keys("?")
 
     def test_opening_and_moving_show_the_selected_familys_advice(self):
         self.refresh_from(current_page())
         for width, height in ((120, 24), (40, 16)):
             space = workspace.Workspace()
+            space.handle("/")
+            for key in "GPT-6.2":
+                space.handle(key)
+            space.handle("enter")
             shown = "\n".join(text(space.lines(width, height)))
-            self.assertIn("Selected · GPT-6.2 Astra (max)", shown)
+            self.assertIn("GPT-6.2 Astra (max)", shown)
             self.assertIn("Try high effort for a bug", shown)
             space.handle("down")
             shown = "\n".join(text(space.lines(width, height)))
-            self.assertIn("Selected · Claude Opus 5.5 (max)", shown)
-            self.assertIn("Start a cross-file review", shown)
+            self.assertIn("GPT-6.2 Sol (max)", shown)
+            self.assertIn("Start a well-specified feature", shown)
             self.assertNotIn("Try high effort for a bug", shown)
 
     def test_every_wrapped_detail_line_can_be_read_in_order(self):
@@ -187,9 +251,12 @@ class DrawTests(WorkspaceCase):
         self.assertRegex(shown[0], r"^Public snapshot: (just now|\d+ min ago) \(20")
         self.assertIn("Intelligence Index v5.0.1", shown[0])
         body = "\n".join(shown)
-        for word in ("enabled", "disabled", "routable", "State", "Public", "Adapter"):
+        for word in (self.space.current.state, "Published", "Index", "$/task"):
             self.assertIn(word, body)
-        self.assertIn("space on/off", "\n".join(shown[-3:]))
+        self.assertIn("? keys", "\n".join(shown[-3:]))
+        self.keys("?")
+        self.assertIn("space on/off", "\n".join(text(self.space.lines(160, 30))))
+        self.keys("?")
         self.assertIn("q quit", "\n".join(text(self.space.lines(60, 30))[-4:]))
         self.assertTrue(all(len(line) <= 160 for line in shown))
 
@@ -218,7 +285,7 @@ class DrawTests(WorkspaceCase):
     def test_high_value_is_marked_with_a_star_and_explained_in_the_detail_panel(self):
         self.go("GPT-6.1 Sol (high)")
         line = next(segments for segments, selected in self.space.lines(160, 60) if selected)
-        self.assertIn(("   $0.59* ", "value"), line)
+        self.assertTrue(any(part.strip() == "$0.59*" and style == "value" for part, style in line))
         self.keys("enter")
         shown = "\n".join(text(self.space.lines(160, 60)))
         self.assertIn("High value, benchmark-relative", shown)
@@ -341,7 +408,7 @@ class TerminalSmokeTest(WorkspaceCase):
                     if not chunk:
                         break
                     seen += chunk
-                if not sent and b"space on/off" in seen:
+                if not sent and b"/ search" in seen:
                     os.write(master, b"q")
                     sent = True
             _pid, status = os.waitpid(pid, 0)

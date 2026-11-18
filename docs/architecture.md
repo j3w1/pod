@@ -207,21 +207,23 @@ the person changes it, through `pod models` or an editor. Coordination reads it 
   are required; other known columns are optional metrics that read as unavailable when absent;
   unknown columns are listed in diagnostics. A missing required column fails the whole refresh
   and the last good snapshot stays. A snapshot records the methodology the page states.
-  The current public table supplies creator identity through the model cell's image alt text
-  and profile qualifiers through a separate marked span, including ungrouped rows. The parser
-  requires one nonempty creator and an unambiguous profile span when present; it converts an
-  explicit `Max, Default Fallback` to `(max with fallback)` and never infers effort from a
-  model's name. The earlier table with a Creator column remains supported. Unreadable required
-  index or cost values fail the whole refresh; explicit missing marks remain unavailable.
-  Only profiles actually present in the fetched table have public measurements; other routable
-  efforts remain unavailable. Neither registry changes nor refresh writes enabled routes,
-  Preferred, Pin or merge authorization.
-- **Workspace.** The terminal list and plain table show OpenAI models and Anthropic Opus.
-  Navigation updates the selected model’s guidance. Enter expands its detail panel with
-  source links, preference state and benchmark measurements. The bracket keys scroll the
-  panel. Sorting, search, provider filters and explicit route edits operate on the visible
-  selection. The underlying view, registry, preference file and JSON diagnostics retain
-  the full catalog. A public observation never makes a route.
+  The current public response includes the collapsed table and structured records for its
+  expanded profiles. Pod reads the records as bounded JSON, retaining the release, creator,
+  raw profile qualifier, full-precision measurements and units. Task duration is converted
+  from seconds to minutes. An unreadable grouped payload or one missing a visible profile
+  fails the refresh. Earlier table-only responses are still supported.
+  Public profiles with different fallback qualifiers remain separate. An unpublished registry
+  effort has no public measurements. Refresh leaves enabled routes, Preferred, Pin and merge
+  authorization as the person configured them.
+- **Workspace.** The interactive browser groups public observations and routable efforts by
+  provider and model. ↑↓ moves between models. Each model starts with its first profile under
+  the active sort. ←→ cycles the selected model’s exact efforts and public profiles. The
+  browser shows each profile’s numeric intelligence index with a bar scaled to the largest
+  visible index, and the benchmark cost per task. The selection pane shows publication and
+  route state, measurements and guidance. On narrow terminals it sits below the list.
+  Enter opens scrollable details and sources, `/` searches, and `?` shows all shortcuts.
+  Only explicit route edits change preferences. The plain table keeps its OpenAI and Opus
+  selection. JSON diagnostics can include every provider with `--all`.
 - **High-value mark.** A cost is marked when no other routable route costs less while scoring
   no more than 2 index points lower, and its index is at or above the median of routable
   routes with both measurements. Rows with an estimated index or a fallback profile are left
