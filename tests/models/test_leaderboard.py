@@ -1,9 +1,11 @@
+import gzip
 import http.server
 import threading
 import unittest
+from unittest.mock import patch
 
 from pod.models import leaderboard
-from tests.models.support import HEADERS, ROWS, current_page, live_page, page, without
+from tests.models.support import FIXTURES, HEADERS, ROWS, current_page, live_page, page, without
 
 
 class ParseTests(unittest.TestCase):
@@ -136,9 +138,95 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(leaderboard.parse(page(rows=rows))["rows"][0]["name"], "Evil Model (high)")
 
 
+class PublishedProfileTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+
+    def test_measures_each_published_profile_with_its_own_identity_precision_and_units(self):
+        parsed = leaderboard.parse(self.source)
+        rows = {row["name"]: row for row in parsed["rows"]}
+        self.assertEqual(set(rows), {"GPT-6.2 Astra (max)", "GPT-6.2 Astra (xhigh)", "Qwen4 Max",
+                                     "Claude Fable 5.2 (max with fallback)", "Claude Fable 5.2 (low with fallback)",
+                                     "JT-35B-Flash"})
+        row = rows["GPT-6.2 Astra (xhigh)"]
+        self.assertEqual((row["model_name"], row["release"], row["profile"], row["creator"]),
+                         ("GPT-6.2 Astra", "gpt-6-2-astra", "Xhigh", "OpenAI"))
+        self.assertEqual(row["intelligence_index"], 61.5602325371388)
+        self.assertEqual(row["cost_per_task_usd"], 2.5211433764120375)
+        self.assertEqual(row["time_per_task_min"], 391.2271374821837 / 60)
+        self.assertEqual(row["context_window_tokens"], 1_000_000)
+        self.assertEqual(row["first_answer_token_s"], 53.87065945964923)
+        self.assertEqual(row["first_token_s"], 53.87065945964923)
+        self.assertEqual(row["output_tokens_per_s"], 56.840650197440034)
+        self.assertEqual(row["omniscience_net_score"], 48.266666666666666)
+        self.assertEqual([row[k + "_price_per_million_usd"] for k in ("input", "output", "cache_hit", "cache_write")],
+                         [8, 40, 0.4, 10])
+        self.assertEqual(leaderboard.UNITS["time_per_task_min"], "minutes per benchmark task")
+        self.assertEqual(leaderboard.UNITS["output_tokens_per_s"], "tokens per second")
+        self.assertEqual(rows["Claude Fable 5.2 (low with fallback)"]["profile"], "Low, Default Fallback")
+        self.assertEqual(rows["Claude Fable 5.2 (low with fallback)"]["intelligence_index"], 53.9249388799182)
+        self.assertIsNone(rows["Qwen4 Max"]["profile"])
+        missing = rows["JT-35B-Flash"]
+        self.assertEqual(missing["creator"], "China Mobile")
+        self.assertEqual(missing["benchmark_scores"], {"critpt": 0, "gpqa-diamond": 0.829292929292929})
+        for field in ("intelligence_index", "cost_per_task_usd", "time_per_task_min", "output_tokens_per_s"):
+            self.assertIsNone(missing[field])
+        self.assertEqual(parsed["methodology"], "Artificial Analysis Intelligence Index v5.0.1")
+
+    def test_estimate_marks_belong_only_to_the_matching_profile(self):
+        parsed = leaderboard.parse(self.source.replace(">65<", ">65*<"))
+        self.assertEqual([row["name"] for row in parsed["rows"] if row["index_estimated"]],
+                         ["Claude Fable 5.2 (max with fallback)"])
+
+    def test_incomplete_or_malformed_profiles_fail_even_with_a_readable_visible_table(self):
+        for old, new in ((r'\"intelligenceIndex\":61.5602325371388', r'\"changedIndex\":61.5602325371388'),
+                         ("61.5602325371388", "true"), ("2.5211433764120375", "1e999"),
+                         (r'\"name\":\"GPT-6.2 Astra (Xhigh)\"', r'\"name\":\"Another model\"'),
+                         (r'\"suffix\":\"Xhigh\"', r'\"suffix\":4'), ("21:[", "21:[[["),
+                         ("self.__next_f.push([1,", "self.__next_f.push([1,invalid+"),
+                         ("initialModels", "renamedModels"), ("JT-35B-Flash</td>", "Different</td>"),
+                         ('Cost per Task USD', 'Unrecognized price')):
+            with self.subTest(old=old):
+                self.assertIn(old, self.source)
+                with self.assertRaises(leaderboard.RefreshError):
+                    leaderboard.parse(self.source.replace(old, new, 1))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source[:self.source.rindex("<script>")])
+
+    def test_optional_invalid_values_and_unrelated_script_fields(self):
+        source = self.source.replace("56.840650197440034", "false")
+        source = source.replace(r'\"scores\":{', r'\"privateField\":\"do-not-copy\",\"scores\":{')
+        parsed = leaderboard.parse(source)
+        row = next(row for row in parsed["rows"] if row["name"] == "GPT-6.2 Astra (xhigh)")
+        self.assertIsNone(row["output_tokens_per_s"])
+        self.assertTrue(any("optional" in note for note in parsed["diagnostics"]))
+        self.assertNotIn("do-not-copy", str(parsed))
+
+    def test_ambiguous_and_incomplete_measurements_fail_the_whole_refresh(self):
+        for replacement in (r'\"intelligenceIndexCostPerTask\":null',
+                            r'\"intelligenceIndexCostPerTask\":0,\"intelligenceIndexCostPerTask\":8'):
+            with self.subTest(replacement=replacement), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(r'\"intelligenceIndexCostPerTask\":3.9979061566801852',
+                                                      replacement))
+        with patch.object(leaderboard, "MAX_ROWS", 5), self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source)
+
+    def test_a_page_cut_off_in_its_first_data_script_cannot_replace_all_profiles_with_visible_rows(self):
+        incomplete = self.source[:self.source.index("</script>")]
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(incomplete)
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.server.requests += 1
+        if self.path == "/incomplete-gzip":
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            self.wfile.write(gzip.compress(page().encode())[:-8])
+            return
         if self.path == "/away":
             self.send_response(302)
             self.send_header("Location", "http://localhost.invalid/")
@@ -218,6 +306,10 @@ class FetchTests(unittest.TestCase):
     def test_the_request_carries_no_credentials(self):
         self.assertTrue(leaderboard.URL.startswith("https://"))
         self.assertNotIn("@", leaderboard.URL)
+
+    def test_a_truncated_compressed_page_fails_even_if_its_table_is_already_readable(self):
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.fetch(self.base + "/incomplete-gzip")
 
 
 if __name__ == "__main__":
