@@ -176,7 +176,7 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
                        if name.effort == effort and matched[index] == model]
             chosen = [index for index in matches if not names[index].fallback]
             if not chosen and not separate_fallback:
-                # Plain and JSON keep the historical projection for table-only captures.
+                # Plain and JSON use the sole fallback result from a table-only capture.
                 chosen = [index for index in matches if "model_name" not in public[index]]
             if len(chosen) == 1:
                 observe(row, chosen[0])

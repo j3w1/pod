@@ -34,16 +34,15 @@ class Workspace:
 
     # ---------------------------------------------------------------- state
 
-    def reload(self, keep=None) -> None:
+    def reload(self) -> None:
         self.models = registry.load()
         self.view = view.build(models=self.models, separate_fallback=True)
         path = self.view.preferences.path
         self.raw = path.read_bytes() if self.view.preferences.status == "ok" else b""
-        self._select(keep)
+        self._select()
 
-    def _select(self, keep=None) -> None:
-        if keep is None and getattr(self, "rows", None):
-            keep = self._identity(self.current)
+    def _select(self) -> None:
+        previous = self.current if getattr(self, "rows", None) else None
         self.rows = [row for row in view.select(self.view, provider=self.provider, search=self.search,
                                                 sort=self.sort, reverse=self.reverse) if row.observed or row.routable]
         releases = {}
@@ -58,7 +57,13 @@ class Workspace:
             grouped.setdefault(key, []).append(i)
         self.groups = list(grouped.values())  # first row represents the group under the active sort
         self.group_for = {index: g for g, members in enumerate(self.groups) for index in members}
-        self.cursor = next((i for i, row in enumerate(self.rows) if self._identity(row) == keep), 0)
+        self.cursor = 0
+        if previous:
+            key = self._identity(previous)
+            matches = [i for i, row in enumerate(self.rows) if self._identity(row) == key]
+            if matches:
+                self.cursor = next((i for i in matches if self.rows[i].public_index == previous.public_index),
+                                   matches[0])
 
     @staticmethod
     def _identity(row):
@@ -66,7 +71,7 @@ class Workspace:
             return row.route
         if row.release:
             return (row.provider, row.release, row.profile)
-        return (row.provider, row.name, row.public_index)
+        return (row.provider, row.name)
 
     def profiles(self):
         def order(i):
@@ -87,13 +92,12 @@ class Workspace:
     # ---------------------------------------------------------------- changes
 
     def _apply(self, done: str, **changes) -> None:
-        keep = self._identity(self.current) if self.current else None
         try:
             edit.apply(expected=self.raw, models=self.models, **changes)
             self.message = done
         except PodError as exc:
             self.message = f"Not changed: {exc}" + (f" To proceed: {exc.fix}." if exc.fix else "")
-        self.reload(keep)
+        self.reload()
 
     def toggle(self) -> None:
         row = self.current

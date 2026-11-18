@@ -185,6 +185,19 @@ class DrawTests(WorkspaceCase):
         self.assertEqual(space.current.name, "Qwen4 Max")
         self.assertEqual(space.current.release, "qwen4-max")
 
+    def test_table_only_profile_keeps_focus_when_snapshot_rows_move(self):
+        self.refresh_from(current_page())
+        space = workspace.Workspace()
+        space.handle("down")
+        space.handle("down")
+        self.assertEqual(space.current.name, "Gemini 4 Carbon (high)")
+        snapshot_data = snapshot.load()
+        snapshot_data["rows"].reverse()
+        with patch.object(snapshot, "load", return_value=snapshot_data):
+            space.reload()
+        self.assertEqual(space.current.name, "Gemini 4 Carbon (high)")
+        self.assertEqual(space.current.provider, "Google")
+
     def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
         self.refresh_from(current_page())
         space = workspace.Workspace()
