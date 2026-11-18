@@ -87,7 +87,7 @@ _ASTRA = "Try high effort for a bug whose cause spans components. Check the diag
 _SOL = "Start a well-specified feature at medium effort. Try high if the implementation misses a dependency."
 _OSS = "https://openai.com/index/introducing-gpt-oss/"
 _GUIDANCE = {
-    "GPT-6 Astra": (_ASTRA, _OPENAI + "/models"),
+    "GPT-6 Astra": (_ASTRA, "https://openai.com/index/gpt-6-astra/"),
     "GPT-6.2 Astra": (_ASTRA, _SELECTION),
     "GPT-6 Sol": (_SOL, "https://openai.com/index/introducing-gpt-6-1-sol/"),
     "GPT-6.1 Sol": (_SOL, "https://openai.com/index/introducing-gpt-6-1-sol/"),

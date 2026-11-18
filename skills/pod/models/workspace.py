@@ -20,7 +20,7 @@ ESCAPE_WAIT_MS = 25   # how long the rest of an escape sequence may take to arri
 class Workspace:
     def __init__(self, refresh=snapshot.refresh):
         self._refresh = refresh
-        self.sort, self.reverse, self.provider, self.search = "index", False, "routed", ""
+        self.sort, self.reverse, self.provider, self.search = "index", False, "all", ""
         self.cursor = self.top = 0
         self.detail = self.searching = False
         self.detail_offset = 0
@@ -48,7 +48,7 @@ class Workspace:
         return self.rows[self.cursor] if self.rows else None
 
     def filters(self) -> list:
-        return ["routed", "all", *self.view.providers]
+        return ["all", *self.view.providers]
 
     # ---------------------------------------------------------------- changes
 
@@ -129,7 +129,7 @@ class Workspace:
             self.detail = not self.detail
             self.detail_offset = 0
         elif self.detail and key in ("[", "]"):
-            self.detail_offset = max(0, self.detail_offset + (4 if key == "]" else -4))
+            self.detail_offset = max(0, self.detail_offset + (1 if key == "]" else -1))
         elif key == "s":
             self.sort = view.SORTS[(view.SORTS.index(self.sort) + 1) % len(view.SORTS)]
             self._select()

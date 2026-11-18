@@ -4,13 +4,14 @@ import os
 import pty
 import select
 import sys
+import textwrap
 import time
 import unittest
 from unittest.mock import patch
 
 from pod import routefile
 from pod.models import snapshot, table, view, workspace
-from tests.models.support import ModelCase, ROUTES, live_page, page, without
+from tests.models.support import ModelCase, ROUTES, current_page, live_page, page, without
 from tests.support import ROOT
 
 
@@ -126,7 +127,6 @@ class KeyTests(WorkspaceCase):
         self.assertEqual({row.model_id for row in self.space.rows}, {"claude-opus-5-5"})
         self.keys("/", "escape")
         self.assertEqual(self.space.search, "")
-        self.keys("f")
         self.assertEqual(self.space.provider, "all")
         self.assertCountEqual(self.space.rows, [row for row in self.space.view.rows if row.provider == "OpenAI" or (row.provider == "Anthropic" and "Opus" in row.name)])
         self.keys("f")
@@ -150,6 +150,37 @@ class DrawTests(WorkspaceCase):
                     self.assertTrue(all(len(line) <= width for line in lines))
                     self.assertIn("/ search", "\n".join(lines))
                     self.assertIn("P Pin", "\n".join(lines))
+
+    def test_opening_and_moving_show_the_selected_familys_advice(self):
+        self.refresh_from(current_page())
+        for width, height in ((120, 24), (40, 16)):
+            space = workspace.Workspace()
+            shown = "\n".join(text(space.lines(width, height)))
+            self.assertIn("Selected · GPT-6.2 Astra (max)", shown)
+            self.assertIn("Try high effort for a bug", shown)
+            space.handle("down")
+            shown = "\n".join(text(space.lines(width, height)))
+            self.assertIn("Selected · Claude Opus 5.5 (max)", shown)
+            self.assertIn("Start a cross-file review", shown)
+            self.assertNotIn("Try high effort for a bug", shown)
+
+    def test_every_wrapped_detail_line_can_be_read_in_order(self):
+        self.refresh_from(current_page())
+        space = workspace.Workspace()
+        space.handle("enter")
+        expected = [part for item in table.detail(space.current, space.view.snapshot)[1:]
+                    for part in textwrap.wrap(item.strip(), 39)]
+        def panel():
+            lines = text(space.lines(40, 12))
+            start = lines.index("[] scroll · " + space.current.name) + 1
+            end = next(i for i in range(start, len(lines)) if "/ search" in lines[i])
+            return lines[start:end]
+
+        window = len(panel())
+        self.assertGreater(window, 0)
+        for start in range(len(expected) - window + 1):
+            self.assertEqual(panel(), expected[start:start + window])
+            space.handle("]")
 
     def test_the_header_always_shows_the_snapshot_age_and_states_are_words(self):
         shown = text(self.space.lines(160, 30))

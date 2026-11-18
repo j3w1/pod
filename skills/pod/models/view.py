@@ -222,9 +222,12 @@ def select(view: View, *, provider: str = "routed", search: str = "", sort: str 
 
 def visible(rows: list) -> list:
     """The human-facing catalog. Routing, diagnostics and JSON consume the full view."""
-    return [row for row in rows if row.provider.casefold() == "openai" or
-            (row.provider.casefold() == "anthropic" and
-             re.search(r"\bopus\b", row.model_id or row.name, re.IGNORECASE))]
+    # Only the registry and public rows identify a provider. Other rows inherit
+    # an agent label for grouping and can refer to third-party models.
+    return [row for row in rows if (row.routable or row.observed) and
+            (row.provider.casefold() == "openai" or
+             (row.provider.casefold() == "anthropic" and
+              re.search(r"\bopus\b", row.model_id or row.name, re.IGNORECASE)))]
 
 
 def as_json(row: Row) -> dict:
