@@ -260,9 +260,9 @@ class PublishedProfileTests(unittest.TestCase):
     def test_unrelated_flight_records_on_a_legacy_table_leave_its_rows_readable(self):
         unrelated = r'<script>self.__next_f.push([1,"1:Tf,\"initialModels\"\n2:[\"$\",\"div\",null,{}]\n"])</script>'
         other_table = '<table><tr><td><button aria-expanded="false">Menu</button></td></tr></table>'
-        for legacy in (page(), current_page()):
-            with self.subTest(size=len(legacy)):
-                self.assertEqual(leaderboard.parse(other_table + legacy + unrelated), leaderboard.parse(legacy))
+        for table_html in (page(), current_page()):
+            with self.subTest(size=len(table_html)):
+                self.assertEqual(leaderboard.parse(other_table + table_html + unrelated), leaderboard.parse(table_html))
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
