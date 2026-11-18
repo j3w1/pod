@@ -61,6 +61,13 @@ class Workspace:
         if previous:
             key = self._identity(previous)
             matches = [i for i, row in enumerate(self.rows) if self._identity(row) == key]
+            if not matches and previous.observed and not previous.route:
+                # Table-only snapshots have no release ID. Cross that boundary only for a unique name.
+                same_name = [i for i, row in enumerate(self.rows)
+                             if row.observed and not row.route and bool(row.release) != bool(previous.release)
+                             and (row.provider, row.name) == (previous.provider, previous.name)]
+                if len(same_name) == 1:
+                    matches = same_name
             if matches:
                 self.cursor = next((i for i in matches if self.rows[i].public_index == previous.public_index),
                                    matches[0])

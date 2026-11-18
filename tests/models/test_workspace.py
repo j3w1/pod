@@ -198,6 +198,16 @@ class DrawTests(WorkspaceCase):
         self.assertEqual(space.current.name, "Gemini 4 Carbon (high)")
         self.assertEqual(space.current.provider, "Google")
 
+    def test_refresh_keeps_a_unique_public_selection_when_the_snapshot_gains_release_ids(self):
+        self.refresh_from(current_page())
+        self.space.reload()
+        self.go("Qwen4 Max")
+        self.assertIsNone(self.space.current.release)
+        self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
+        self.space.reload()
+        self.assertEqual(self.space.current.release, "qwen4-max")
+        self.assertEqual(self.space.current.provider, "Alibaba")
+
     def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
         self.refresh_from(current_page())
         space = workspace.Workspace()
