@@ -47,3 +47,26 @@ class GuidanceTests(ModelCase):
                 advice, *sources = table.guidance(row)
                 self.assertIn("supported effort", advice)
                 self.assertTrue(sources)
+
+    def test_detail_shows_full_measurements_and_their_leaderboard_source(self):
+        shot = {"source": leaderboard.URL, "units": leaderboard.UNITS}
+        row = view.Row("Claude Fable 5.2 (max with fallback)", "Anthropic", "no route",
+                       observed=True, fallback=True)
+        row.metrics.update(intelligence_index=64.987654, cost_per_task_usd=26.543219,
+                           time_per_task_min=40.81234, first_answer_token_s=221.823456)
+        lines = [line.strip() for line in table.detail(row, shot)]
+        self.assertIn("State: no route", lines)
+        self.assertIn("intelligence_index: 64.987654  [index points]", lines)
+        self.assertIn("cost_per_task_usd: 26.543219  [US dollars per benchmark task]", lines)
+        self.assertIn("time_per_task_min: 40.81234  [minutes per benchmark task]", lines)
+        self.assertIn("first_answer_token_s: 221.823456  [seconds]", lines)
+        self.assertTrue(any(leaderboard.URL in line for line in lines))
+        _, *sources = table.guidance(row)
+        self.assertTrue(any(urlsplit(url).hostname == "platform.claude.com" for url in sources))
+
+    def test_another_provider_can_offer_guidance_without_inventing_efforts(self):
+        row = view.Row("Gemini 4 Carbon (high)", "Google", "no route", observed=True)
+        advice, *sources = table.guidance(row)
+        self.assertIn("known answer", advice)
+        self.assertNotIn("effort", advice)
+        self.assertEqual(sources, [])

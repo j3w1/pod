@@ -139,6 +139,55 @@ class StateTests(ViewCase):
         self.assertEqual(extra.state, "no route")
         self.assertIn("fallback profile of codex/gpt-6.1-sol/high", extra.reason)
 
+    def test_a_public_model_with_the_same_name_from_another_provider_cannot_supply_route_metrics(self):
+        model = self.build([public("GPT-6.1 Sol (high)", 65, 0.5, "Other")])
+        rows = [row for row in model.rows if row.name == "GPT-6.1 Sol (high)"]
+        self.assertEqual([(row.provider, row.observed, row.metrics["intelligence_index"]) for row in rows],
+                         [("OpenAI", False, None), ("Other", True, 65)])
+        self.assertIsNone(rows[1].model_id)
+
+    def test_duplicate_observations_remain_inspectable_with_their_own_values(self):
+        model = self.build([public("GPT-6.1 Sol (max)", 55, 1.2), public("GPT-6.1 Sol (max)", 56, 1.3)])
+        rows = [row for row in model.rows if row.name == "GPT-6.1 Sol (max)"]
+        self.assertEqual([(row.observed, row.routable, row.metrics["cost_per_task_usd"]) for row in rows],
+                         [(False, True, None), (True, False, 1.2), (True, False, 1.3)])
+        self.assertNotEqual(rows[1].public_index, rows[2].public_index)
+
+    def test_structured_fable_fallback_is_a_public_profile_with_no_route(self):
+        identity = {"model_name": "Claude Fable 5.2", "release": "claude-fable-5-2"}
+        entry = public("Claude Fable 5.2 (max with fallback)", 65, 26.54, "Anthropic",
+                       **identity, profile="Max, Default Fallback",
+                       time_per_task_min=40.8, first_answer_token_s=221.82)
+        model = self.build([entry])
+        route = self.by_name(model, "Claude Fable 5.2 (max)")
+        self.assertEqual((route.observed, route.routable, route.metrics["time_per_task_min"]),
+                         (False, True, None))
+        fallback = self.by_name(model, "Claude Fable 5.2 (max with fallback)")
+        self.assertEqual((fallback.observed, fallback.routable, fallback.fallback), (True, False, True))
+        self.assertEqual(fallback.model_name, route.model_name)
+        self.assertEqual(fallback.profile, "Max, Default Fallback")
+        self.assertEqual((fallback.metrics["time_per_task_min"], fallback.metrics["first_answer_token_s"]),
+                         (40.8, 221.82))
+        ordinary = public("Claude Fable 5.2 (max)", 65, 26.54, "Anthropic",
+                          **identity, profile="Max", time_per_task_min=47.8, first_answer_token_s=245.58)
+        profiles = self.build([entry, ordinary])
+        route = self.by_name(profiles, ordinary["name"])
+        fallback = self.by_name(profiles, entry["name"])
+        self.assertEqual((route.observed, route.routable, route.fallback, route.profile), (True, True, False, "Max"))
+        self.assertEqual((route.release, fallback.release), (identity["release"], identity["release"]))
+        self.assertEqual((route.metrics["first_answer_token_s"], fallback.metrics["first_answer_token_s"]),
+                         (245.58, 221.82))
+
+    def test_a_structured_model_name_that_ends_in_effort_text_stays_unqualified(self):
+        entry = public("GPT-6.1 Sol (high)", 56, 1.3,
+                       model_name="GPT-6.1 Sol (high)", release="gpt-6-1-sol-high", profile=None)
+        model = self.build([entry])
+        route, observation = [row for row in model.rows if row.name == entry["name"]]
+        self.assertEqual((route.routable, route.observed), (True, False))
+        self.assertEqual((observation.model_name, observation.release, observation.profile),
+                         (entry["model_name"], entry["release"], None))
+        self.assertEqual((observation.routable, observation.metrics["intelligence_index"]), (False, 56))
+
 
 class ValueTests(ViewCase):
     def test_the_rule_on_the_public_table(self):
