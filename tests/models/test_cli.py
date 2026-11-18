@@ -3,11 +3,12 @@ import io
 import json
 import subprocess
 import sys
+from os import terminal_size
 from unittest.mock import patch
 
 from pod import routefile
 from pod.models import cli, leaderboard
-from tests.models.support import ModelCase, ROUTES, current_page, live_page, page, without
+from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live_page, page, without
 from tests.support import ROOT
 
 
@@ -62,6 +63,21 @@ class CliTests(CliCase):
         self.assertIn("enabled", out)
         self.assertNotIn("Gemini", out)
         self.assertNotIn("Gemini 4 Carbon (high)", self.run_cli("--all")[1])
+
+    def test_narrow_plain_table_rounds_full_precision_indexes_and_keeps_the_estimate_marker(self):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        self.assertTrue(self.refresh_from(source.replace(">62<", ">62*<"))["ok"])
+        with patch.object(cli.shutil, "get_terminal_size", return_value=terminal_size((54, 24))):
+            code, out, err = self.run_cli("--plain")
+        self.assertEqual((code, err), (0, ""))
+        for name, index in (("GPT-6.2 Astra (max)", "62.14e"), ("GPT-6.2 Astra (xhigh)", "61.56")):
+            with self.subTest(profile=name):
+                line = next(line for line in out.splitlines() if name in line)
+                self.assertEqual(line.split()[-2], index)
+        rows = json.loads(self.run_cli("--json")[1])["rows"]
+        max_profile = next(row for row in rows if row["name"] == "GPT-6.2 Astra (max)")
+        self.assertEqual(max_profile["metrics"]["intelligence_index"], 62.1387990593969)
+        self.assertTrue(max_profile["index_estimated"])
 
     def test_visible_catalog_preserves_hidden_routes_and_refreshed_measurements(self):
         target = self.write_routes(ROUTES.replace("preferred: null",

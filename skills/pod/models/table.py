@@ -71,6 +71,9 @@ def header_line(columns: list, width: int, sort: str | None = None) -> list:
 
 def row_line(row: view.Row, columns: list, width: int) -> list:
     widths, values, line = _widths(columns, width), cells(row), []
+    if "index" in widths and len(values["index"]) > widths["index"]:
+        index = f'{row.metrics["intelligence_index"]:.2f}'.rstrip("0").rstrip(".")
+        values["index"] = index + ("e" if row.estimated else "")
     for key, _title, _w, align in columns:
         style = STATE_STYLE[row.state] if key == "state" else "value" if key == "cost" and row.value else \
             "dim" if values[key] == UNAVAILABLE or row.state == "no route" else ""

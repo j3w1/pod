@@ -133,7 +133,8 @@ def _public_name(entry: dict) -> registry.RowName:
     return name if name.base == base else registry.RowName(base, qualifier=profile)
 
 
-def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt="load") -> View:
+def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt="load",
+          separate_fallback: bool = False) -> View:
     models = registry.load() if models is None else models
     shot = snapshot.load() if shot == "load" else shot
     attempt = snapshot.last_attempt() if attempt == "load" else attempt
@@ -173,10 +174,10 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
                       model_name=model.name, profile=effort)
             matches = [index for index, name in enumerate(names)
                        if name.effort == effort and matched[index] == model]
-            exact = [index for index in matches if not names[index].fallback]
-            # Older captures used the only fallback result when an ordinary profile was absent.
-            # A structured qualifier identifies a distinct public profile.
-            chosen = exact or [index for index in matches if "model_name" not in public[index]]
+            chosen = [index for index in matches if not names[index].fallback]
+            if not chosen and not separate_fallback:
+                # Plain and JSON keep the historical projection for table-only captures.
+                chosen = [index for index in matches if "model_name" not in public[index]]
             if len(chosen) == 1:
                 observe(row, chosen[0])
                 used.add(chosen[0])

@@ -139,6 +139,19 @@ class StateTests(ViewCase):
         self.assertEqual(extra.state, "no route")
         self.assertIn("fallback profile of codex/gpt-6.1-sol/high", extra.reason)
 
+    def test_the_browser_view_keeps_a_table_only_fallback_separate_from_its_route(self):
+        rows = leaderboard.parse(current_page())["rows"]
+        model = view.build(shot=shot(rows), attempt=None, catalogs={}, separate_fallback=True)
+        route = self.by_name(model, "Claude Fable 5.2 (max)")
+        fallback = self.by_name(model, "Claude Fable 5.2 (max with fallback)")
+        self.assertEqual((route.route, route.observed, route.fallback),
+                         ("claude/claude-fable-5-2/max", False, False))
+        self.assertTrue(all(value is None for value in route.metrics.values()))
+        self.assertEqual((fallback.route, fallback.observed, fallback.fallback, fallback.profile),
+                         (None, True, True, "max with fallback"))
+        self.assertEqual((fallback.metrics["time_per_task_min"], fallback.metrics["first_answer_token_s"]),
+                         (40.8, 221.82))
+
     def test_a_public_model_with_the_same_name_from_another_provider_cannot_supply_route_metrics(self):
         model = self.build([public("GPT-6.1 Sol (high)", 65, 0.5, "Other")])
         rows = [row for row in model.rows if row.name == "GPT-6.1 Sol (high)"]
