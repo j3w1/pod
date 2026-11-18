@@ -11,6 +11,7 @@ Building the view reads; it changes nothing. A public observation never makes a 
 """
 
 from dataclasses import dataclass, field
+import re
 
 from . import adapters, registry, snapshot
 from .leaderboard import METRICS
@@ -217,6 +218,16 @@ def select(view: View, *, provider: str = "routed", search: str = "", sort: str 
     if sort == "state":
         return sorted(rows, key=lambda row: (_STATE_ORDER[row.state], row.name), reverse=reverse)
     return sorted(rows, key=lambda row: row.name.casefold(), reverse=reverse)
+
+
+def visible(rows: list) -> list:
+    """The human-facing catalog. Routing, diagnostics and JSON consume the full view."""
+    # Only the registry and public rows identify a provider. Other rows inherit
+    # an agent label for grouping and can refer to third-party models.
+    return [row for row in rows if (row.routable or row.observed) and
+            (row.provider.casefold() == "openai" or
+             (row.provider.casefold() == "anthropic" and
+              re.search(r"\bopus\b", row.model_id or row.name, re.IGNORECASE)))]
 
 
 def as_json(row: Row) -> dict:

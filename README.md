@@ -96,10 +96,10 @@ or `pod drop` again for a dropped objective.
 
 ## Models and routes
 
-`pod models` opens a keyboard-driven workspace in your terminal: every exact model and effort
-route Pod can use, what the installed agents report, public benchmark observations, and your
-choices. Enable or disable routes, set a Preferred route or a Pin. Press `R`, or run
-`pod models refresh`, to fetch the public leaderboard; nothing else touches the network.
+`pod models` lets you compare OpenAI models and Anthropic’s Opus family. Move through the
+list to read guidance for each choice. Press Enter for sources, benchmark measurements and
+route details. Use Space to enable or disable a route, `p` for Preferred and `P` for Pin.
+Press `R`, or run `pod models refresh`, to fetch the public leaderboard.
 
 A green `*` marks a benchmark cost that is high value: no other routable route costs less
 while scoring no more than two index points lower, and its index is in the upper half. Both

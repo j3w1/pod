@@ -61,7 +61,38 @@ class CliTests(CliCase):
         self.assertIn("Model and effort", out)
         self.assertIn("enabled", out)
         self.assertNotIn("Gemini", out)
-        self.assertIn("Gemini 4 Carbon (high)", self.run_cli("--all")[1])
+        self.assertNotIn("Gemini 4 Carbon (high)", self.run_cli("--all")[1])
+
+    def test_visible_catalog_preserves_hidden_routes_and_refreshed_measurements(self):
+        target = self.write_routes(ROUTES.replace("preferred: null",
+            "  claude/claude-fable-5-2/high: enabled\npreferred: claude/claude-fable-5-2/high"))
+        before = target.read_bytes()
+        self.refresh_from(current_page())
+        for args in ((), ("--plain",), ("--plain", "--all")):
+            shown = self.run_cli(*args)[1]
+            for name in ("GPT-6.2 Astra", "GPT-6.2 Sol", "Claude Opus"):
+                self.assertIn(name, shown)
+            self.assertIn("Astra for Law 6.2", shown)  # public observation outside the registry
+            for hidden in ("Fable", "Haiku", "Sonnet", "Gemini"):
+                self.assertNotIn(hidden, shown)
+        raw = json.loads(self.run_cli("--json", "--all")[1])["rows"]
+        hidden = next(row for row in raw if row["route"] == "claude/claude-fable-5-2/high")
+        self.assertTrue(hidden["routable"] and hidden["preferred"])
+        self.assertEqual(hidden["state"], "enabled")
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_an_agent_name_alone_does_not_identify_the_provider(self):
+        self.codex_catalog({"deepseek-r1": ["high"]})
+        target = self.write_routes(ROUTES.replace("preferred: null", "  codex/qwen3/high: enabled\npreferred: null"))
+        before = target.read_bytes()
+        for args in (("--plain",), ("--plain", "--all")):
+            shown = self.run_cli(*args)[1].casefold()
+            self.assertNotIn("deepseek", shown)
+            self.assertNotIn("qwen3", shown)
+        raw = json.loads(self.run_cli("--json", "--all")[1])["rows"]
+        self.assertTrue(any(row["name"] == "DEEPSEEK-R1" for row in raw))
+        self.assertTrue(any(row["route"] == "codex/qwen3/high" and row["preference"] == "enabled" for row in raw))
+        self.assertEqual(target.read_bytes(), before)
 
     def test_json_rows_keep_unavailable_as_null(self):
         self.refresh_from(live_page())

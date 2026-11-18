@@ -216,10 +216,12 @@ the person changes it, through `pod models` or an editor. Coordination reads it 
   Only profiles actually present in the fetched table have public measurements; other routable
   efforts remain unavailable. Neither registry changes nor refresh writes enabled routes,
   Preferred, Pin or merge authorization.
-- **Workspace.** A keyboard-driven terminal table: sort, search, provider filter, enable and
-  disable, Preferred, Pin, a bulk change per model, one detail panel. It prints a plain table
-  when there is no terminal. A public observation never makes a route, and no refresh or
-  update changes a preference.
+- **Workspace.** The terminal list and plain table show OpenAI models and Anthropic Opus.
+  Navigation updates the selected model’s guidance. Enter expands its detail panel with
+  source links, preference state and benchmark measurements. The bracket keys scroll the
+  panel. Sorting, search, provider filters and explicit route edits operate on the visible
+  selection. The underlying view, registry, preference file and JSON diagnostics retain
+  the full catalog. A public observation never makes a route.
 - **High-value mark.** A cost is marked when no other routable route costs less while scoring
   no more than 2 index points lower, and its index is at or above the median of routable
   routes with both measurements. Rows with an estimated index or a fallback profile are left
