@@ -55,8 +55,10 @@ UNITS.update({name: "US dollars per million tokens" for name in _PROFILE_FIELDS 
 _MISSING = ("", "--", "—", "–", "-", "n/a")
 _NUMBER = re.compile(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,9})(?:\.[0-9]{1,6})?")
 _METHOD = re.compile(r"Intelligence Index v([0-9]{1,2}(?:\.[0-9]{1,3}){0,3})\b")
-_PUSH = re.compile(r"\s*self\.__next_f\.push\(\s*")
-_END_PUSH = re.compile(r"\s*\)\s*;?")
+_BOOTSTRAP = "(self.__next_f=self.__next_f||[])"
+_PUSH = re.compile(rf"\s*(?:self\.__next_f|{re.escape(_BOOTSTRAP)})\.push\(\s*")
+# These are the four ECMAScript line terminators that can separate push statements.
+_END_PUSH = re.compile(r"\s*\)\s*(?:;|[\r\n\u2028\u2029]|\Z)")
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 
 
@@ -424,8 +426,10 @@ def _check_memberships(releases, observed):
         if not isinstance(names, list) or len(names) > MAX_ROWS:
             raise RefreshError("A published release has an unreadable model name list")
         # Releases without named variants publish their base name and an empty list.
-        expected = Counter(_identity_text(name) for name in names or [release.get("name")])
-        if observed[key] != expected:
+        members = names or [release.get("name")]
+        for name in members:
+            _identity_text(name)  # Validate before counting the original strings from both sources.
+        if observed[key] != Counter(members):
             raise RefreshError("The profile measurements disagree with the published release membership")
 
 

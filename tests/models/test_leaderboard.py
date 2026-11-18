@@ -153,6 +153,22 @@ class PublishedProfileTests(unittest.TestCase):
         with self.assertRaises(leaderboard.RefreshError):
             leaderboard.parse(self.source.replace(")</script>", ")broken</script>", 1))
 
+    def test_bootstrap_and_data_pushes_can_share_a_script(self):
+        bootstrap = "(self.__next_f=self.__next_f||[]).push([0])"
+        expected = leaderboard.parse(self.source)
+        for separator in (";", "\n", "\r", "\r\n", "\u2028", "\u2029"):
+            combined = self.source.replace("</script>\n<script>", separator)
+            combined = combined.replace("<script>", "<script>" + bootstrap + separator, 1)
+            with self.subTest(separator=separator):
+                self.assertEqual(leaderboard.parse(combined), expected)
+
+    def test_release_membership_uses_the_original_name_and_display_cleans_its_spacing(self):
+        spaced = self.source.replace("GPT-6.2 Astra", "GPT-6.2  Astra")
+        self.assertEqual(leaderboard.parse(spaced), leaderboard.parse(self.source))
+        different_member = self.source.replace("GPT-6.2 Astra (Max)", "GPT-6.2  Astra (Max)", 1)
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(different_member)
+
     def test_named_release_members_must_match_profiles_and_multiplicity(self):
         member = r'GPT-6.2 Astra (Max)\"'
         for replacement in (r'GPT-6.2 Astra (Medium)\"', member + r',\"' + member):
@@ -252,7 +268,7 @@ class PublishedProfileTests(unittest.TestCase):
             with self.subTest(tail=tail), self.assertRaises(leaderboard.RefreshError):
                 leaderboard.parse(table + tail)
 
-    def test_each_collapsed_release_has_more_than_its_visible_profile(self):
+    def test_a_missing_published_astra_xhigh_member_fails_refresh(self):
         incomplete = "\n".join(line for line in self.source.splitlines() if "GPT-6.2 Astra (Xhigh)" not in line)
         with self.assertRaises(leaderboard.RefreshError):
             leaderboard.parse(incomplete)

@@ -11,6 +11,19 @@ from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live
 
 
 class RefreshTests(ModelCase):
+    def test_pushes_without_a_statement_boundary_preserve_the_previous_snapshot(self):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        self.assertTrue(self.refresh_from(source)["ok"])
+        path = snapshot.home() / "snapshot.json"
+        kept = path.read_bytes()
+        for separator in ("", " ", "\t", "\v", "\f", "\x85"):
+            with self.subTest(separator=separator):
+                malformed = source.replace("</script>\n<script>", separator, 1)
+                attempt = self.refresh_from(malformed)
+                self.assertFalse(attempt["ok"])
+                self.assertEqual(snapshot.last_attempt(), attempt)
+                self.assertEqual(path.read_bytes(), kept)
+
     def test_removing_one_of_three_published_profiles_preserves_the_whole_snapshot(self):
         source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
         source = source.replace(r'Xhigh)\"],', r'Xhigh)\",\"GPT-6.2 Astra (Low)\"],', 1)
