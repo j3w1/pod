@@ -51,6 +51,10 @@ class Row:
     fallback: bool = False
     value: bool = False
     notes: list = field(default_factory=list)
+    model_name: str | None = None   # base name for grouping, independent of the profile
+    release: str | None = None      # public release identity when the snapshot supplies one
+    profile: str | None = None      # published qualifier, or the route effort when unobserved
+    public_index: int | None = None # position of this observation in the snapshot
 
 
 @dataclass
@@ -116,21 +120,48 @@ def _adapter_state(catalog: dict | None, model_id: str, effort: str | None) -> t
     return "listed", entry["context_tokens"]
 
 
-def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt="load") -> View:
+def _public_name(entry: dict) -> registry.RowName:
+    if "model_name" not in entry:
+        return registry.read_name(entry["name"])
+    base, profile = entry["model_name"], entry.get("profile")
+    if profile is None:
+        return registry.RowName(base)
+    words = profile.casefold()
+    if words.endswith(", default fallback"):
+        words = words.removesuffix(", default fallback") + " with fallback"
+    name = registry.read_name(f"{base} ({words})")
+    return name if name.base == base else registry.RowName(base, qualifier=profile)
+
+
+def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt="load",
+          separate_fallback: bool = False) -> View:
     models = registry.load() if models is None else models
     shot = snapshot.load() if shot == "load" else shot
     attempt = snapshot.last_attempt() if attempt == "load" else attempt
     preferences = routefile.load() if preferences is None else preferences
     catalogs = adapters.catalogs() if catalogs is None else catalogs
     public = list((shot or {}).get("rows", []))
-    names = [registry.read_name(entry["name"]) for entry in public]
+    names = [_public_name(entry) for entry in public]
+    matched = [registry.find(models, name.base) for name in names]
+    matched = [model if model and model.provider.casefold() == (entry.get("creator") or "").casefold() else None
+               for entry, model in zip(public, matched)]
     used: set = set()
+    duplicates: set = set()
     rows: list = []
     agents = {model.agent: model.provider for model in models}
 
-    def observe(row: Row, entry: dict, fallback: bool) -> None:
-        row.observed, row.fallback, row.estimated = True, fallback, bool(entry.get("index_estimated"))
+    def observe(row: Row, index: int) -> None:
+        entry, name = public[index], names[index]
+        row.observed, row.fallback, row.estimated = True, name.fallback, bool(entry.get("index_estimated"))
         row.metrics = {metric: entry.get(metric) for metric in METRICS}
+        row.model_name = name.base
+        row.release = entry.get("release")
+        row.public_index = index
+        if "model_name" in entry:
+            row.profile = entry.get("profile")
+        else:
+            row.profile = ("non-reasoning" if name.non_reasoning else
+                           f"{name.effort} with fallback" if name.fallback else name.effort or name.qualifier)
 
     for model in models:
         for effort in model.efforts:
@@ -139,37 +170,41 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
             adapter, context = _adapter_state(catalogs.get(model.agent), model.id, effort)
             row = Row(f"{model.name} ({effort})", model.provider, preference or "routable", route=key, routable=True,
                       model_id=model.id, effort=effort, adapter=adapter, adapter_context=context,
-                      preference=preference, preferred=preferences.preferred == key, pinned=preferences.pinned == key)
+                      preference=preference, preferred=preferences.preferred == key, pinned=preferences.pinned == key,
+                      model_name=model.name, profile=effort)
             matches = [index for index, name in enumerate(names)
-                       if name.effort == effort and registry.find([model], name.base) is not None]
-            exact = [index for index in matches if not names[index].fallback]
-            chosen = exact or matches
+                       if name.effort == effort and matched[index] == model]
+            chosen = [index for index in matches if not names[index].fallback]
+            if not chosen and not separate_fallback:
+                # Plain and JSON use the sole fallback result from a table-only capture.
+                chosen = [index for index in matches if "model_name" not in public[index]]
             if len(chosen) == 1:
-                observe(row, public[chosen[0]], names[chosen[0]].fallback)
+                observe(row, chosen[0])
                 used.add(chosen[0])
             elif len(chosen) > 1:
-                row.notes.append("The leaderboard lists this name more than once; its measurements are unavailable.")
-                used.update(chosen)
+                row.notes.append("The leaderboard lists this name more than once. The route has no linked measurements.")
+                duplicates.update(chosen)
             if adapter == "not listed":
                 row.notes.append(f"The installed {model.agent} does not list this model and effort.")
             rows.append(row)
     for index, entry in enumerate(public):
         if index in used:
             continue
-        name = names[index]
-        model = registry.find(models, name.base)
+        name, model = names[index], matched[index]
         row = Row(entry["name"], entry.get("creator") or "unknown", "no route")
-        observe(row, entry, name.fallback)
+        observe(row, index)
         if model is None:
             row.reason = "not in the shipped registry"
         else:
             row.model_id = model.id
             row.adapter, row.adapter_context = _adapter_state(catalogs.get(model.agent), model.id, None)
-            if name.non_reasoning:
+            if index in duplicates:
+                row.reason = "the leaderboard lists this profile more than once; measurements shown for information"
+            elif name.non_reasoning:
                 source = (f"the installed {model.agent} offers" if catalogs.get(model.agent) is not None
                           else "the registry lists")
                 row.reason = f"{source} no non-reasoning effort for {model.id}; measurements shown for information"
-            elif name.fallback:
+            elif name.fallback and name.effort in model.efforts:
                 row.reason = f"a fallback profile of {model.route(name.effort)}, shown for information"
             elif name.effort is not None:
                 row.reason = f"the registry lists no {name.effort} effort for {model.id}"

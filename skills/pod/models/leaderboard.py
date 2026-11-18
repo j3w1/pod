@@ -6,8 +6,11 @@ column Pod does not know is reported and not shown. A renamed column is therefor
 unknown column: no metric is ever read from a header it was not defined for.
 """
 
+from collections import Counter, defaultdict
 from html.parser import HTMLParser
 import http.client
+import io
+import json
 import math
 import re
 import unicodedata
@@ -37,14 +40,40 @@ OPTIONAL = {"contextwindow": ("context_window_tokens", "tokens"),
 IGNORED = ("furtheranalysis",)   # a link column, not a measurement
 METRICS = tuple(name for name, unit in [*REQUIRED.values(), *OPTIONAL.values()] if unit)
 UNITS = {name: unit for name, unit in [*REQUIRED.values(), *OPTIONAL.values()] if unit}
+# The grouped response uses seconds for task duration. Prices are USD per million tokens.
+_PROFILE_FIELDS = {
+    "intelligence_index": "intelligenceIndex", "cost_per_task_usd": "intelligenceIndexCostPerTask",
+    "context_window_tokens": "contextWindowTokens", "time_per_task_min": "intelligenceIndexTimePerTask",
+    "first_answer_token_s": "timeToFirstAnswerToken", "first_token_s": "timeToFirstToken",
+    "output_tokens_per_s": "outputSpeed", "omniscience_net_score": "omniscience",
+    "input_price_per_million_usd": "price1mInputTokens", "output_price_per_million_usd": "price1mOutputTokens",
+    "cache_hit_price_per_million_usd": "cacheHitPrice", "cache_write_price_per_million_usd": "cacheWritePrice",
+}
+UNITS.update({"first_token_s": "seconds", "output_tokens_per_s": "tokens per second",
+              "omniscience_net_score": "net score points", "benchmark_scores": "each benchmark's native score"})
+UNITS.update({name: "US dollars per million tokens" for name in _PROFILE_FIELDS if name.endswith("_per_million_usd")})
 _MISSING = ("", "--", "—", "–", "-", "n/a")
 _NUMBER = re.compile(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,9})(?:\.[0-9]{1,6})?")
 _METHOD = re.compile(r"Intelligence Index v([0-9]{1,2}(?:\.[0-9]{1,3}){0,3})\b")
+# ECMAScript WhiteSpace (including Space_Separator and BOM) and LineTerminator.
+_JS_SPACE = r"\t\v\f \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff"
+_JS_LINE = r"\r\n\u2028\u2029"
+_PADDING = f"[{_JS_SPACE}{_JS_LINE}]*"
+_BOUNDARY = rf"{_PADDING}(?:;|[{_JS_LINE}]|\Z){_PADDING}"
+_BOOTSTRAP = re.compile(_PADDING + re.escape("(self.__next_f=self.__next_f||[]).push([0])") + _BOUNDARY)
+_PUSH = re.compile(_PADDING + r"self\.__next_f\.push\(" + _PADDING)
+_END_PUSH = re.compile(_PADDING + r"\)" + _BOUNDARY)
+# Recognize a frame even after invalid leading control whitespace so it cannot silently disappear.
+_FRAME_START = re.compile(rf"[{_JS_SPACE}{_JS_LINE}\x1c-\x1f\x85]*(?:self\.__next_f\.push\(|\(self\.__next_f=)")
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 
 
 class RefreshError(Exception):
     """The refresh failed as a whole. The message is safe to store and show."""
+
+
+def _reject_constant(literal):
+    raise RefreshError(f"The leaderboard contains an invalid JSON number: {literal}")
 
 
 def clean(value: str, limit: int = MAX_CELL_TEXT) -> str:
@@ -107,6 +136,8 @@ def fetch(url: str = URL, *, max_bytes: int = MAX_BYTES, timeout: float = TIMEOU
             raw = inflater.decompress(raw, max_bytes + 1)
             if len(raw) > max_bytes or inflater.unconsumed_tail:
                 raise RefreshError("The source page is larger than the fetch limit")
+            if not inflater.eof:
+                raise RefreshError("The compressed source page is incomplete")
         elif encoding not in ("", "identity"):
             raise RefreshError("The source used an unsupported content encoding")
         return raw.decode("utf-8")
@@ -115,16 +146,20 @@ def fetch(url: str = URL, *, max_bytes: int = MAX_BYTES, timeout: float = TIMEOU
 
 
 class _Tables(HTMLParser):
-    """Tables as rows of cleaned cell text; script and style text is ignored."""
+    """Visible cells and the JSON string chunks carrying the published profiles."""
     SKIP = ("script", "style", "svg", "noscript", "template")
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.tables, self._open, self._row, self._cell, self._skip, self._size = [], [], None, None, 0, 0
         self._creators, self._suffix, self._suffix_count, self._in_suffix = [], [], 0, 0
+        self.chunks = []
+        self._inline_script = False
 
     def handle_starttag(self, tag, attrs):
         if tag in self.SKIP:
+            if tag == "script":
+                self._inline_script = not self._skip and "src" not in dict(attrs)
             self._skip += 1
         elif tag == "table":
             if len(self._open) >= 4 or len(self.tables) + len(self._open) >= 16:
@@ -135,10 +170,13 @@ class _Tables(HTMLParser):
         elif self._open and self._row is not None and tag in ("td", "th"):
             self._cell, self._size = [], 0
             self._creators, self._suffix, self._suffix_count, self._in_suffix = [], [], 0, 0
+            self._expandable = False
         elif self._cell is not None and not self._skip:
             attrs = dict(attrs)
             if tag == "img":
                 self._creators.append(clean(attrs.get("alt") or "", 120))
+            elif tag == "button" and attrs.get("aria-expanded") in ("true", "false"):
+                self._expandable = True
             elif tag == "span":
                 if {"font-normal", "text-neutral-500"} <= set(attrs.get("class", "").split()):
                     self._suffix_count += 1
@@ -150,6 +188,8 @@ class _Tables(HTMLParser):
 
     def handle_endtag(self, tag):
         if tag in self.SKIP:
+            if tag == "script":
+                self._inline_script = False
             self._skip = max(0, self._skip - 1)
         elif not self._open:
             return
@@ -161,6 +201,7 @@ class _Tables(HTMLParser):
             cell = _Cell(clean("".join(self._cell)))
             cell.creators, cell.suffix = self._creators, clean("".join(self._suffix))
             cell.suffix_count = self._suffix_count
+            cell.expandable = self._expandable
             self._row.append(cell)
             self._cell = None
         elif tag == "tr" and self._row is not None:
@@ -173,11 +214,32 @@ class _Tables(HTMLParser):
             self._row = self._cell = None
 
     def handle_data(self, data):
+        if self._inline_script and _FRAME_START.match(data):
+            self._read_pushes(data)
         if self._cell is not None and not self._skip and self._size < MAX_CELL_TEXT * 4:
             self._cell.append(data)
             self._size += len(data)
             if self._in_suffix:
                 self._suffix.append(data)
+
+    def _read_pushes(self, data):
+        bootstrap = _BOOTSTRAP.match(data)
+        pos = bootstrap.end() if bootstrap else 0
+        while pos < len(data):
+            start = _PUSH.match(data, pos)
+            if not start:
+                raise RefreshError("Unreadable leaderboard push statement")
+            chunk, end = json.JSONDecoder(parse_constant=_reject_constant).raw_decode(data, start.end())
+            close = _END_PUSH.match(data, end)
+            if not close:
+                raise RefreshError("Incomplete leaderboard data chunk")
+            pos = close.end()
+            if not isinstance(chunk, list) or not chunk or type(chunk[0]) is not int:
+                raise RefreshError("Unreadable leaderboard data chunk")
+            if chunk[0] == 1:
+                if len(chunk) != 2 or not isinstance(chunk[1], str) or len(self.chunks) >= 4096:
+                    raise RefreshError("Invalid leaderboard text chunks")
+                self.chunks.append(chunk[1])
 
 
 class _Cell(str):
@@ -195,9 +257,17 @@ class _Cell(str):
             base = name[:-len(self.suffix)].strip()
             if not base:
                 raise RefreshError("A model cell has no model name")
-            qualifier = self.suffix.lower().replace(", default fallback", " with fallback")
-            name = f"{base} ({qualifier})"
+            name = _profile_name(base, self.suffix)
         return name, self.creators[0]
+
+
+def _profile_name(base, suffix):
+    if not suffix:
+        return base
+    qualifier = suffix.lower()
+    if qualifier.endswith(", default fallback"):
+        qualifier = qualifier.removesuffix(", default fallback") + " with fallback"
+    return f"{base} ({qualifier})"
 
 
 def _key(text: str) -> str:
@@ -246,12 +316,181 @@ def _methodology(text: str) -> str | None:
     return "Artificial Analysis Intelligence Index v" + best
 
 
+def _unique_fields(pairs):
+    fields = dict(pairs)
+    if len(fields) != len(pairs):
+        raise RefreshError("The grouped leaderboard contains a duplicate JSON field")
+    return fields
+
+
+def _published_lists(chunks):
+    """Read the model measurements and release memberships from component props."""
+    found = defaultdict(list)
+    for line in io.StringIO("".join(chunks)):
+        if '"initialModels"' not in line and '"releases"' not in line:
+            continue
+        number, _, body = line.partition(":")
+        if not re.fullmatch(r"[0-9a-f]+", number) or not body.lstrip().startswith("["):
+            continue
+        try:
+            pending = [json.loads(body, parse_constant=_reject_constant, object_pairs_hook=_unique_fields)]
+        except (ValueError, RecursionError):
+            raise RefreshError("The grouped leaderboard record is incomplete or unreadable") from None
+        while pending:
+            node = pending.pop()
+            if not isinstance(node, list):
+                continue
+            if len(node) == 4 and node[0] == "$" and isinstance(node[3], dict):
+                props = node[3]
+                for key in ("initialModels", "releases"):
+                    if key in props:
+                        found[key].append(props[key])
+                if "children" in props:
+                    pending.append(props["children"])
+            else:
+                pending.extend(node)
+    if "initialModels" not in found:
+        return {}
+    for key, matches in found.items():
+        if len(matches) != 1 or not isinstance(matches[0], list) or not 0 < len(matches[0]) <= MAX_ROWS:
+            raise RefreshError(f"The grouped leaderboard has an invalid {key} list")
+    return {key: matches[0] for key, matches in found.items()}
+
+
+def _identity_text(value):
+    if not isinstance(value, str) or len(value) > 120 or not (text := clean(value, 120)):
+        raise RefreshError("A grouped leaderboard profile has an unreadable identity")
+    return text
+
+
+def _measurement(value, *, low=0, high=1e18):
+    if value is None or (type(value) in (int, float) and low <= value <= high):
+        return value
+    raise ValueError
+
+
+def _profile_identity(model):
+    if (not isinstance(model, dict) or not isinstance(model.get("release"), dict)
+            or "suffix" not in model or "intelligenceIndex" not in model):
+        raise RefreshError("The grouped leaderboard contains an incomplete profile")
+    release = _identity_text(model["release"].get("slug"))
+    base = _identity_text(model["release"].get("name"))
+    creator = _identity_text(model.get("modelCreatorName"))
+    profile = None if model["suffix"] is None else _identity_text(model["suffix"])
+    published_name = _identity_text(model.get("name"))
+    expected = f"{base} ({profile})" if profile else base
+    if published_name.casefold() != expected.casefold():
+        raise RefreshError("A grouped leaderboard name disagrees with its release and profile")
+    name = _profile_name(base, profile)
+    return {"name": name, "creator": creator, "release": release, "model_name": base, "profile": profile}
+
+
+def _read_profile_metrics(model, row, supplied):
+    unread = 0
+    for metric, source in _PROFILE_FIELDS.items():
+        if source in model:
+            supplied.add(metric)
+        try:
+            if metric == "intelligence_index":
+                value = _measurement(model[source], high=100)
+            elif metric == "omniscience_net_score":
+                value = _measurement(model.get(source), low=-100, high=100)
+            else:
+                value = _measurement(model.get(source))
+            if metric == "time_per_task_min" and value is not None:
+                value /= 60
+            if metric == "context_window_tokens" and value is not None and type(value) is not int:
+                raise ValueError
+        except ValueError:
+            if metric in ("intelligence_index", "cost_per_task_usd"):
+                raise RefreshError("A grouped leaderboard profile has an unreadable index or cost") from None
+            value = None
+            unread += 1
+        row[metric] = value
+    # Benchmark results use different units/scales. Keep the published keys and raw scores.
+    scores = model.get("scores")
+    row["benchmark_scores"] = None
+    if isinstance(scores, dict) and len(scores) <= 128:
+        supplied.add("benchmark_scores")
+        row["benchmark_scores"] = {}
+        for benchmark, value in scores.items():
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", benchmark):
+                unread += 1
+                continue
+            try:
+                row["benchmark_scores"][benchmark] = _measurement(value, low=-1e18)
+            except ValueError:
+                row["benchmark_scores"][benchmark] = None
+                unread += 1
+    elif scores is not None:
+        unread += 1
+    return unread
+
+
+def _check_memberships(releases, observed):
+    seen = set()
+    for release in releases:
+        if not isinstance(release, dict) or not isinstance(release.get("creator"), dict):
+            raise RefreshError("The published release list has an unreadable identity")
+        key = (_identity_text(release["creator"].get("name")), _identity_text(release.get("slug")))
+        if key in seen:
+            raise RefreshError("The published release list repeats a release")
+        seen.add(key)
+        if key not in observed or "modelNames" not in release:
+            continue
+        names = release["modelNames"]
+        if not isinstance(names, list) or len(names) > MAX_ROWS:
+            raise RefreshError("A published release has an unreadable model name list")
+        # Releases without named variants publish their base name and an empty list.
+        members = names or [release.get("name")]
+        for name in members:
+            _identity_text(name)  # Validate before counting the original strings from both sources.
+        if observed[key] != Counter(members):
+            raise RefreshError("The profile measurements disagree with the published release membership")
+
+
+def _profile_rows(models, visible, releases):
+    visible_by_name = {(row["creator"], row["name"]): row for row in visible}
+    if len(visible_by_name) != len(visible):
+        raise RefreshError("The visible leaderboard repeats a profile identity")
+    rows, seen, matched, supplied = [], set(), set(), set()
+    observed = defaultdict(Counter)
+    unread = 0
+    for model in models:
+        row = _profile_identity(model)
+        identity = (row["creator"], row["release"], row["profile"])
+        if identity in seen:
+            raise RefreshError("The grouped leaderboard repeats a release profile")
+        seen.add(identity)
+        observed[row["creator"], row["release"]][model["name"]] += 1
+        unread += _read_profile_metrics(model, row, supplied)
+        visible_key = (row["creator"], row["name"])
+        rendered = visible_by_name.get(visible_key)
+        row["index_estimated"] = bool(rendered and rendered["index_estimated"])
+        if rendered is not None:
+            if visible_key in matched:
+                raise RefreshError("A visible profile matches more than one grouped release")
+            matched.add(visible_key)
+            if any(rendered[key] is not None and row[key] is None for key in ("intelligence_index", "cost_per_task_usd")):
+                raise RefreshError("The grouped leaderboard is missing a visible measurement")
+        rows.append(row)
+    if visible_by_name.keys() != matched:
+        raise RefreshError("The grouped leaderboard is missing a visible profile")
+    _check_memberships(releases, observed)
+    absent = sorted(UNITS.keys() - supplied - {"intelligence_index", "cost_per_task_usd"})
+    return rows, absent, unread
+
+
 def parse(text: str) -> dict:
     """Rows, the columns found and diagnostics. Raises RefreshError; never returns a partial result."""
     parser = _Tables()
+    if len(text) > MAX_BYTES:
+        raise RefreshError("The source page is larger than the fetch limit")
     try:
         parser.feed(text)
         parser.close()
+        if parser._inline_script:
+            raise RefreshError("The source page ended inside a script")
     except RefreshError:
         raise
     except Exception as exc:    # html.parser raises assorted errors on hostile markup
@@ -283,7 +522,7 @@ def parse(text: str) -> dict:
     body = table[header + 1:]
     if not body:
         raise RefreshError("Leaderboard has no rows")
-    rows, unread = [], 0
+    rows, unread, expandable = [], 0, False
     for number, cells in enumerate(body, 1):
         if len(cells) != len(keys):
             raise RefreshError(f"Leaderboard row {number} has the wrong number of cells")
@@ -291,6 +530,8 @@ def parse(text: str) -> dict:
                          (cells[columns["name"]], cells[columns["creator"]]))
         if not name or not creator or len(name) > 120:
             raise RefreshError(f"Leaderboard row {number} has no usable model or creator name")
+        if cells[columns["name"]].expandable:
+            expandable = True
         score = cells[columns["intelligence_index"]]
         estimated = score.endswith("*")
         try:
@@ -307,6 +548,11 @@ def parse(text: str) -> dict:
                 except ValueError:
                     unread += 1     # shown as unavailable and counted, never guessed
         rows.append(row)
+    lists = _published_lists(parser.chunks)
+    if "initialModels" in lists:
+        rows, absent, unread = _profile_rows(lists["initialModels"], rows, lists.get("releases", []))
+    elif expandable:
+        raise RefreshError("The expandable leaderboard is missing its grouped profile data")
     methodology = _methodology(text)
     diagnostics = []
     if unknown:

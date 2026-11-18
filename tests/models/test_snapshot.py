@@ -7,10 +7,90 @@ from unittest.mock import patch
 
 from pod import paths, routefile
 from pod.models import adapters, cli, leaderboard, snapshot, view
-from tests.models.support import ModelCase, ROUTES, current_page, live_page, page, without
+from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live_page, page, without
 
 
 class RefreshTests(ModelCase):
+    def test_non_json_numbers_in_control_pushes_preserve_the_previous_snapshot(self):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        self.assertTrue(self.refresh_from(source)["ok"])
+        path = snapshot.home() / "snapshot.json"
+        kept = path.read_bytes()
+        bootstrap = "(self.__next_f=self.__next_f||[]).push([0]);"
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(literal=literal):
+                control = f"{bootstrap}self.__next_f.push([2,{literal}]);"
+                attempt = self.refresh_from(source.replace("<script>", "<script>" + control, 1))
+                self.assertFalse(attempt["ok"])
+                self.assertEqual(snapshot.last_attempt(), attempt)
+                self.assertEqual(path.read_bytes(), kept)
+
+    def test_malformed_push_scripts_keep_the_last_good_snapshot(self):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        self.assertTrue(self.refresh_from(source)["ok"])
+        path = snapshot.home() / "snapshot.json"
+        kept = path.read_bytes()
+        bootstrap = "(self.__next_f=self.__next_f||[]).push([0])"
+        for separator in ("\n" + bootstrap + ";", "\x85;", ";\x85"):
+            malformed = source.replace("</script>\n<script>", separator, 1)
+            malformed = malformed.replace("<script>", "<script>" + bootstrap + ";", 1)
+            with self.subTest(separator=separator):
+                attempt = self.refresh_from(malformed)
+                self.assertFalse(attempt["ok"])
+                self.assertEqual(snapshot.last_attempt(), attempt)
+                self.assertEqual(path.read_bytes(), kept)
+
+    def test_pushes_without_a_statement_boundary_preserve_the_previous_snapshot(self):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        self.assertTrue(self.refresh_from(source)["ok"])
+        path = snapshot.home() / "snapshot.json"
+        kept = path.read_bytes()
+        for separator in ("", " ", "\t", "\v", "\f", "\x85"):
+            with self.subTest(separator=separator):
+                malformed = source.replace("</script>\n<script>", separator, 1)
+                attempt = self.refresh_from(malformed)
+                self.assertFalse(attempt["ok"])
+                self.assertEqual(snapshot.last_attempt(), attempt)
+                self.assertEqual(path.read_bytes(), kept)
+
+    def test_removing_one_of_three_published_profiles_preserves_the_whole_snapshot(self):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        source = source.replace(r'Xhigh)\"],', r'Xhigh)\",\"GPT-6.2 Astra (Low)\"],', 1)
+        low = {"release": {"slug": "gpt-6-2-astra", "name": "GPT-6.2 Astra"}, "modelCreatorName": "OpenAI",
+               "name": "GPT-6.2 Astra (Low)", "suffix": "Low", "intelligenceIndex": 45.6504174923967}
+        push = "<script>self.__next_f.push(" + json.dumps([1, json.dumps(low) + ","]) + ")</script>\n"
+        position = source.index('<script>self.__next_f.push([1,"{')
+        good = self.refresh_from(source[:position] + push + source[position:])
+        self.assertTrue(good["ok"], good)
+        path = snapshot.home() / "snapshot.json"
+        kept = path.read_bytes()
+        failed = self.refresh_from(source)
+        self.assertFalse(failed["ok"])
+        self.assertEqual(snapshot.last_attempt(), failed)
+        self.assertEqual(path.read_bytes(), kept)
+        self.assertEqual(len(snapshot.load()["rows"]), good["rows"])
+
+    def test_read_and_replace_use_the_same_serialized_cache_limit(self):
+        source = page().replace("GPT-6.1 Sol", "Café")
+        self.assertTrue(self.refresh_from(source)["ok"])
+        path = snapshot.home() / "snapshot.json"
+        size = path.stat().st_size
+        with patch.object(snapshot, "MAX_CACHE_BYTES", size, create=True):
+            self.assertTrue(self.refresh_from(source)["ok"])
+            kept = path.read_bytes()
+            self.assertEqual(len(kept), size)
+            self.assertEqual(snapshot.load()["rows"][1]["name"], "Café (high)")
+
+            attempt = self.refresh_from(source.replace("Café", "Cafés"))
+            self.assertFalse(attempt["ok"])
+            self.assertIn("cache limit", attempt["failure"])
+            self.assertEqual(snapshot.last_attempt(), attempt)
+            self.assertEqual(path.read_bytes(), kept)
+            self.assertIsNotNone(snapshot.load())
+
+            path.write_bytes(kept + b" ")
+            self.assertIsNone(snapshot.load())
+
     def test_current_refresh_fetches_once_preserves_preferences_and_last_good_on_failure(self):
         preferences = ROUTES.replace("preferred: null", "preferred: codex/gpt-6.1-sol/high").replace(
             "pinned: null", "pinned: codex/gpt-6.1-sol/high")

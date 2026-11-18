@@ -4,7 +4,7 @@ A line is a list of (text, style) segments. Styles are names; only the workspace
 colours, and every state is also a word, so nothing depends on colour.
 """
 
-from . import registry, view
+from . import leaderboard, registry, view
 
 # (key, title, width, align). Narrow terminals drop columns from the end of DROP_ORDER first.
 COLUMNS = (("state", "State", 9, "<"), ("mark", "Pick", 5, "<"), ("name", "Model and effort", 0, "<"),
@@ -71,6 +71,9 @@ def header_line(columns: list, width: int, sort: str | None = None) -> list:
 
 def row_line(row: view.Row, columns: list, width: int) -> list:
     widths, values, line = _widths(columns, width), cells(row), []
+    if "index" in widths and len(values["index"]) > widths["index"]:
+        index = f'{row.metrics["intelligence_index"]:.2f}'.rstrip("0").rstrip(".")
+        values["index"] = index + ("e" if row.estimated else "")
     for key, _title, _w, align in columns:
         style = STATE_STYLE[row.state] if key == "state" else "value" if key == "cost" and row.value else \
             "dim" if values[key] == UNAVAILABLE or row.state == "no route" else ""
@@ -82,7 +85,7 @@ def row_line(row: view.Row, columns: list, width: int) -> list:
 # provider's basis for choosing a model, independent of its local availability.
 _OPENAI = "https://developers.openai.com/api/docs"
 _SELECTION = _OPENAI + "/guides/model-selection"
-_OPUS = "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+_CLAUDE = "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
 _ASTRA = "Try high effort for a bug whose cause spans components. Check the diagnosis against a failing test."
 _SOL = "Start a well-specified feature at medium effort. Try high if the implementation misses a dependency."
 _OSS = "https://openai.com/index/introducing-gpt-oss/"
@@ -97,7 +100,7 @@ _GUIDANCE = {
     "GPT-6 Luna": ("Try low effort to extract fields from many similar records. Spot-check exceptions first.",
                    _SELECTION),
     "Claude Opus 5.5": ("Start a cross-file review at medium effort. Try high on a change with subtle invariants.",
-                        _OPUS),
+                        _CLAUDE),
     "Astra for Law 6.2": ("Compare on a legal research question with known authorities. Judge extra effort "
                           "by whether it surfaces relevant contrary cases.", "https://openai.com/index/astra-law-6-2/"),
     "GPT-5.3 Codex": ("Compare at medium effort on a patch that needs several edits and a regression test.",
@@ -117,18 +120,54 @@ _GUIDANCE = {
 
 def guidance(row: view.Row) -> list[str]:
     """Show a suggested use and effort, followed by the public sources for that judgment."""
-    name = registry.read_name(row.name).base
+    name = row.model_name or registry.read_name(row.name).base
     provider = row.provider.casefold()
     if provider == "openai":
         source = _SELECTION
-    elif provider == "anthropic" and "opus" in (name + " " + (row.model_id or "")).casefold():
-        source = _OPUS
+    elif provider == "anthropic":
+        source = _CLAUDE
     else:
-        return []
+        return ["Compare this profile on a task with a known answer and record quality, cost, and time."]
     suggestion, source = _GUIDANCE.get(name, (
         "Compare this model on a task with a known answer. Try its lowest supported effort first "
         "if it offers a choice.", source))
     return [suggestion, source]
+
+
+_SUPPLEMENTAL_LABELS = {
+    "first_token_s": "Time to first token",
+    "output_tokens_per_s": "Output speed",
+    "omniscience_net_score": "Omniscience",
+    "input_price_per_million_usd": "Input token price",
+    "output_price_per_million_usd": "Output token price",
+    "cache_hit_price_per_million_usd": "Cache hit price",
+    "cache_write_price_per_million_usd": "Cache write price",
+}
+
+
+def _supplemental_detail(observation: dict, units: dict) -> list[str]:
+    if "benchmark_scores" not in observation and not any(key in observation for key in _SUPPLEMENTAL_LABELS):
+        return []
+    lines, unavailable = [], []
+    for key, label in _SUPPLEMENTAL_LABELS.items():
+        value = observation.get(key)
+        if value is None:
+            unavailable.append(label)
+        else:
+            lines.append(f"  {label}: {value}  [{units.get(key, leaderboard.UNITS[key])}]")
+    scores = observation.get("benchmark_scores")
+    if isinstance(scores, dict) and scores:
+        unit = units.get("benchmark_scores", leaderboard.UNITS["benchmark_scores"])
+        lines.extend(f"  Benchmark {benchmark}: {score}  [{unit}]"
+                     for benchmark, score in sorted(scores.items()) if score is not None)
+        missing_scores = sum(score is None for score in scores.values())
+        if missing_scores:
+            unavailable.append(f"{missing_scores} of {len(scores)} benchmark scores")
+    else:
+        unavailable.append("benchmark scores")
+    if unavailable:
+        lines.append("  Supplemental measurements unavailable: " + ", ".join(unavailable))
+    return lines
 
 
 def detail(row: view.Row, shot: dict | None) -> list[str]:
@@ -140,6 +179,10 @@ def detail(row: view.Row, shot: dict | None) -> list[str]:
     lines.append("  Observed publicly: " + ("yes, on the leaderboard snapshot" + (
         f" ({shot.get('methodology') or 'methodology not stated'})" if shot else "") if row.observed
         else "no row on the leaderboard snapshot"))
+    if row.observed and row.profile:
+        lines.append(f"  Published profile: {row.profile}")
+    if row.observed and (shot or {}).get("source"):
+        lines.append(f"  Artificial Analysis: {shot['source']}")
     lines.append(f"  Installed adapter: {row.adapter}" + (
         f"; context window stated by the adapter's catalog: {tokens(row.adapter_context)}"
         if row.adapter_context else ""))
@@ -148,7 +191,7 @@ def detail(row: view.Row, shot: dict | None) -> list[str]:
     picks = "".join(label for label, held in ((", Preferred", row.preferred), (", Pin", row.pinned)) if held)
     lines.append(f"  Your preference: {preference}{picks}")
     for metric, value in row.metrics.items():
-        shown = UNAVAILABLE if value is None else str(value) if isinstance(value, int) else f"{value:g}"
+        shown = UNAVAILABLE if value is None else str(value)
         note = " (estimated)" if metric == "intelligence_index" and row.estimated else ""
         lines.append(f"  {metric}: {shown}{note}" + (f"  [{units[metric]}]" if metric in units else ""))
     if row.fallback:
@@ -157,6 +200,10 @@ def detail(row: view.Row, shot: dict | None) -> list[str]:
     if row.value:
         lines.append("  " + view.VALUE_EXPLANATION)
     lines.append("  " + view.COST_STATEMENT)
+    observations = (shot or {}).get("rows", [])
+    index = row.public_index
+    if row.observed and index is not None and 0 <= index < len(observations):
+        lines.extend(_supplemental_detail(observations[index], units))
     return lines
 
 

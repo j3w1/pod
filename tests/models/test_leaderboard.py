@@ -1,9 +1,11 @@
+import gzip
 import http.server
 import threading
 import unittest
+from unittest.mock import patch
 
 from pod.models import leaderboard
-from tests.models.support import HEADERS, ROWS, current_page, live_page, page, without
+from tests.models.support import FIXTURES, HEADERS, ROWS, current_page, live_page, page, without
 
 
 class ParseTests(unittest.TestCase):
@@ -136,9 +138,182 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(leaderboard.parse(page(rows=rows))["rows"][0]["name"], "Evil Model (high)")
 
 
+class PublishedProfileTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+
+    def test_grouped_json_rejects_bare_non_json_numbers_even_in_unused_fields(self):
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(literal=literal), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(r'\"scores\":', rf'\"extra\":{literal},\"scores\":', 1))
+
+    def test_both_json_layers_accept_strings_and_finite_numbers(self):
+        control = 'self.__next_f.push([2,["NaN","Infinity","-Infinity",-1.25e2]]);'
+        source = self.source.replace("<script>", "<script>" + control, 1)
+        extra = r'\"extra\":[\"NaN\",\"Infinity\",\"-Infinity\",-1.25e2],'
+        source = source.replace(r'\"scores\":', extra + r'\"scores\":', 1)
+        self.assertEqual(leaderboard.parse(source), leaderboard.parse(self.source))
+
+    def test_ecmascript_padding_at_script_and_argument_boundaries(self):
+        # Includes a BOM and representatives of the Unicode Space_Separator category.
+        padding = "\ufeff\u00a0\u200a\u3000\t\v\f"
+        padded = self.source.replace("<script>", "<script>" + padding)
+        padded = padded.replace(".push([", ".push(" + padding + "[")
+        padded = padded.replace("])</script>", "]" + padding + ")" + padding + ";" + padding + "</script>")
+        self.assertEqual(leaderboard.parse(padded), leaderboard.parse(self.source))
+        for old, new in (("<script>", "<script>\x85"), (".push([", ".push(\x85["),
+                         ("])</script>", "]\x85)</script>"), (")</script>", ");\x85</script>")):
+            with self.subTest(new=new), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(old, new, 1))
+
+    def test_independently_framed_pushes_share_a_script(self):
+        controls = "self.__next_f.push([0]);self.__next_f.push([2,null])"
+        self.assertEqual(leaderboard.parse(page() + f"<script>{controls}</script>"), leaderboard.parse(page()))
+        combined = self.source.replace("</script>\n<script>", ";").replace("<script>", f"<script>{controls};", 1)
+        self.assertEqual(leaderboard.parse(combined), leaderboard.parse(self.source))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(combined.replace("21:[", "21:[[", 1))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source.replace(")</script>", ")broken</script>", 1))
+
+    def test_bootstrap_and_data_pushes_can_share_a_script(self):
+        bootstrap = "(self.__next_f=self.__next_f||[]).push([0])"
+        expected = leaderboard.parse(self.source)
+        for separator in (";", "\n", "\r", "\r\n", "\u2028", "\u2029"):
+            combined = self.source.replace("</script>\n<script>", separator)
+            combined = combined.replace("<script>", "<script>" + bootstrap + separator, 1)
+            with self.subTest(separator=separator):
+                self.assertEqual(leaderboard.parse(combined), expected)
+
+    def test_release_membership_uses_the_original_name_and_display_cleans_its_spacing(self):
+        spaced = self.source.replace("GPT-6.2 Astra", "GPT-6.2  Astra")
+        self.assertEqual(leaderboard.parse(spaced), leaderboard.parse(self.source))
+        different_member = self.source.replace("GPT-6.2 Astra (Max)", "GPT-6.2  Astra (Max)", 1)
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(different_member)
+
+    def test_named_release_members_must_match_profiles_and_multiplicity(self):
+        member = r'GPT-6.2 Astra (Max)\"'
+        for replacement in (r'GPT-6.2 Astra (Medium)\"', member + r',\"' + member):
+            with self.subTest(replacement=replacement), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(member, replacement, 1))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source.replace(r'\"modelNames\":[', r'\"modelNames\":null,\"other\":[', 1))
+
+    def test_expandable_control_does_not_impose_a_minimum_profile_count(self):
+        source = self.source.replace(r',\"Claude Fable 5.2 (Low, Default Fallback)\"', "", 1)
+        source = "\n".join(line for line in source.splitlines() if "Claude Fable 5.2 (Low, Default Fallback)" not in line)
+        rows = leaderboard.parse(source)["rows"]
+        self.assertEqual([row["profile"] for row in rows if row["release"] == "claude-fable-5-2"],
+                         ["Max, Default Fallback"])
+
+    def test_unrelated_release_list_does_not_change_a_standalone_table(self):
+        unrelated = r'<script>self.__next_f.push([1,"8:[\"$\",\"nav\",null,{\"releases\":[]}]\n"])</script>'
+        self.assertEqual(leaderboard.parse(page() + unrelated), leaderboard.parse(page()))
+
+    def test_measures_each_published_profile_with_its_own_identity_precision_and_units(self):
+        parsed = leaderboard.parse(self.source)
+        rows = {row["name"]: row for row in parsed["rows"]}
+        self.assertEqual(set(rows), {"GPT-6.2 Astra (max)", "GPT-6.2 Astra (xhigh)", "Qwen4 Max",
+                                     "Claude Fable 5.2 (max with fallback)", "Claude Fable 5.2 (low with fallback)",
+                                     "JT-35B-Flash"})
+        row = rows["GPT-6.2 Astra (xhigh)"]
+        self.assertEqual((row["model_name"], row["release"], row["profile"], row["creator"]),
+                         ("GPT-6.2 Astra", "gpt-6-2-astra", "Xhigh", "OpenAI"))
+        self.assertEqual(row["intelligence_index"], 61.5602325371388)
+        self.assertEqual(row["cost_per_task_usd"], 2.5211433764120375)
+        self.assertEqual(row["time_per_task_min"], 391.2271374821837 / 60)
+        self.assertEqual(row["context_window_tokens"], 1_000_000)
+        self.assertEqual(row["first_answer_token_s"], 53.87065945964923)
+        self.assertEqual(row["first_token_s"], 53.87065945964923)
+        self.assertEqual(row["output_tokens_per_s"], 56.840650197440034)
+        self.assertEqual(row["omniscience_net_score"], 48.266666666666666)
+        self.assertEqual([row[k + "_price_per_million_usd"] for k in ("input", "output", "cache_hit", "cache_write")],
+                         [8, 40, 0.4, 10])
+        self.assertEqual(leaderboard.UNITS["time_per_task_min"], "minutes per benchmark task")
+        self.assertEqual(leaderboard.UNITS["output_tokens_per_s"], "tokens per second")
+        self.assertEqual(rows["Claude Fable 5.2 (low with fallback)"]["profile"], "Low, Default Fallback")
+        self.assertEqual(rows["Claude Fable 5.2 (low with fallback)"]["intelligence_index"], 53.9249388799182)
+        self.assertIsNone(rows["Qwen4 Max"]["profile"])
+        missing = rows["JT-35B-Flash"]
+        self.assertEqual(missing["creator"], "China Mobile")
+        self.assertEqual(missing["benchmark_scores"], {"critpt": 0, "gpqa-diamond": 0.829292929292929})
+        for field in ("intelligence_index", "cost_per_task_usd", "time_per_task_min", "output_tokens_per_s"):
+            self.assertIsNone(missing[field])
+        self.assertEqual(parsed["methodology"], "Artificial Analysis Intelligence Index v5.0.1")
+
+    def test_estimate_marks_belong_only_to_the_matching_profile(self):
+        parsed = leaderboard.parse(self.source.replace(">65<", ">65*<"))
+        self.assertEqual([row["name"] for row in parsed["rows"] if row["index_estimated"]],
+                         ["Claude Fable 5.2 (max with fallback)"])
+
+    def test_incomplete_or_malformed_profiles_fail_even_with_a_readable_visible_table(self):
+        for old, new in ((r'\"intelligenceIndex\":61.5602325371388', r'\"changedIndex\":61.5602325371388'),
+                         ("61.5602325371388", "true"), ("2.5211433764120375", "1e999"),
+                         (r'\"name\":\"GPT-6.2 Astra (Xhigh)\"', r'\"name\":\"Another model\"'),
+                         (r'\"suffix\":\"Xhigh\"', r'\"suffix\":4'), ("21:[", "21:[[["),
+                         ("self.__next_f.push([1,", "self.__next_f.push([1,invalid+"),
+                         ("initialModels", "renamedModels"), ("JT-35B-Flash</td>", "Different</td>"),
+                         ('Cost per Task USD', 'Unrecognized price')):
+            with self.subTest(old=old):
+                self.assertIn(old, self.source)
+                with self.assertRaises(leaderboard.RefreshError):
+                    leaderboard.parse(self.source.replace(old, new, 1))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source[:self.source.rindex("<script>")])
+
+    def test_optional_invalid_values_and_unrelated_script_fields(self):
+        source = self.source.replace("56.840650197440034", "false")
+        source = source.replace(r'\"scores\":{', r'\"privateField\":\"do-not-copy\",\"scores\":{')
+        parsed = leaderboard.parse(source)
+        row = next(row for row in parsed["rows"] if row["name"] == "GPT-6.2 Astra (xhigh)")
+        self.assertIsNone(row["output_tokens_per_s"])
+        self.assertTrue(any("optional" in note for note in parsed["diagnostics"]))
+        self.assertNotIn("do-not-copy", str(parsed))
+
+    def test_ambiguous_and_incomplete_measurements_fail_the_whole_refresh(self):
+        for replacement in (r'\"intelligenceIndexCostPerTask\":null',
+                            r'\"intelligenceIndexCostPerTask\":0,\"intelligenceIndexCostPerTask\":8'):
+            with self.subTest(replacement=replacement), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(r'\"intelligenceIndexCostPerTask\":3.9979061566801852',
+                                                      replacement))
+        with patch.object(leaderboard, "MAX_ROWS", 5), self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(self.source)
+
+    def test_a_page_cut_off_in_its_first_data_script_cannot_replace_all_profiles_with_visible_rows(self):
+        incomplete = self.source[:self.source.index("</script>")]
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(incomplete)
+
+    def test_explicitly_expandable_models_require_the_grouped_data(self):
+        table = self.source.split("</table>", 1)[0] + "</table>"
+        for tail in ("", '<script>self.__next_f.push([1,"0:T5,title"])</script>'):
+            with self.subTest(tail=tail), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(table + tail)
+
+    def test_a_missing_published_astra_xhigh_member_fails_refresh(self):
+        incomplete = "\n".join(line for line in self.source.splitlines() if "GPT-6.2 Astra (Xhigh)" not in line)
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(incomplete)
+
+    def test_unrelated_flight_records_on_a_legacy_table_leave_its_rows_readable(self):
+        unrelated = r'<script>self.__next_f.push([1,"1:Tf,\"initialModels\"\n2:[\"$\",\"div\",null,{}]\n"])</script>'
+        other_table = '<table><tr><td><button aria-expanded="false">Menu</button></td></tr></table>'
+        for table_html in (page(), current_page()):
+            with self.subTest(size=len(table_html)):
+                self.assertEqual(leaderboard.parse(other_table + table_html + unrelated), leaderboard.parse(table_html))
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.server.requests += 1
+        if self.path == "/incomplete-gzip":
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            self.wfile.write(gzip.compress(page().encode())[:-8])
+            return
         if self.path == "/away":
             self.send_response(302)
             self.send_header("Location", "http://localhost.invalid/")
@@ -218,6 +393,10 @@ class FetchTests(unittest.TestCase):
     def test_the_request_carries_no_credentials(self):
         self.assertTrue(leaderboard.URL.startswith("https://"))
         self.assertNotIn("@", leaderboard.URL)
+
+    def test_a_truncated_compressed_page_fails_even_if_its_table_is_already_readable(self):
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.fetch(self.base + "/incomplete-gzip")
 
 
 if __name__ == "__main__":

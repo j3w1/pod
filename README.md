@@ -96,9 +96,10 @@ or `pod drop` again for a dropped objective.
 
 ## Models and routes
 
-`pod models` lets you compare OpenAI models and Anthropic’s Opus family. Move through the
-list to read guidance for each choice. Press Enter for sources, benchmark measurements and
-route details. Use Space to enable or disable a route, `p` for Preferred and `P` for Pin.
+`pod models` opens a browser of published models and local routes. Use ↑↓ to compare
+models by benchmark index and cost per task, and ←→ to inspect each effort or public
+profile. Enter shows sources and exact measurements. Space enables or disables the
+selected route, `p` sets Preferred, and `P` sets Pin. Press `?` for all keys.
 Press `R`, or run `pod models refresh`, to fetch the public leaderboard.
 
 A green `*` marks a benchmark cost that is high value: no other routable route costs less
