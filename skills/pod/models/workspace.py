@@ -153,8 +153,10 @@ class Workspace:
         if key in moves or key in ("home", "g", "end", "G", "left", "right", "l", "h", "/", "f", "r", "s"):
             self.detail_offset = 0
         if key in moves and self.groups:
-            group = max(0, min(len(self.groups) - 1, self.group_for[self.cursor] + moves[key]))
-            self.cursor = self.groups[group][0]
+            position = self.group_for[self.cursor]
+            group = max(0, min(len(self.groups) - 1, position + moves[key]))
+            if group != position:
+                self.cursor = self.groups[group][0]
         elif key in ("home", "g", "end", "G") and self.groups:
             self.cursor = self.groups[0 if key in ("home", "g") else -1][0]
         elif key in ("left", "right", "h", "l") and self.groups:
