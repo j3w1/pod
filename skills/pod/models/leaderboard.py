@@ -55,10 +55,16 @@ UNITS.update({name: "US dollars per million tokens" for name in _PROFILE_FIELDS 
 _MISSING = ("", "--", "—", "–", "-", "n/a")
 _NUMBER = re.compile(r"(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,9})(?:\.[0-9]{1,6})?")
 _METHOD = re.compile(r"Intelligence Index v([0-9]{1,2}(?:\.[0-9]{1,3}){0,3})\b")
-_BOOTSTRAP = "(self.__next_f=self.__next_f||[])"
-_PUSH = re.compile(rf"\s*(?:self\.__next_f|{re.escape(_BOOTSTRAP)})\.push\(\s*")
-# These are the four ECMAScript line terminators that can separate push statements.
-_END_PUSH = re.compile(r"\s*\)\s*(?:;|[\r\n\u2028\u2029]|\Z)")
+# ECMAScript WhiteSpace (including Space_Separator and BOM) and LineTerminator.
+_JS_SPACE = r"\t\v\f \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff"
+_JS_LINE = r"\r\n\u2028\u2029"
+_PADDING = f"[{_JS_SPACE}{_JS_LINE}]*"
+_BOUNDARY = rf"{_PADDING}(?:;|[{_JS_LINE}]|\Z){_PADDING}"
+_BOOTSTRAP = re.compile(_PADDING + re.escape("(self.__next_f=self.__next_f||[]).push([0])") + _BOUNDARY)
+_PUSH = re.compile(_PADDING + r"self\.__next_f\.push\(" + _PADDING)
+_END_PUSH = re.compile(_PADDING + r"\)" + _BOUNDARY)
+# Recognize a frame even after invalid leading control whitespace so it cannot silently disappear.
+_FRAME_START = re.compile(rf"[{_JS_SPACE}{_JS_LINE}\x1c-\x1f\x85]*(?:self\.__next_f\.push\(|\(self\.__next_f=)")
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 
 
@@ -204,8 +210,21 @@ class _Tables(HTMLParser):
             self._row = self._cell = None
 
     def handle_data(self, data):
-        pos = 0
-        while self._inline_script and (start := _PUSH.match(data, pos)):
+        if self._inline_script and _FRAME_START.match(data):
+            self._read_pushes(data)
+        if self._cell is not None and not self._skip and self._size < MAX_CELL_TEXT * 4:
+            self._cell.append(data)
+            self._size += len(data)
+            if self._in_suffix:
+                self._suffix.append(data)
+
+    def _read_pushes(self, data):
+        bootstrap = _BOOTSTRAP.match(data)
+        pos = bootstrap.end() if bootstrap else 0
+        while pos < len(data):
+            start = _PUSH.match(data, pos)
+            if not start:
+                raise RefreshError("Unreadable leaderboard push statement")
             chunk, end = json.JSONDecoder().raw_decode(data, start.end())
             close = _END_PUSH.match(data, end)
             if not close:
@@ -217,13 +236,6 @@ class _Tables(HTMLParser):
                 if len(chunk) != 2 or not isinstance(chunk[1], str) or len(self.chunks) >= 4096:
                     raise RefreshError("Invalid leaderboard text chunks")
                 self.chunks.append(chunk[1])
-        if pos and data[pos:].strip():
-            raise RefreshError("Unreadable leaderboard data after a push")
-        if self._cell is not None and not self._skip and self._size < MAX_CELL_TEXT * 4:
-            self._cell.append(data)
-            self._size += len(data)
-            if self._in_suffix:
-                self._suffix.append(data)
 
 
 class _Cell(str):

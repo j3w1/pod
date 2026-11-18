@@ -143,6 +143,18 @@ class PublishedProfileTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
 
+    def test_ecmascript_padding_at_script_and_argument_boundaries(self):
+        # Includes a BOM and representatives of the Unicode Space_Separator category.
+        padding = "\ufeff\u00a0\u200a\u3000\t\v\f"
+        padded = self.source.replace("<script>", "<script>" + padding)
+        padded = padded.replace(".push([", ".push(" + padding + "[")
+        padded = padded.replace("])</script>", "]" + padding + ")" + padding + ";" + padding + "</script>")
+        self.assertEqual(leaderboard.parse(padded), leaderboard.parse(self.source))
+        for old, new in (("<script>", "<script>\x85"), (".push([", ".push(\x85["),
+                         ("])</script>", "]\x85)</script>"), (")</script>", ");\x85</script>")):
+            with self.subTest(new=new), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(old, new, 1))
+
     def test_independently_framed_pushes_share_a_script(self):
         controls = "self.__next_f.push([0]);self.__next_f.push([2,null])"
         self.assertEqual(leaderboard.parse(page() + f"<script>{controls}</script>"), leaderboard.parse(page()))
