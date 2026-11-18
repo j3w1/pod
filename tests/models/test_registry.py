@@ -5,6 +5,20 @@ from pod.models import registry
 
 
 class RegistryTests(unittest.TestCase):
+    def test_6_2_models_match_exactly_at_every_verified_effort(self):
+        models = registry.load()
+        routes = registry.routes(models)
+        for name, model_id in (("GPT-6.2 Astra", "gpt-6.2-astra"), ("GPT-6.2 Sol", "gpt-6.2-sol")):
+            model = registry.find(models, name)
+            self.assertIsNotNone(model)
+            self.assertEqual((model.id, model.agent, model.provider), (model_id, "codex", "OpenAI"))
+            self.assertEqual(model.efforts, ("low", "medium", "high", "xhigh", "max", "ultra"))
+            for effort in model.efforts:
+                self.assertIn(f"codex/{model_id}/{effort}", routes)
+                self.assertEqual(registry.read_name(f"{name} ({effort})").base, name)
+        self.assertIsNone(registry.find(models, "GPT-6.2"))
+        self.assertIsNone(registry.find(models, "GPT-6.2 Astra Preview"))
+
     def test_an_entry_is_only_identity_agent_provider_and_efforts(self):
         document = json.loads(registry.FILE.read_text())
         self.assertEqual(set(document), {"schema", "models"})

@@ -7,10 +7,31 @@ from unittest.mock import patch
 
 from pod import paths, routefile
 from pod.models import adapters, cli, leaderboard, snapshot, view
-from tests.models.support import ModelCase, ROUTES, live_page, page, without
+from tests.models.support import ModelCase, ROUTES, current_page, live_page, page, without
 
 
 class RefreshTests(ModelCase):
+    def test_current_refresh_fetches_once_preserves_preferences_and_last_good_on_failure(self):
+        preferences = ROUTES.replace("preferred: null", "preferred: codex/gpt-6.1-sol/high").replace(
+            "pinned: null", "pinned: codex/gpt-6.1-sol/high")
+        target = self.write_routes(preferences)
+        before, stamp = target.read_bytes(), target.stat().st_mtime_ns
+        with patch.object(leaderboard, "fetch", return_value=current_page()) as fetch:
+            attempt = snapshot.refresh()
+        self.assertTrue(attempt["ok"], attempt)
+        fetch.assert_called_once_with()
+        self.assertEqual(attempt["rows"], 197)
+        kept = (snapshot.home() / "snapshot.json").read_bytes()
+        for old, new in (("$4.00", "invalid"), (">62<", ">inf<"),
+                         ('<img alt="OpenAI">', '<img alt="">')):
+            with self.subTest(old=old):
+                attempt = self.refresh_from(current_page().replace(old, new, 1))
+                self.assertFalse(attempt["ok"])
+                self.assertEqual((snapshot.home() / "snapshot.json").read_bytes(), kept)
+        self.assertEqual(target.read_bytes(), before)
+        self.assertEqual(target.stat().st_mtime_ns, stamp)
+        self.assertEqual(routefile.load().enabled(), ["codex/gpt-6.1-sol/high", "claude/claude-opus-5-5/high"])
+
     def test_refresh_succeeds_against_the_current_public_table(self):
         attempt = self.refresh_from(live_page())
         self.assertEqual((attempt["ok"], attempt["rows"], attempt["failure"]), (True, 284, None))

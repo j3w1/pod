@@ -200,12 +200,22 @@ the person changes it, through `pod models` or an editor. Coordination reads it 
 
 - **Registry.** An entry is an id, the public name, the agent and the efforts. One rule maps
   leaderboard row names (`Name (effort)`, optionally "with fallback" or "non-reasoning").
-  Adding a model is a data change and enables nothing.
+  GPT-6.2 Astra and GPT-6.2 Sol use the Codex IDs `gpt-6.2-astra` and `gpt-6.2-sol`, each
+  with low, medium, high, xhigh, max and ultra efforts. Adding a model enables nothing.
 - **Refresh** is explicit (`pod models refresh` or the key in the workspace): one bounded
   fetch, no retries, no credentials. Model, creator, the intelligence index and cost per task
   are required; other known columns are optional metrics that read as unavailable when absent;
   unknown columns are listed in diagnostics. A missing required column fails the whole refresh
   and the last good snapshot stays. A snapshot records the methodology the page states.
+  The current public table supplies creator identity through the model cell's image alt text
+  and profile qualifiers through a separate marked span, including ungrouped rows. The parser
+  requires one nonempty creator and an unambiguous profile span when present; it converts an
+  explicit `Max, Default Fallback` to `(max with fallback)` and never infers effort from a
+  model's name. The earlier table with a Creator column remains supported. Unreadable required
+  index or cost values fail the whole refresh; explicit missing marks remain unavailable.
+  Only profiles actually present in the fetched table have public measurements; other routable
+  efforts remain unavailable. Neither registry changes nor refresh writes enabled routes,
+  Preferred, Pin or merge authorization.
 - **Workspace.** A keyboard-driven terminal table: sort, search, provider filter, enable and
   disable, Preferred, Pin, a bulk change per model, one detail panel. It prints a plain table
   when there is no terminal. A public observation never makes a route, and no refresh or

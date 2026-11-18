@@ -37,6 +37,11 @@ def live_page() -> str:
     return (FIXTURES / "leaderboard.html").read_text(encoding="utf-8")
 
 
+def current_page() -> str:
+    """The sanitized public table after creator and effort moved into the model cell."""
+    return (FIXTURES / "leaderboard-current.html").read_text(encoding="utf-8")
+
+
 def page(headers=HEADERS, rows=ROWS, *, text="Intelligence Index v5.0.1") -> str:
     head = "".join(f"<th><button>{html.escape(cell)}</button></th>" for cell in headers)
     body = "".join("<tr>" + "".join(f"<td><div>{html.escape(cell)}</div></td>" for cell in row) + "</tr>"
