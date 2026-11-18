@@ -11,6 +11,20 @@ from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live
 
 
 class RefreshTests(ModelCase):
+    def test_non_json_numbers_in_control_pushes_preserve_the_previous_snapshot(self):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        self.assertTrue(self.refresh_from(source)["ok"])
+        path = snapshot.home() / "snapshot.json"
+        kept = path.read_bytes()
+        bootstrap = "(self.__next_f=self.__next_f||[]).push([0]);"
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(literal=literal):
+                control = f"{bootstrap}self.__next_f.push([2,{literal}]);"
+                attempt = self.refresh_from(source.replace("<script>", "<script>" + control, 1))
+                self.assertFalse(attempt["ok"])
+                self.assertEqual(snapshot.last_attempt(), attempt)
+                self.assertEqual(path.read_bytes(), kept)
+
     def test_malformed_push_scripts_keep_the_last_good_snapshot(self):
         source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
         self.assertTrue(self.refresh_from(source)["ok"])

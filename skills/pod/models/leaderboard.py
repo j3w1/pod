@@ -72,6 +72,10 @@ class RefreshError(Exception):
     """The refresh failed as a whole. The message is safe to store and show."""
 
 
+def _reject_constant(literal):
+    raise RefreshError(f"The leaderboard contains an invalid JSON number: {literal}")
+
+
 def clean(value: str, limit: int = MAX_CELL_TEXT) -> str:
     """Bounded display text with terminal sequences and control characters removed."""
     kept = []
@@ -225,7 +229,7 @@ class _Tables(HTMLParser):
             start = _PUSH.match(data, pos)
             if not start:
                 raise RefreshError("Unreadable leaderboard push statement")
-            chunk, end = json.JSONDecoder().raw_decode(data, start.end())
+            chunk, end = json.JSONDecoder(parse_constant=_reject_constant).raw_decode(data, start.end())
             close = _END_PUSH.match(data, end)
             if not close:
                 raise RefreshError("Incomplete leaderboard data chunk")
@@ -329,7 +333,7 @@ def _published_lists(chunks):
         if not re.fullmatch(r"[0-9a-f]+", number) or not body.lstrip().startswith("["):
             continue
         try:
-            pending = [json.loads(body, object_pairs_hook=_unique_fields)]
+            pending = [json.loads(body, parse_constant=_reject_constant, object_pairs_hook=_unique_fields)]
         except (ValueError, RecursionError):
             raise RefreshError("The grouped leaderboard record is incomplete or unreadable") from None
         while pending:

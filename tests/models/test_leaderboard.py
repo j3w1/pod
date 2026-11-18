@@ -143,6 +143,18 @@ class PublishedProfileTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
 
+    def test_grouped_json_rejects_bare_non_json_numbers_even_in_unused_fields(self):
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(literal=literal), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(self.source.replace(r'\"scores\":', rf'\"extra\":{literal},\"scores\":', 1))
+
+    def test_both_json_layers_accept_strings_and_finite_numbers(self):
+        control = 'self.__next_f.push([2,["NaN","Infinity","-Infinity",-1.25e2]]);'
+        source = self.source.replace("<script>", "<script>" + control, 1)
+        extra = r'\"extra\":[\"NaN\",\"Infinity\",\"-Infinity\",-1.25e2],'
+        source = source.replace(r'\"scores\":', extra + r'\"scores\":', 1)
+        self.assertEqual(leaderboard.parse(source), leaderboard.parse(self.source))
+
     def test_ecmascript_padding_at_script_and_argument_boundaries(self):
         # Includes a BOM and representatives of the Unicode Space_Separator category.
         padding = "\ufeff\u00a0\u200a\u3000\t\v\f"
