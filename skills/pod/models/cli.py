@@ -18,7 +18,7 @@ def _parser() -> argparse.ArgumentParser:
                         help="refresh: fetch the public leaderboard once; status: offline diagnostics")
     parser.add_argument("--json", action="store_true", help="print JSON instead of text")
     parser.add_argument("--plain", action="store_true", help="print the table even on a terminal")
-    parser.add_argument("--all", action="store_true", help="include providers Pod has no route for")
+    parser.add_argument("--all", action="store_true", help="include all providers in JSON output")
     parser.add_argument("--enable", action="append", default=[], metavar="ROUTE", help="enable agent/model/effort")
     parser.add_argument("--disable", action="append", default=[], metavar="ROUTE", help="disable agent/model/effort")
     parser.add_argument("--preferred", metavar="ROUTE|none", help="set or clear the Preferred route")
@@ -119,7 +119,7 @@ def main(argv: list[str]) -> int:
         if args.json:
             _emit({"header": model.header(), "rows": [view.as_json(row) for row in rows]})
         else:
-            sys.stdout.write(table.plain(model, rows, shutil.get_terminal_size((120, 24)).columns))
+            sys.stdout.write(table.plain(model, view.visible(rows), shutil.get_terminal_size((120, 24)).columns))
         return 0
     except PodError as exc:
         if args.json:

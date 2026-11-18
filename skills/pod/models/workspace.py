@@ -12,8 +12,8 @@ import textwrap
 from ..errors import PodError
 from . import edit, registry, snapshot, table, view
 
-KEYS = ("space on/off · E/D whole model on/off · p Preferred · P Pin · Enter detail · "
-        "s sort · r reverse · f provider · / search · R refresh · q quit")
+KEYS = ("↑↓ move · / search · s sort · r reverse · f provider · Enter details · "
+        "space on/off · E/D model on/off · p Preferred · P Pin · R refresh · q quit")
 ESCAPE_WAIT_MS = 25   # how long the rest of an escape sequence may take to arrive after its ESC
 
 
@@ -23,6 +23,7 @@ class Workspace:
         self.sort, self.reverse, self.provider, self.search = "index", False, "routed", ""
         self.cursor = self.top = 0
         self.detail = self.searching = False
+        self.detail_offset = 0
         self.message = ""
         self.reload()
 
@@ -37,8 +38,8 @@ class Workspace:
 
     def _select(self, keep: str | None = None) -> None:
         keep = keep or (self.current.name if getattr(self, "rows", None) else None)
-        self.rows = view.select(self.view, provider=self.provider, search=self.search, sort=self.sort,
-                                reverse=self.reverse)
+        self.rows = view.visible(view.select(self.view, provider=self.provider, search=self.search, sort=self.sort,
+                                reverse=self.reverse))
         names = [row.name for row in self.rows]
         self.cursor = names.index(keep) if keep in names else min(self.cursor, max(0, len(self.rows) - 1))
 
@@ -110,6 +111,8 @@ class Workspace:
             return None
         self.message = ""
         moves = {"up": -1, "k": -1, "down": 1, "j": 1, "pageup": -10, "pagedown": 10}
+        if key in moves or key in ("home", "end", "g", "G", "/", "f"):
+            self.detail_offset = 0
         if key in moves:
             self.cursor = max(0, min(len(self.rows) - 1, self.cursor + moves[key]))
         elif key in ("home", "g"):
@@ -124,6 +127,9 @@ class Workspace:
             self.pick("preferred" if key == "p" else "pinned")
         elif key in ("\n", "\r", "enter"):
             self.detail = not self.detail
+            self.detail_offset = 0
+        elif self.detail and key in ("[", "]"):
+            self.detail_offset = max(0, self.detail_offset + (4 if key == "]" else -4))
         elif key == "s":
             self.sort = view.SORTS[(view.SORTS.index(self.sort) + 1) % len(view.SORTS)]
             self._select()
@@ -147,32 +153,48 @@ class Workspace:
 
     def lines(self, width: int, height: int) -> list:
         """Screen lines as (segments, selected). Pure: tests read exactly what the terminal shows."""
+        def line(text, style=""):
+            return ([(text[:width], style)], False)
+
+        width = max(1, width - 1)  # curses reserves the last cell
         columns = table.columns_for(width)
-        top = [([(text[:width], "warn" if "failed" in text or "invalid" in text else "")], False)
+        if width < 52:
+            columns = [column for column in columns if column[0] in ("name", "state")]
+        top = [line(text, "warn" if "failed" in text or "invalid" in text else "")
                for text in self.view.header()]
-        status = (f"Showing {len(self.rows)} rows · provider: {self.provider} · sort: {self.sort}"
-                  f"{' reversed' if self.reverse else ''}" + (f" · search: {self.search}" if self.search else ""))
-        if self.searching:
-            status = f"Search: {self.search}_   (Enter keeps it, Esc clears it)"
-        top.append(([(status[:width], "")], False))
-        top.append((table.header_line(columns, width, self.sort), False))
+        status = (f"{len(self.rows)} rows · {self.provider} · sort: {self.sort}"
+                  + (" reversed" if self.reverse else "") + (f" · search: {self.search}" if self.search else ""))
+        top.append(line(f"Search: {self.search}_" if self.searching else status, "head"))
+        heading = table.header_line(columns, width, self.sort)[0][0]
+        top.append(line(heading, "head"))
+
+        bottom = [line(part, "head") for part in textwrap.wrap(KEYS, width)]
+        if self.message:
+            bottom.insert(0, line(self.message, "warn" if self.message.startswith(
+                ("Not changed", "Refresh failed", "No route")) else "good"))
+        available = max(1, height - len(top) - len(bottom))
         panel = []
-        if self.detail and self.current is not None:
-            wrapped = [piece for text in table.detail(self.current, self.view.snapshot)
-                       for piece in textwrap.wrap(text, max(20, width - 1), subsequent_indent="    ") or [""]]
-            panel = [([(text, "")], False) for text in wrapped[:max(4, height - len(top) - 8)]]
-        failed = self.message.startswith(("Not changed", "Refresh failed", "No route"))
-        bottom = [([(self.message[:width], "warn" if failed else "good")], False),
-                  ([(table.LEGEND[:width], "dim")], False),
-                  *[([(text, "head")], False) for text in textwrap.wrap(KEYS, max(20, width - 1))]]
-        room = max(1, height - len(top) - len(panel) - len(bottom))
-        self.top = min(max(self.top, self.cursor - room + 1), self.cursor)
+        if self.current and available >= 3:
+            title = "Selected · " + self.current.name
+            if self.detail:
+                title = "[] scroll · " + self.current.name
+                details = table.detail(self.current, self.view.snapshot)[1:]
+                limit = max(1, available - 2)
+            else:
+                details = table.guidance(self.current)[:1]
+                limit = min(4, max(1, available // 2 - 1))
+            wrapped = [part for item in details for part in textwrap.wrap(item.strip(), width)]
+            self.detail_offset = min(self.detail_offset, max(0, len(wrapped) - limit))
+            panel = [line(title, "head"), *[line(part) for part in
+                     wrapped[self.detail_offset:self.detail_offset + limit]]]
+
+        room = max(1, available - len(panel))
+        self.top = min(max(self.top, self.cursor - room + 1), self.cursor, max(0, len(self.rows) - room))
         body = [(table.row_line(row, columns, width), index == self.cursor)
                 for index, row in enumerate(self.rows[self.top:self.top + room], self.top)]
         if not self.rows:
-            body = [([("No rows match. Press f to change the provider filter or / to change the search.", "dim")],
-                     False)]
-        return top + body + panel + bottom
+            body = [line("No matches. / search · f provider", "dim")]
+        return (top + body + panel + bottom)[:height]
 
 
 _NAMES = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_PPAGE: "pageup", curses.KEY_NPAGE: "pagedown",

@@ -45,13 +45,13 @@ class KeyTests(WorkspaceCase):
         self.assertEqual(self.space.search, "sol")
 
     def test_space_enables_and_disables_the_selected_route(self):
-        self.go("Claude Fable 5.2 (high)")
+        self.go("Claude Opus 5.5 (low)")
         self.keys(" ")
-        self.assertEqual(routefile.load().routes["claude/claude-fable-5-2/high"], "enabled")
-        self.assertEqual(self.space.current.name, "Claude Fable 5.2 (high)")
+        self.assertEqual(routefile.load().routes["claude/claude-opus-5-5/low"], "enabled")
+        self.assertEqual(self.space.current.name, "Claude Opus 5.5 (low)")
         self.assertEqual(self.space.current.state, "enabled")
         self.keys(" ")
-        self.assertEqual(routefile.load().routes["claude/claude-fable-5-2/high"], "disabled")
+        self.assertEqual(routefile.load().routes["claude/claude-opus-5-5/low"], "disabled")
         self.assertIn("now disabled", self.space.message)
 
     def test_a_row_without_a_route_cannot_be_changed_and_says_why(self):
@@ -90,12 +90,12 @@ class KeyTests(WorkspaceCase):
 
     def test_a_file_changed_elsewhere_is_not_overwritten(self):
         self.target.write_text(ROUTES.replace("preferred: null", "preferred: codex/gpt-6.1-sol/high"))
-        self.go("Claude Fable 5.2 (high)")
+        self.go("Claude Opus 5.5 (low)")
         self.keys(" ")
         self.assertIn("changed since it was shown", self.space.message)
-        self.assertNotIn("claude/claude-fable-5-2/high", routefile.load().routes)
+        self.assertNotIn("claude/claude-opus-5-5/low", routefile.load().routes)
         self.keys(" ")
-        self.assertEqual(routefile.load().routes["claude/claude-fable-5-2/high"], "enabled")
+        self.assertEqual(routefile.load().routes["claude/claude-opus-5-5/low"], "enabled")
 
     def test_an_invalid_preference_file_is_shown_and_never_edited(self):
         self.target.write_text("schema: pod/v2\nroutes: [a]\n")
@@ -122,22 +122,35 @@ class KeyTests(WorkspaceCase):
         self.assertEqual(len(snapshot.load()["rows"]), 284)
 
     def test_search_filter_sort_and_quit(self):
-        self.keys("/", "f", "a", "b", "l", "e", "enter")
-        self.assertEqual({row.model_id for row in self.space.rows}, {"claude-fable-5-1", "claude-fable-5-2"})
+        self.keys("/", *"Opus 5.5", "enter")
+        self.assertEqual({row.model_id for row in self.space.rows}, {"claude-opus-5-5"})
         self.keys("/", "escape")
         self.assertEqual(self.space.search, "")
         self.keys("f")
         self.assertEqual(self.space.provider, "all")
-        self.assertEqual(len(self.space.rows), len(self.space.view.rows))
+        self.assertCountEqual(self.space.rows, [row for row in self.space.view.rows if row.provider == "OpenAI" or (row.provider == "Anthropic" and "Opus" in row.name)])
         self.keys("f")
         self.assertEqual({row.provider for row in self.space.rows}, {"Anthropic"})
         self.keys("s")
         self.assertEqual(self.space.sort, "cost")
-        self.assertEqual(self.space.rows[0].name, "Claude Haiku 5.5 (low)")
+        self.assertEqual(self.space.rows[0].name, "Claude Opus 5.5 (low)")
         self.assertEqual(self.space.handle("q"), "quit")
 
 
 class DrawTests(WorkspaceCase):
+    def test_selected_details_follow_navigation_and_fit_the_terminal(self):
+        for width, height in ((120, 24), (60, 20), (40, 16)):
+            with self.subTest(width=width):
+                self.keys("home")
+                for move in ("down", "end", "up"):
+                    self.keys(move)
+                    lines = text(self.space.lines(width, height))
+                    self.assertIn("Selected · " + self.space.current.name, "\n".join(lines))
+                    self.assertLessEqual(len(lines), height)
+                    self.assertTrue(all(len(line) <= width for line in lines))
+                    self.assertIn("/ search", "\n".join(lines))
+                    self.assertIn("P Pin", "\n".join(lines))
+
     def test_the_header_always_shows_the_snapshot_age_and_states_are_words(self):
         shown = text(self.space.lines(160, 30))
         self.assertRegex(shown[0], r"^Public snapshot: (just now|\d+ min ago) \(20")
