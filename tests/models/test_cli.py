@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from pod import routefile
 from pod.models import cli, leaderboard
-from tests.models.support import ModelCase, ROUTES, live_page, page, without
+from tests.models.support import ModelCase, ROUTES, current_page, live_page, page, without
 from tests.support import ROOT
 
 
@@ -20,6 +20,23 @@ class CliCase(ModelCase):
 
 
 class CliTests(CliCase):
+    def test_current_refresh_and_json_expose_new_routes_without_preferences(self):
+        with patch.object(leaderboard, "fetch", return_value=current_page()) as fetch:
+            code, out, err = self.run_cli("refresh")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("Refreshed: 197 public rows", out)
+        fetch.assert_called_once_with()
+        code, out, err = self.run_cli("--json")
+        self.assertEqual((code, err), (0, ""))
+        rows = json.loads(out)["rows"]
+        for model_id in ("gpt-6.2-astra", "gpt-6.2-sol"):
+            matched = [row for row in rows if row["route"] and row["route"].startswith(f"codex/{model_id}/")]
+            self.assertEqual(len(matched), 6)
+            self.assertTrue(all(row["state"] == "routable" for row in matched))
+            measured = next(row for row in matched if row["route"].endswith("/max"))
+            self.assertTrue(measured["observed_publicly"])
+        self.assertFalse(routefile.load().path.exists())
+
     def test_refresh_reports_success_and_failure_and_fetches_once(self):
         calls = []
         with patch.object(leaderboard, "fetch", lambda: calls.append(1) or live_page()):
@@ -67,7 +84,7 @@ class CliTests(CliCase):
         self.assertIsNone(status["snapshot"])
         self.assertEqual(status["preferences"]["enabled"], 2)
         self.assertEqual(status["adapters"], {"codex": "no catalog", "claude": "no catalog"})
-        self.assertEqual(status["registry"]["routes"], 48)
+        self.assertEqual(status["registry"]["routes"], 60)
         self.refresh_from(page(HEADERS_WITH_UNKNOWN, ROWS_WITH_UNKNOWN))
         code, out, _err = self.run_cli("status")
         self.assertIn("Columns not known to Pod, not shown: Median Tokens/s", out)

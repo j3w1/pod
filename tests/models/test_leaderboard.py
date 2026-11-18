@@ -3,10 +3,56 @@ import threading
 import unittest
 
 from pod.models import leaderboard
-from tests.models.support import HEADERS, ROWS, live_page, page, without
+from tests.models.support import HEADERS, ROWS, current_page, live_page, page, without
 
 
 class ParseTests(unittest.TestCase):
+    def test_current_grouped_table_keeps_creator_and_explicit_effort(self):
+        parsed = leaderboard.parse(current_page())
+        self.assertEqual(len(parsed["rows"]), 197)
+        self.assertEqual(parsed["methodology"], "Artificial Analysis Intelligence Index v5.0.1")
+        self.assertEqual((parsed["unknown_columns"], parsed["absent_metrics"]), ([], []))
+        astra = parsed["rows"][1]
+        self.assertEqual(astra, {"name": "GPT-6.2 Astra (max)", "creator": "OpenAI",
+                                 "index_estimated": False, "intelligence_index": 62,
+                                 "cost_per_task_usd": 4.0, "time_per_task_min": 10.7,
+                                 "first_answer_token_s": 147.65, "context_window_tokens": 1000000})
+        self.assertEqual(parsed["rows"][4]["name"], "GPT-6.2 Sol (max)")
+        self.assertEqual(parsed["rows"][0]["name"], "Claude Fable 5.2 (max with fallback)")
+        self.assertIn("Qwen4 Max", [row["name"] for row in parsed["rows"]])
+        self.assertNotIn("Qwen4 (max)", [row["name"] for row in parsed["rows"]])
+
+    def test_current_table_required_identity_and_values_are_validated(self):
+        source = current_page()
+        for old, new in (('<img alt="OpenAI">', '<img alt="">'),
+                         ("$4.00", "4.00 USD"), (">62<", ">NaN<"),
+                         (">62<", ">101<"), (">62<", ">62**<"), ("Cost per Task", "Price per Task")):
+            with self.subTest(old=old, new=new), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(source.replace(old, new, 1))
+
+    def test_current_optional_values_are_unavailable_without_guessing(self):
+        parsed = leaderboard.parse(current_page().replace(">10.7<", ">fast<", 1))
+        self.assertIsNone(parsed["rows"][1]["time_per_task_min"])
+        self.assertTrue(any("1 optional values" in note for note in parsed["diagnostics"]))
+        missing = next(row for row in parsed["rows"] if row["name"] == "Muse Wonder Full (max)")
+        self.assertIsNone(missing["cost_per_task_usd"])
+
+    def test_current_explicit_suffix_is_required_to_be_unambiguous(self):
+        marker = '<span class="font-normal text-neutral-500">Max</span>'
+        for replacement in (marker + marker, '<span class="font-normal text-neutral-500"></span>',
+                            marker + "extra"):
+            with self.subTest(replacement=replacement), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(current_page().replace(marker, replacement, 1))
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(current_page().replace('<img alt="OpenAI">',
+                                                     '<img alt="OpenAI"><img alt="Other">', 1))
+
+    def test_current_ungrouped_suffix_is_explicit_and_not_part_of_the_base_name(self):
+        rows = leaderboard.parse(current_page())["rows"]
+        muse = next(row for row in rows if row["name"] == "Muse Wonder Full (max)")
+        self.assertEqual((muse["creator"], muse["intelligence_index"]), ("Meta", 50))
+
+
     def test_the_current_public_table_parses_with_its_methodology(self):
         parsed = leaderboard.parse(live_page())
         self.assertEqual(len(parsed["rows"]), 284)

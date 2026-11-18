@@ -2,7 +2,7 @@ from pathlib import Path
 
 from pod import routefile
 from pod.models import leaderboard, registry, view
-from tests.models.support import ModelCase, ROUTES, live_page
+from tests.models.support import ModelCase, ROUTES, current_page, live_page
 
 EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]
 CODEX = {"gpt-6.1-sol": EFFORTS, "gpt-6.1-terra": EFFORTS, "gpt-6-astra": EFFORTS, "gpt-6-luna": EFFORTS[:5],
@@ -31,6 +31,21 @@ class ViewCase(ModelCase):
 
 
 class StateTests(ViewCase):
+    def test_6_2_routes_keep_unobserved_efforts_unavailable_and_enable_nothing(self):
+        from pod.models import adapters
+        self.codex_catalog({"gpt-6.2-astra": EFFORTS, "gpt-6.2-sol": EFFORTS})
+        model = self.build(leaderboard.parse(current_page())["rows"], ROUTES, adapters.catalogs())
+        for model_id in ("gpt-6.2-astra", "gpt-6.2-sol"):
+            for effort in EFFORTS:
+                row = next(row for row in model.rows if row.route == f"codex/{model_id}/{effort}")
+                self.assertEqual((row.state, row.routable, row.adapter, row.preference),
+                                 ("routable", True, "listed", None))
+                self.assertEqual(row.observed, effort == "max")
+                if effort != "max":
+                    self.assertTrue(all(value is None for value in row.metrics.values()))
+        self.assertEqual(sorted(row.route for row in model.rows if row.state == "enabled"),
+                         ["claude/claude-opus-5-5/high", "codex/gpt-6.1-sol/high"])
+
     def test_each_state_comes_from_its_one_source(self):
         self.codex_catalog(CODEX)
         from pod.models import adapters

@@ -121,6 +121,7 @@ class _Tables(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.tables, self._open, self._row, self._cell, self._skip, self._size = [], [], None, None, 0, 0
+        self._creators, self._suffix, self._suffix_count, self._in_suffix = [], [], 0, 0
 
     def handle_starttag(self, tag, attrs):
         if tag in self.SKIP:
@@ -133,18 +134,34 @@ class _Tables(HTMLParser):
             self._row = []
         elif self._open and self._row is not None and tag in ("td", "th"):
             self._cell, self._size = [], 0
-        elif tag == "br" and self._cell is not None:
-            self._cell.append(" ")
+            self._creators, self._suffix, self._suffix_count, self._in_suffix = [], [], 0, 0
+        elif self._cell is not None and not self._skip:
+            attrs = dict(attrs)
+            if tag == "img":
+                self._creators.append(clean(attrs.get("alt") or "", 120))
+            elif tag == "span":
+                if {"font-normal", "text-neutral-500"} <= set(attrs.get("class", "").split()):
+                    self._suffix_count += 1
+                    self._in_suffix += 1
+                elif self._in_suffix:
+                    self._in_suffix += 1
+            elif tag == "br":
+                self._cell.append(" ")
 
     def handle_endtag(self, tag):
         if tag in self.SKIP:
             self._skip = max(0, self._skip - 1)
         elif not self._open:
             return
+        elif tag == "span":
+            self._in_suffix = max(0, self._in_suffix - 1)
         elif tag in ("td", "th") and self._cell is not None:
             if len(self._row) >= MAX_CELLS:
                 raise RefreshError("A table row has too many cells")
-            self._row.append(clean("".join(self._cell)))
+            cell = _Cell(clean("".join(self._cell)))
+            cell.creators, cell.suffix = self._creators, clean("".join(self._suffix))
+            cell.suffix_count = self._suffix_count
+            self._row.append(cell)
             self._cell = None
         elif tag == "tr" and self._row is not None:
             if len(self._open[-1]) > MAX_ROWS:
@@ -159,6 +176,28 @@ class _Tables(HTMLParser):
         if self._cell is not None and not self._skip and self._size < MAX_CELL_TEXT * 4:
             self._cell.append(data)
             self._size += len(data)
+            if self._in_suffix:
+                self._suffix.append(data)
+
+
+class _Cell(str):
+    """Cell text plus the current table's explicitly marked creator and profile."""
+
+    def identity(self):
+        if len(self.creators) != 1 or not self.creators[0]:
+            raise RefreshError("A model cell has no unambiguous creator image alt text")
+        name = str(self)
+        if self.suffix_count > 1 or (self.suffix_count and not self.suffix):
+            raise RefreshError("A model cell has an ambiguous or empty profile suffix")
+        if self.suffix:
+            if not name.endswith(" " + self.suffix):
+                raise RefreshError("A model cell has an unreadable profile suffix")
+            base = name[:-len(self.suffix)].strip()
+            if not base:
+                raise RefreshError("A model cell has no model name")
+            qualifier = self.suffix.lower().replace(", default fallback", " with fallback")
+            name = f"{base} ({qualifier})"
+        return name, self.creators[0]
 
 
 def _key(text: str) -> str:
@@ -219,7 +258,8 @@ def parse(text: str) -> dict:
         raise RefreshError(f"The page could not be parsed ({type(exc).__name__})") from None
     for table in parser.tables:
         header = next((index for index, row in enumerate(table[:4])
-                       if {"model", "creator"} <= {_key(cell) for cell in row}), None)
+                       if "model" in {_key(cell) for cell in row} and
+                       {"creator", "artificialanalysisintelligenceindex"} & {_key(cell) for cell in row}), None)
         if header is not None:
             break
     else:
@@ -232,7 +272,9 @@ def parse(text: str) -> dict:
             if known[key][0] in columns:
                 raise RefreshError(f"Leaderboard has the column {table[header][index]!r} twice")
             columns[known[key][0]] = index
-    missing = sorted(name for name, _unit in REQUIRED.values() if name not in columns)
+    inline_identity = "creator" not in columns
+    missing = sorted(name for name, _unit in REQUIRED.values()
+                     if name not in columns and not (name == "creator" and inline_identity))
     if missing:
         raise RefreshError("Leaderboard lacks required columns: " + ", ".join(missing))
     unknown = [table[header][index] for index, key in enumerate(keys)
@@ -245,14 +287,15 @@ def parse(text: str) -> dict:
     for number, cells in enumerate(body, 1):
         if len(cells) != len(keys):
             raise RefreshError(f"Leaderboard row {number} has the wrong number of cells")
-        name, creator = cells[columns["name"]], cells[columns["creator"]]
+        name, creator = (cells[columns["name"]].identity() if inline_identity else
+                         (cells[columns["name"]], cells[columns["creator"]]))
         if not name or not creator or len(name) > 120:
             raise RefreshError(f"Leaderboard row {number} has no usable model or creator name")
         score = cells[columns["intelligence_index"]]
         estimated = score.endswith("*")
         try:
             row = {"name": name, "creator": creator, "index_estimated": estimated,
-                   "intelligence_index": _number(score.rstrip("*"), high=100),
+                   "intelligence_index": _number(score.removesuffix("*"), high=100),
                    "cost_per_task_usd": _number(cells[columns["cost_per_task_usd"]], prefix="$")}
         except ValueError as exc:
             raise RefreshError(f"Leaderboard row {number} ({name}) has an unreadable index or cost: {exc}") from None
