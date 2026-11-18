@@ -16,6 +16,11 @@ from .. import paths
 from . import leaderboard
 
 SCHEMA = "pod-model-snapshot/v1"
+MAX_CACHE_BYTES = 4 * 1024 * 1024
+
+
+class _CacheTooLarge(OSError):
+    """The new cache record exceeds the limit used to read it."""
 
 
 def home() -> Path:
@@ -24,7 +29,7 @@ def home() -> Path:
 
 def _read(path: Path):
     try:
-        if path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024:
+        if path.is_symlink() or path.stat().st_size > MAX_CACHE_BYTES:
             return None
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -39,6 +44,8 @@ def _write(path: Path, value: dict) -> None:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             json.dump(value, stream, indent=1, sort_keys=True)
             stream.write("\n")
+        if os.path.getsize(temporary) > MAX_CACHE_BYTES:
+            raise _CacheTooLarge(f"The serialized {path.name} exceeds the {MAX_CACHE_BYTES}-byte cache limit")
         os.replace(temporary, path)
     except BaseException:
         try:
@@ -87,6 +94,8 @@ def refresh(fetch=None) -> dict:
                 "units": leaderboard.UNITS, "unknown_columns": parsed["unknown_columns"],
                 "absent_metrics": parsed["absent_metrics"], "diagnostics": parsed["diagnostics"],
                 "rows": parsed["rows"]})
+        except _CacheTooLarge as exc:
+            attempt["failure"] = str(exc)
         except OSError as exc:
             attempt["failure"] = f"The snapshot could not be written to {home()} ({type(exc).__name__})"
         else:

@@ -6,6 +6,7 @@ column Pod does not know is reported and not shown. A renamed column is therefor
 unknown column: no metric is ever read from a header it was not defined for.
 """
 
+from collections import Counter
 from html.parser import HTMLParser
 import http.client
 import io
@@ -155,10 +156,13 @@ class _Tables(HTMLParser):
         elif self._open and self._row is not None and tag in ("td", "th"):
             self._cell, self._size = [], 0
             self._creators, self._suffix, self._suffix_count, self._in_suffix = [], [], 0, 0
+            self._expandable = False
         elif self._cell is not None and not self._skip:
             attrs = dict(attrs)
             if tag == "img":
                 self._creators.append(clean(attrs.get("alt") or "", 120))
+            elif tag == "button" and attrs.get("aria-expanded") in ("true", "false"):
+                self._expandable = True
             elif tag == "span":
                 if {"font-normal", "text-neutral-500"} <= set(attrs.get("class", "").split()):
                     self._suffix_count += 1
@@ -183,6 +187,7 @@ class _Tables(HTMLParser):
             cell = _Cell(clean("".join(self._cell)))
             cell.creators, cell.suffix = self._creators, clean("".join(self._suffix))
             cell.suffix_count = self._suffix_count
+            cell.expandable = self._expandable
             self._row.append(cell)
             self._cell = None
         elif tag == "tr" and self._row is not None:
@@ -301,7 +306,7 @@ def _models_from_chunks(chunks):
         if '"initialModels"' not in line:
             continue
         number, _, body = line.partition(":")
-        if not re.fullmatch(r"[0-9a-f]+", number):
+        if not re.fullmatch(r"[0-9a-f]+", number) or not body.lstrip().startswith("["):
             continue
         try:
             pending = [json.loads(body, object_pairs_hook=_unique_fields)]
@@ -319,6 +324,8 @@ def _models_from_chunks(chunks):
                     pending.append(props["children"])
             else:
                 pending.extend(node)
+    if not found:
+        return None
     if len(found) != 1 or not isinstance(found[0], list) or not 0 < len(found[0]) <= MAX_ROWS:
         raise RefreshError("The page does not contain one complete grouped leaderboard")
     return found[0]
@@ -394,13 +401,13 @@ def _read_profile_metrics(model, row, supplied):
     return unread
 
 
-def _profile_rows(chunks, visible):
+def _profile_rows(models, visible, expandable):
     visible_by_name = {(row["creator"], row["name"]): row for row in visible}
     if len(visible_by_name) != len(visible):
         raise RefreshError("The visible leaderboard repeats a profile identity")
     rows, seen, matched, supplied = [], set(), set(), set()
     unread = 0
-    for model in _models_from_chunks(chunks):
+    for model in models:
         row = _profile_identity(model)
         identity = (row["creator"], row["release"], row["profile"])
         if identity in seen:
@@ -419,6 +426,10 @@ def _profile_rows(chunks, visible):
         rows.append(row)
     if visible_by_name.keys() != matched:
         raise RefreshError("The grouped leaderboard is missing a visible profile")
+    counts = Counter((creator, release) for creator, release, _ in seen)
+    for row in rows:
+        if (row["creator"], row["name"]) in expandable and counts[row["creator"], row["release"]] < 2:
+            raise RefreshError("An expandable release is missing its additional profiles")
     absent = sorted(UNITS.keys() - supplied - {"intelligence_index", "cost_per_task_usd"})
     return rows, absent, unread
 
@@ -464,7 +475,7 @@ def parse(text: str) -> dict:
     body = table[header + 1:]
     if not body:
         raise RefreshError("Leaderboard has no rows")
-    rows, unread = [], 0
+    rows, unread, expandable = [], 0, set()
     for number, cells in enumerate(body, 1):
         if len(cells) != len(keys):
             raise RefreshError(f"Leaderboard row {number} has the wrong number of cells")
@@ -472,6 +483,8 @@ def parse(text: str) -> dict:
                          (cells[columns["name"]], cells[columns["creator"]]))
         if not name or not creator or len(name) > 120:
             raise RefreshError(f"Leaderboard row {number} has no usable model or creator name")
+        if cells[columns["name"]].expandable:
+            expandable.add((creator, name))
         score = cells[columns["intelligence_index"]]
         estimated = score.endswith("*")
         try:
@@ -488,8 +501,11 @@ def parse(text: str) -> dict:
                 except ValueError:
                     unread += 1     # shown as unavailable and counted, never guessed
         rows.append(row)
-    if parser.chunks:
-        rows, absent, unread = _profile_rows(parser.chunks, rows)
+    models = _models_from_chunks(parser.chunks)
+    if models is not None:
+        rows, absent, unread = _profile_rows(models, rows, expandable)
+    elif expandable:
+        raise RefreshError("The expandable leaderboard is missing its grouped profile data")
     methodology = _methodology(text)
     diagnostics = []
     if unknown:

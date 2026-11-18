@@ -11,6 +11,27 @@ from tests.models.support import ModelCase, ROUTES, current_page, live_page, pag
 
 
 class RefreshTests(ModelCase):
+    def test_read_and_replace_use_the_same_serialized_cache_limit(self):
+        source = page().replace("GPT-6.1 Sol", "Café")
+        self.assertTrue(self.refresh_from(source)["ok"])
+        path = snapshot.home() / "snapshot.json"
+        size = path.stat().st_size
+        with patch.object(snapshot, "MAX_CACHE_BYTES", size, create=True):
+            self.assertTrue(self.refresh_from(source)["ok"])
+            kept = path.read_bytes()
+            self.assertEqual(len(kept), size)
+            self.assertEqual(snapshot.load()["rows"][1]["name"], "Café (high)")
+
+            attempt = self.refresh_from(source.replace("Café", "Cafés"))
+            self.assertFalse(attempt["ok"])
+            self.assertIn("cache limit", attempt["failure"])
+            self.assertEqual(snapshot.last_attempt(), attempt)
+            self.assertEqual(path.read_bytes(), kept)
+            self.assertIsNotNone(snapshot.load())
+
+            path.write_bytes(kept + b" ")
+            self.assertIsNone(snapshot.load())
+
     def test_current_refresh_fetches_once_preserves_preferences_and_last_good_on_failure(self):
         preferences = ROUTES.replace("preferred: null", "preferred: codex/gpt-6.1-sol/high").replace(
             "pinned: null", "pinned: codex/gpt-6.1-sol/high")

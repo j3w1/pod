@@ -217,6 +217,24 @@ class PublishedProfileTests(unittest.TestCase):
         with self.assertRaises(leaderboard.RefreshError):
             leaderboard.parse(incomplete)
 
+    def test_explicitly_expandable_models_require_the_grouped_data(self):
+        table = self.source.split("</table>", 1)[0] + "</table>"
+        for tail in ("", '<script>self.__next_f.push([1,"0:T5,title"])</script>'):
+            with self.subTest(tail=tail), self.assertRaises(leaderboard.RefreshError):
+                leaderboard.parse(table + tail)
+
+    def test_each_collapsed_release_has_more_than_its_visible_profile(self):
+        incomplete = "\n".join(line for line in self.source.splitlines() if "GPT-6.2 Astra (Xhigh)" not in line)
+        with self.assertRaises(leaderboard.RefreshError):
+            leaderboard.parse(incomplete)
+
+    def test_unrelated_flight_records_on_a_legacy_table_leave_its_rows_readable(self):
+        unrelated = r'<script>self.__next_f.push([1,"1:Tf,\"initialModels\"\n2:[\"$\",\"div\",null,{}]\n"])</script>'
+        other_table = '<table><tr><td><button aria-expanded="false">Menu</button></td></tr></table>'
+        for legacy in (page(), current_page()):
+            with self.subTest(size=len(legacy)):
+                self.assertEqual(leaderboard.parse(other_table + legacy + unrelated), leaderboard.parse(legacy))
+
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
