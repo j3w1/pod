@@ -4,7 +4,7 @@ A line is a list of (text, style) segments. Styles are names; only the workspace
 colours, and every state is also a word, so nothing depends on colour.
 """
 
-from . import registry, view
+from . import leaderboard, registry, view
 
 # (key, title, width, align). Narrow terminals drop columns from the end of DROP_ORDER first.
 COLUMNS = (("state", "State", 9, "<"), ("mark", "Pick", 5, "<"), ("name", "Model and effort", 0, "<"),
@@ -131,6 +131,42 @@ def guidance(row: view.Row) -> list[str]:
     return [suggestion, source]
 
 
+_SUPPLEMENTAL_LABELS = {
+    "first_token_s": "Time to first token",
+    "output_tokens_per_s": "Output speed",
+    "omniscience_net_score": "Omniscience",
+    "input_price_per_million_usd": "Input token price",
+    "output_price_per_million_usd": "Output token price",
+    "cache_hit_price_per_million_usd": "Cache hit price",
+    "cache_write_price_per_million_usd": "Cache write price",
+}
+
+
+def _supplemental_detail(observation: dict, units: dict) -> list[str]:
+    if "benchmark_scores" not in observation and not any(key in observation for key in _SUPPLEMENTAL_LABELS):
+        return []
+    lines, unavailable = [], []
+    for key, label in _SUPPLEMENTAL_LABELS.items():
+        value = observation.get(key)
+        if value is None:
+            unavailable.append(label)
+        else:
+            lines.append(f"  {label}: {value}  [{units.get(key, leaderboard.UNITS[key])}]")
+    scores = observation.get("benchmark_scores")
+    if isinstance(scores, dict) and scores:
+        unit = units.get("benchmark_scores", leaderboard.UNITS["benchmark_scores"])
+        lines.extend(f"  Benchmark {benchmark}: {score}  [{unit}]"
+                     for benchmark, score in sorted(scores.items()) if score is not None)
+        missing_scores = sum(score is None for score in scores.values())
+        if missing_scores:
+            unavailable.append(f"{missing_scores} of {len(scores)} benchmark scores")
+    else:
+        unavailable.append("benchmark scores")
+    if unavailable:
+        lines.append("  Supplemental measurements unavailable: " + ", ".join(unavailable))
+    return lines
+
+
 def detail(row: view.Row, shot: dict | None) -> list[str]:
     """The one detail panel: each state with its source, the measurements with units, and why."""
     units = (shot or {}).get("units") or {}
@@ -161,6 +197,10 @@ def detail(row: view.Row, shot: dict | None) -> list[str]:
     if row.value:
         lines.append("  " + view.VALUE_EXPLANATION)
     lines.append("  " + view.COST_STATEMENT)
+    observations = (shot or {}).get("rows", [])
+    index = row.public_index
+    if row.observed and index is not None and 0 <= index < len(observations):
+        lines.extend(_supplemental_detail(observations[index], units))
     return lines
 
 
