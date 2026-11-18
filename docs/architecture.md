@@ -210,8 +210,9 @@ the person changes it, through `pod models` or an editor. Coordination reads it 
   The current public response includes the collapsed table and structured records for its
   expanded profiles. Pod reads the records as bounded JSON, retaining the release, creator,
   raw profile qualifier, full-precision measurements and units. Task duration is converted
-  from seconds to minutes. An unreadable grouped payload or one missing a visible profile
-  fails the refresh. Earlier table-only responses are still supported.
+  from seconds to minutes. An explicitly expandable table requires complete grouped data.
+  Earlier standalone tables are still supported. Missing or unreadable grouped records and
+  snapshots exceeding the cache read limit fail the refresh before replacing the last good copy.
   Public profiles with different fallback qualifiers remain separate. An unpublished registry
   effort has no public measurements. Refresh leaves enabled routes, Preferred, Pin and merge
   authorization as the person configured them.
