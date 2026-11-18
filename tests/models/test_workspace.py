@@ -148,9 +148,42 @@ class DrawTests(WorkspaceCase):
             else:
                 divider = next(i for i, line in enumerate(lines) if line.startswith("─"))
                 pane = lines[divider + 1:]
-            self.assertEqual(pane[0], "Claude Fable 5.2 (max)")
+            self.assertEqual(pane[0], "Claude Fable 5.2 (max with fallback)")
             self.assertIn("fallback", " ".join(pane).casefold())
             self.assertIn(table.guidance(space.current)[0].split(".")[0][:25], " ".join(pane))
+
+    def test_cached_fallback_is_inspectable_separately_from_the_ordinary_route(self):
+        self.refresh_from(current_page())
+        space = workspace.Workspace(refresh=lambda: self.fail("opening the cache fetched the source"))
+        self.assertEqual((space.current.name, space.current.route, space.current.metrics["intelligence_index"]),
+                         ("Claude Fable 5.2 (max with fallback)", None, 65))
+        space.handle("enter")
+        before = text(space.lines(40, 12))
+        self.assertIn("[] scroll · Claude Fable 5.2 (max with fallback)", " ".join(before))
+        space.handle("]")
+        self.assertNotEqual(before, text(space.lines(40, 12)))
+        space.handle("enter")
+        space.handle(" ")
+        self.assertEqual(self.target.read_text(), ROUTES)
+        space.handle("left")
+        self.assertEqual(space.current.route, "claude/claude-fable-5-2/max")
+        self.assertFalse(space.current.observed)
+        self.assertIsNone(space.current.metrics["intelligence_index"])
+
+    def test_first_answer_latency_uses_its_own_label_and_public_selection_survives_reordering(self):
+        self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
+        space = workspace.Workspace()
+        space.handle("down")
+        space.handle("down")
+        self.assertEqual(space.current.name, "Qwen4 Max")
+        inspector = "\n".join(text(space.lines(200, 50)))
+        self.assertIn("155.4 s to first answer token", inspector)
+        shot = snapshot.load()
+        shot["rows"].reverse()
+        with patch.object(snapshot, "load", return_value=shot):
+            space.reload()
+        self.assertEqual(space.current.name, "Qwen4 Max")
+        self.assertEqual(space.current.release, "qwen4-max")
 
     def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
         self.refresh_from(current_page())
@@ -231,6 +264,7 @@ class DrawTests(WorkspaceCase):
     def test_every_wrapped_detail_line_can_be_read_in_order(self):
         self.refresh_from(current_page())
         space = workspace.Workspace()
+        space.handle("down")  # Astra's detail title fits the 40-column scrolling fixture.
         space.handle("enter")
         expected = [part for item in table.detail(space.current, space.view.snapshot)[1:]
                     for part in textwrap.wrap(item.strip(), 39)]

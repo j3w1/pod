@@ -36,7 +36,7 @@ class Workspace:
 
     def reload(self, keep=None) -> None:
         self.models = registry.load()
-        self.view = view.build(models=self.models)
+        self.view = view.build(models=self.models, separate_fallback=True)
         path = self.view.preferences.path
         self.raw = path.read_bytes() if self.view.preferences.status == "ok" else b""
         self._select(keep)
@@ -62,7 +62,11 @@ class Workspace:
 
     @staticmethod
     def _identity(row):
-        return row.route or (row.provider, row.release, row.name, row.public_index)
+        if row.route:
+            return row.route
+        if row.release:
+            return (row.provider, row.release, row.profile)
+        return (row.provider, row.name, row.public_index)
 
     def profiles(self):
         def order(i):
@@ -248,7 +252,7 @@ class Workspace:
         if unmeasured:
             lines.extend((part, "dim") for part in textwrap.wrap("Unpublished: " + ", ".join(unmeasured), width))
         other = [cells["time"] + " min/task" if cells["time"] != table.UNAVAILABLE else "",
-                 cells["first"] + " s to first token" if cells["first"] != table.UNAVAILABLE else "",
+                 cells["first"] + " s to first answer token" if cells["first"] != table.UNAVAILABLE else "",
                  cells["context"] + " context" if cells["context"] != table.UNAVAILABLE else ""]
         summary = " · ".join(item for item in other if item)
         if summary:
@@ -276,8 +280,8 @@ class Workspace:
             else:
                 title = "[] scroll · " + self.current.name
                 items = table.detail(self.current, self.view.snapshot)[1:]
-            top.append(line(title, "head"))
-            footer = line("↑↓ scroll · ? back · q quit" if self.help else "/ search · Enter back · [] scroll · q quit",
+            top.extend(line(part, "head") for part in textwrap.wrap(title, width))
+            footer = line("↑↓ scroll · ? back · q quit" if self.help else "/ search · Enter back · [] scroll · q",
                           "head")
             wrapped = [part for item in items for part in textwrap.wrap(item.strip(), width)]
             room = max(1, height - len(top) - 1)
