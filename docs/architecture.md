@@ -59,6 +59,12 @@ Nothing about applicability is declared (`skills/pod/proof.py`).
 - Finding locations `P:LINE` and `P:LINE:COL` match the unique file `P` in the original reviewed
   tree; a literal tracked filename takes precedence. Unknown or ambiguous locations stay open
   and prevent that review from covering paths. Recorded locations remain unchanged.
+- Use `/pr-description` for a finding on the pull request body. A full review includes the body
+  when GitHub shows an open pull request for the commit and target. Use `--paths /pr-description`
+  to review just the body. Pod records its pull request number and exact text digest when the
+  reviewer confirms the digest from the packet's read command. A correction on the same pull
+  request clears the finding while GitHub still returns the corrected text. A later edit or an
+  unavailable body leaves the finding open.
 - Review dispatch includes required finding paths changed since their original review, within
   the requested scope, even when their correction leaves no net diff against the target.
 - A review Orca did not report as completed keeps its findings, covers nothing and closes

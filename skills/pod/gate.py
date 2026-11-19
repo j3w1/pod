@@ -83,7 +83,9 @@ def evaluate(root: Path, state: State, *, commit: str | None = None, remote: boo
         if cover["uncovered"]:
             shown = ", ".join(cover["uncovered"][:8]) + (f" and {len(cover['uncovered']) - 8} more" if len(cover["uncovered"]) > 8 else "")
             needs.append(f"an independent passing review of {len(cover['uncovered'])} changed paths: {shown}")
-    for finding in proof.open_required(root, state, candidate):
+    description = github.description(request)
+    verdict["open_findings"] = proof.open_required(root, state, candidate, description=description)
+    for finding in verdict["open_findings"]:
         needs.append(f"finding {finding['id']} resolved by a review that raises nothing required on the corrected "
                      f"{finding['path'] or 'paths it covers'}, or waived")
     # 4. Every criterion that can be proved before the merge.

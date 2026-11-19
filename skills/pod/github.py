@@ -4,6 +4,7 @@ Every outcome reported here was read from GitHub. A command that fails or cannot
 yields None or a refusal, never an assumed result.
 """
 
+import hashlib
 import json
 import subprocess
 
@@ -42,8 +43,15 @@ def issue(repository: str, number: int) -> dict:
 def pull_request(repository: str, selector: str) -> dict | None:
     """The pull request by number or head branch, or None when there is none or it cannot be read."""
     value, _ = _json("pr", "view", str(selector), "--repo", repository, "--json",
-                     "number,state,isDraft,headRefOid,headRefName,baseRefName,mergeCommit,mergedAt,mergeStateStatus,url")
+                     "number,state,isDraft,headRefOid,headRefName,baseRefName,mergeCommit,mergedAt,mergeStateStatus,url,body")
     return value
+
+
+def description(request: dict | None) -> dict | None:
+    """Identify the exact body GitHub returned, including an empty one, without keeping its text."""
+    if request and isinstance(request.get("body"), str) and type(request.get("number")) is int:
+        return {"pr": request["number"], "digest": hashlib.sha256(request["body"].encode()).hexdigest()}
+    return None
 
 
 def checks(repository: str, number: int, required: list[str] | None = None) -> dict:

@@ -15,16 +15,22 @@ from .errors import PodError
 from .state import State
 
 
+PR_DESCRIPTION = "/pr-description"
+
+
 def checks(state: State, tree: str) -> list[dict]:
     return [fact for fact in state.of("check") if fact.get("tree") == tree]
 
 
 def finding_paths(cwd: Path, review: dict) -> dict:
     """Resolve locations in their original reviewed tree without changing recorded evidence."""
-    options = {}
+    options, result = {}, {}
     for finding in review.get("findings", []):
         name = finding.get("path")
         if not name:
+            continue
+        if name == PR_DESCRIPTION:
+            result[name] = name if review.get("description") else None
             continue
         options[name] = {name}
         for count in (1, 2):
@@ -34,8 +40,7 @@ def finding_paths(cwd: Path, review: dict) -> dict:
     try:
         blobs = gitio.blobs(cwd, review["commit"], list({p for names in options.values() for p in names}))
     except PodError:
-        return dict.fromkeys(options)  # an unavailable original tree proves no path identity
-    result = {}
+        return {**result, **dict.fromkeys(options)}  # an unavailable original tree proves no Git path identity
     for name, names in options.items():
         matches = [p for p in names if blobs[p] is not None]
         if blobs[name] is not None or len(names) == 1:
@@ -61,7 +66,7 @@ def _clean(review: dict, name: str, locations: dict) -> bool:
     return review["verdict"] == "pass" or bool(required)
 
 
-def findings(cwd: Path, state: State, candidate: str) -> list[dict]:
+def findings(cwd: Path, state: State, candidate: str, *, description: dict | None = None) -> list[dict]:
     """Every finding with whether it is open for this candidate.
 
     A finding is closed by a later completed review, from a worker that changed nothing, that
@@ -77,10 +82,17 @@ def findings(cwd: Path, state: State, candidate: str) -> list[dict]:
     for review in reviews:
         later = [other for other in reviews if other["n"] > review["n"] and not other.get("carried")]
         for finding in review.get("findings", []):
-            wanted = [locations[review["n"]][finding["path"]]] if finding.get("path") else review["paths"]
-            closing = next((other for other in later if set(wanted) <= set(other["paths"])
-                            and all(_clean(other, name, locations) for name in wanted)
-                            and _corrected(cwd, review["commit"], other["commit"], wanted, candidate, now)), None)
+            if finding.get("path") == PR_DESCRIPTION:
+                original = review.get("description")
+                closing = next((other for other in later if description and original
+                                and original["pr"] == description["pr"] and original != description
+                                and other.get("description") == description
+                                and _clean(other, PR_DESCRIPTION, locations)), None)
+            else:
+                wanted = [locations[review["n"]][finding["path"]]] if finding.get("path") else review["paths"]
+                closing = next((other for other in later if set(wanted) <= set(other["paths"])
+                                and all(_clean(other, name, locations) for name in wanted)
+                                and _corrected(cwd, review["commit"], other["commit"], wanted, candidate, now)), None)
             closed = (f"waived in entry {waived[finding['id']]['n']}" if finding["id"] in waived
                       else f"passed in entry {closing['n']}" if closing else None)
             rows.append({**finding, "review": review["n"], "open": closed is None, "closed": closed})
@@ -99,8 +111,8 @@ def _corrected(cwd: Path, raised: str, passed: str, names: list[str], candidate:
         return False
 
 
-def open_required(cwd: Path, state: State, candidate: str) -> list[dict]:
-    return [row for row in findings(cwd, state, candidate) if row["open"] and row.get("required")]
+def open_required(cwd: Path, state: State, candidate: str, *, description: dict | None = None) -> list[dict]:
+    return [row for row in findings(cwd, state, candidate, description=description) if row["open"] and row.get("required")]
 
 
 def coverage(cwd: Path, state: State, candidate: str, base: str, *, final_tree: bool = False) -> dict:

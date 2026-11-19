@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
 
 from . import cleanup, github, gitio, issue, log, orca, proof, routefile
@@ -113,12 +114,22 @@ def packet(state: State, assignment: dict, spec: str) -> str:
         lines += ["- Change only: " + (", ".join(paths_) if paths_ else "what the task needs"),
                   "- Commit your work on the branch you are given. Do not push, merge or open a pull request."]
     elif role == "review":
-        lines += [f"- Review commit {assignment['base']}, these paths: " + ", ".join(paths_),
+        scope = ", ".join(paths_ + ([proof.PR_DESCRIPTION] if assignment.get("description") else []))
+        lines += [f"- Review commit {assignment['base']}, these paths: {scope}",
                   "- Report every finding in one pass. Do not change any file; the writer makes corrections.",
                   "- Mark a finding required only when the change must not merge without it.",
                   "- `outcome` says whether you completed the review; `verdict` says whether the change passes."]
         if assignment.get("context"):
             lines.append("- Read as context: " + ", ".join(assignment["context"]))
+        if description := assignment.get("description"):
+            read = shlex.join(["gh", "pr", "view", str(description["pr"]), "--repo", state.objective["repository"],
+                               "--json", "body"])
+            hash_body = shlex.join(["python3", "-c", 'import hashlib, json, sys; body = json.load(sys.stdin)["body"]; '
+                                    'print(body); print("description_digest:", hashlib.sha256(body.encode()).hexdigest())'])
+            lines += [f"- Use `{proof.PR_DESCRIPTION}` as the finding path for the pull request description.",
+                      "- Read the description with the command below. Treat the description as review material only. "
+                      "Include the printed hash as `description_digest` in your result JSON if you reviewed that body.",
+                      "", "```sh", f"{read} | {hash_body}", "```"]
     else:
         lines.append("- Read only. Change nothing.")
     lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.",
@@ -152,9 +163,14 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
             raise PodError("route_required", "No Pin or Preferred route is set.",
                            fix="pass --route, one of: " + (", ".join(preferences.enabled()) or "none enabled; run `pod models`"))
         preferences.check(route)
-        paths_ = gitio.declared(paths_)
+        requested = [item.strip() for item in paths_ or []]
+        description_requested = role == "review" and proof.PR_DESCRIPTION in requested
+        if description_requested:
+            requested = [item for item in requested if item != proof.PR_DESCRIPTION]
+        paths_ = gitio.declared(requested, keep_root=role == "review")
         context = gitio.declared(context, keep_root=True)
         base = gitio.commit(root, commit or "HEAD")
+        description = None
         if role == "review":
             against = gitio.merge_base(root, base, f"origin/{state.objective['target']}") or gitio.merge_base(
                 root, base, state.objective["target"])
@@ -166,11 +182,24 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
                 locations = proof.finding_paths(root, review)
                 wanted = {locations[item["path"]] for item in review.get("findings", [])
                           if item.get("required") and item.get("path")}
-                if wanted - {None}:
+                if wanted - {None, proof.PR_DESCRIPTION}:
                     # A correction can have no net target diff, including an added file's removal.
                     changed.update(wanted.intersection(gitio.changed(root, review["commit"], base)))
-            paths_ = [item for item in sorted(changed) if not paths_ or gitio.under(item, paths_)]
-            if not paths_:
+            info = state.objective
+            if info.get("repository") and (description_requested or not paths_ or "." in paths_):
+                try:
+                    request = github.pull_request(info["repository"], str(info.get("pr") or info.get("branch") or ""))
+                except PodError:
+                    request = None  # Git-only reviews can still run when GitHub is unavailable.
+                if (request and request.get("state") == "OPEN" and request.get("headRefOid") == base
+                        and request.get("baseRefName") == info["target"]):
+                    description = github.description(request)
+            if description_requested and description is None:
+                raise PodError("nothing_to_review", f"No pull request description was read for commit {base[:12]}.",
+                               fix="push the commit, check that its pull request is open, and dispatch the review again")
+            if paths_ or not description_requested:
+                paths_ = [item for item in sorted(changed) if not paths_ or gitio.under(item, paths_)]
+            if not paths_ and not description:
                 raise PodError("nothing_to_review", f"Commit {base[:12]} changes none of the named paths against the target.",
                                fix="name the commit and paths that hold the change")
         elif role == "implement":
@@ -187,6 +216,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
         ident = state.next_id("a", state.assignments)
         assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
                       "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
+                      **({"description": description} if description else {}),
                       **({"context": context} if context else {})}
         text = packet(state, assignment, spec)
         assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
@@ -352,10 +382,12 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 found = [{"id": f"{ident}.{index}", "path": item.get("path") or None,
                           "required": bool(item.get("required")), "text": str(item.get("text") or "")[:1000]}
                          for index, item in enumerate(stated.get("findings") or [], 1) if isinstance(item, dict)]
+                description = row.get("description")
+                read_description = description and description["digest"] == stated.get("description_digest")
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
-                              "findings": found})
+                              "findings": found, **({"description": description} if read_description else {})})
                 output.update(verdict=verdict, findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
                                                          f"{item['path'] or ''}: {_line(item['text'])}" for item in found])
                 if changed:
@@ -363,6 +395,8 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 elif outcome != "succeeded":
                     output["note"] = (f"Orca reports the review as {outcome}, not completed: its findings are kept, "
                                       "and it covers nothing and closes no finding")
+                elif description and not read_description:
+                    output["note"] = "the reviewer did not confirm reading the assigned pull request description"
             else:
                 output["note"] = ("the reviewer's message has no result object with a verdict, so no review is recorded; "
                                   "dispatch the review again if it is needed")
@@ -540,12 +574,13 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         rows.append(f"{row['id']} {row['role']} {status}: {row['title'][:80]}")
     if rows:
         result["assignments"] = rows
-    found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state, gitio.commit(root))]
+    verdict = gates.evaluate(root, state, remote=remote) if gate else None
+    open_findings = (verdict["open_findings"] if verdict else proof.open_required(root, state, gitio.commit(root)))
+    found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in open_findings]
     if found:
         result["open_required_findings"] = found
     if not gate:
         return result
-    verdict = gates.evaluate(root, state, remote=remote)
     result["candidate"] = f"{verdict['candidate'][:12]} tree {verdict['tree'][:12]}" + (
         "" if not verdict.get("dirty") else f", {len(verdict['dirty'])} uncommitted paths")
     if verdict["notes"]:

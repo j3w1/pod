@@ -1,4 +1,6 @@
+import hashlib
 import json
+import subprocess
 
 from pod import commands, gate
 from tests.core.support import CoreCase, ROUTES
@@ -82,6 +84,64 @@ class GateTests(GateCase):
         self.review("fail", [{"path": "src/a.py", "required": True, "text": "wrong"}])
         self.pull_request()
         self.assertTrue(any("finding a2.1" in need for need in self.needs()))
+
+    def test_description_finding_requires_a_review_of_the_current_corrected_body(self):
+        self.implement({"src/a.py": "a\n"})
+        self.pull_request()
+        commands.record(self.repo, None, met=["c1", "c2"], why="fixture criteria observed")
+        location = "/pr-description"
+        bad = "Missing rationale.\n"
+        fixed = "The rationale explains the change.\r\n"
+
+        def set_body(body):
+            requests = self.gh()["prs"]
+            requests["7"]["body"] = body
+            self.set_gh(prs=requests)
+
+        def start(paths=None):
+            return commands.dispatch(self.repo, None, role="review", title="description", spec="Read the changes.",
+                                     paths_=paths, route="codex/sol/high")
+
+        def finish(review, body, findings=()):
+            self.finish(review["task"], {"outcome": "succeeded", "verdict": "fail" if findings else "pass",
+                                         "findings": list(findings),
+                                         "description_digest": hashlib.sha256(body.encode()).hexdigest()})
+            commands.accept(self.repo, None, review["assignment"])
+
+        set_body(bad)
+        original = start()
+        finish(original, bad, [{"path": location, "required": True, "text": "Explain the rationale."}])
+        needs = self.needs()
+        self.assertTrue(any("finding a2.1" in need for need in needs))
+        self.assertFalse(any("independent passing review" in need for need in needs))
+
+        finish(start([location]), bad)
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))
+        set_body(fixed)
+        self.review("pass", paths_=["src/a.py"])
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))
+
+        correction = start([location])
+        self.assertIn(location, self.orca()["tasks"][correction["task"]]["spec"])
+        set_body(fixed + " ")
+        finish(correction, fixed + " ")   # Saw a different body than the one assigned.
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))
+
+        set_body(fixed)
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))
+        correction = start([location])
+        spec = self.orca()["tasks"][correction["task"]]["spec"]
+        read = spec.split("```sh\n", 1)[1].split("\n```", 1)[0]
+        out = subprocess.check_output(["sh", "-c", read], cwd=self.repo)
+        self.assertEqual(out, fixed.encode() + b"\ndescription_digest: " + hashlib.sha256(fixed.encode()).hexdigest().encode() + b"\n")
+        finish(correction, fixed)
+        self.assertTrue(gate.deliver(self.repo, None, check=True)["pass"])
+        self.assertNotIn("open_required_findings", commands.status(self.repo, None))
+        self.assertTrue(commands.status(self.repo, None, remote=False)["open_required_findings"])
+
+        set_body(fixed + " ")
+        self.assertTrue(any("finding a2.1" in need for need in self.needs()))
+        self.assertTrue(commands.status(self.repo, None)["open_required_findings"])
 
     def test_a_review_can_close_a_finding_on_a_file_added_then_deleted_in_the_pr(self):
         path = "tests/live/retry.mjs"
