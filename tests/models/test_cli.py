@@ -6,7 +6,7 @@ import sys
 from os import terminal_size
 from unittest.mock import patch
 
-from pod import routefile
+from pod import log, routefile
 from pod.models import cli, leaderboard
 from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live_page, page, without
 from tests.support import ROOT
@@ -63,6 +63,21 @@ class CliTests(CliCase):
         self.assertIn("enabled", out)
         self.assertNotIn("Gemini", out)
         self.assertNotIn("Gemini 4 Carbon (high)", self.run_cli("--all")[1])
+
+    def test_models_shows_the_recent_dispatch_split_and_unknown_fallback(self):
+        self.write_routes(ROUTES + "routing: balance\n")
+        target = log.path("repo", "objective")
+        with log.writer(target, create=True) as writer:
+            writer.append(
+                {"kind": "objective", "id": "objective"},
+                {"kind": "assignment", "id": "a1", "route": "claude/claude-opus-5-5/high"},
+                {"kind": "assignment", "id": "a1", "task": "task_1", "dispatch": "ctx_1"})
+        self.assertIn("Codex 0% · Claude 100%", self.run_cli("--plain")[1])
+        report = json.loads(self.run_cli("status", "--json")[1])["status"]["dispatch_balance"]
+        self.assertEqual(report["counts"], {"codex": 0, "claude": 1})
+        target.write_text("broken\n")
+        self.assertIn("using Preferred", self.run_cli("--plain")[1])
+        self.assertIsNone(json.loads(self.run_cli("--json")[1])["dispatch_balance"]["counts"])
 
     def test_narrow_plain_table_rounds_full_precision_indexes_and_keeps_the_estimate_marker(self):
         source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")

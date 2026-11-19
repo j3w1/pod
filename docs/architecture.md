@@ -181,10 +181,28 @@ No file means no rule. A file this version cannot read requires review and says 
 
 ## Preferences
 
-`<config home>/config.yaml` is the only authority for enabled routes, Preferred, Pin,
-`merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only
-the person changes it, through `pod models` or an editor. Coordination reads it with
-`skills/pod/routefile.py` and loads nothing else about models.
+`<config home>/config.yaml` is the authority for route preferences, `merge_authorization`
+(`person` by default, or `coordinator`) and the verifier command. Only the person changes it,
+through `pod models` or an editor. Coordination reads it with `skills/pod/routefile.py`.
+
+- `routing` defaults to `preferred`. Set `routing: balance` with `pod config edit` to choose
+  between enabled Codex and Claude routes. `codex_share` is an integer percentage from 1 to
+  99 and defaults to 50. Claude receives the rest. An explicit worker route or a Pin takes
+  precedence. Within the selected family, Pod uses Preferred if eligible, then the first
+  enabled route in file order. When only one family is eligible it receives automatic work.
+- The split comes from the last 20 confirmed Pod dispatches in the last seven days across this
+  Pod state directory. Effective routes are used when recorded. Pod compares the prospective
+  split after the next dispatch with the target and chooses the closer result. Preferred breaks
+  a tie. The split reflects dispatches, including explicit choices, and can temporarily differ
+  from the target after overrides, simultaneous choices or rounding. If history is unreadable
+  or exceeds the read budget, automatic selection falls back to the eligible Preferred route.
+  Provider quota and health checks are outside this rule.
+- `coordinator_routes` is an optional YAML list of exact `agent/model/effort` routes. With it,
+  a host may restrict coordinators to enabled coding routes and their allowed efforts. An
+  empty list excludes all routes. `pod config --coordinator --json` reports
+  `coordinator.eligible`, `coordinator.selected` and the selection `basis`. A Pin outside
+  the list yields no eligible route. The host owns the launch. Coordinator launches by CE Dev
+  are outside the measured split until the CE Dev pin follow-up.
 
 ## Models
 
@@ -225,6 +243,7 @@ the person changes it, through `pod models` or an editor. Coordination reads it 
   Enter opens scrollable details and sources, `/` searches, and `?` shows all shortcuts.
   Only explicit route edits change preferences. The plain table keeps its OpenAI and Opus
   selection. JSON diagnostics can include every provider with `--all`.
+  The header shows the recent Codex and Claude dispatch split and whether balance is enabled.
 - **High-value mark.** A cost is marked when no other routable route costs less while scoring
   no more than 2 index points lower, and its index is at or above the median of routable
   routes with both measurements. Rows with an estimated index or a fallback profile are left

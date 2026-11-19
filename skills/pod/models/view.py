@@ -15,7 +15,7 @@ import re
 
 from . import adapters, registry, snapshot
 from .leaderboard import METRICS
-from .. import routefile
+from .. import routefile, routing
 
 VALUE_TOLERANCE_POINTS = 2     # a cheaper route within this many index points beats the row
 VALUE_FLOOR_QUANTILE = 0.5     # the row's index must reach this quantile of routable routes
@@ -64,6 +64,7 @@ class View:
     attempt: dict | None
     preferences: routefile.Preferences
     providers: list                  # providers the registry routes, in registry order
+    dispatch_balance: dict | None = None
 
     def header(self) -> list[str]:
         """Always the snapshot's age and the last failure."""
@@ -84,6 +85,17 @@ class View:
                          "nothing can be changed here until it is corrected with `pod config edit`.")
         elif self.preferences.status == "absent":
             lines.append("No preference file yet: no route is enabled. Enabling one here creates it.")
+        if self.dispatch_balance is not None:
+            counts = self.dispatch_balance["counts"]
+            mode = "balance on" if self.preferences.routing == "balance" else "balance off"
+            if counts is None:
+                fallback = ", using Preferred when available" if mode == "balance on" and not self.preferences.pinned else ""
+                lines.append(f"Dispatch split unavailable ({mode}{fallback}).")
+            elif total := sum(counts.values()):
+                shares = " · ".join(f"{family.title()} {count / total:.0%}" for family, count in counts.items())
+                lines.append(f"Last {total} dispatches · {shares} · {mode}")
+            else:
+                lines.append(f"No recent Codex or Claude dispatches · {mode}")
         return lines
 
 
@@ -229,7 +241,12 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
                                 reason=f"known to the installed {agent}; not in the shipped registry"))
     mark_value(rows)
     providers = list(dict.fromkeys(model.provider for model in models))
-    return View(rows, shot, attempt, preferences, providers)
+    dispatch_balance = None
+    if preferences.status == "ok":
+        recent = routing.history()
+        dispatch_balance = {"rule": preferences.routing, "codex_target_percent": preferences.codex_share,
+                            "counts": None if recent is None else {family: recent.count(family) for family in routing.FAMILIES}}
+    return View(rows, shot, attempt, preferences, providers, dispatch_balance)
 
 
 def select(view: View, *, provider: str = "routed", search: str = "", sort: str = "index",

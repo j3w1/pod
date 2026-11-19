@@ -29,9 +29,17 @@ class Preferences:
     pinned: str | None = None
     merge_authorization: str = "person"
     authorization_verifier: list | None = None
+    routing: str = "preferred"
+    codex_share: int = 50
+    coordinator_routes: list[str] | None = None
 
     def enabled(self) -> list[str]:
         return [key for key, state in self.routes.items() if state == "enabled"]
+
+    def coordinator_eligible(self) -> list[str]:
+        return [route for route in self.enabled()
+                if (self.pinned is None or route == self.pinned)
+                and (self.coordinator_routes is None or route in self.coordinator_routes)]
 
     def check(self, route: str) -> None:
         """Refuse a route the person has not enabled, or any route but the Pin while one is set."""
@@ -91,9 +99,24 @@ def load(path: Path | None = None) -> Preferences:
                             or not command[0].startswith("/")):
                 raise ValueError("authorization_verifier must be an absolute command and up to 15 arguments")
             result.authorization_verifier = command or None
+        for name in ("routing", "codex_share"):
+            if name not in blocks:
+                continue
+            value = yamlsubset.scalar(blocks[name].value)
+            if name == "routing" and value not in ("preferred", "balance"):
+                raise ValueError("routing must be preferred or balance")
+            if name == "codex_share" and (type(value) is not int or not 1 <= value <= 99):
+                raise ValueError("codex_share must be an integer from 1 to 99")
+            setattr(result, name, value)
+        if "coordinator_routes" in blocks:
+            allowed = yamlsubset.sequence(blocks["coordinator_routes"])
+            if any(not isinstance(route, str) or not ROUTE.fullmatch(route) for route in allowed):
+                raise ValueError("coordinator_routes must list agent/model/effort routes")
+            result.coordinator_routes = allowed
         result.routes, result.status = routes, "ok"
     except (OSError, UnicodeError, ValueError) as exc:
         result.status, result.problem = "invalid", str(exc)
         result.routes, result.preferred, result.pinned = {}, None, None
         result.merge_authorization, result.authorization_verifier = "person", None
+        result.routing, result.codex_share, result.coordinator_routes = "preferred", 50, None
     return result

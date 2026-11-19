@@ -19,6 +19,8 @@ from . import paths
 from .errors import PodError
 
 NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,79}")
+RECENT_PATH_LIMIT = 8192
+RECENT_BYTE_LIMIT = 16 * 1024 * 1024
 
 
 def now() -> str:
@@ -51,11 +53,14 @@ def _entries(data: bytes) -> tuple[list[dict], int]:
     return entries, good
 
 
-def read(target: Path) -> list[dict]:
-    """Every entry, without taking the lock: the file only grows."""
+def read(target: Path, *, size: int | None = None) -> list[dict]:
+    """Complete entries, optionally from a previously sized snapshot of the file."""
     try:
-        return _entries(target.read_bytes())[0]
+        with target.open("rb") as stream:
+            return _entries(stream.read(-1 if size is None else size))[0]
     except FileNotFoundError:
+        if size is not None:
+            raise
         return []
 
 
@@ -108,3 +113,37 @@ def every() -> list[Path]:
     """Every objective log on this host."""
     home = paths.objectives_home()
     return sorted(home.glob("*/*.jsonl")) if home.is_dir() else []
+
+
+def recent_paths(cutoff: float):
+    """Yield paths and snapshot sizes within the recent history read budget."""
+    paths_left, bytes_left = RECENT_PATH_LIMIT, RECENT_BYTE_LIMIT
+    try:
+        repositories = os.scandir(paths.objectives_home())
+    except FileNotFoundError:
+        return
+    with repositories:
+        for repo in repositories:
+            paths_left -= 1
+            if paths_left < 0:
+                raise ValueError("too many objective paths")
+            if repo.is_symlink():
+                raise ValueError("objective directory is a symlink")
+            if not repo.is_dir(follow_symlinks=False):
+                continue
+            with os.scandir(repo.path) as objectives:
+                for target in objectives:
+                    paths_left -= 1
+                    if paths_left < 0:
+                        raise ValueError("too many objective paths")
+                    if not target.name.endswith(".jsonl"):
+                        continue
+                    if not target.is_file(follow_symlinks=False):
+                        raise ValueError("objective log is not a regular file")
+                    stat = target.stat()
+                    if stat.st_mtime < cutoff:
+                        continue
+                    if stat.st_size > bytes_left:
+                        raise ValueError("too much recent objective data")
+                    bytes_left -= stat.st_size
+                    yield Path(target.path), stat.st_size

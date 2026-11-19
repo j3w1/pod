@@ -1,6 +1,7 @@
 import os
+from unittest.mock import patch
 
-from pod import commands, orca
+from pod import commands, log, orca
 from tests.core.support import CoreCase, ROUTES
 
 
@@ -36,6 +37,36 @@ class DispatchTests(CoreCase):
     def test_without_a_pin_or_preferred_route_one_must_be_named(self):
         self.write_routes(ROUTES.replace("preferred: claude/opus/high", "preferred: null"))
         self.assertIn("claude/opus/high", self.refused("route_required", self.start).fix)
+
+    def test_opt_in_balance_reads_confirmed_dispatches_across_objectives(self):
+        self.start(paths_=["first"])
+        with log.writer(log.path("other-repository", "other-objective"), create=True) as writer:
+            writer.append(
+                {"kind": "objective", "id": "other-objective"},
+                {"kind": "assignment", "id": "a1", "route": "claude/opus/high"},
+                {"kind": "assignment", "id": "a1", "task": "task_other", "dispatch": "ctx_other"},
+                {"kind": "assignment", "id": "a2", "route": "codex/sol/high"},
+                {"kind": "assignment", "id": "a2", "dispatch": "ctx_failed", "void": True},
+                {"kind": "assignment", "id": "a3", "route": "codex/sol/high"})
+        self.assertEqual(self.start(paths_=["default"])["route"], "claude/opus/high")
+        self.write_routes(ROUTES + "routing: balance\n")
+        self.assertEqual(self.start(paths_=["second"])["route"], "codex/sol/high")
+        self.assertEqual(self.start(paths_=["explicit"], route="claude/opus/high")["route"], "claude/opus/high")
+        self.write_routes((ROUTES + "routing: balance\n").replace("pinned: null", "pinned: claude/opus/high"))
+        self.assertEqual(self.start(paths_=["pinned"])["route"], "claude/opus/high")
+
+    def test_unreadable_balance_history_uses_preferred(self):
+        damaged = log.path("other-repository", "damaged")
+        damaged.parent.mkdir(parents=True)
+        damaged.write_text("not a JSON record\n")
+        self.write_routes(ROUTES + "routing: balance\n")
+        self.assertEqual(self.start()["route"], "claude/opus/high")
+
+    def test_unavailable_balance_respects_the_log_read_budget(self):
+        self.write_routes(ROUTES + "routing: balance\n")
+        self.start(paths_=["first"])
+        with patch.object(log, "RECENT_BYTE_LIMIT", 1):
+            self.assertEqual(self.start(paths_=["second"])["route"], "claude/opus/high")
 
     def test_one_writer_per_overlapping_path_set_at_a_time(self):
         first = self.start(paths_=["src/app"])

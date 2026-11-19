@@ -46,7 +46,7 @@ def parser() -> argparse.ArgumentParser:
     one.add_argument("--title", help="short task title")
     one.add_argument("--spec", help="the task text")
     one.add_argument("--spec-file", metavar="PATH", help="read the task text from a file, or - for standard input")
-    one.add_argument("--route", metavar="AGENT/MODEL/EFFORT", help="default: the Pin, else the Preferred route")
+    one.add_argument("--route", metavar="AGENT/MODEL/EFFORT", help="default: Pin, then the configured routing rule")
     one.add_argument("--paths", type=_list, metavar="A,B", help="implement: the only paths it may change; review: limit the review")
     one.add_argument("--commit", help="review: the commit to review (default: HEAD)")
     one.add_argument("--context", type=_list, metavar="A,B", help="review: paths whose later change lapses this review")
@@ -96,7 +96,9 @@ def parser() -> argparse.ArgumentParser:
     one.add_argument("--why", required=True)
 
     one = command("config", "Show the personal preference file, or open it in your editor.", objective=False)
-    one.add_argument("action", nargs="?", choices=("edit",))
+    config_mode = one.add_mutually_exclusive_group()
+    config_mode.add_argument("action", nargs="?", choices=("edit",))
+    config_mode.add_argument("--coordinator", action="store_true", help="read the eligible and selected coordinator routes")
     sub.add_parser("models", help="model routes and public observations", add_help=False)
     command("doctor", "Read-only installation and capability diagnostics.", objective=False)
     sub.add_parser("update", help="update the installed bundle", add_help=False)
@@ -104,7 +106,7 @@ def parser() -> argparse.ArgumentParser:
     return top
 
 
-def _config(edit: bool) -> dict:
+def _config(edit: bool, coordinator: bool) -> dict:
     from . import paths, routefile
     target = paths.route_file()
     if edit:
@@ -113,16 +115,23 @@ def _config(edit: bool) -> dict:
             raise PodError("config_absent", f"There is no preference file at {target}.", fix="run `pod models` to create one")
         subprocess.run([*editor, str(target)], check=False)
     found = routefile.load(target)
-    return {"path": str(target), "status": found.status, **({"problem": found.problem} if found.problem else {}),
-            "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
-            "merge_authorization": found.merge_authorization,
-            "authorization_verifier": "configured" if found.authorization_verifier else None}
+    result = {"path": str(target), "status": found.status, **({"problem": found.problem} if found.problem else {}),
+              "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
+              "routing": found.routing, "codex_share": found.codex_share,
+              "merge_authorization": found.merge_authorization,
+              "authorization_verifier": "configured" if found.authorization_verifier else None}
+    if coordinator:
+        from . import routing
+        eligible = found.coordinator_eligible()
+        selected, basis = routing.choose(found, eligible)
+        result["coordinator"] = {"eligible": eligible, "selected": selected, "basis": basis}
+    return result
 
 
 def execute(args: argparse.Namespace, cwd: Path) -> dict:
     name = args.command
     if name == "config":
-        return _config(args.action == "edit")
+        return _config(args.action == "edit", args.coordinator)
     if name == "doctor":
         from . import maintenance
         return maintenance.doctor()

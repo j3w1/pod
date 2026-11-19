@@ -67,6 +67,7 @@ def _status(args) -> int:
                         "enabled": len(preferences.enabled()), "preferred": preferences.preferred,
                         "pinned": preferences.pinned},
         "rows_by_state": counts,
+        "dispatch_balance": model.dispatch_balance,
         "cache": str(snapshot.home())}
     if args.json:
         _emit({"status": report})
@@ -117,7 +118,8 @@ def main(argv: list[str]) -> int:
         model = view.build()
         rows = view.select(model, provider="all" if args.all else "routed")
         if args.json:
-            _emit({"header": model.header(), "rows": [view.as_json(row) for row in rows]})
+            _emit({"header": model.header(), "dispatch_balance": model.dispatch_balance,
+                   "rows": [view.as_json(row) for row in rows]})
         else:
             sys.stdout.write(table.plain(model, view.visible(rows), shutil.get_terminal_size((120, 24)).columns))
         return 0

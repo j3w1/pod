@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-from pod import routefile
+from pod import cli, log, routefile, routing
 from pod.errors import PodError
 from tests.support import PodCase, ROOT
 
@@ -46,6 +46,70 @@ class RouteFileTests(PodCase):
         before = (path.read_bytes(), path.stat().st_mtime_ns)
         routefile.load(path).check("codex/gpt-6.1-sol/high")
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+
+    def test_coordinator_selection_limits_enabled_routes_before_balancing(self):
+        text = """schema: pod/v2
+routing: balance
+routes:
+  codex/gpt-6.2-sol/high: enabled
+  codex/gpt-6-luna/high: enabled
+  claude/claude-opus-5-5/high: enabled
+  claude/claude-haiku-5-5/high: enabled
+preferred: codex/gpt-6.2-sol/high
+coordinator_routes:
+- codex/gpt-6.2-sol/high
+- claude/claude-opus-5-5/high
+"""
+        target = self.write_routes(text)
+        with log.writer(log.path("repo", "objective"), create=True) as writer:
+            writer.append(
+                {"kind": "objective", "id": "objective"},
+                {"kind": "assignment", "id": "a1", "route": "codex/gpt-6.2-sol/high"},
+                {"kind": "assignment", "id": "a1", "task": "task_1", "dispatch": "ctx_1"})
+        args = cli.parser().parse_args(["config", "--coordinator", "--json"])
+        result = cli.execute(args, self.tmp)
+        self.assertEqual(result["coordinator"]["eligible"],
+                         ["codex/gpt-6.2-sol/high", "claude/claude-opus-5-5/high"])
+        self.assertEqual(result["coordinator"]["selected"], "claude/claude-opus-5-5/high")
+        self.assertEqual(target.read_text(), text)
+        self.write_routes(text + "pinned: codex/gpt-6-luna/high\n")
+        blocked = cli.execute(args, self.tmp)["coordinator"]
+        self.assertEqual((blocked["eligible"], blocked["selected"]), ([], None))
+
+    def test_invalid_balance_configuration_fails_closed(self):
+        for setting in ("routing: on\n", "codex_share: true\n", "codex_share: 100\n",
+                        "coordinator_routes:\n- nonsense\n"):
+            with self.subTest(setting=setting):
+                self.assertEqual(routefile.load(self.write_routes(FULL + setting)).status, "invalid")
+
+    def test_balance_keeps_the_configured_share_when_the_window_rolls(self):
+        text = FULL.replace("max: disabled", "max: enabled") + "routing: balance\ncodex_share: 60\n"
+        preferences = routefile.load(self.write_routes(text))
+        target = log.path("repo", "objective")
+        with log.writer(target, create=True) as writer:
+            writer.append({"kind": "objective", "id": "objective"})
+            claude, codex = reversed(preferences.enabled())
+            for index, route in enumerate([codex, claude] + [codex] * 12 + [claude] * 7):
+                writer.append(
+                    {"kind": "assignment", "id": f"a{index}", "route": route},
+                    {"kind": "assignment", "id": f"a{index}", "task": f"task_{index}", "dispatch": f"ctx_{index}"})
+        self.assertEqual(routing.history(), ["claude"] + ["codex"] * 12 + ["claude"] * 7)
+        self.assertEqual(routing.choose(preferences, preferences.enabled()), (claude, "balance"))
+
+    def test_history_uses_current_confirmations_and_the_observed_effective_route(self):
+        target = log.path("repo", "objective")
+        with log.writer(target, create=True) as writer:
+            writer.append(
+                {"kind": "objective", "id": "objective"},
+                {"kind": "assignment", "id": "a1", "route": "codex/sol/high"},
+                {"kind": "assignment", "id": "a1", "task": "task_1", "dispatch": "ctx_1",
+                 "at": "2000-01-01T00:00:00Z"},
+                {"kind": "assignment", "id": "a2", "route": "codex/sol/high"},
+                {"kind": "assignment", "id": "a2", "task": "task_2", "dispatch": "ctx_2",
+                 "effective": "claude/opus/high"})
+        with target.open("ab") as stream:
+            stream.write(b'{"kind":')
+        self.assertEqual(routing.history(), ["claude"])
 
     def test_a_route_that_is_not_enabled_is_refused_with_the_enabled_ones(self):
         found = routefile.load(self.write_routes(FULL))

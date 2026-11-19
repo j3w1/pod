@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from . import cleanup, github, gitio, issue, log, orca, proof, routefile
+from . import cleanup, github, gitio, issue, log, orca, proof, routefile, routing
 from .errors import PodError
 from .state import ROLES, State, fold
 
@@ -147,7 +147,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
             raise PodError("dispatch_incomplete", "A dispatch needs a role, a title and the task text.",
                            fix="pass --role implement|review|investigate, --title and --spec or --spec-file")
         preferences = routefile.load()
-        route = route or preferences.pinned or preferences.preferred
+        route = route or routing.choose(preferences, preferences.enabled())[0]
         if not route:
             raise PodError("route_required", "No Pin or Preferred route is set.",
                            fix="pass --route, one of: " + (", ".join(preferences.enabled()) or "none enabled; run `pod models`"))

@@ -121,10 +121,15 @@ review by a worker that changed nothing.
 
 ## Routes and models
 
-Workers run only on routes the person enabled; the Pin, when set, is the only route used.
-`pod dispatch` uses the Pin, else the Preferred route, else asks you to name one of the enabled
-routes it lists. Choose by the task: its difficulty, risk and size. `pod models` is the
-person's workspace for comparing and enabling routes; do not change their preferences.
+Workers run only on routes the person enabled. A Pin, when set, is the only route used.
+`pod dispatch` uses an explicit route or the Pin first. For automatic selection it uses
+Preferred by default. If the person opts into `routing: balance`, Pod chooses between
+eligible Codex and Claude routes using recent dispatches and falls back to Preferred when
+the split is unavailable. With no default, name an enabled route suited to the task.
+`pod models` shows the split and lets the person compare and enable routes.
+`pod config --coordinator --json` reads the eligible coordinator routes and the selected
+route for a host to launch. The optional `coordinator_routes` allow-list restricts this read.
+Leave preference changes to the person.
 
 ## Document types
 
