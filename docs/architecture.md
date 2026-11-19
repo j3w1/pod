@@ -194,8 +194,9 @@ through `pod models` or an editor. Coordination reads it with `skills/pod/routef
   Pod state directory. Effective routes are used when recorded. Pod compares the prospective
   split after the next dispatch with the target and chooses the closer result. Preferred breaks
   a tie. The split reflects dispatches, including explicit choices, and can temporarily differ
-  from the target after overrides, simultaneous choices or rounding. If history is unreadable
-  or exceeds the read budget, automatic selection falls back to the eligible Preferred route.
+  from the target after overrides, simultaneous choices or rounding. The read budget is 8,192
+  filesystem entries and 16 MiB of recently modified logs. If history is unreadable or exceeds
+  either limit, automatic selection falls back to the eligible Preferred route.
   Provider quota and health checks are outside this rule.
 - `coordinator_routes` is an optional YAML list of exact `agent/model/effort` routes. With it,
   a host may restrict coordinators to enabled coding routes and their allowed efforts. An

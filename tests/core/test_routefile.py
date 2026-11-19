@@ -1,5 +1,8 @@
+from datetime import datetime, timedelta, timezone
+import os
 import subprocess
 import sys
+from unittest.mock import patch
 
 from pod import cli, log, routefile, routing
 from pod.errors import PodError
@@ -110,6 +113,91 @@ coordinator_routes:
         with target.open("ab") as stream:
             stream.write(b'{"kind":')
         self.assertEqual(routing.history(), ["claude"])
+
+    def test_history_excludes_a_ten_day_old_dispatch_in_a_recent_log(self):
+        old = datetime.now(timezone.utc) - timedelta(days=10)
+        target = log.path("repo", "objective")
+        with log.writer(target, create=True) as writer:
+            writer.append(
+                {"kind": "objective", "id": "objective"},
+                {"kind": "assignment", "id": "a1", "route": "codex/sol/high"},
+                {"kind": "assignment", "id": "a1", "task": "task_1", "dispatch": "ctx_1", "at": old.isoformat()})
+        self.assertEqual(routing.history(), [])
+
+    def test_history_skips_logs_untouched_for_more_than_a_week(self):
+        old = datetime.now(timezone.utc) - timedelta(days=10)
+        target = log.path("repo", "old")
+        target.parent.mkdir(parents=True)
+        target.write_text("unreadable\n")
+        os.utime(target, (old.timestamp(), old.timestamp()))
+        self.assertEqual(routing.history(), [])
+
+    def test_history_unavailable_when_enumeration_exceeds_the_path_budget(self):
+        with log.writer(log.path("repo", "objective"), create=True) as writer:
+            writer.append({"kind": "objective", "id": "objective"})
+        with patch.object(log, "RECENT_PATH_LIMIT", 1):
+            self.assertIsNone(routing.history())
+
+    def test_history_unavailable_with_a_symlinked_repository_or_log(self):
+        target = log.path("repo", "objective")
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        target.parent.parent.mkdir(parents=True)
+        target.parent.symlink_to(elsewhere, target_is_directory=True)
+        self.assertIsNone(routing.history())
+
+        target.parent.unlink()
+        target.parent.mkdir()
+        copied = elsewhere / "elsewhere.jsonl"
+        copied.touch()
+        target.symlink_to(copied)
+        self.assertIsNone(routing.history())
+
+    def test_dispatch_requires_confirmation_and_must_not_be_void_to_count(self):
+        intent = {"kind": "assignment", "id": "a1", "route": "codex/sol/high"}
+        confirmation = {"kind": "assignment", "id": "a1", "task": "task_1", "dispatch": "ctx_1"}
+        void = {"kind": "assignment", "id": "a1", "void": True}
+        target = log.path("repo", "objective")
+        with log.writer(target, create=True) as writer:
+            writer.append({"kind": "objective", "id": "objective"}, intent)
+            self.assertEqual(routing.history(), [])
+            writer.append(confirmation)
+            self.assertEqual(routing.history(), ["codex"])
+            writer.append(void)
+            self.assertEqual(routing.history(), [])
+
+    def test_balanced_ties_use_preferred_or_the_first_family(self):
+        text = FULL.replace("max: disabled", "max: enabled") + "routing: balance\n"
+        codex, claude = routefile.load(self.write_routes(text)).enabled()
+        for preferred, expected in ((claude, claude), ("null", codex)):
+            with self.subTest(preferred=preferred):
+                settings = routefile.load(self.write_routes(text.replace(f"preferred: {codex}", f"preferred: {preferred}")))
+                self.assertEqual(routing.choose(settings, settings.enabled()), (expected, "balance"))
+
+    def test_unreadable_history_falls_back_even_if_an_empty_sample_would_choose_differently(self):
+        text = FULL.replace("max: disabled", "max: enabled") + "routing: balance\ncodex_share: 20\n"
+        settings = routefile.load(self.write_routes(text))
+        codex, claude = settings.enabled()
+        self.assertEqual(routing.choose(settings, settings.enabled()), (claude, "balance"))
+        damaged = log.path("repo", "damaged")
+        damaged.parent.mkdir(parents=True)
+        damaged.write_text("unreadable\n")
+        args = cli.parser().parse_args(["config", "--coordinator", "--json"])
+        result = cli.execute(args, self.tmp)["coordinator"]
+        self.assertEqual((result["selected"], result["basis"]), (codex, "history_unavailable"))
+
+    def test_coordinator_default_pin_and_empty_allow_list(self):
+        args = cli.parser().parse_args(["config", "--coordinator", "--json"])
+        route = "codex/gpt-6.1-sol/high"
+        for text, eligible, selected, basis in (
+                (FULL, [route], route, "preferred"),
+                (FULL.replace("pinned: null", f"pinned: {route}") + f"coordinator_routes:\n- {route}\n",
+                 [route], route, "pin"),
+                (FULL + "coordinator_routes: []\n", [], None, "preferred")):
+            with self.subTest(basis=basis, eligible=eligible):
+                self.write_routes(text)
+                self.assertEqual(cli.execute(args, self.tmp)["coordinator"],
+                                 {"eligible": eligible, "selected": selected, "basis": basis})
 
     def test_a_route_that_is_not_enabled_is_refused_with_the_enabled_ones(self):
         found = routefile.load(self.write_routes(FULL))
