@@ -164,6 +164,13 @@ class DispatchTests(CoreCase):
         self.assertEqual(self.start()["route"], "claude/opus/high")
         self.assertEqual(self.start(role="investigate")["route"], "claude/opus/high")
 
+    def test_review_refusal_with_a_disallowed_pin_and_no_allowed_route_explains_both_changes(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES.replace("pinned: null", "pinned: claude/opus/high") + "review_agents: [other]\n")
+        refusal = self.refused("reviewer_agent_not_allowed", self.start_review)
+        self.assertIn("enable", refusal.fix)
+        self.assertIn("Pin", refusal.fix)
+
     def test_words_exception_is_written_on_the_initial_assignment(self):
         self.commit({"src/a.py": "a\n"})
         self.write_routes(ROUTES + "review_agents: [codex]\n")
@@ -196,6 +203,21 @@ class DispatchTests(CoreCase):
         args = cli.parser().parse_args(["dispatch", "--role", "review", "--title", "review", "--spec", "Review.",
                                        "--after", "a1", "--why", "The first worker could not launch."])
         self.assertEqual(cli.execute(args, self.repo)["assignment"], "a2")
+
+    def test_after_exception_cannot_use_a_later_dispatch_failure_on_the_same_task(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        prior = self.start_review(route="codex/sol/high")
+        native = self.orca()
+        native["tasks"][prior["task"]]["status"] = "failed"
+        first = native["workers"][prior["dispatch"]]
+        first.update(workerState="stopped", dispatchStatus="cancelled")
+        native["workers"]["ctx_retry"] = dict(first, dispatchId="ctx_retry", workerState="failed", dispatchStatus="failed")
+        self.set_orca(**native)
+        entries = self.entries("widget")
+        self.refused("review_exception_invalid", self.start_review, after=prior["assignment"], why="Try another agent.")
+        self.assertEqual(self.entries("widget"), entries)
+        self.assertEqual(self.orca()["starts"], 1)
 
     def test_after_exception_refuses_ineligible_prior_assignments_without_effects(self):
         self.commit({"src/a.py": "a\n"})

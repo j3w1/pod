@@ -142,11 +142,17 @@ def _failed_review(state: State, ident: str, base: str, agents: list[str]) -> bo
         return False
     if prior.get("void"):
         return True
-    if not prior.get("task"):
+    if not prior.get("dispatch") or not prior.get("task"):
         return False
-    task = orca.tasks(state.objective["run"]).get(prior["task"])
-    return bool(task and task["status"] == "failed"
-                and parse_result((task["report"] or {}).get("body")).get("verdict") not in ("pass", "fail"))
+    run = state.objective["run"]
+    task = orca.tasks(run).get(prior["task"])
+    if not task or task["status"] != "failed":
+        return False
+    if parse_result((task["report"] or {}).get("body")).get("verdict") in ("pass", "fail"):
+        return False
+    # A Task can outlive its Dispatch and later fail under a different worker.
+    return any(worker["dispatch"] == prior["dispatch"] and worker["task"] == prior["task"]
+               and worker["state"] == "failed" for worker in orca.workers(run))
 
 
 def _review_exception(state: State, preferences: routefile.Preferences, role: str, route: str, base: str,
@@ -159,8 +165,9 @@ def _review_exception(state: State, preferences: routefile.Preferences, role: st
             return None
         allowed = next((key for key in preferences.enabled() if key.partition("/")[0] in agents), None)
         fix = f"pass --route {allowed}" if allowed else "enable a route on an allowed agent in `pod models`"
-        if preferences.pinned and allowed:
-            fix = f"clear or change the Pin in `pod models`, then {fix}"
+        if preferences.pinned:
+            fix = (f"clear or change the Pin in `pod models`, then {fix}" if allowed
+                   else "enable a route on an allowed agent and clear or change the Pin in `pod models`")
         raise PodError("reviewer_agent_not_allowed", f"The review agent {agent} is outside review_agents.", fix=fix)
     if not disallowed:
         raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",

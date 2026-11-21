@@ -59,6 +59,12 @@ class RouteFileTests(PodCase):
                 self.assertEqual((found.status, found.enabled()), ("invalid", []))
                 self.assertIn("review_agents", found.problem)
 
+    def test_review_agents_rejects_a_misindented_block_member(self):
+        path = self.write_routes(FULL + "review_agents:\n  - codex\n    - claude\n")
+        found = routefile.load(path)
+        self.assertEqual((found.status, found.enabled()), ("invalid", []))
+        self.assertIn("review_agents", found.problem)
+
     def test_reading_never_writes_the_file(self):
         path = self.write_routes(FULL)
         before = (path.read_bytes(), path.stat().st_mtime_ns)

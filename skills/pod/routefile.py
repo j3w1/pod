@@ -62,6 +62,9 @@ def _review_agents(block: yamlsubset.Block) -> list[str]:
         items = value[1:-1].strip()
         agents = [yamlsubset.scalar(item) for item in items.removesuffix(",").split(",")] if items else []
     elif block.lines:
+        indents = {len(line) - len(line.lstrip(" ")) for _, line in block.lines}
+        if len(indents) != 1:
+            raise ValueError("review_agents list items must have the same indentation")
         agents = yamlsubset.sequence(block)
     else:
         raise ValueError("review_agents must be a list of agent names")
