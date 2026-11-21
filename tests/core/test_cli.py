@@ -72,6 +72,16 @@ class CliTests(CoreCase):
                          (0, "ok", ["claude/opus/high", "codex/sol/high"], "person"))
         self.assertEqual(paths.route_file().read_bytes(), before)
 
+    def test_config_json_shows_configured_and_absent_review_agents(self):
+        from pod import paths
+        original = paths.route_file().read_text()
+        for suffix, expected in (("", []), ("review_agents: [codex]\n", ["codex"])):
+            with self.subTest(expected=expected):
+                self.write_routes(original + suffix)
+                code, out, _ = self.run_pod("config", "--json")
+                self.assertEqual(code, 0)
+                self.assertEqual(json.loads(out)["review_agents"], expected)
+
     def test_the_coordinator_facing_surface_is_the_eight_commands(self):
         choices = cli.parser()._subparsers._group_actions[0].choices
         self.assertEqual(sorted(choices), sorted(["open", "dispatch", "accept", "record", "status", "deliver", "resume", "drop",
