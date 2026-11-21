@@ -118,7 +118,7 @@ def _config(edit: bool) -> dict:
     found = routefile.load(target)
     return {"path": str(target), "status": found.status, **({"problem": found.problem} if found.problem else {}),
             "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
-            "merge_authorization": found.merge_authorization,
+            "merge_authorization": found.merge_authorization, "review_agents": found.review_agents,
             "authorization_verifier": "configured" if found.authorization_verifier else None}
 
 
