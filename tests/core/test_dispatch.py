@@ -1,6 +1,6 @@
 import os
 
-from pod import commands, orca
+from pod import cli, commands, orca, state
 from tests.core.support import CoreCase, ROUTES
 
 
@@ -133,3 +133,137 @@ class DispatchTests(CoreCase):
         commands.drop(self.repo, None, why="stopped")
         self.refused("objective_closed", self.start)
         self.assertFalse(self.orca_file.exists())
+
+    def start_review(self, **options):
+        return self.start(role="review", title="review", **options)
+
+    def test_review_agents_absent_or_empty_leaves_route_selection_unchanged(self):
+        self.commit({"src/a.py": "a\n"})
+        self.assertEqual(self.start_review()["route"], "claude/opus/high")
+        self.write_routes(ROUTES + "review_agents: []\n")
+        self.assertEqual(self.start_review()["route"], "claude/opus/high")
+
+    def test_disallowed_review_route_refuses_before_any_write_or_worker_start(self):
+        self.commit({"src/a.py": "a\n"})
+        preferences = ROUTES + "review_agents: [codex]\n"
+        entries = self.entries("widget")
+        for source, config, options in (
+            ("explicit", preferences, {"route": "claude/opus/high"}),
+            ("pinned", preferences.replace("pinned: null", "pinned: claude/opus/high"), {}),
+            ("preferred", preferences, {}),
+        ):
+            with self.subTest(source=source):
+                self.write_routes(config)
+                refusal = self.refused("reviewer_agent_not_allowed", self.start_review, **options)
+                self.assertIn("codex/sol/high", refusal.fix)
+                self.assertEqual(self.entries("widget"), entries)
+                self.assertFalse(self.orca_file.exists())
+
+    def test_other_roles_can_still_use_agents_outside_the_review_list(self):
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        self.assertEqual(self.start()["route"], "claude/opus/high")
+        self.assertEqual(self.start(role="investigate")["route"], "claude/opus/high")
+
+    def test_review_refusal_with_a_disallowed_pin_and_no_allowed_route_explains_both_changes(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES.replace("pinned: null", "pinned: claude/opus/high") + "review_agents: [other]\n")
+        refusal = self.refused("reviewer_agent_not_allowed", self.start_review)
+        self.assertIn("enable", refusal.fix)
+        self.assertIn("Pin", refusal.fix)
+
+    def test_words_exception_is_written_on_the_initial_assignment(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        words = "Please use Claude for this review."
+        args = cli.parser().parse_args(["dispatch", "--role", "review", "--title", "review", "--spec", "Review.",
+                                       "--words", words])
+        started = cli.execute(args, self.repo)
+        initial = self.entries("widget")[-2]
+        self.assertEqual(initial["id"], started["assignment"])
+        self.assertEqual(initial["review_exception"], {"kind": "words", "words": words})
+        self.assertNotIn("dispatch", initial)
+
+    def test_after_exception_is_written_for_a_failed_allowed_review(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        prior = self.start_review(route="codex/sol/high")
+        self.finish(prior["task"], None, outcome="failed")
+        started = self.start_review(after=prior["assignment"], why="The first worker failed.")
+        initial = self.entries("widget")[-2]
+        self.assertEqual(initial["id"], started["assignment"])
+        self.assertEqual(initial["review_exception"], {"kind": "after", "after": prior["assignment"],
+                                                       "why": "The first worker failed."})
+
+    def test_after_exception_can_reference_a_void_allowed_review(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        self.set_orca(start_fails="Could not launch")
+        self.refused("start_failed", self.start_review, route="codex/sol/high")
+        self.set_orca(start_fails=None)
+        args = cli.parser().parse_args(["dispatch", "--role", "review", "--title", "review", "--spec", "Review.",
+                                       "--after", "a1", "--why", "The first worker could not launch."])
+        self.assertEqual(cli.execute(args, self.repo)["assignment"], "a2")
+
+    def test_after_exception_cannot_use_a_later_dispatch_failure_on_the_same_task(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        prior = self.start_review(route="codex/sol/high")
+        native = self.orca()
+        native["tasks"][prior["task"]]["status"] = "failed"
+        first = native["workers"][prior["dispatch"]]
+        first.update(workerState="stopped", dispatchStatus="cancelled")
+        native["workers"]["ctx_retry"] = dict(first, dispatchId="ctx_retry", workerState="failed", dispatchStatus="failed")
+        self.set_orca(**native)
+        entries = self.entries("widget")
+        self.refused("review_exception_invalid", self.start_review, after=prior["assignment"], why="Try another agent.")
+        self.assertEqual(self.entries("widget"), entries)
+        self.assertEqual(self.orca()["starts"], 1)
+
+    def test_after_exception_refuses_ineligible_prior_assignments_without_effects(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        different = self.start_review(route="codex/sol/high")
+        self.finish(different["task"], None, outcome="failed")
+        self.commit({"src/a.py": "b\n"})
+        completed = self.start_review(route="codex/sol/high")
+        self.finish(completed["task"], {"outcome": "succeeded", "verdict": "pass"})
+        failed_with_review = self.start_review(route="codex/sol/high")
+        self.finish(failed_with_review["task"], {"outcome": "failed", "verdict": "fail"}, outcome="failed")
+        commands.accept(self.repo, None, failed_with_review["assignment"])
+        running = self.start_review(route="codex/sol/high")
+        disallowed = self.start_review(words="Please use Claude for this review.")
+        self.finish(disallowed["task"], None, outcome="failed")
+        nonreview = self.start(role="investigate", route="codex/sol/high")
+        self.finish(nonreview["task"], None, outcome="failed")
+        entries, starts = self.entries("widget"), self.orca()["starts"]
+        for ident in (different["assignment"], completed["assignment"], failed_with_review["assignment"],
+                      running["assignment"], disallowed["assignment"], nonreview["assignment"], "a99"):
+            with self.subTest(ident=ident):
+                self.refused("review_exception_invalid", self.start_review, after=ident, why="Try another agent.")
+                self.assertEqual(self.entries("widget"), entries)
+                self.assertEqual(self.orca()["starts"], starts)
+
+    def test_incomplete_or_combined_exception_flags_are_refused_without_effects(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        entries = self.entries("widget")
+        for flags in ({"words": " "}, {"after": "a1"}, {"why": "Try another agent."},
+                      {"words": "Please use Claude.", "after": "a1", "why": "Try another agent."}):
+            with self.subTest(flags=flags):
+                self.refused("review_exception_invalid", self.start_review, **flags)
+                self.assertEqual(self.entries("widget"), entries)
+                self.assertFalse(self.orca_file.exists())
+
+    def test_lost_reply_and_retry_keep_the_exception_even_after_preferences_change(self):
+        self.commit({"src/a.py": "a\n"})
+        self.write_routes(ROUTES + "review_agents: [codex]\n")
+        self.set_orca(lose_reply=True)
+        words = "Please use Claude for this review."
+        problem = self.refused("orca_unknown", self.start_review, words=words)
+        self.assertIn("--retry a1", problem.fix)
+        self.write_routes(ROUTES + "review_agents: invalid\n")
+        self.assertEqual(commands.dispatch(self.repo, None, retry="a1")["dispatch"], "ctx_1")
+        self.assertTrue(commands.dispatch(self.repo, None, retry="a1")["already"])
+        row = state.fold(self.entries("widget")).assignments["a1"]
+        self.assertEqual(row["review_exception"], {"kind": "words", "words": words})
+        self.assertEqual(self.orca()["starts"], 1)

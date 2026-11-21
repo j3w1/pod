@@ -53,6 +53,9 @@ def parser() -> argparse.ArgumentParser:
     one.add_argument("--worktree", default="current", help="Orca worktree selector (default: this worktree)")
     one.add_argument("--name", help="display name for the worker")
     one.add_argument("--retry", metavar="ASSIGNMENT", help="after a lost reply: read from Orca whether it started")
+    one.add_argument("--words", help="review exception: the person's own words allowing this agent")
+    one.add_argument("--after", metavar="ASSIGNMENT", help="review exception: an earlier failed review of this commit")
+    one.add_argument("--why", help="reason for the exception with --after")
 
     one = command("accept", "Read a finished worker's result and record it with your decision.")
     one.add_argument("assignment")
@@ -139,7 +142,7 @@ def execute(args: argparse.Namespace, cwd: Path) -> dict:
             spec = sys.stdin.read() if args.spec_file == "-" else Path(args.spec_file).read_text(encoding="utf-8")
         return commands.dispatch(cwd, args.objective, role=args.role, title=args.title, spec=spec, route=args.route,
                                  paths_=args.paths, commit=args.commit, context=args.context, worktree=args.worktree,
-                                 retry=args.retry, name=args.name)
+                                 retry=args.retry, name=args.name, words=args.words, after=args.after, why=args.why)
     if name == "accept":
         return commands.accept(cwd, args.objective, args.assignment, integrated=args.integrated,
                                discarded=args.discarded, why=args.why)

@@ -41,6 +41,48 @@ class RouteFileTests(PodCase):
         self.assertEqual(found.merge_authorization, "coordinator")
         self.assertEqual(routefile.load(self.write_routes(FULL + "merge_authorization: anyone\n")).status, "invalid")
 
+    def test_review_agents_accepts_inline_lists_of_plain_agent_names(self):
+        for setting, expected in (
+            ("review_agents: [codex]\n", ["codex"]),
+            ("review_agents: [codex, local_agent]\n", ["codex", "local_agent"]),
+            ("review_agents: [ codex , local_agent ]\r\n", ["codex", "local_agent"]),
+            ("review_agents: []\n", []),
+            ("review_agents: [ ] # vacío\n", []),
+        ):
+            with self.subTest(setting=setting):
+                found = routefile.load(self.write_routes(FULL + setting))
+                self.assertEqual(found.status, "ok", found.problem)
+                self.assertEqual(found.review_agents, expected)
+
+    def test_invalid_review_agents_make_the_preferences_invalid(self):
+        for value in ("codex", "null", "{}", "[codex/sol/high]", "[codex, false]", "[codex,,claude]", "\n- 42"):
+            with self.subTest(value=value):
+                found = routefile.load(self.write_routes(FULL + f"review_agents: {value}\n"))
+                self.assertEqual((found.status, found.enabled()), ("invalid", []))
+                self.assertIn("review_agents", found.problem)
+
+    def test_review_agents_rejects_block_lists_and_non_ascii_whitespace(self):
+        for setting in (
+            "review_agents:\n  - codex\n  - claude\n",
+            "review_agents:\n  - codex\n    - claude\n",
+            "review_agents:\n  - codex\n  \u00a0 - claude\n",
+            "review_agents:\u00a0[codex]\n",
+            "review_agents: [codex,\u00a0claude]\n",
+            "review_agents: [codex]\u00a0\n",
+            "review_agents:\v[codex]\n",
+        ):
+            with self.subTest(setting=setting):
+                found = routefile.load(self.write_routes(FULL + setting))
+                self.assertEqual((found.status, found.enabled()), ("invalid", []))
+                self.assertIn("review_agents", found.problem)
+
+    def test_review_agents_rejects_malformed_brackets(self):
+        for value in ("[", "]", "[codex,]", "[,]", "[[codex]]"):
+            with self.subTest(value=value):
+                found = routefile.load(self.write_routes(FULL + f"review_agents: {value}\n"))
+                self.assertEqual((found.status, found.enabled()), ("invalid", []))
+                self.assertIn("review_agents", found.problem)
+
     def test_reading_never_writes_the_file(self):
         path = self.write_routes(FULL)
         before = (path.read_bytes(), path.stat().st_mtime_ns)

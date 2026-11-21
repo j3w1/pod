@@ -24,7 +24,7 @@ on Pod.
 | --- | --- |
 | Objective | Source (issue reference and body digest, or a sentence), target branch, worktree, branch, Orca Run, pull request, one continuation note |
 | Criterion | Text and `open`, `met` (with fact numbers or what was observed) or `dropped` (with why). One that can only be proved after a merge is marked so |
-| Assignment | Orca Task and Dispatch ids, the digest of the frozen packet, role, declared paths, base commit, requested route |
+| Assignment | Orca Task and Dispatch ids, the digest of the frozen packet, role, declared paths, base commit, requested route, review exception when used |
 | Fact | Immutable: a worker result, check, review with findings, CI readback, authorization, waiver, scope change, decision, takeover. Names its commit and tree where it has one |
 | Effect | The intent and the read-back outcome of an action Pod performs: a merge, an issue update, a cleanup |
 
@@ -182,9 +182,16 @@ No file means no rule. A file this version cannot read requires review and says 
 ## Preferences
 
 `<config home>/config.yaml` is the only authority for enabled routes, Preferred, Pin,
-`merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only
+`review_agents`, `merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only
 the person changes it, through `pod models` or an editor. Coordination reads it with
 `skills/pod/routefile.py` and loads nothing else about models.
+
+An optional `review_agents` list such as `[codex]` limits new review dispatches to those agents.
+Omit it or use `[]` to allow any enabled agent for review. Explicit routes, Pin and Preferred
+all go through the same check. To use another agent, give the person's own `--words` for the
+review or use `--after aN --why "…"` after an allowed review of the same commit failed or was
+voided without a review result. The assignment records the exception before Orca starts and keeps
+it when `--retry` reads the start back.
 
 ## Models
 
