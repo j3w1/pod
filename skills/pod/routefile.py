@@ -1,6 +1,6 @@
 """Read the personal preference file. Coordination reads this and nothing else about models.
 
-The file is the only authority for which routes are enabled, the Preferred route, the Pin and
+The file is the only authority for enabled routes, Preferred, Pin, permitted review agents and
 who may authorize a merge. Nothing here writes it. A file that cannot be read safely yields no
 eligible route and says why; it is never repaired or replaced.
 """
@@ -14,7 +14,8 @@ from .errors import PodError
 
 STATES = ("enabled", "disabled")
 AUTHORIZERS = ("person", "coordinator")
-ROUTE = re.compile(r"[a-z][a-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]*")
+AGENT = re.compile(r"[a-z][a-z0-9_-]*")
+ROUTE = re.compile(rf"{AGENT.pattern}/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]*")
 MAX_BYTES = 256 * 1024
 EDIT = "run `pod models` to choose routes, or `pod config edit` to correct the file"
 
@@ -29,6 +30,7 @@ class Preferences:
     pinned: str | None = None
     merge_authorization: str = "person"
     authorization_verifier: list | None = None
+    review_agents: list[str] = field(default_factory=list)
 
     def enabled(self) -> list[str]:
         return [key for key, state in self.routes.items() if state == "enabled"]
@@ -52,6 +54,20 @@ class Preferences:
 def split(route: str) -> tuple[str, str, str]:
     agent, model, effort = route.split("/")
     return agent, model, effort
+
+
+def _review_agents(block: yamlsubset.Block) -> list[str]:
+    value = block.value
+    if value and value.startswith("[") and value.endswith("]"):
+        items = value[1:-1].strip()
+        agents = [yamlsubset.scalar(item) for item in items.removesuffix(",").split(",")] if items else []
+    elif block.lines:
+        agents = yamlsubset.sequence(block)
+    else:
+        raise ValueError("review_agents must be a list of agent names")
+    if any(not isinstance(agent, str) or not AGENT.fullmatch(agent) for agent in agents):
+        raise ValueError("review_agents must be a list of agent names")
+    return agents
 
 
 def load(path: Path | None = None) -> Preferences:
@@ -91,6 +107,8 @@ def load(path: Path | None = None) -> Preferences:
                             or not command[0].startswith("/")):
                 raise ValueError("authorization_verifier must be an absolute command and up to 15 arguments")
             result.authorization_verifier = command or None
+        if "review_agents" in blocks:
+            result.review_agents = _review_agents(blocks["review_agents"])
         result.routes, result.status = routes, "ok"
     except (OSError, UnicodeError, ValueError) as exc:
         result.status, result.problem = "invalid", str(exc)

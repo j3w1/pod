@@ -73,6 +73,7 @@ review by a worker that changed nothing.
 
 - Dispatch a reviewer with `--role review` on a committed candidate. Ask for every finding in
   one pass; reviewers report, the writer corrects.
+- Follow the person's `review_agents` list. To use another agent, pass their own `--words` for this review or name an allowed review of the same commit that failed without a review result with `--after aN --why "…"`.
 - A review keeps covering a file while that file's content stays the same, and a review that
   fails still covers the files it raised nothing required on. After a correction, review only
   the changed paths (`--paths`); after merging the target branch, only files whose content

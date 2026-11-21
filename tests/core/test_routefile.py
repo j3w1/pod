@@ -41,6 +41,24 @@ class RouteFileTests(PodCase):
         self.assertEqual(found.merge_authorization, "coordinator")
         self.assertEqual(routefile.load(self.write_routes(FULL + "merge_authorization: anyone\n")).status, "invalid")
 
+    def test_review_agents_accepts_inline_block_and_empty_lists(self):
+        for setting, expected in (
+            ("review_agents: [codex, local_agent]\n", ["codex", "local_agent"]),
+            ("review_agents:\n  - codex\n  - 'local_agent'\n", ["codex", "local_agent"]),
+            ("review_agents: []\n", []),
+        ):
+            with self.subTest(setting=setting):
+                found = routefile.load(self.write_routes(FULL + setting))
+                self.assertEqual(found.status, "ok", found.problem)
+                self.assertEqual(found.review_agents, expected)
+
+    def test_invalid_review_agents_make_the_preferences_invalid(self):
+        for value in ("codex", "null", "{}", "[codex/sol/high]", "[codex, false]", "[codex,,claude]", "\n- 42"):
+            with self.subTest(value=value):
+                found = routefile.load(self.write_routes(FULL + f"review_agents: {value}\n"))
+                self.assertEqual((found.status, found.enabled()), ("invalid", []))
+                self.assertIn("review_agents", found.problem)
+
     def test_reading_never_writes_the_file(self):
         path = self.write_routes(FULL)
         before = (path.read_bytes(), path.stat().st_mtime_ns)

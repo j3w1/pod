@@ -132,10 +132,52 @@ def packet(state: State, assignment: dict, spec: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _failed_review(state: State, ident: str, base: str, agents: list[str]) -> bool:
+    prior = state.assignments.get(ident)
+    if not prior or prior["role"] != "review" or prior["base"] != base:
+        return False
+    if prior["route"].partition("/")[0] not in agents or prior.get("effective", prior["route"]).partition("/")[0] not in agents:
+        return False
+    if any(review["reviewer"] == ident for review in state.of("review")):
+        return False
+    if prior.get("void"):
+        return True
+    if not prior.get("task"):
+        return False
+    task = orca.tasks(state.objective["run"]).get(prior["task"])
+    return bool(task and task["status"] == "failed"
+                and parse_result((task["report"] or {}).get("body")).get("verdict") not in ("pass", "fail"))
+
+
+def _review_exception(state: State, preferences: routefile.Preferences, role: str, route: str, base: str,
+                      *, words: str | None, after: str | None, why: str | None) -> dict | None:
+    agents = preferences.review_agents
+    agent = routefile.split(route)[0]
+    disallowed = role == "review" and agents and agent not in agents
+    if words is after is why is None:
+        if not disallowed:
+            return None
+        allowed = next((key for key in preferences.enabled() if key.partition("/")[0] in agents), None)
+        fix = f"pass --route {allowed}" if allowed else "enable a route on an allowed agent in `pod models`"
+        if preferences.pinned and allowed:
+            fix = f"clear or change the Pin in `pod models`, then {fix}"
+        raise PodError("reviewer_agent_not_allowed", f"The review agent {agent} is outside review_agents.", fix=fix)
+    if not disallowed:
+        raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",
+                       fix="omit --words, --after and --why")
+    if words and words.strip() and after is why is None:
+        return {"kind": "words", "words": words}
+    if words is None and after and why and why.strip() and _failed_review(state, after, base, agents):
+        return {"kind": "after", "after": after, "why": why}
+    raise PodError("review_exception_invalid", "The review exception is incomplete or the prior review is ineligible.",
+                   fix="pass the person's own --words, or use --after with --why for a failed or void review "
+                       "by an allowed agent on the same commit without a review result")
+
+
 def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title: str | None = None, spec: str | None = None,
              route: str | None = None, paths_: list[str] | None = None, commit: str | None = None,
              context: list[str] | None = None, worktree: str = "current", retry: str | None = None,
-             name: str | None = None) -> dict:
+             name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None) -> dict:
     target, root, _ = locate(cwd, objective)
     with log.writer(target) as writer:
         state = fold(writer.entries)
@@ -155,6 +197,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
         paths_ = gitio.declared(paths_)
         context = gitio.declared(context, keep_root=True)
         base = gitio.commit(root, commit or "HEAD")
+        exception = _review_exception(state, preferences, role, route, base, words=words, after=after, why=why)
         if role == "review":
             against = gitio.merge_base(root, base, f"origin/{state.objective['target']}") or gitio.merge_base(
                 root, base, state.objective["target"])
@@ -187,7 +230,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
         ident = state.next_id("a", state.assignments)
         assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
                       "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
-                      **({"context": context} if context else {})}
+                      **({"context": context} if context else {}),
+                      **({"review_exception": exception} if exception else {})}
         text = packet(state, assignment, spec)
         assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
         writer.append(assignment)
