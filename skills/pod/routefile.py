@@ -16,6 +16,7 @@ STATES = ("enabled", "disabled")
 AUTHORIZERS = ("person", "coordinator")
 AGENT = re.compile(r"[a-z][a-z0-9_-]*")
 ROUTE = re.compile(rf"{AGENT.pattern}/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]*")
+REVIEW_AGENTS = re.compile(rf"\[ *(?:{AGENT.pattern}(?: *, *{AGENT.pattern})* *)?\]", re.ASCII)
 MAX_BYTES = 256 * 1024
 EDIT = "run `pod models` to choose routes, or `pod config edit` to correct the file"
 
@@ -56,21 +57,15 @@ def split(route: str) -> tuple[str, str, str]:
     return agent, model, effort
 
 
-def _review_agents(block: yamlsubset.Block) -> list[str]:
+def _review_agents(block: yamlsubset.Block, raw_line: str) -> list[str]:
+    # The YAML reader trims whitespace. Check the original syntax before accepting its value.
+    syntax = raw_line.partition("#")[0].removesuffix("\r")
     value = block.value
-    if value and value.startswith("[") and value.endswith("]"):
-        items = value[1:-1].strip()
-        agents = [yamlsubset.scalar(item) for item in items.removesuffix(",").split(",")] if items else []
-    elif block.lines:
-        indents = {len(line) - len(line.lstrip(" ")) for _, line in block.lines}
-        if len(indents) != 1:
-            raise ValueError("review_agents list items must have the same indentation")
-        agents = yamlsubset.sequence(block)
-    else:
-        raise ValueError("review_agents must be a list of agent names")
-    if any(not isinstance(agent, str) or not AGENT.fullmatch(agent) for agent in agents):
-        raise ValueError("review_agents must be a list of agent names")
-    return agents
+    if value and not block.lines and syntax.isascii() and syntax.isprintable() and REVIEW_AGENTS.fullmatch(value):
+        agents = AGENT.findall(value)
+        if all(isinstance(yamlsubset.scalar(agent), str) for agent in agents):
+            return agents
+    raise ValueError("review_agents must be an inline list of agent names such as [codex]")
 
 
 def load(path: Path | None = None) -> Preferences:
@@ -84,7 +79,8 @@ def load(path: Path | None = None) -> Preferences:
         raw = path.read_bytes()
         if len(raw) > MAX_BYTES:
             raise ValueError("the file is larger than 256 KiB")
-        blocks = yamlsubset.parse(raw.decode("utf-8"))
+        text = raw.decode("utf-8")
+        blocks = yamlsubset.parse(text)
         schema = yamlsubset.scalar(blocks["schema"].value) if "schema" in blocks else None
         if schema != "pod/v2":
             raise ValueError(f"schema is {schema!r}, expected pod/v2")
@@ -111,7 +107,8 @@ def load(path: Path | None = None) -> Preferences:
                 raise ValueError("authorization_verifier must be an absolute command and up to 15 arguments")
             result.authorization_verifier = command or None
         if "review_agents" in blocks:
-            result.review_agents = _review_agents(blocks["review_agents"])
+            block = blocks["review_agents"]
+            result.review_agents = _review_agents(block, text.split("\n")[block.start])
         result.routes, result.status = routes, "ok"
     except (OSError, UnicodeError, ValueError) as exc:
         result.status, result.problem = "invalid", str(exc)
