@@ -177,6 +177,32 @@ class CliTests(CliCase):
         self.assertEqual(self.run_cli("--pause", "codex", "--unpause", "codex")[0], 2)
         self.assertEqual(self.run_cli("--profile", "missing_equals")[0], 2)
 
+    def test_cli_twins_drain_and_pause_support_reason_ttl_and_unpause_clears_both(self):
+        self.write_routes(ROUTES)
+        code, out, err = self.run_cli("--drain", "claude", "--reason", "weekly_10pct", "--ttl", "2h")
+        self.assertEqual((code, err), (0, ""), out)
+        loaded = routefile.load()
+        self.assertEqual(loaded.soft_drained_agents, ["claude"])
+        self.assertEqual(loaded.soft_drained_meta["claude"].reason, "weekly_10pct")
+        self.assertEqual(loaded.soft_drained_meta["claude"].ttl, 7200)
+        self.assertIsNotNone(loaded.soft_drained_meta["claude"].until)
+        code, out, err = self.run_cli("--pause", "antigravity", "--reason", "rate_limit", "--ttl", "30m")
+        self.assertEqual((code, err), (0, ""), out)
+        loaded = routefile.load()
+        self.assertEqual(loaded.paused_agents, ["antigravity"])
+        self.assertEqual(loaded.paused_meta["antigravity"].ttl, 1800)
+        status = json.loads(self.run_cli("status", "--json")[1])["status"]["preferences"]
+        self.assertEqual(status["soft_drained_agents"], ["claude"])
+        self.assertEqual(status["paused_agents"], ["antigravity"])
+        # --unpause clears both paused_agents and soft_drained_agents
+        self.assertEqual(self.run_cli("--unpause", "claude", "--unpause", "antigravity")[0], 0)
+        loaded = routefile.load()
+        self.assertEqual((loaded.paused_agents, loaded.soft_drained_agents), ([], []))
+        # Invalid combinations are refused
+        self.assertEqual(self.run_cli("--pause", "claude", "--drain", "claude")[0], 2)
+        self.assertEqual(self.run_cli("--reason", "orphan")[0], 2)
+        self.assertEqual(self.run_cli("--drain", "claude", "--ttl", "bad")[0], 2)
+
     def test_refresh_isolates_antigravity_adapter_errors_from_aa_snapshot(self):
         from pod.models import adapters
         with patch.object(leaderboard, "fetch", return_value=current_page()), \

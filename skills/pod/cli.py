@@ -125,6 +125,11 @@ def _config(edit: bool) -> dict:
             "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
             "merge_authorization": found.merge_authorization, "review_agents": found.review_agents,
             "paused_agents": found.paused_agents,
+            **({"paused_meta": {k: routefile.hold_as_dict(v) for k, v in found.paused_meta.items() if v.has_metadata}}
+               if any(v.has_metadata for v in found.paused_meta.values()) else {}),
+            "soft_drained_agents": found.soft_drained_agents,
+            **({"soft_drained_meta": {k: routefile.hold_as_dict(v) for k, v in found.soft_drained_meta.items() if v.has_metadata}}
+               if any(v.has_metadata for v in found.soft_drained_meta.values()) else {}),
             "profiles": {name: routefile.format_profile(prof) for name, prof in found.profiles.items()},
             "authorization_verifier": "configured" if found.authorization_verifier else None}
 

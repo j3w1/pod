@@ -248,6 +248,14 @@ class DrawTests(WorkspaceCase):
         self.assertIn("Decision trace", screen)
         self.keys("x")
         self.assertEqual(routefile.load().paused_agents, [])
+        # Toggle soft_drained_agents with `d` and verify TUI visibility + Decision trace
+        self.keys("d")
+        self.assertEqual(routefile.load().soft_drained_agents, ["antigravity"])
+        screen = "\n".join(text(self.space.lines(120, 30)))
+        self.assertIn("Soft-drained agents: antigravity", screen)
+        self.assertEqual(self.space.preview_profile("scout-fast").route, "codex/gpt-6.1-terra/low")
+        self.keys("d")
+        self.assertEqual(routefile.load().soft_drained_agents, [])
 
     def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
         self.refresh_from(current_page())

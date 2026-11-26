@@ -84,8 +84,12 @@ class View:
                          "nothing can be changed here until it is corrected with `pod config edit`.")
         elif self.preferences.status == "absent":
             lines.append("No preference file yet: no route is enabled. Enabling one here creates it.")
-        if self.preferences.paused_agents:
-            lines.append("Paused agents: " + ", ".join(self.preferences.paused_agents))
+        active_paused = routefile.active_holds(self.preferences.paused_meta, agents=self.preferences.paused_agents)
+        if active_paused:
+            lines.append("Paused agents: " + ", ".join(routefile.hold_summary(v) for v in active_paused.values()))
+        active_drained = routefile.active_holds(self.preferences.soft_drained_meta, agents=self.preferences.soft_drained_agents)
+        if active_drained:
+            lines.append("Soft-drained agents: " + ", ".join(routefile.hold_summary(v) for v in active_drained.values()))
         return lines
 
 

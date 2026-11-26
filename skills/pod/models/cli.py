@@ -1,6 +1,7 @@
 """`pod models`: the workspace, the plain table, the explicit refresh and offline diagnostics."""
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import sys
@@ -26,8 +27,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--pin", metavar="ROUTE|none", help="set or clear the Pin")
     parser.add_argument("--pause", action="append", default=[], metavar="AGENT",
                         help="pause an agent host-wide in paused_agents (repeatable)")
+    parser.add_argument("--drain", action="append", default=[], metavar="AGENT",
+                        help="soft-drain an agent in soft_drained_agents to block new dispatches (repeatable)")
     parser.add_argument("--unpause", action="append", default=[], metavar="AGENT",
-                        help="unpause an agent in paused_agents (repeatable)")
+                        help="clear an agent from paused_agents and soft_drained_agents (repeatable)")
+    parser.add_argument("--reason", metavar="TEXT",
+                        help="optional reason attached to --pause or --drain")
+    parser.add_argument("--ttl", metavar="DURATION",
+                        help="optional TTL attached to --pause or --drain (seconds or s/m/h/d such as 30m, 2h)")
     parser.add_argument("--profile", action="append", default=[], metavar="NAME=SPEC",
                         help="set or update a profile: NAME='<role>[+mcp] <route> ...' (repeatable)")
     parser.add_argument("--delete-profile", action="append", default=[], metavar="NAME",
@@ -84,7 +91,11 @@ def _status(args) -> int:
                      for agent, catalog in catalogs.items()},
         "preferences": {"path": str(preferences.path), "status": preferences.status, "problem": preferences.problem,
                         "enabled": len(preferences.enabled()), "preferred": preferences.preferred,
-                        "pinned": preferences.pinned, "paused_agents": list(preferences.paused_agents),
+                        "pinned": preferences.pinned,
+                        "paused_agents": list(preferences.paused_agents),
+                        "paused_meta": {k: routefile.hold_as_dict(v) for k, v in preferences.paused_meta.items()},
+                        "soft_drained_agents": list(preferences.soft_drained_agents),
+                        "soft_drained_meta": {k: routefile.hold_as_dict(v) for k, v in preferences.soft_drained_meta.items()},
                         "review_agents": list(preferences.review_agents),
                         "profiles": len(preferences.profiles)},
         "rows_by_state": counts,
@@ -101,12 +112,18 @@ def _status(args) -> int:
     print(f"Registry: {report['registry']['models']} models, {report['registry']['routes']} routes")
     for agent, state in report["adapters"].items():
         print(f"Installed {agent}: {state}")
-    paused = ", ".join(preferences.paused_agents) if preferences.paused_agents else "none"
+    paused = ", ".join(routefile.hold_summary(v) for v in preferences.paused_meta.values()) or "none"
+    drained = ", ".join(routefile.hold_summary(v) for v in preferences.soft_drained_meta.values()) or "none"
     print(f"Preferences: {preferences.status} at {preferences.path}; {len(preferences.enabled())} enabled; "
           f"Preferred {preferences.preferred or 'none'}; Pin {preferences.pinned or 'none'}; "
-          f"Paused {paused}; Profiles {len(preferences.profiles)}")
+          f"Paused {paused}; Drained {drained}; Profiles {len(preferences.profiles)}")
     print("Rows by state: " + ", ".join(f"{state} {count}" for state, count in sorted(counts.items())))
     return 0
+
+
+def _build_hold(agent: str, *, reason: str | None, ttl_seconds: int | None, until: str | None) -> routefile.AgentHold:
+    cleaned_reason = " ".join(reason.split()) if reason and reason.strip() else None
+    return routefile.AgentHold(agent=agent, reason=cleaned_reason, until=until, ttl=ttl_seconds)
 
 
 def _edit(args) -> None:
@@ -117,16 +134,38 @@ def _edit(args) -> None:
         value = getattr(args, flag)
         if value is not None:
             changes[name] = None if value.lower() in ("none", "null") else value
-    if args.pause or args.unpause:
-        if set(args.pause) & set(args.unpause):
-            raise PodError("agent_invalid", "An agent is named by both --pause and --unpause.", fix="name it once")
+    if (args.reason is not None or args.ttl is not None) and not (args.pause or args.drain):
+        raise PodError("agent_invalid", "--reason and --ttl require --pause or --drain.",
+                       fix="pass --pause AGENT or --drain AGENT alongside --reason or --ttl")
+    if args.pause or args.drain or args.unpause:
+        pause_set, drain_set, unpause_set = set(args.pause), set(args.drain), set(args.unpause)
+        if pause_set & unpause_set or drain_set & unpause_set or pause_set & drain_set:
+            raise PodError("agent_invalid", "An agent cannot be combined across --pause, --drain and --unpause.",
+                           fix="name each agent under one action")
+        ttl_seconds: int | None = None
+        until: str | None = None
+        if args.ttl is not None:
+            try:
+                ttl_seconds = routefile.parse_ttl(args.ttl)
+            except ValueError as exc:
+                raise PodError("agent_invalid", str(exc),
+                               fix="pass a positive TTL such as 30m, 2h or 1800") from exc
+            until = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(
+                timespec="seconds").replace("+00:00", "Z")
         current = routefile.load()
-        paused = list(current.paused_agents) if current.status == "ok" else []
+        paused = dict(current.paused_meta) if current.status == "ok" else {}
+        drained = dict(current.soft_drained_meta) if current.status == "ok" else {}
         for agent in args.pause:
-            if agent not in paused:
-                paused.append(agent)
-        paused = [agent for agent in paused if agent not in set(args.unpause)]
+            paused[agent] = _build_hold(agent, reason=args.reason, ttl_seconds=ttl_seconds, until=until)
+            drained.pop(agent, None)
+        for agent in args.drain:
+            drained[agent] = _build_hold(agent, reason=args.reason, ttl_seconds=ttl_seconds, until=until)
+            paused.pop(agent, None)
+        for agent in args.unpause:
+            paused.pop(agent, None)
+            drained.pop(agent, None)
         changes["paused_agents"] = paused
+        changes["soft_drained_agents"] = drained
     if args.profile or args.delete_profile:
         parsed_profiles: dict[str, str | None] = {}
         for item in args.profile:
@@ -152,9 +191,10 @@ def _edit(args) -> None:
                                     else [item.strip() for item in raw.split(",") if item.strip()])
     result = edit.apply(**changes)
     if not args.json:
-        paused = ", ".join(result.paused_agents) if result.paused_agents else "none"
+        paused = ", ".join(routefile.hold_summary(v) for v in result.paused_meta.values()) or "none"
+        drained = ", ".join(routefile.hold_summary(v) for v in result.soft_drained_meta.values()) or "none"
         print(f"Saved {result.path}: {len(result.enabled())} enabled; Preferred {result.preferred or 'none'}; "
-              f"Pin {result.pinned or 'none'}; Paused {paused}; Profiles {len(result.profiles)}")
+              f"Pin {result.pinned or 'none'}; Paused {paused}; Drained {drained}; Profiles {len(result.profiles)}")
 
 
 def main(argv: list[str]) -> int:
@@ -165,8 +205,9 @@ def main(argv: list[str]) -> int:
         if args.action == "status":
             return _status(args)
         has_edit = bool(args.enable or args.disable or args.preferred is not None or args.pin is not None
-                        or args.pause or args.unpause or args.profile or args.delete_profile
-                        or args.review_agents is not None)
+                        or args.pause or args.drain or args.unpause
+                        or args.reason is not None or args.ttl is not None
+                        or args.profile or args.delete_profile or args.review_agents is not None)
         if has_edit:
             _edit(args)
             if not args.json:
@@ -179,6 +220,9 @@ def main(argv: list[str]) -> int:
         if args.json:
             _emit({"header": model.header(), "rows": [view.as_json(row) for row in rows],
                    "paused_agents": list(model.preferences.paused_agents),
+                   "paused_meta": {k: routefile.hold_as_dict(v) for k, v in model.preferences.paused_meta.items()},
+                   "soft_drained_agents": list(model.preferences.soft_drained_agents),
+                   "soft_drained_meta": {k: routefile.hold_as_dict(v) for k, v in model.preferences.soft_drained_meta.items()},
                    "profiles": {name: routefile.format_profile(prof)
                                 for name, prof in model.preferences.profiles.items()}})
         else:

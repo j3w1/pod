@@ -18,6 +18,7 @@ HELP = ("Tab / 1 2   Switch Models and Profiles & What-If tabs",
         "Enter   Sources and exact measurements", "/ search   Match model, route or state",
         "space on/off   Toggle this route", "p Preferred   Set or clear preference", "P Pin   Set or clear pin",
         "E/D   Enable or disable all model efforts", "x pause   Toggle agent in paused_agents",
+        "d drain   Toggle agent in soft_drained_agents",
         "w what-if   Cycle simulated down provider (Profiles tab)",
         "a author   Cycle simulated author provider (Profiles tab)",
         "m mcp   Toggle +mcp on selected profile (Profiles tab)",
@@ -167,23 +168,42 @@ class Workspace:
         self._apply(f"{label} cleared." if held else f"{label} is now {row.route}.",
                     **{name: None if held else row.route})
 
-    def toggle_pause(self) -> None:
+    def _selected_agent(self) -> str | None:
         if self.tab == "profiles":
             prof = self.current_profile
-            agent = routefile.split(prof.routes[0])[0] if prof and prof.routes else None
-        else:
-            row = self.current
-            agent = routefile.split(row.route)[0] if row and row.route else None
+            return routefile.split(prof.routes[0])[0] if prof and prof.routes else None
+        row = self.current
+        return routefile.split(row.route)[0] if row and row.route else None
+
+    def toggle_pause(self) -> None:
+        agent = self._selected_agent()
         if not agent:
             self.message = "Select a routable item to pause or unpause its agent."
             return
-        paused = list(self.view.preferences.paused_agents)
+        paused = dict(self.view.preferences.paused_meta)
+        drained = dict(self.view.preferences.soft_drained_meta)
         if agent in paused:
-            paused.remove(agent)
+            paused.pop(agent, None)
             self._apply(f"{agent} unpaused.", paused_agents=paused)
         else:
-            paused.append(agent)
-            self._apply(f"{agent} paused in paused_agents.", paused_agents=paused)
+            paused[agent] = routefile.AgentHold(agent=agent)
+            drained.pop(agent, None)
+            self._apply(f"{agent} paused in paused_agents.", paused_agents=paused, soft_drained_agents=drained)
+
+    def toggle_drain(self) -> None:
+        agent = self._selected_agent()
+        if not agent:
+            self.message = "Select a routable item to soft-drain or unpause its agent."
+            return
+        drained = dict(self.view.preferences.soft_drained_meta)
+        paused = dict(self.view.preferences.paused_meta)
+        if agent in drained:
+            drained.pop(agent, None)
+            self._apply(f"{agent} removed from soft_drained_agents.", soft_drained_agents=drained)
+        else:
+            drained[agent] = routefile.AgentHold(agent=agent)
+            paused.pop(agent, None)
+            self._apply(f"{agent} soft-drained in soft_drained_agents.", paused_agents=paused, soft_drained_agents=drained)
 
     def toggle_profile_mcp(self) -> None:
         prof = self.current_profile
@@ -249,6 +269,9 @@ class Workspace:
             return None
         if key == "x":
             self.toggle_pause()
+            return None
+        if key == "d":
+            self.toggle_drain()
             return None
         if key == "R":
             self.message = "Refreshing the public snapshot and adapter catalog…"
@@ -356,7 +379,7 @@ class Workspace:
         auth = self.what_if_author or "none"
         status = f"Profiles  {len(self.profile_names())}  ·  What-If down: {excl}  ·  author: {auth}"
         top.append(line(status, "head"))
-        keys = "Tab models · ↑↓ profile · w what-if · a author · x pause · m +mcp · R refresh · ? keys · q quit"
+        keys = "Tab models · ↑↓ profile · w what-if · a author · x pause · d drain · m +mcp · R refresh · ? keys · q quit"
         bottom = [line(part, "head") for part in textwrap.wrap(keys, width)]
         if self.message:
             bottom.insert(0, line(self.message, "warn"))
@@ -458,7 +481,7 @@ class Workspace:
         if len(header[0]) > width and self.view.snapshot:
             shot = self.view.snapshot
             header[0] = f"Public snapshot: {snapshot.age(shot.get('fetched_at'))}"
-        top = [line(text, "warn" if "failed" in text or "invalid" in text or "Paused" in text else "") for text in header]
+        top = [line(text, "warn" if "failed" in text or "invalid" in text or "Paused" in text or "Soft-drained" in text else "") for text in header]
         if self.help or (self.detail and self.current and self.tab == "models"):
             if self.help:
                 title, items = "Keyboard shortcuts", HELP
@@ -490,7 +513,7 @@ class Workspace:
                 else "↑↓ model  ←→ effort  Enter sources\n/ search  ? keys  q quit")
         if width >= 128:
             keys = ("↑↓ model · ←→ effort · / search · s sort · r reverse · f provider · Tab profiles · Enter sources · R refresh\n"
-                    "space on/off · E/D model on/off · p Preferred · P Pin · x pause · ? keys · q quit")
+                    "space on/off · E/D model on/off · p Preferred · P Pin · x pause · d drain · ? keys · q quit")
         bottom = [line(part, "head") for group in keys.splitlines() for part in textwrap.wrap(group, width)]
         if self.message:
             bottom.insert(0, line(self.message, "warn"))

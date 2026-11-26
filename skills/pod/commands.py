@@ -105,6 +105,31 @@ def open_(cwd: Path, *, source: str | None = None, text: str | None = None, obje
 
 # --- dispatch --------------------------------------------------------------------------------------
 
+def _reviewer_note_lines(state: State, *, commit: str | None = None) -> list[str]:
+    lines: list[str] = []
+    for item in state.reviewer_notes():
+        if commit is not None and item.get("commit") not in (None, commit):
+            continue
+        who = item.get("assignment") or "review"
+        verdict = item.get("verdict") or "partial"
+        if item.get("notes"):
+            lines.append(f"- {who} ({verdict}): {_line(item['notes'], 300)}")
+        for finding in item.get("partial_findings") or []:
+            req = "required" if finding.get("required") else "advisory"
+            where = finding.get("path") or ""
+            lines.append(f"- {who} partial {req} {where}: {_line(str(finding.get('text') or ''), 200)}")
+    return lines[-10:]
+
+
+def _normalize_notes(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:2000]
+    if isinstance(value, list):
+        joined = "\n".join(str(item).strip() for item in value if isinstance(item, str) and item.strip())
+        return joined[:2000] if joined else None
+    return None
+
+
 def packet(state: State, assignment: dict, spec: str) -> str:
     role, paths_ = assignment["role"], assignment.get("paths") or []
     lines = [f"# Assignment {state.id} {assignment['id']} ({role})", "", spec.strip(), "", "## Boundaries", "",
@@ -118,11 +143,20 @@ def packet(state: State, assignment: dict, spec: str) -> str:
         lines += [f"- Review commit {assignment['base']}, these paths: " + ", ".join(paths_),
                   "- Report every finding in one pass. Do not change any file; the writer makes corrections.",
                   "- Mark a finding required only when the change must not merge without it.",
-                  "- `outcome` says whether you completed the review; `verdict` says whether the change passes."]
+                  "- `outcome` says whether you completed the review; `verdict` says whether the change passes.",
+                  "- Include brief `notes` (checked invariants or partial progress) in your result JSON so findings persist across handoffs."]
         if assignment.get("context"):
             lines.append("- Read as context: " + ", ".join(assignment["context"]))
     else:
         lines.append("- Read only. Change nothing.")
+    if role == "implement":
+        note_lines = _reviewer_note_lines(state)
+        if note_lines:
+            lines += ["", "## Reviewer context", "", *note_lines]
+    elif role == "review":
+        prior_notes = _reviewer_note_lines(state, commit=assignment["base"])
+        if prior_notes:
+            lines += ["", "## Prior reviewer notes", "", *prior_notes]
     lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.",
               "- Leave this terminal's name as it is. Orca treats a renamed worker terminal as kept by a person and",
               "  will not release it when the work is done.", "",
@@ -173,25 +207,32 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
                       words: str | None = None, after: str | None = None) -> dict:
     """Pure read-only route resolution: never writes to the log and never calls Orca."""
     authors: set[str] = set()
+    notes: list[str] = []
     if objective:
         target, _root, _ = locate(cwd, objective)
         entries = log.read(target)
         if not entries:
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
-        authors = fold(entries).author_agents()
+        folded = fold(entries)
+        authors = folded.author_agents()
+        notes = _reviewer_note_lines(folded)
     else:
         try:
             target, _root, _ = locate(cwd, None)
             entries = log.read(target)
             if entries:
-                authors = fold(entries).author_agents()
+                folded = fold(entries)
+                authors = folded.author_agents()
+                notes = _reviewer_note_lines(folded)
         except PodError:
             pass
     preferences = routefile.load()
     excluded = list(exclude_agents or ())
     res = routefile.resolve_dispatch(
         preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
-        author_agents=authors, allow_review_exception=bool(words or after))
+        author_agents=authors, reviewer_notes=notes, allow_review_exception=bool(words or after))
+    active_paused = routefile.active_holds(preferences.paused_meta, agents=preferences.paused_agents)
+    active_drained = routefile.active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents)
     output = {
         "dry_run": True,
         "pass": res.ok,
@@ -201,10 +242,12 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         "mcp": res.mcp,
         "route": res.route,
         "wire": {"agent": res.wire[0], "model": res.wire[1], "effort": res.wire[2]} if res.wire else None,
-        "author_agents": sorted(authors),
+        "author_agents": list(res.author_agents),
         "review_independence": res.review_independence,
-        "paused_agents": list(preferences.paused_agents),
+        "paused_agents": list(active_paused),
+        "soft_drained_agents": list(active_drained),
         "excluded_agents": sorted({item.strip() for item in excluded if item and item.strip()}),
+        **({"reviewer_notes": list(res.reviewer_notes)} if res.reviewer_notes else {}),
         "trace": [{"route": step.route, "status": step.status, "code": step.code, "reason": step.reason}
                   for step in res.trace],
     }
@@ -234,11 +277,12 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
         authors = state.author_agents()
+        notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
         res = routefile.resolve_dispatch(
             preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
-            author_agents=authors, allow_review_exception=False)
+            author_agents=authors, reviewer_notes=notes, allow_review_exception=False)
         exception = None
         paths_ = gitio.declared(paths_)
         context = gitio.declared(context, keep_root=True)
@@ -254,7 +298,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                                fix=res.error_fix)
             res = routefile.resolve_dispatch(
                 preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
-                author_agents=authors, allow_review_exception=True)
+                author_agents=authors, reviewer_notes=notes, allow_review_exception=True)
             if not res.ok:
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
                                fix=res.error_fix)
@@ -343,6 +387,8 @@ def _started(writer, ident: str, started: dict, route: str, *, resolution: route
         actual_route = effective or route
         actual_agent = actual_route.partition("/")[0]
         result["review_independence"] = routefile.review_tag(actual_agent, authors or set(), primary_agent)
+        if authors:
+            result["author_agents"] = sorted(authors)
     if resolution and any(step.status == "skipped" for step in resolution.trace):
         result["trace"] = [step.reason for step in resolution.trace]
     if effective and effective != route:
@@ -474,12 +520,13 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                           for item in stated.get("checks") or [] if isinstance(item, dict) and isinstance(item.get("exit"), int)]
         elif row["role"] == "review":
             verdict = stated.get("verdict") if stated.get("verdict") in ("pass", "fail") else None
+            reviewer_notes = _normalize_notes(stated.get("notes"))
+            found = [{"id": f"{ident}.{index}", "path": item.get("path") or None,
+                      "required": bool(item.get("required")), "text": str(item.get("text") or "")[:1000]}
+                     for index, item in enumerate(stated.get("findings") or [], 1) if isinstance(item, dict)]
             if discarded:
                 output["note"] = "discarded: no review is recorded"
             elif verdict:
-                found = [{"id": f"{ident}.{index}", "path": item.get("path") or None,
-                          "required": bool(item.get("required")), "text": str(item.get("text") or "")[:1000]}
-                         for index, item in enumerate(stated.get("findings") or [], 1) if isinstance(item, dict)]
                 impl_dispatches = state.implement_dispatches()
                 same_session = bool(row.get("dispatch") and row["dispatch"] in impl_dispatches)
                 if not same_session and row.get("dispatch") and impl_dispatches:
@@ -493,13 +540,19 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 reviewer_agent = (row.get("effective") or row["route"]).partition("/")[0]
                 prefs = routefile.load()
                 primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
-                tag = routefile.review_tag(reviewer_agent, state.author_agents(), primary_agent)
+                authors = sorted(state.author_agents())
+                tag = routefile.review_tag(reviewer_agent, set(authors), primary_agent)
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
-                              "review_independence": tag, **({"same_session": True} if same_session else {}),
+                              "review_independence": tag,
+                              **({"author_agents": authors} if authors else {}),
+                              **({"notes": reviewer_notes} if reviewer_notes else {}),
+                              **({"same_session": True} if same_session else {}),
                               "findings": found})
                 output.update(verdict=verdict, review_independence=tag,
+                              **({"author_agents": authors} if authors else {}),
+                              **({"notes": reviewer_notes} if reviewer_notes else {}),
                               findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
                                         f"{item['path'] or ''}: {_line(item['text'])}" for item in found])
                 if same_session:
@@ -510,6 +563,13 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                     output["note"] = (f"Orca reports the review as {outcome}, not completed: its findings are kept, "
                                       "and it covers nothing and closes no finding")
             else:
+                if reviewer_notes:
+                    fact["reviewer_notes"] = reviewer_notes
+                    output["reviewer_notes"] = reviewer_notes
+                if found:
+                    fact["partial_findings"] = found
+                    output["partial_findings"] = [f"{item['id']} {'required' if item['required'] else 'advisory'} "
+                                                  f"{item['path'] or ''}: {_line(item['text'])}" for item in found]
                 output["note"] = ("the reviewer's message has no result object with a verdict, so no review is recorded; "
                                   "dispatch the review again if it is needed")
         if fact["summary"]:
@@ -689,6 +749,9 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
     found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state, gitio.commit(root))]
     if found:
         result["open_required_findings"] = found
+    notes = _reviewer_note_lines(state)
+    if notes:
+        result["reviewer_notes"] = notes
     if not gate:
         return result
     verdict = gates.evaluate(root, state, remote=remote)

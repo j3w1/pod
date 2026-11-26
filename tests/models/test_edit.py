@@ -94,6 +94,23 @@ class EditTests(ModelCase):
             edit.apply(paused_agents=["Not Valid"])
         self.assertEqual(caught.exception.code, "agent_invalid")
 
+    def test_paused_and_soft_drained_holds_with_reason_and_ttl_round_trip_cleanly(self):
+        target = self.write_routes(ROUTES)
+        hold = routefile.AgentHold("antigravity", reason="rate_limit", until="2026-11-26T04:00:00Z", ttl=1800)
+        drain = routefile.AgentHold("claude", reason="weekly_10pct", until="2026-11-26T06:00:00Z", ttl=7200)
+        res = edit.apply(paused_agents={"antigravity": hold}, soft_drained_agents={"claude": drain})
+        self.assertEqual(res.paused_meta["antigravity"], hold)
+        self.assertEqual(res.soft_drained_meta["claude"], drain)
+        text = target.read_text()
+        self.assertIn("  codex/gpt-6.1-sol/medium: disabled   # kept comment\n", text)
+        self.assertIn("paused_agents:\n  antigravity: rate_limit ttl=1800 until=2026-11-26T04:00:00Z\n", text)
+        self.assertIn("soft_drained_agents:\n  claude: weekly_10pct ttl=7200 until=2026-11-26T06:00:00Z\n", text)
+        # Transition mapping back to simple inline list and then empty list
+        res2 = edit.apply(paused_agents=["codex"], soft_drained_agents=[])
+        self.assertEqual((res2.paused_agents, res2.soft_drained_agents), (["codex"], []))
+        self.assertIn("paused_agents: [codex]\n", target.read_text())
+        self.assertIn("soft_drained_agents: []\n", target.read_text())
+
     def test_an_invalid_file_is_refused_and_left_untouched(self):
         target = self.write_routes("schema: pod/v2\nroutes: [a, b]\n")
         before = target.read_bytes()

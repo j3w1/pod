@@ -226,3 +226,62 @@ class RouteFileTests(PodCase):
         blocked = routefile.resolve_dispatch(pin_prefs, profile="scout-fast")
         self.assertFalse(blocked.ok)
         self.assertEqual(blocked.error_code, "pinned_agent_excluded")
+
+    def test_soft_drained_and_paused_holds_support_reason_ttl_expiry_and_skip_trace(self):
+        from datetime import datetime, timezone
+        cfg = (
+            "schema: pod/v2\n"
+            "routes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  codex/gpt-6.1-terra/low: enabled\n"
+            "  claude/claude-sonnet-5-5/high: enabled\n"
+            "preferred: null\n"
+            "pinned: null\n"
+            "paused_agents:\n"
+            "  antigravity: rate_limit ttl=1800 until=2026-11-26T04:00:00Z\n"
+            "soft_drained_agents:\n"
+            "  codex: 5h_window until=2026-11-26T03:30:00Z\n"
+            "profiles:\n"
+            "  scout: investigate antigravity/gemini-4-neon/low codex/gpt-6.1-terra/low claude/claude-sonnet-5-5/high\n"
+        )
+        prefs = routefile.load(self.write_routes(cfg))
+        self.assertEqual((prefs.status, prefs.paused_agents, prefs.soft_drained_agents),
+                         ("ok", ["antigravity"], ["codex"]))
+        self.assertEqual(prefs.paused_meta["antigravity"].reason, "rate_limit")
+        self.assertEqual(prefs.paused_meta["antigravity"].ttl, 1800)
+        self.assertEqual(prefs.soft_drained_meta["codex"].until, "2026-11-26T03:30:00Z")
+        # Before either expires: skips paused antigravity and soft-drained codex, picks claude
+        t_early = datetime(2026, 11, 26, 3, 0, tzinfo=timezone.utc)
+        r1 = routefile.resolve_dispatch(prefs, profile="scout", now=t_early,
+                                        reviewer_notes=["a2: check edge case"])
+        self.assertTrue(r1.ok)
+        self.assertEqual(r1.route, "claude/claude-sonnet-5-5/high")
+        self.assertEqual([s.code for s in r1.trace], ["paused_agent", "soft_drained_agent", "selected"])
+        self.assertIn("rate_limit", r1.trace[0].reason)
+        self.assertIn("5h_window", r1.trace[1].reason)
+        self.assertEqual(r1.reviewer_notes, ("a2: check edge case",))
+        # After codex soft-drain expires (03:45) while antigravity pause still holds (until 04:00): picks codex
+        t_mid = datetime(2026, 11, 26, 3, 45, tzinfo=timezone.utc)
+        r2 = routefile.resolve_dispatch(prefs, profile="scout", now=t_mid)
+        self.assertEqual((r2.ok, r2.route), (True, "codex/gpt-6.1-terra/low"))
+        # After both expire (04:05): picks default antigravity
+        t_late = datetime(2026, 11, 26, 4, 5, tzinfo=timezone.utc)
+        r3 = routefile.resolve_dispatch(prefs, profile="scout", now=t_late)
+        self.assertEqual((r3.ok, r3.route), (True, "antigravity/gemini-4-neon/low"))
+        # Simple inline list on soft_drained_agents also parses and blocks Pin fail-closed
+        inline = routefile.load(self.write_routes(
+            "schema: pod/v2\nroutes:\n  claude/claude-sonnet-5-5/high: enabled\n"
+            "preferred: null\npinned: claude/claude-sonnet-5-5/high\nsoft_drained_agents: [claude]\n"
+        ))
+        self.assertEqual((inline.status, inline.soft_drained_agents), ("ok", ["claude"]))
+        pin_blocked = routefile.resolve_dispatch(inline, role="implement")
+        self.assertEqual((pin_blocked.ok, pin_blocked.error_code), (False, "pinned_agent_excluded"))
+        self.assertIn("soft_drained_agents", pin_blocked.error_message)
+        # Invalid metadata is refused cleanly
+        for bad in (
+            "soft_drained_agents:\n  - claude\n",
+            "soft_drained_agents:\n  claude: until=not-a-date\n",
+            "paused_agents:\n  codex: ttl=0\n",
+        ):
+            with self.subTest(bad=bad):
+                self.assertEqual(routefile.load(self.write_routes(FULL + bad)).status, "invalid")

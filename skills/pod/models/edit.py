@@ -81,7 +81,6 @@ def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None],
         lines[block.end:block.end] = added
     if removed_indices:
         lines = [line for idx, line in enumerate(lines) if idx not in removed_indices]
-        # If every child line of the mapping was removed, turn `<key>:` into `<key>: {}` so YAML stays valid.
         re_blocks = yamlsubset.parse("\n".join(lines))
         re_block = re_blocks.get(key)
         if re_block is not None and re_block.value is None and not re_block.lines:
@@ -89,11 +88,38 @@ def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None],
     return lines
 
 
-def _rewrite(text: str, routes: dict, scalars: dict, profiles: dict | None = None) -> str:
+def _rewrite_holds(lines: list[str], key: str, holds: dict[str, routefile.AgentHold], ending: str) -> list[str]:
+    blocks = yamlsubset.parse("\n".join(lines))
+    block = blocks.get(key)
+    use_map = any(hold.has_metadata for hold in holds.values())
+    if not use_map:
+        written = "[" + ", ".join(holds) + "]"
+        if block is None:
+            if lines and lines[-1] == "":
+                lines.pop()
+            return lines + [f"{key}: {written}{ending}", ""]
+        if not block.lines:
+            lines[block.start] = _set_line(lines[block.start], written)
+            return lines
+        lines[block.start:block.end] = [f"{key}: {written}{ending}"]
+        return lines
+    entries = [f"  {agent}: {routefile.format_agent_hold(hold)}{ending}" for agent, hold in holds.items()]
+    if block is None:
+        if lines and lines[-1] == "":
+            lines.pop()
+        return lines + [f"{key}:{ending}", *entries, ""]
+    lines[block.start:block.end] = [f"{key}:{ending}", *entries]
+    return lines
+
+
+def _rewrite(text: str, routes: dict, scalars: dict, profiles: dict | None = None,
+             holds: dict[str, dict[str, routefile.AgentHold]] | None = None) -> str:
     lines = text.split("\n")
     ending = "\r" if lines and lines[0].endswith("\r") else ""
     lines = _rewrite_mapping(lines, "routes", routes, ending)
     lines = _rewrite_mapping(lines, "profiles", profiles or {}, ending)
+    for key, mapping in (holds or {}).items():
+        lines = _rewrite_holds(lines, key, mapping, ending)
     if scalars:
         blocks = yamlsubset.parse("\n".join(lines))
         for name, value in scalars.items():
@@ -122,13 +148,41 @@ def _validate_agent_list(value: object, field_name: str) -> list[str]:
     return cleaned
 
 
+def _validate_holds(value: object, field_name: str) -> dict[str, routefile.AgentHold]:
+    if isinstance(value, (list, tuple)):
+        return {agent: routefile.AgentHold(agent=agent) for agent in _validate_agent_list(value, field_name)}
+    if isinstance(value, dict):
+        result: dict[str, routefile.AgentHold] = {}
+        for agent, spec in value.items():
+            if not isinstance(agent, str) or not routefile.AGENT.fullmatch(agent):
+                raise PodError("agent_invalid", f"{agent!r} is not a valid agent name for {field_name}.",
+                               fix="use plain lowercase agent names such as codex, claude or antigravity")
+            if isinstance(spec, routefile.AgentHold):
+                try:
+                    normalized = routefile.parse_agent_hold(agent, routefile.format_agent_hold(spec) if spec.has_metadata else None)
+                except ValueError as exc:
+                    raise PodError("agent_invalid", str(exc),
+                                   fix="supply valid reason text, positive ttl and ISO-8601 UTC until timestamp") from exc
+                result[agent] = normalized
+            else:
+                try:
+                    result[agent] = routefile.parse_agent_hold(agent, spec)
+                except ValueError as exc:
+                    raise PodError("agent_invalid", str(exc),
+                                   fix="supply valid reason text, positive ttl and ISO-8601 UTC until timestamp") from exc
+        return result
+    raise PodError("agent_invalid", f"{field_name} must be a list of agent names or a mapping of agent metadata.",
+                   fix="pass plain agent names such as codex, claude or antigravity")
+
+
 def _initial_text() -> str:
     """Single shipped default source (`registry.json`) with empty `routes: {}` so only explicit edits enable routes."""
     return installer.default_preferences(registry.FILE.parent.parent, include_routes=False).decode("utf-8")
 
 
 def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
-          profiles: dict[str, str | None] | None = None, paused_agents=KEEP, review_agents=KEEP,
+          profiles: dict[str, str | None] | None = None,
+          paused_agents=KEEP, soft_drained_agents=KEEP, review_agents=KEEP,
           expected: bytes | None = None, path: Path | None = None, models=None) -> routefile.Preferences:
     """Apply one explicit change. `expected` is the file content the person was looking at.
 
@@ -181,11 +235,19 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                                fix="enable the route first")
             if value != held:
                 scalars[name] = value
-        wanted_paused = current.paused_agents
+
+        hold_updates: dict[str, dict[str, routefile.AgentHold]] = {}
+        wanted_paused_meta = dict(current.paused_meta)
         if paused_agents is not KEEP:
-            wanted_paused = _validate_agent_list(paused_agents, "paused_agents")
-            if wanted_paused != current.paused_agents:
-                scalars["paused_agents"] = "[" + ", ".join(wanted_paused) + "]"
+            wanted_paused_meta = _validate_holds(paused_agents, "paused_agents")
+            if wanted_paused_meta != current.paused_meta or list(wanted_paused_meta) != current.paused_agents:
+                hold_updates["paused_agents"] = wanted_paused_meta
+        wanted_drained_meta = dict(current.soft_drained_meta)
+        if soft_drained_agents is not KEEP:
+            wanted_drained_meta = _validate_holds(soft_drained_agents, "soft_drained_agents")
+            if wanted_drained_meta != current.soft_drained_meta or list(wanted_drained_meta) != current.soft_drained_agents:
+                hold_updates["soft_drained_agents"] = wanted_drained_meta
+
         wanted_review = current.review_agents
         if review_agents is not KEEP:
             wanted_review = _validate_agent_list(review_agents, "review_agents")
@@ -201,11 +263,11 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
             elif current.profiles.get(name) != parsed:
                 formatted_profiles[name] = routefile.format_profile(parsed)
 
-        if not routes and not scalars and not formatted_profiles:
+        if not routes and not scalars and not formatted_profiles and not hold_updates:
             return current
         base_text = raw.decode("utf-8") if current.status == "ok" else _initial_text()
         base_prefs = current if current.status == "ok" else None
-        text = _rewrite(base_text, routes, scalars, formatted_profiles)
+        text = _rewrite(base_text, routes, scalars, formatted_profiles, hold_updates)
         handle, temporary = tempfile.mkstemp(prefix=".config.", dir=path.parent)
         try:
             with os.fdopen(handle, "wb") as stream:
@@ -225,7 +287,10 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
             if (result.status != "ok" or result.routes != wanted_routes
                     or result.preferred != scalars.get("preferred", current.preferred)
                     or result.pinned != scalars.get("pinned", current.pinned)
-                    or result.paused_agents != wanted_paused
+                    or result.paused_agents != list(wanted_paused_meta)
+                    or result.paused_meta != wanted_paused_meta
+                    or result.soft_drained_agents != list(wanted_drained_meta)
+                    or result.soft_drained_meta != wanted_drained_meta
                     or result.review_agents != expected_review
                     or result.profiles != expected_profiles):
                 raise PodError("preferences_edit_unsafe", "The change could not be written as a one-line edit.",

@@ -182,26 +182,29 @@ No file means no rule. A file this version cannot read requires review and says 
 ## Preferences
 
 `<config home>/config.yaml` (`schema: pod/v2`) is the only authority for enabled routes,
-Preferred, Pin, `profiles`, `review_agents`, `paused_agents`, `merge_authorization` (`person` by
-default, or `coordinator`) and the verifier command. Only the person changes it, through
-`pod models` or an editor. Coordination reads it with `skills/pod/routefile.py` and loads nothing
-else about models.
+Preferred, Pin, `profiles`, `review_agents`, `paused_agents`, `soft_drained_agents`,
+`merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only the
+person changes it, through `pod models` or an editor. Coordination reads it with
+`skills/pod/routefile.py` and loads nothing else about models.
 
 - **Profiles.** An optional flat `profiles:` map defines one line per profile:
   `<role>[+mcp] <route1> [<route2> ...]`. The first route is the default and the rest are the
   ordered fallback chain; `+mcp` declares MCP access (default: no MCP). `pod dispatch --profile`,
   `pod dispatch --dry-run` and `pod models` What-If share the same pure `resolve_dispatch()`
-  function, respecting `paused_agents`, `--exclude-agent` and fail-closed `Pin`.
-- **Review agents.** An optional `review_agents` list such as `[codex, claude, antigravity]`
-  limits new review dispatches to those agents in preference order. For multi-candidate review
-  profiles, eligible candidates are stable-sorted so agents outside the diff's author set
-  (accepted `implement` dispatches) come first, ties by `review_agents` order, and each review
-  records a factual `review_independence` tag (`cross_provider`, `cross_provider_fallback`,
-  `same_provider`, `same_provider_fallback`, or `unknown_author`). Reviews must run in a separate
-  session from any implementer. Omit `review_agents` or use `[]` to allow any enabled agent. To
-  use an agent outside `review_agents`, give the person's own `--words` or use
-  `--after aN --why "…"` after an allowed review of the same commit failed or was voided without
-  a review result.
+  function, respecting active `paused_agents`, `soft_drained_agents` (with optional reason and
+  TTL/`until` expiry), `--exclude-agent` and fail-closed `Pin`.
+- **Review agents & reviewer notes.** An optional `review_agents` list such as
+  `[codex, claude, antigravity]` limits new review dispatches to those agents in preference order.
+  For multi-candidate review profiles, eligible candidates are stable-sorted so agents outside the
+  diff's author set (all accepted `implement` dispatches, including mixed authorship after a
+  handoff) come first, ties by `review_agents` order, and each review records a factual
+  `review_independence` tag (`cross_provider`, `cross_provider_fallback`, `same_provider`,
+  `same_provider_fallback`, or `unknown_author`). Reviews must run in a separate session from any
+  implementer, and optional reviewer `notes` (or partial findings on an interrupted review) are
+  persisted in the objective log and passed into successor dispatches. Omit `review_agents` or use
+  `[]` to allow any enabled agent. To use an agent outside `review_agents`, give the person's own
+  `--words` or use `--after aN --why "…"` after an allowed review of the same commit failed or was
+  voided without a review result.
 - **Antigravity wire format.** `routefile.wire_route()` translates `antigravity/gemini-4-neon/<effort>`
   to `--agent antigravity --model gemini-4-neon-<effort>` (omitting `--effort`), and
   `canonical_effective()` normalizes Orca's `launch.effective` back to the 3-part canonical route.
@@ -209,9 +212,10 @@ else about models.
 ## Models
 
 `pod models` lives in `skills/pod/models/`, which only that command imports. The view, adapters
-and workspace are scoped strictly to Anthropic, Google and OpenAI. Every route, profile and
-`paused_agents` edit has a CLI flag twin (`--enable`, `--disable`, `--preferred`, `--pin`,
-`--pause`, `--unpause`, `--profile`, `--delete-profile`, `--review-agents`).
+and workspace are scoped strictly to Anthropic, Google and OpenAI. Every route, profile,
+`paused_agents` and `soft_drained_agents` edit has a CLI flag twin (`--enable`, `--disable`,
+`--preferred`, `--pin`, `--pause`, `--drain`, `--unpause`, `--reason`, `--ttl`, `--profile`,
+`--delete-profile`, `--review-agents`).
 
 | State | Source |
 | --- | --- |

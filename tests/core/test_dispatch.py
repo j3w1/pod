@@ -344,3 +344,67 @@ class DispatchTests(CoreCase):
         log_text = _json.dumps(self.entries("widget"))
         self.assertNotIn("term_", log_text)
         self.assertNotIn("handle", log_text)
+
+    def test_mixed_authorship_soft_drain_and_persisted_reviewer_notes_survive_handoff(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.2-sol/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  claude/claude-sonnet-5-5/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, claude, antigravity]\n"
+            "profiles:\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high codex/gpt-6.2-sol/high claude/claude-sonnet-5-5/high\n"
+            "  review-fast: review codex/gpt-6.1-terra/high claude/claude-sonnet-5-5/high antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg)
+        # Step 1: Antigravity implements part 1 and integrates WIP.
+        b1 = commands.dispatch(self.repo, None, profile="build-deep", title="part1", spec="Part 1.")
+        c1 = self.commit({"src/a.py": "part1\n"})
+        self.finish(b1["task"], {"outcome": "succeeded", "commit": c1})
+        commands.accept(self.repo, None, b1["assignment"], integrated=c1)
+        # Step 2: Antigravity is soft-drained -> successor Builder falls back to Codex (mixed authorship).
+        self.write_routes(cfg + "soft_drained_agents:\n  antigravity: quota_low\n")
+        b2 = commands.dispatch(self.repo, None, profile="build-deep", title="part2", spec="Part 2.")
+        self.assertEqual(b2["route"], "codex/gpt-6.2-sol/high")
+        self.assertTrue(any("soft-drained" in line for line in b2["trace"]))
+        c2 = self.commit({"src/b.py": "part2\n"})
+        self.finish(b2["task"], {"outcome": "succeeded", "commit": c2})
+        commands.accept(self.repo, None, b2["assignment"], integrated=c2)
+        # Step 3: Review under mixed authorship {antigravity, codex} -> picks third provider Claude!
+        self.write_routes(cfg)
+        rev1 = commands.dispatch(self.repo, None, profile="review-fast", title="rev1", spec="Review.")
+        self.assertEqual((rev1["route"], rev1["review_independence"], rev1["author_agents"]),
+                         ("claude/claude-sonnet-5-5/high", "cross_provider_fallback", ["antigravity", "codex"]))
+        # Starved/interrupted Reviewer emits notes + partial finding without verdict -> persisted on result fact.
+        self.finish(rev1["task"], {
+            "outcome": "failed",
+            "notes": "Checked src/a.py; still need to verify src/b.py error handling.",
+            "findings": [{"path": "src/a.py", "required": True, "text": "missing null guard"}],
+        }, outcome="failed")
+        acc1 = commands.accept(self.repo, None, rev1["assignment"])
+        self.assertIn("Checked src/a.py", acc1["reviewer_notes"])
+        self.assertEqual(len(acc1["partial_findings"]), 1)
+        # Dry-run and status surface persisted reviewer notes & mixed authors.
+        dry = commands.dispatch(self.repo, None, profile="review-fast", dry_run=True)
+        self.assertEqual(dry["author_agents"], ["antigravity", "codex"])
+        self.assertTrue(any("Checked src/a.py" in line for line in dry["reviewer_notes"]))
+        # Successor Reviewer packet carries Prior reviewer notes!
+        rev2 = commands.dispatch(self.repo, None, profile="review-fast", title="rev2", spec="Finish review.")
+        rev2_spec = self.orca()["tasks"][rev2["task"]]["spec"]
+        self.assertIn("## Prior reviewer notes", rev2_spec)
+        self.assertIn("Checked src/a.py", rev2_spec)
+        self.finish(rev2["task"], {
+            "outcome": "succeeded", "verdict": "fail",
+            "notes": "Verified both files; fix src/a.py guard.",
+            "findings": [{"path": "src/a.py", "required": True, "text": "missing null guard"}],
+        })
+        acc2 = commands.accept(self.repo, None, rev2["assignment"])
+        self.assertEqual(acc2["notes"], "Verified both files; fix src/a.py guard.")
+        self.assertEqual(acc2["author_agents"], ["antigravity", "codex"])
+        # Successor Builder packet receives Reviewer context automatically!
+        b3 = commands.dispatch(self.repo, None, profile="build-deep", title="fix", spec="Fix finding.")
+        b3_spec = self.orca()["tasks"][b3["task"]]["spec"]
+        self.assertIn("## Reviewer context", b3_spec)
+        self.assertIn("Verified both files; fix src/a.py guard.", b3_spec)
