@@ -116,7 +116,7 @@ usable or changes a preference. Only you change your preferences.
 - **The skill** (`skills/pod/SKILL.md`): how a coordinator decides how much process a task
   needs, and the eight commands.
 - **The command** (`pod open`, `dispatch`, `accept`, `record`, `status`, `deliver`, `resume`,
-  `drop`; plus `config`, `models`, `doctor`, `update`, `export`).
+  `drop`; plus `config`, `models`, `doctor`, `update`).
 - **Authoring templates** for PES, SEAL and EEL documents, for those who use them.
 - [Architecture](docs/architecture.md): the five concepts, derived proof, the gate and the
   interfaces a host may use.
@@ -131,8 +131,7 @@ compute, and never records what was not observed.
 ## Updating and removing
 
 Run `pod update` to fetch the current `main` bundle through the same staged installer. It
-never rewrites your preference file. Records written by Pod 0.21 are left untouched;
-`pod export --to DIR` writes them to plain JSON. See
+never rewrites your preference file. Records written by Pod 0.21 are left untouched. See
 [the removal map](docs/installation.md#removal) before deleting anything. There are no release
 packages or tags.
 

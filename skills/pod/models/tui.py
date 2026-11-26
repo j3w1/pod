@@ -447,11 +447,6 @@ class Workspace:
         if not compact:
             lines.extend((part, "") for part in textwrap.wrap(row.route or row.reason or "", width))
             lines.append((status, "accent"))
-        advice = table.guidance(row)
-        if advice:
-            if not compact:
-                lines += [("", ""), ("Guidance", "head")]
-            lines.extend((part, "") for part in textwrap.wrap(advice[0], width))
         if compact:
             return lines
         profiles = [self.rows[i] for i in self.profiles()]

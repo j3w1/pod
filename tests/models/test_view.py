@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from pod import routefile
-from pod.models import leaderboard, registry, view
-from tests.models.support import ModelCase, ROUTES, current_page, live_page
+from pod.models import leaderboard, registry, table, view
+from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live_page
 
 EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]
 CODEX = {"gpt-6.1-sol": EFFORTS, "gpt-6.1-terra": EFFORTS, "gpt-6-astra": EFFORTS, "gpt-6-luna": EFFORTS[:5],
@@ -267,6 +267,62 @@ class SelectTests(ViewCase):
                          {"gpt-6.1-terra"})
         self.assertEqual({row.state for row in view.select(self.model, search="enabled")}, {"enabled"})
         self.assertEqual(view.select(self.model, search="no such thing"), [])
+
+
+class SupplementalDetailsTests(ModelCase):
+    @classmethod
+    def setUpClass(cls):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        cls.shot = {**leaderboard.parse(source), "units": leaderboard.UNITS}
+
+    def test_detail_shows_full_measurements_and_their_leaderboard_source(self):
+        shot_doc = {"source": leaderboard.URL, "units": leaderboard.UNITS}
+        row = view.Row("Claude Fable 5.2 (max with fallback)", "Anthropic", "no route",
+                       observed=True, fallback=True)
+        row.metrics.update(intelligence_index=64.987654, cost_per_task_usd=26.543219,
+                           time_per_task_min=40.81234, first_answer_token_s=221.823456)
+        lines = [line.strip() for line in table.detail(row, shot_doc)]
+        self.assertIn("State: no route", lines)
+        self.assertIn("intelligence_index: 64.987654  [index points]", lines)
+        self.assertIn("cost_per_task_usd: 26.543219  [US dollars per benchmark task]", lines)
+        self.assertIn("time_per_task_min: 40.81234  [minutes per benchmark task]", lines)
+        self.assertIn("first_answer_token_s: 221.823456  [seconds]", lines)
+        self.assertTrue(any(leaderboard.URL in line for line in lines))
+
+    def test_detail_displays_exact_supplemental_metrics_and_scores_for_the_selected_profile(self):
+        model = view.build(shot=self.shot, attempt=None, catalogs={})
+        low = next(row for row in model.rows if row.name == "Claude Fable 5.2 (low with fallback)")
+        maximum = next(row for row in model.rows if row.name == "Claude Fable 5.2 (max with fallback)")
+        lines = [line.strip() for line in table.detail(low, model.snapshot)]
+        for expected in (
+            "Time to first token: 7.313568137324001  [seconds]",
+            "Output speed: 111.74295995068549  [tokens per second]",
+            "Omniscience: 62.93333333333333  [net score points]",
+            "Input token price: 8  [US dollars per million tokens]",
+            "Output token price: 40  [US dollars per million tokens]",
+            "Cache hit price: 0.2  [US dollars per million tokens]",
+            "Cache write price: 10  [US dollars per million tokens]",
+            "Benchmark critpt: 0.294285714285714  [each benchmark's native score]",
+            "Benchmark gdpval-aa-normalized: 1545.68  [each benchmark's native score]",
+        ):
+            self.assertIn(expected, lines)
+        self.assertIn("Benchmark critpt: 0.354285714285714  [each benchmark's native score]",
+                      [line.strip() for line in table.detail(maximum, model.snapshot)])
+
+    def test_detail_uses_the_observation_index_for_duplicate_names_and_summarizes_missing_values(self):
+        entry = next(row for row in self.shot["rows"] if row["name"] == "Claude Fable 5.2 (low with fallback)")
+        duplicate = {**entry, "name": "Gemini 4 Carbon (high)", "model_name": "Gemini 4 Carbon", "creator": "Google",
+                     "profile": None, "release": "gemini-4-carbon-second", "output_tokens_per_s": None,
+                     "benchmark_scores": {"critpt": 0, "gpqa-diamond": None}}
+        shot_doc = {**self.shot, "rows": [*self.shot["rows"], duplicate]}
+        model = view.build(shot=shot_doc, attempt=None, catalogs={})
+        selected = next(row for row in model.rows if row.release == duplicate["release"])
+        lines = [line.strip() for line in table.detail(selected, model.snapshot)]
+        self.assertIn("Benchmark critpt: 0  [each benchmark's native score]", lines)
+        self.assertFalse(any("gpqa-diamond" in line for line in lines))
+        summary = next(line for line in lines if line.startswith("Supplemental measurements unavailable"))
+        self.assertIn("Output speed", summary)
+        self.assertIn("1 of 2 benchmark scores", summary)
 
 
 if __name__ == "__main__":

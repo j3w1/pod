@@ -152,7 +152,7 @@ class KeyTests(WorkspaceCase):
 
 
 class DrawTests(WorkspaceCase):
-    def test_first_frame_identifies_the_profile_and_its_guidance_in_the_inspector(self):
+    def test_first_frame_identifies_the_profile_in_the_inspector(self):
         self.refresh_from(current_page())
         for width, height in ((120, 24), (40, 16)):
             space = tui.Workspace()
@@ -164,7 +164,6 @@ class DrawTests(WorkspaceCase):
                 pane = lines[divider + 1:]
             self.assertEqual(pane[0], "Claude Fable 5.2 (max with fallback)")
             self.assertIn("fallback", " ".join(pane).casefold())
-            self.assertIn(table.guidance(space.current)[0].split(".")[0][:25], " ".join(pane))
 
     def test_cached_fallback_is_inspectable_separately_from_the_ordinary_route(self):
         self.refresh_from(current_page())
@@ -323,23 +322,6 @@ class DrawTests(WorkspaceCase):
                     self.keys("?")
                     self.assertIn("P Pin", "\n".join(text(self.space.lines(width, height))))
                     self.keys("?")
-
-    def test_opening_and_moving_show_the_selected_familys_advice(self):
-        self.refresh_from(current_page())
-        for width, height in ((120, 24), (40, 16)):
-            space = tui.Workspace()
-            space.handle("/")
-            for key in "GPT-6.2":
-                space.handle(key)
-            space.handle("enter")
-            shown = "\n".join(text(space.lines(width, height)))
-            self.assertIn("GPT-6.2 Astra (max)", shown)
-            self.assertIn("Try high effort for a bug", shown)
-            space.handle("down")
-            shown = "\n".join(text(space.lines(width, height)))
-            self.assertIn("GPT-6.2 Sol (max)", shown)
-            self.assertIn("Start a well-specified feature", shown)
-            self.assertNotIn("Try high effort for a bug", shown)
 
     def test_every_wrapped_detail_line_can_be_read_in_order(self):
         self.refresh_from(current_page())

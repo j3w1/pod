@@ -11,7 +11,7 @@ import sys
 from . import __version__
 from .errors import PodError
 
-COMMANDS = "open, dispatch, accept, record, status, deliver, resume, drop; config, models, doctor, update, export"
+COMMANDS = "open, dispatch, accept, record, status, deliver, resume, drop; config, models, doctor, update"
 
 
 def _list(value: str) -> list[str]:
@@ -108,7 +108,6 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("models", help="model routes and public observations", add_help=False)
     command("doctor", "Read-only installation and capability diagnostics.", objective=False)
     sub.add_parser("update", help="update the installed bundle", add_help=False)
-    sub.add_parser("export", help="export records written by 0.21 to plain JSON", add_help=False)
     return top
 
 
@@ -198,9 +197,6 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["update"]:
         from . import maintenance
         return maintenance.update(argv[1:])
-    if argv[:1] == ["export"]:
-        from . import export
-        return export.main(argv[1:])
     args = parser().parse_args(argv)
     try:
         result = execute(args, Path.cwd())

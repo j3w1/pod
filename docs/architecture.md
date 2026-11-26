@@ -34,8 +34,7 @@ under a file lock (`skills/pod/log.py`). State is a fold over the file
 (`skills/pod/state.py`). An append names the length it read, so a writer with an older view is
 refused. A partial last line was never an entry and is ignored. There is no caller-supplied
 sequence, no limit on entries and no snapshot. Records written by 0.21 live beside this
-directory, are never read by the core and are never modified; `pod export --to DIR` writes
-each of them to plain JSON.
+directory, are never read by the core and are never modified.
 
 **Closure is derived.** An objective is closed when no criterion is open and every delivery it
 opened is merged (or it was opened with `--no-delivery`, or dropped). No command closes one.
@@ -83,8 +82,8 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
 ## Commands
 
 `open`, `dispatch`, `accept`, `record`, `status`, `deliver`, `resume`, `drop`
-(`skills/pod/commands.py`, `skills/pod/gate.py`), plus `config`, `models`, `doctor`, `update`
-and `export`. Each takes a handful of flags. A refusal has a code, a message and a `fix`.
+(`skills/pod/commands.py`, `skills/pod/gate.py`), plus `config`, `models`, `doctor`
+and `update`. Each takes a handful of flags. A refusal has a code, a message and a `fix`.
 
 **Worker result.** A worker finishes through Orca. Pod reads the Task's result from Orca and
 takes the last JSON object in the message body that states an `outcome`:
@@ -255,7 +254,7 @@ OpenAI. Every route, profile, `paused_agents` and `soft_drained_agents` edit has
   the active sort. ←→ cycles the selected model’s exact efforts and public profiles. The
   browser shows each profile’s numeric intelligence index with a bar scaled to the largest
   visible index, and the benchmark cost per task. The selection pane shows publication and
-  route state, measurements and guidance. On narrow terminals it sits below the list.
+  route state and measurements. On narrow terminals it sits below the list.
   Enter opens scrollable details and sources, `/` searches, and `?` shows all shortcuts.
   Only explicit route edits change preferences. The plain table keeps its OpenAI and Opus
   selection. JSON diagnostics can include every provider with `--all`.
