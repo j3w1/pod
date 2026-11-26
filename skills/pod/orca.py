@@ -69,7 +69,7 @@ def run_show(run: str) -> dict:
     return call("orchestration", "run-show", "--id", run)["run"]
 
 
-def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, str, str], request: str,
+def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, str, str | None], request: str,
           name: str | None = None, new_from: tuple[str, str] | None = None) -> dict:
     """Start one worker. Repeating the call with the same request returns the first outcome.
 
@@ -78,7 +78,10 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
     """
     agent, model, effort = route
     args = ["orchestration", "worker-start", "--spec-file", "-", "--task-title", title, "--worktree", worktree,
-            "--agent", agent, "--model", model, "--effort", effort, "--run", run, "--retry-request", request]
+            "--agent", agent, "--model", model]
+    if effort:
+        args += ["--effort", effort]
+    args += ["--run", run, "--retry-request", request]
     args += (["--display-name", name] if name else []) + (
         ["--repo", f"path:{new_from[0]}", "--base-branch", new_from[1]] if new_from else [])
     result = call(*args, stdin=spec, timeout=180)

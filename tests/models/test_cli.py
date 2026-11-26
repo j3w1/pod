@@ -61,8 +61,9 @@ class CliTests(CliCase):
         self.assertEqual(code, 0)
         self.assertIn("Model and effort", out)
         self.assertIn("enabled", out)
-        self.assertNotIn("Gemini", out)
-        self.assertNotIn("Gemini 4 Carbon (high)", self.run_cli("--all")[1])
+        self.assertIn("Gemini 4 Carbon (high)", out)
+        self.assertNotIn("Qwen", out)
+        self.assertNotIn("Qwen", self.run_cli("--all")[1])
 
     def test_narrow_plain_table_rounds_full_precision_indexes_and_keeps_the_estimate_marker(self):
         source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
@@ -79,22 +80,23 @@ class CliTests(CliCase):
         self.assertEqual(max_profile["metrics"]["intelligence_index"], 62.1387990593969)
         self.assertTrue(max_profile["index_estimated"])
 
-    def test_visible_catalog_preserves_hidden_routes_and_refreshed_measurements(self):
+    def test_visible_catalog_shows_three_providers_only_and_preserves_routes(self):
         target = self.write_routes(ROUTES.replace("preferred: null",
             "  claude/claude-fable-5-2/high: enabled\npreferred: claude/claude-fable-5-2/high"))
         before = target.read_bytes()
         self.refresh_from(current_page())
         for args in ((), ("--plain",), ("--plain", "--all")):
             shown = self.run_cli(*args)[1]
-            for name in ("GPT-6.2 Astra", "GPT-6.2 Sol", "Claude Opus"):
+            for name in ("GPT-6.2 Astra", "GPT-6.2 Sol", "Claude Opus", "Claude Sonnet", "Claude Haiku",
+                         "Claude Fable", "Gemini 4 Neon", "Gemini 4 Carbon"):
                 self.assertIn(name, shown)
             self.assertIn("Astra for Law 6.2", shown)  # public observation outside the registry
-            for hidden in ("Fable", "Haiku", "Sonnet", "Gemini"):
-                self.assertNotIn(hidden, shown)
+            for non_three in ("Qwen", "DeepSeek", "Llama"):
+                self.assertNotIn(non_three, shown)
         raw = json.loads(self.run_cli("--json", "--all")[1])["rows"]
-        hidden = next(row for row in raw if row["route"] == "claude/claude-fable-5-2/high")
-        self.assertTrue(hidden["routable"] and hidden["preferred"])
-        self.assertEqual(hidden["state"], "enabled")
+        fable = next(row for row in raw if row["route"] == "claude/claude-fable-5-2/high")
+        self.assertTrue(fable["routable"] and fable["preferred"])
+        self.assertEqual(fable["state"], "enabled")
         self.assertEqual(target.read_bytes(), before)
 
     def test_an_agent_name_alone_does_not_identify_the_provider(self):
@@ -130,8 +132,8 @@ class CliTests(CliCase):
         self.assertEqual(code, 0)
         self.assertIsNone(status["snapshot"])
         self.assertEqual(status["preferences"]["enabled"], 2)
-        self.assertEqual(status["adapters"], {"codex": "no catalog", "claude": "no catalog"})
-        self.assertEqual(status["registry"]["routes"], 60)
+        self.assertEqual(status["adapters"], {"antigravity": "no catalog", "codex": "no catalog", "claude": "no catalog"})
+        self.assertEqual(status["registry"]["routes"], 64)
         self.refresh_from(page(HEADERS_WITH_UNKNOWN, ROWS_WITH_UNKNOWN))
         code, out, _err = self.run_cli("status")
         self.assertIn("Columns not known to Pod, not shown: Median Tokens/s", out)
@@ -154,6 +156,38 @@ class CliTests(CliCase):
         self.assertEqual(target.read_bytes(), before)
         self.assertEqual(self.run_cli("--preferred", "none")[0], 0)
         self.assertIsNone(routefile.load().preferred)
+
+    def test_cli_twins_edit_profiles_paused_agents_and_review_agents(self):
+        self.write_routes(ROUTES)
+        code, out, err = self.run_cli(
+            "--pause", "antigravity",
+            "--profile", "scout-fast=investigate antigravity/gemini-4-neon/low codex/gpt-6.1-terra/low",
+            "--review-agents", "codex,claude,antigravity",
+        )
+        self.assertEqual((code, err), (0, ""), out)
+        loaded = routefile.load()
+        self.assertEqual(loaded.paused_agents, ["antigravity"])
+        self.assertEqual(loaded.review_agents, ["codex", "claude", "antigravity"])
+        self.assertIn("scout-fast", loaded.profiles)
+        code, out, err = self.run_cli("--unpause", "antigravity", "--delete-profile", "scout-fast")
+        self.assertEqual((code, err), (0, ""), out)
+        loaded = routefile.load()
+        self.assertEqual(loaded.paused_agents, [])
+        self.assertEqual(loaded.profiles, {})
+        self.assertEqual(self.run_cli("--pause", "codex", "--unpause", "codex")[0], 2)
+        self.assertEqual(self.run_cli("--profile", "missing_equals")[0], 2)
+
+    def test_refresh_isolates_antigravity_adapter_errors_from_aa_snapshot(self):
+        from pod.models import adapters
+        with patch.object(leaderboard, "fetch", return_value=current_page()), \
+                patch.object(adapters, "refresh_antigravity",
+                             return_value={"ok": False, "installed": True, "failure": "agy failed"}):
+            code, out, err = self.run_cli("refresh", "--json")
+        self.assertEqual((code, err), (0, ""))
+        payload = json.loads(out)
+        self.assertTrue(payload["refresh"]["ok"])
+        self.assertFalse(payload["adapters"]["antigravity"]["ok"])
+        self.assertFalse(routefile.load().path.exists())
 
 
 from tests.models.support import HEADERS, ROWS  # noqa: E402

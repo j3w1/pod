@@ -99,8 +99,9 @@ class SupplementalDetailsTests(ModelCase):
                       [line.strip() for line in table.detail(maximum, model.snapshot)])
 
     def test_detail_uses_the_observation_index_for_duplicate_names_and_summarizes_missing_values(self):
-        entry = next(row for row in self.shot["rows"] if row["name"] == "JT-35B-Flash")
-        duplicate = {**entry, "release": "jt-35b-flash-second",
+        entry = next(row for row in self.shot["rows"] if row["name"] == "Claude Fable 5.2 (low with fallback)")
+        duplicate = {**entry, "name": "Gemini 4 Carbon (high)", "model_name": "Gemini 4 Carbon", "creator": "Google",
+                     "profile": None, "release": "gemini-4-carbon-second", "output_tokens_per_s": None,
                      "benchmark_scores": {"critpt": 0, "gpqa-diamond": None}}
         shot = {**self.shot, "rows": [*self.shot["rows"], duplicate]}
         model = view.build(shot=shot, attempt=None, catalogs={})

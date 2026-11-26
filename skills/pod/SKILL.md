@@ -125,9 +125,13 @@ review by a worker that changed nothing.
 ## Routes and models
 
 Workers run only on routes the person enabled; the Pin, when set, is the only route used.
-`pod dispatch` uses the Pin, else the Preferred route, else asks you to name one of the enabled
-routes it lists. Choose by the task: its difficulty, risk and size. `pod models` is the
-person's workspace for comparing and enabling routes; do not change their preferences.
+`pod dispatch` accepts `--profile NAME` (which sets role, ordered fallback routes and optional
+`+mcp`), `--route`, `--exclude-agent AGENT`, and `--dry-run` (pure read-only route preview with
+a plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, else the
+Preferred route. Host-wide `paused_agents` skips exhausted providers automatically. Choose by the
+task: its difficulty, risk and size. `pod models` is the person's workspace (and CLI flag twins)
+for comparing and configuring routes, profiles and paused agents; do not change their preferences
+without their direction.
 
 ## Document types
 

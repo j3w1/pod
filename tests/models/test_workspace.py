@@ -25,7 +25,10 @@ class WorkspaceCase(ModelCase):
         self.target = self.write_routes(ROUTES)
         self.refresh_from(live_page())
         self.fetches = []
-        self.space = workspace.Workspace(refresh=lambda: self.fetches.append(1) or snapshot.refresh(live_page))
+        self.space = workspace.Workspace(
+            refresh=lambda: self.fetches.append(1) or snapshot.refresh(live_page),
+            refresh_antigravity=lambda: {"ok": False, "installed": False, "failure": "agy is not on PATH"},
+        )
 
     def go(self, name: str) -> None:
         self.space.cursor = [row.name for row in self.space.rows].index(name)
@@ -114,7 +117,10 @@ class KeyTests(WorkspaceCase):
         self.space.refresh()
         self.assertEqual(len(self.fetches), 1)
         self.assertIn("Refreshed: 284 public rows", self.space.message)
-        failing = workspace.Workspace(refresh=lambda: snapshot.refresh(lambda: page(*without("Creator"))))
+        failing = workspace.Workspace(
+            refresh=lambda: snapshot.refresh(lambda: page(*without("Creator"))),
+            refresh_antigravity=lambda: {"ok": False, "installed": False, "failure": "agy is not on PATH"},
+        )
         failing.refresh()
         self.assertIn("Refresh failed", failing.message)
         shown = "\n".join(text(failing.lines(160, 30)))
@@ -173,17 +179,15 @@ class DrawTests(WorkspaceCase):
     def test_first_answer_latency_uses_its_own_label_and_public_selection_survives_reordering(self):
         self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
         space = workspace.Workspace()
-        space.handle("down")
-        space.handle("down")
-        self.assertEqual(space.current.name, "Qwen4 Max")
+        self.assertEqual(space.current.name, "Claude Fable 5.2 (max with fallback)")
         inspector = "\n".join(text(space.lines(200, 50)))
-        self.assertIn("155.4 s to first answer token", inspector)
+        self.assertIn("215.3 s to first answer token", inspector)
         shot = snapshot.load()
         shot["rows"].reverse()
         with patch.object(snapshot, "load", return_value=shot):
             space.reload()
-        self.assertEqual(space.current.name, "Qwen4 Max")
-        self.assertEqual(space.current.release, "qwen4-max")
+        self.assertEqual(space.current.name, "Claude Fable 5.2 (max with fallback)")
+        self.assertEqual(space.current.release, "claude-fable-5-2")
 
     def test_table_only_profile_keeps_focus_when_snapshot_rows_move(self):
         self.refresh_from(current_page())
@@ -201,12 +205,49 @@ class DrawTests(WorkspaceCase):
     def test_refresh_keeps_a_unique_public_selection_when_the_snapshot_gains_release_ids(self):
         self.refresh_from(current_page())
         self.space.reload()
-        self.go("Qwen4 Max")
+        self.go("Claude Fable 5.2 (max with fallback)")
         self.assertIsNone(self.space.current.release)
         self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
         self.space.reload()
-        self.assertEqual(self.space.current.release, "qwen4-max")
-        self.assertEqual(self.space.current.provider, "Alibaba")
+        self.assertEqual(self.space.current.release, "claude-fable-5-2")
+        self.assertEqual(self.space.current.provider, "Anthropic")
+
+    def test_three_provider_filters_and_profiles_what_if_tab_match_resolve_dispatch(self):
+        self.assertEqual(self.space.filters(), ["all", "Anthropic", "Google", "OpenAI"])
+        self.write_routes(
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  codex/gpt-6.1-terra/low: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  claude/claude-sonnet-5-5/high: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, claude, antigravity]\n"
+            "profiles:\n"
+            "  scout-fast: investigate antigravity/gemini-4-neon/low codex/gpt-6.1-terra/low\n"
+            "  review-fast: review codex/gpt-6.1-terra/high claude/claude-sonnet-5-5/high antigravity/gemini-4-neon/high\n"
+        )
+        self.space.reload()
+        self.keys("\t")
+        self.assertEqual(self.space.tab, "profiles")
+        self.assertEqual(self.space.preview_profile("scout-fast").route, "antigravity/gemini-4-neon/low")
+        # What-If exclude antigravity -> falls back to codex/gpt-6.1-terra/low
+        self.keys("w")
+        self.assertEqual(self.space.what_if_exclude, ("antigravity",))
+        self.assertEqual(self.space.preview_profile("scout-fast"),
+                         routefile.resolve_dispatch(self.space.view.preferences, profile="scout-fast",
+                                                    exclude_agents=("antigravity",)))
+        self.assertEqual(self.space.preview_profile("scout-fast").route, "codex/gpt-6.1-terra/low")
+        # Toggle +mcp on scout-fast with `m`, and toggle pause with `x`
+        self.keys("m")
+        self.assertTrue(routefile.load().profiles["scout-fast"].mcp)
+        self.keys("x")
+        self.assertEqual(routefile.load().paused_agents, ["antigravity"])
+        screen = "\n".join(text(self.space.lines(120, 30)))
+        self.assertIn("Paused agents: antigravity", screen)
+        self.assertIn("Decision trace", screen)
+        self.keys("x")
+        self.assertEqual(routefile.load().paused_agents, [])
 
     def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
         self.refresh_from(current_page())

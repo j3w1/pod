@@ -86,7 +86,7 @@ class StateTests(ViewCase):
     def test_a_public_observation_never_makes_or_enables_a_route(self):
         model = self.build(leaderboard.parse(live_page())["rows"])
         self.assertEqual({row.state for row in model.rows}, {"routable", "no route"})
-        self.assertFalse(any(row.routable for row in model.rows if row.provider not in ("Anthropic", "OpenAI")))
+        self.assertTrue(all(row.provider in registry.SUPPORTED_PROVIDERS for row in model.rows))
         self.assertEqual(sum(row.routable for row in model.rows), len(registry.routes(registry.load())))
         self.assertFalse(routefile.load().path.exists())
 
@@ -153,10 +153,12 @@ class StateTests(ViewCase):
                          (40.8, 221.82))
 
     def test_a_public_model_with_the_same_name_from_another_provider_cannot_supply_route_metrics(self):
-        model = self.build([public("GPT-6.1 Sol (high)", 65, 0.5, "Other")])
+        model = self.build([public("GPT-6.1 Sol (high)", 65, 0.5, "Other"),
+                            public("GPT-6.1 Sol (high)", 64, 0.5, "Google")])
         rows = [row for row in model.rows if row.name == "GPT-6.1 Sol (high)"]
+        # Non-3-provider rows ("Other") are dropped at ingest; Google row stays separate with no model_id.
         self.assertEqual([(row.provider, row.observed, row.metrics["intelligence_index"]) for row in rows],
-                         [("OpenAI", False, None), ("Other", True, 65)])
+                         [("OpenAI", False, None), ("Google", True, 64)])
         self.assertIsNone(rows[1].model_id)
 
     def test_duplicate_observations_remain_inspectable_with_their_own_values(self):
@@ -246,9 +248,10 @@ class SelectTests(ViewCase):
 
     def test_default_filter_keeps_routed_providers_and_all_keeps_everything(self):
         routed = view.select(self.model)
-        self.assertEqual({row.provider for row in routed}, {"Anthropic", "OpenAI"})
+        self.assertEqual({row.provider for row in routed}, {"Anthropic", "Google", "OpenAI"})
         self.assertEqual(len(view.select(self.model, provider="all")), len(self.model.rows))
         self.assertEqual({row.provider for row in view.select(self.model, provider="Anthropic")}, {"Anthropic"})
+        self.assertEqual({row.provider for row in view.select(self.model, provider="Google")}, {"Google"})
 
     def test_sorting_puts_unavailable_values_last_in_both_directions(self):
         for reverse in (False, True):

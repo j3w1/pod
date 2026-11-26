@@ -128,3 +128,101 @@ class RouteFileTests(PodCase):
         done = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True,
                               env={"PYTHONPATH": str(ROOT / "skills"), "PATH": "/usr/bin:/bin"})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_profiles_and_paused_agents_parse_under_pod_v2(self):
+        extra = (
+            "paused_agents: [antigravity]\n"
+            "profiles:\n"
+            "  scout-fast: investigate antigravity/gemini-4-neon/low codex/gpt-6.1-sol/high\n"
+            "  scout: investigate+mcp antigravity/gemini-4-neon/medium codex/gpt-6.1-sol/high\n"
+        )
+        found = routefile.load(self.write_routes(FULL + extra))
+        self.assertEqual((found.status, found.problem), ("ok", None))
+        self.assertEqual(found.paused_agents, ["antigravity"])
+        self.assertEqual(found.profiles["scout-fast"].role, "investigate")
+        self.assertFalse(found.profiles["scout-fast"].mcp)
+        self.assertTrue(found.profiles["scout"].mcp)
+        for bad in (
+            "paused_agents:\n  - codex\n",
+            "paused_agents: codex\n",
+            "profiles:\n  bad: unknownrole codex/gpt-6.1-sol/high\n",
+            "profiles:\n  bad: investigate\n",
+            "profiles:\n  bad: investigate not-a-route\n",
+            "profiles:\n  bad: investigate codex/gpt-6.1-sol/high codex/gpt-6.1-sol/high\n",
+        ):
+            with self.subTest(bad=bad):
+                invalid = routefile.load(self.write_routes(FULL + bad))
+                self.assertEqual((invalid.status, invalid.enabled()), ("invalid", []))
+
+    def test_wire_route_and_canonical_effective_handle_antigravity_effort_suffix(self):
+        for effort in ("low", "medium", "high", "xhigh"):
+            canonical = f"antigravity/gemini-4-neon/{effort}"
+            self.assertEqual(routefile.wire_route(canonical), ("antigravity", f"gemini-4-neon-{effort}", None))
+            self.assertEqual(routefile.canonical_effective(
+                {"agent": "antigravity", "model": f"gemini-4-neon-{effort}", "effort": None}), canonical)
+            self.assertEqual(routefile.canonical_effective(
+                {"agent": "antigravity", "model": f"gemini-4-neon-{effort}", "effort": effort}), canonical)
+        self.assertEqual(routefile.wire_route("codex/gpt-6.2-sol/high"), ("codex", "gpt-6.2-sol", "high"))
+        self.assertEqual(routefile.canonical_effective(
+            {"agent": "codex", "model": "gpt-6.2-sol", "effort": "high"}), "codex/gpt-6.2-sol/high")
+
+    def test_resolve_dispatch_fallbacks_pin_fail_closed_and_review_author_set_sorting(self):
+        cfg = (
+            "schema: pod/v2\n"
+            "routes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/low: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/high: enabled\n"
+            "  claude/claude-sonnet-5-5/high: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: null\n"
+            "pinned: null\n"
+            "review_agents: [codex, claude, antigravity]\n"
+            "profiles:\n"
+            "  scout-fast: investigate antigravity/gemini-4-neon/low codex/gpt-6.1-terra/low\n"
+            "  ui-design: implement claude/claude-opus-5-5/high claude/claude-sonnet-5-5/high\n"
+            "  review-fast: review codex/gpt-6.1-terra/high codex/gpt-6.2-sol/high claude/claude-sonnet-5-5/high claude/claude-opus-5-5/high antigravity/gemini-4-neon/high\n"
+        )
+        prefs = routefile.load(self.write_routes(cfg))
+        # Ordered fallback when excluded
+        res = routefile.resolve_dispatch(prefs, profile="scout-fast", exclude_agents=["antigravity"])
+        self.assertTrue(res.ok)
+        self.assertEqual(res.route, "codex/gpt-6.1-terra/low")
+        self.assertEqual([step.code for step in res.trace], ["excluded_agent", "selected"])
+        # Clean pause when zero candidates remain
+        paused = routefile.resolve_dispatch(prefs, profile="ui-design", exclude_agents=["claude"])
+        self.assertFalse(paused.ok)
+        self.assertEqual(paused.error_code, "no_eligible_route")
+        self.assertIn("Paused:", paused.error_message)
+        self.assertEqual(len(paused.trace), 2)
+        # Review ordering + honest factual tags:
+        # 1. Neon built diff, all up -> Codex primary (cross_provider)
+        r1 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity"})
+        self.assertEqual((r1.route, r1.review_independence), ("codex/gpt-6.1-terra/high", "cross_provider"))
+        # 2. Neon built diff, Codex down -> Claude Sonnet (cross_provider_fallback)
+        r2 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity"},
+                                        exclude_agents=["codex"])
+        self.assertEqual((r2.route, r2.review_independence), ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
+        # 3. Claude built diff, Codex down -> AGY Neon beats Claude (cross_provider_fallback)
+        r3 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"claude"},
+                                        exclude_agents=["codex"])
+        self.assertEqual((r3.route, r3.review_independence), ("antigravity/gemini-4-neon/high", "cross_provider_fallback"))
+        # 4. Codex built diff, all up -> Claude Sonnet beats Codex (cross_provider_fallback)
+        r4 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"codex"})
+        self.assertEqual((r4.route, r4.review_independence), ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
+        # 5. Mixed authorship {antigravity, codex} -> Claude Sonnet (cross_provider_fallback)
+        r5 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity", "codex"})
+        self.assertEqual((r5.route, r5.review_independence), ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
+        # 6. Neon built diff, Codex & Claude down -> AGY Neon (same_provider_fallback)
+        r6 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity"},
+                                        exclude_agents=["codex", "claude"])
+        self.assertEqual((r6.route, r6.review_independence), ("antigravity/gemini-4-neon/high", "same_provider_fallback"))
+        # Pin fail-closed when pinned agent is paused or excluded
+        pin_prefs = routefile.load(self.write_routes(
+            cfg.replace("pinned: null", "pinned: antigravity/gemini-4-neon/low") + "paused_agents: [antigravity]\n"
+        ))
+        blocked = routefile.resolve_dispatch(pin_prefs, profile="scout-fast")
+        self.assertFalse(blocked.ok)
+        self.assertEqual(blocked.error_code, "pinned_agent_excluded")

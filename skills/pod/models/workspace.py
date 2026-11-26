@@ -1,4 +1,4 @@
-"""The keyboard workspace for routes: browse, compare, and change your own preferences.
+"""The keyboard workspace for routes and profiles: browse, compare, simulate What-If, and edit preferences.
 
 `Workspace` holds the state and turns keys into changes; `run` is the thin curses loop around
 it. Opening the workspace reads local files only. The network is touched by the R key alone,
@@ -9,24 +9,37 @@ import curses
 import locale
 import textwrap
 
+from .. import routefile
 from ..errors import PodError
-from . import edit, registry, snapshot, table, view
+from . import adapters, edit, registry, snapshot, table, view
 
-HELP = ("↑↓ / j k   Previous or next model", "←→ / h l   Previous or next profile",
+HELP = ("Tab / 1 2   Switch Models and Profiles & What-If tabs",
+        "↑↓ / j k   Previous or next model (or profile)", "←→ / h l   Previous or next effort",
         "Enter   Sources and exact measurements", "/ search   Match model, route or state",
         "space on/off   Toggle this route", "p Preferred   Set or clear preference", "P Pin   Set or clear pin",
-        "E/D   Enable or disable all model efforts", "R refresh   Fetch public measurements",
+        "E/D   Enable or disable all model efforts", "x pause   Toggle agent in paused_agents",
+        "w what-if   Cycle simulated down provider (Profiles tab)",
+        "a author   Cycle simulated author provider (Profiles tab)",
+        "m mcp   Toggle +mcp on selected profile (Profiles tab)",
+        "R refresh   Fetch public measurements and Antigravity catalog",
         "s sort   Index, cost, time, first answer, name or state", "r reverse   Reverse order",
-        "f provider   Cycle providers", "PgUp/PgDn   Move ten models", "Home/End   First or last model",
-        "[ ]   Scroll source details")
+        "f provider   Cycle providers (Anthropic, Google, OpenAI)", "PgUp/PgDn   Move ten models",
+        "Home/End   First or last item", "[ ]   Scroll source details")
 ESCAPE_WAIT_MS = 25   # how long the rest of an escape sequence may take to arrive after its ESC
+_WHAT_IF_EXCLUDES = ((), ("antigravity",), ("codex",), ("claude",), ("antigravity", "codex"), ("codex", "claude"))
+_WHAT_IF_AUTHORS = (None, "antigravity", "codex", "claude")
 
 
 class Workspace:
-    def __init__(self, refresh=snapshot.refresh):
+    def __init__(self, refresh=snapshot.refresh, refresh_antigravity=adapters.refresh_antigravity):
         self._refresh = refresh
+        self._refresh_antigravity = refresh_antigravity
         self.sort, self.reverse, self.provider, self.search = "index", False, "all", ""
+        self.tab = "models"
         self.cursor = self.top = 0
+        self.profile_cursor = 0
+        self.what_if_exclude: tuple[str, ...] = ()
+        self.what_if_author: str | None = None
         self.detail = self.searching = self.help = False
         self.detail_offset = 0
         self.message = ""
@@ -40,6 +53,8 @@ class Workspace:
         path = self.view.preferences.path
         self.raw = path.read_bytes() if self.view.preferences.status == "ok" else b""
         self._select()
+        names = self.profile_names()
+        self.profile_cursor = min(self.profile_cursor, max(0, len(names) - 1))
 
     def _select(self) -> None:
         previous = self.current if getattr(self, "rows", None) else None
@@ -88,13 +103,32 @@ class Workspace:
             return rank, row.fallback, row.name
         return sorted(self.groups[self.group_for[self.cursor]], key=order)
 
+    def profile_names(self) -> list[str]:
+        return list(self.view.preferences.profiles.keys())
+
+    @property
+    def current_profile(self) -> routefile.Profile | None:
+        names = self.profile_names()
+        if not names:
+            return None
+        return self.view.preferences.profiles[names[min(self.profile_cursor, len(names) - 1)]]
+
+    def preview_profile(self, name: str) -> routefile.Resolution:
+        """Preview a profile using the exact same `routefile.resolve_dispatch()` as `pod dispatch`."""
+        authors = frozenset({self.what_if_author}) if self.what_if_author else frozenset()
+        return routefile.resolve_dispatch(
+            self.view.preferences,
+            profile=name,
+            exclude_agents=self.what_if_exclude,
+            author_agents=authors,
+        )
+
     @property
     def current(self):
         return self.rows[self.cursor] if self.rows else None
 
     def filters(self) -> list:
-        observed = {row.provider for row in self.view.rows if row.observed}
-        return ["all", *self.view.providers, *sorted(observed - set(self.view.providers))]
+        return ["all", *sorted(registry.SUPPORTED_PROVIDERS)]
 
     # ---------------------------------------------------------------- changes
 
@@ -133,10 +167,43 @@ class Workspace:
         self._apply(f"{label} cleared." if held else f"{label} is now {row.route}.",
                     **{name: None if held else row.route})
 
+    def toggle_pause(self) -> None:
+        if self.tab == "profiles":
+            prof = self.current_profile
+            agent = routefile.split(prof.routes[0])[0] if prof and prof.routes else None
+        else:
+            row = self.current
+            agent = routefile.split(row.route)[0] if row and row.route else None
+        if not agent:
+            self.message = "Select a routable item to pause or unpause its agent."
+            return
+        paused = list(self.view.preferences.paused_agents)
+        if agent in paused:
+            paused.remove(agent)
+            self._apply(f"{agent} unpaused.", paused_agents=paused)
+        else:
+            paused.append(agent)
+            self._apply(f"{agent} paused in paused_agents.", paused_agents=paused)
+
+    def toggle_profile_mcp(self) -> None:
+        prof = self.current_profile
+        if prof is None:
+            self.message = "No profile selected."
+            return
+        updated = routefile.Profile(prof.name, prof.role, not prof.mcp, prof.routes)
+        self._apply(f"Profile {prof.name} mcp is now {'on' if updated.mcp else 'off'}.",
+                    profiles={prof.name: routefile.format_profile(updated)})
+
     def refresh(self) -> None:
         attempt = self._refresh()
-        self.message = (f"Refreshed: {attempt['rows']} public rows." if attempt["ok"]
-                        else f"Refresh failed: {attempt['failure']}. The earlier snapshot was kept.")
+        agy = self._refresh_antigravity()
+        parts = [f"Refreshed: {attempt['rows']} public rows." if attempt["ok"]
+                 else f"Refresh failed: {attempt['failure']}. The earlier snapshot was kept."]
+        if agy["ok"]:
+            parts.append(f"AGY: {agy['models']} models cached.")
+        elif agy.get("installed"):
+            parts.append(f"AGY refresh failed: {agy['failure']}.")
+        self.message = " ".join(parts)
         self.reload()
 
     # ---------------------------------------------------------------- keys
@@ -164,6 +231,50 @@ class Workspace:
             self._select()
             return None
         self.message = ""
+        if key == "\t":
+            self.tab = "profiles" if self.tab == "models" else "models"
+            self.detail = False
+            return None
+        if key == "1":
+            self.tab = "models"
+            self.detail = False
+            return None
+        if key == "2":
+            self.tab = "profiles"
+            self.detail = False
+            return None
+        if key == "?":
+            self.help = True
+            self.detail_offset = 0
+            return None
+        if key == "x":
+            self.toggle_pause()
+            return None
+        if key == "R":
+            self.message = "Refreshing the public snapshot and adapter catalog…"
+            return "refresh"
+        if key in ("q", "Q"):
+            return "quit"
+        if self.tab == "profiles":
+            names = self.profile_names()
+            if key in ("up", "k") and names:
+                self.profile_cursor = max(0, self.profile_cursor - 1)
+            elif key in ("down", "j") and names:
+                self.profile_cursor = min(len(names) - 1, self.profile_cursor + 1)
+            elif key in ("home", "g") and names:
+                self.profile_cursor = 0
+            elif key in ("end", "G") and names:
+                self.profile_cursor = len(names) - 1
+            elif key == "w":
+                idx = _WHAT_IF_EXCLUDES.index(self.what_if_exclude) if self.what_if_exclude in _WHAT_IF_EXCLUDES else -1
+                self.what_if_exclude = _WHAT_IF_EXCLUDES[(idx + 1) % len(_WHAT_IF_EXCLUDES)]
+            elif key == "a":
+                idx = _WHAT_IF_AUTHORS.index(self.what_if_author) if self.what_if_author in _WHAT_IF_AUTHORS else -1
+                self.what_if_author = _WHAT_IF_AUTHORS[(idx + 1) % len(_WHAT_IF_AUTHORS)]
+            elif key == "m":
+                self.toggle_profile_mcp()
+            return None
+
         moves = {"up": -1, "k": -1, "down": 1, "j": 1, "pageup": -10, "pagedown": 10}
         if key in moves or key in ("home", "g", "end", "G", "left", "right", "l", "h", "/", "f", "r", "s"):
             self.detail_offset = 0
@@ -178,9 +289,6 @@ class Workspace:
             profiles = self.profiles()
             offset = 1 if key in ("right", "l") else -1
             self.cursor = profiles[(profiles.index(self.cursor) + offset) % len(profiles)]
-        elif key == "?":
-            self.help = True
-            self.detail_offset = 0
         elif key == " ":
             self.toggle()
         elif key in ("E", "D"):
@@ -206,14 +314,80 @@ class Workspace:
         elif key == "/":
             self.detail = False
             self.searching = True
-        elif key == "R":
-            self.message = "Refreshing the public snapshot: one request, no retries…"
-            return "refresh"
-        elif key in ("q", "Q"):
-            return "quit"
         return None
 
     # ---------------------------------------------------------------- drawing
+
+    def _profile_inspector(self, prof: routefile.Profile, width: int) -> list:
+        res = self.preview_profile(prof.name)
+        lines = [(f"{prof.name}  ({prof.role}{'+mcp' if prof.mcp else ''})", "head")]
+        if res.ok and res.route and res.wire:
+            lines.append((f"Selected: {res.route}", "good"))
+            agent, model, effort = res.wire
+            wire_cmd = f"--agent {agent} --model {model}" + (f" --effort {effort}" if effort else "")
+            lines.extend((part, "dim") for part in textwrap.wrap("Wire: " + wire_cmd, width))
+            if res.review_independence:
+                lines.append((f"Review tag: {res.review_independence}", "accent"))
+        else:
+            lines.append((f"PAUSED ({res.error_code})", "warn"))
+            if res.error_message:
+                lines.extend((part, "") for part in textwrap.wrap(res.error_message, width))
+            if res.error_fix:
+                lines.extend((part, "accent") for part in textwrap.wrap("Unblock: " + res.error_fix, width))
+        lines += [("", ""), ("Configured routes", "head")]
+        known = registry.routes(self.models)
+        for index, route in enumerate(prof.routes):
+            marker = "default" if index == 0 else f"fb {index}"
+            state = self.view.preferences.routes.get(route) or ("not enabled" if route in known else "unlisted")
+            style = "good" if state == "enabled" else "warn"
+            lines.extend((part, style) for part in textwrap.wrap(f"  [{marker}] {route} ({state})", width))
+        if res.trace:
+            lines += [("", ""), ("Decision trace", "head")]
+            for step in res.trace:
+                style = "good" if step.status == "selected" else "warn" if step.status == "blocked" else "dim"
+                lines.extend((part, style) for part in textwrap.wrap("  " + step.reason, width))
+        return lines
+
+    def _profiles_lines(self, top: list, width: int, height: int) -> list:
+        def line(text, style=""):
+            return ([(text[:width], style)], False)
+
+        excl = ",".join(self.what_if_exclude) if self.what_if_exclude else "none"
+        auth = self.what_if_author or "none"
+        status = f"Profiles  {len(self.profile_names())}  ·  What-If down: {excl}  ·  author: {auth}"
+        top.append(line(status, "head"))
+        keys = "Tab models · ↑↓ profile · w what-if · a author · x pause · m +mcp · R refresh · ? keys · q quit"
+        bottom = [line(part, "head") for part in textwrap.wrap(keys, width)]
+        if self.message:
+            bottom.insert(0, line(self.message, "warn"))
+        names = self.profile_names()
+        if not names:
+            return (top + [line("No profiles configured. Add profiles via `pod models --profile NAME=SPEC`.", "dim")] + bottom)[:height]
+        side = width >= 91
+        left = min(56, width // 2) if side else min(width, 68)
+        right = min(72, width - left - 3) if side else width
+        prof = self.current_profile
+        inspector = self._profile_inspector(prof, right)
+        room = max(1, height - len(top) - len(bottom))
+        browser = [([(table._fit("Profile", 14, "<") + " " + table._fit("Resolved route", max(8, left - 16), "<"), "head")], False)]
+        for idx, name in enumerate(names):
+            res = self.preview_profile(name)
+            selected = idx == self.profile_cursor
+            outcome = res.route if res.ok and res.route else f"PAUSED ({res.error_code})"
+            label = ("▸ " if selected else "  ") + table._fit(name, 12, "<") + " " + table._fit(outcome, max(8, left - 16), "<")
+            style = "focus" if selected else ("good" if res.ok else "warn")
+            browser.append(([(label[:left], style)], selected))
+        if side:
+            body = []
+            for i in range(min(room, max(len(browser), len(inspector)))):
+                segments, active = browser[i] if i < len(browser) else ([], False)
+                detail = inspector[i] if i < len(inspector) else ("", "")
+                pad = left - sum(len(part) for part, _style in segments)
+                body.append((segments + [(" " * max(0, pad) + " │ ", "dim"), (detail[0][:right], detail[1])], active))
+        else:
+            body = browser + [line("─" * min(width, 68), "dim")]
+            body += [line(t, style) for t, style in inspector[:max(0, room - len(body))]]
+        return (top + body + bottom)[:height]
 
     def _inspector(self, width, compact):
         row = self.current
@@ -284,8 +458,8 @@ class Workspace:
         if len(header[0]) > width and self.view.snapshot:
             shot = self.view.snapshot
             header[0] = f"Public snapshot: {snapshot.age(shot.get('fetched_at'))}"
-        top = [line(text, "warn" if "failed" in text or "invalid" in text else "") for text in header]
-        if self.help or (self.detail and self.current):
+        top = [line(text, "warn" if "failed" in text or "invalid" in text or "Paused" in text else "") for text in header]
+        if self.help or (self.detail and self.current and self.tab == "models"):
             if self.help:
                 title, items = "Keyboard shortcuts", HELP
             else:
@@ -302,6 +476,9 @@ class Workspace:
             return (top + [line(t) for t in wrapped[self.detail_offset:self.detail_offset + room]]
                     + notice + [footer])[:height]
 
+        if self.tab == "profiles":
+            return self._profiles_lines(top, width, height)
+
         status = f"Models  {len(self.groups)}  ·  {self.provider}  ·  sort: {self.sort}"
         status += " reversed" if self.reverse else ""
         if self.search:
@@ -309,11 +486,11 @@ class Workspace:
         top.append(line(f"Search: {self.search}_" if self.searching else status, "head"))
         side = width >= 91
         left = min(62, width // 2) if side else min(width, 68)
-        keys = ("↑↓ model · ←→ effort · / search · s sort · Enter sources · ? keys · q quit" if width >= 78
+        keys = ("↑↓ model · ←→ effort · / search · s sort · Tab profiles · Enter sources · ? keys · q quit" if width >= 78
                 else "↑↓ model  ←→ effort  Enter sources\n/ search  ? keys  q quit")
         if width >= 128:
-            keys = ("↑↓ model · ←→ effort · / search · s sort · r reverse · f provider · Enter sources · R refresh\n"
-                    "space on/off · E/D model on/off · p Preferred · P Pin · ? keys · q quit")
+            keys = ("↑↓ model · ←→ effort · / search · s sort · r reverse · f provider · Tab profiles · Enter sources · R refresh\n"
+                    "space on/off · E/D model on/off · p Preferred · P Pin · x pause · ? keys · q quit")
         bottom = [line(part, "head") for group in keys.splitlines() for part in textwrap.wrap(group, width)]
         if self.message:
             bottom.insert(0, line(self.message, "warn"))

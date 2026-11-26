@@ -267,3 +267,80 @@ class DispatchTests(CoreCase):
         row = state.fold(self.entries("widget")).assignments["a1"]
         self.assertEqual(row["review_exception"], {"kind": "words", "words": words})
         self.assertEqual(self.orca()["starts"], 1)
+
+    def test_antigravity_wire_translation_omits_effort_and_avoids_false_route_mismatch(self):
+        self.write_routes(
+            ROUTES.replace("routes:\n", "routes:\n  antigravity/gemini-4-neon/high: enabled\n")
+        )
+        started = self.start(paths_=["src"], route="antigravity/gemini-4-neon/high")
+        self.assertEqual(started["route"], "antigravity/gemini-4-neon/high")
+        self.assertNotIn("route_mismatch", started)
+        req = next(iter(self.orca()["requests"].values()))["receipt"]["launch"]["requested"]
+        self.assertEqual(req, {"agent": "antigravity", "model": "gemini-4-neon-high", "effort": None})
+        # Genuine mismatch on AGY (low instead of high) is still flagged.
+        self.set_orca(effective={"agent": "antigravity", "model": "gemini-4-neon-low", "effort": None})
+        mismatch = self.start(paths_=["docs"], route="antigravity/gemini-4-neon/high")
+        self.assertEqual(mismatch["route_mismatch"],
+                         "asked for antigravity/gemini-4-neon/high, Orca started antigravity/gemini-4-neon/low")
+
+    def test_profile_dispatch_dry_run_paused_agents_and_review_tags_end_to_end(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  claude/claude-sonnet-5-5/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, claude, antigravity]\n"
+            "profiles:\n"
+            "  scout: investigate+mcp antigravity/gemini-4-neon/medium claude/claude-sonnet-5-5/high\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high codex/gpt-6.1-terra/high\n"
+            "  review-fast: review codex/gpt-6.1-terra/high claude/claude-sonnet-5-5/high antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg)
+        before_entries = self.entries("widget")
+        dry = commands.dispatch(self.repo, None, profile="scout", exclude_agents=["antigravity"], dry_run=True)
+        self.assertTrue(dry["dry_run"] and dry["pass"])
+        self.assertEqual((dry["route"], dry["mcp"]), ("claude/claude-sonnet-5-5/high", True))
+        self.assertEqual(self.entries("widget"), before_entries)
+        self.assertFalse(self.orca_file.exists())
+        # Implement with Neon via build-deep
+        built = commands.dispatch(self.repo, None, profile="build-deep", title="build", spec="Build it.")
+        self.assertEqual((built["route"], built["profile"], built["mcp"]),
+                         ("antigravity/gemini-4-neon/high", "build-deep", False))
+        commit = self.commit({"src/a.py": "a\n"})
+        self.finish(built["task"], {"outcome": "succeeded", "commit": commit})
+        commands.accept(self.repo, None, built["assignment"], integrated=commit)
+        # Pause Codex -> review-fast falls back to Claude Sonnet with cross_provider_fallback
+        self.write_routes(cfg + "paused_agents: [codex]\n")
+        rev = commands.dispatch(self.repo, None, profile="review-fast", title="rev", spec="Review it.")
+        self.assertEqual((rev["route"], rev["review_independence"]),
+                         ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
+        self.finish(rev["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        accepted = commands.accept(self.repo, None, rev["assignment"])
+        self.assertEqual(accepted["review_independence"], "cross_provider_fallback")
+        review_fact = [e for e in self.entries("widget") if e.get("fact") == "review"][-1]
+        self.assertEqual(review_fact["review_independence"], "cross_provider_fallback")
+
+    def test_same_session_review_covers_nothing_and_never_persists_handles(self):
+        from pod import proof
+        commit, _ = self.implement({"src/a.py": "a\n"})
+        rev = commands.dispatch(self.repo, None, role="review", title="rev", spec="Review.", route="codex/sol/high")
+        # Simulate Orca reporting the same terminal handle as the implementer (a1 -> ctx_1).
+        native = self.orca()
+        native["workers"][rev["dispatch"]]["agentTerminalHandle"] = native["workers"]["ctx_1"]["agentTerminalHandle"]
+        self.set_orca(**native)
+        self.finish(rev["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        accepted = commands.accept(self.repo, None, rev["assignment"])
+        self.assertIn("same session", accepted["note"])
+        folded = state.fold(self.entries("widget"))
+        review_fact = folded.of("review")[-1]
+        self.assertTrue(review_fact["same_session"])
+        # Same-session review covers nothing.
+        base = self.git(self.repo, "merge-base", commit, "origin/main")
+        self.assertEqual(proof.coverage(self.repo, folded, commit, base)["uncovered"], ["src/a.py"])
+        # Never persist terminal handles into the objective log.
+        import json as _json
+        log_text = _json.dumps(self.entries("widget"))
+        self.assertNotIn("term_", log_text)
+        self.assertNotIn("handle", log_text)

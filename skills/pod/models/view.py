@@ -84,6 +84,8 @@ class View:
                          "nothing can be changed here until it is corrected with `pod config edit`.")
         elif self.preferences.status == "absent":
             lines.append("No preference file yet: no route is enabled. Enabling one here creates it.")
+        if self.preferences.paused_agents:
+            lines.append("Paused agents: " + ", ".join(self.preferences.paused_agents))
         return lines
 
 
@@ -140,7 +142,11 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
     attempt = snapshot.last_attempt() if attempt == "load" else attempt
     preferences = routefile.load() if preferences is None else preferences
     catalogs = adapters.catalogs() if catalogs is None else catalogs
-    public = list((shot or {}).get("rows", []))
+    supported = {provider.casefold() for provider in registry.SUPPORTED_PROVIDERS}
+    indexed = [(orig_idx, entry) for orig_idx, entry in enumerate((shot or {}).get("rows", []))
+               if (entry.get("creator") or "").casefold() in supported]
+    orig_indices = [orig_idx for orig_idx, _ in indexed]
+    public = [entry for _, entry in indexed]
     names = [_public_name(entry) for entry in public]
     matched = [registry.find(models, name.base) for name in names]
     matched = [model if model and model.provider.casefold() == (entry.get("creator") or "").casefold() else None
@@ -156,7 +162,7 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
         row.metrics = {metric: entry.get(metric) for metric in METRICS}
         row.model_name = name.base
         row.release = entry.get("release")
-        row.public_index = index
+        row.public_index = orig_indices[index]
         if "model_name" in entry:
             row.profile = entry.get("profile")
         else:
@@ -222,13 +228,15 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
                                "so Pod cannot say whether it runs"))
     listed = {model.id for model in models}
     for agent, catalog in catalogs.items():
+        if agent not in agents:
+            continue
         for model_id, entry in (catalog or {}).items():
             if model_id not in listed:
-                rows.append(Row(entry["name"], agents.get(agent, agent), "no route", model_id=model_id,
+                rows.append(Row(entry["name"], agents[agent], "no route", model_id=model_id,
                                 adapter="listed", adapter_context=entry["context_tokens"],
                                 reason=f"known to the installed {agent}; not in the shipped registry"))
     mark_value(rows)
-    providers = list(dict.fromkeys(model.provider for model in models))
+    providers = sorted(dict.fromkeys(model.provider for model in models))
     return View(rows, shot, attempt, preferences, providers)
 
 
@@ -256,13 +264,8 @@ def select(view: View, *, provider: str = "routed", search: str = "", sort: str 
 
 
 def visible(rows: list) -> list:
-    """The human-facing catalog. Routing, diagnostics and JSON consume the full view."""
-    # Only the registry and public rows identify a provider. Other rows inherit
-    # an agent label for grouping and can refer to third-party models.
-    return [row for row in rows if (row.routable or row.observed) and
-            (row.provider.casefold() == "openai" or
-             (row.provider.casefold() == "anthropic" and
-              re.search(r"\bopus\b", row.model_id or row.name, re.IGNORECASE)))]
+    """The human-facing catalog: the three supported providers only."""
+    return [row for row in rows if (row.routable or row.observed) and row.provider in registry.SUPPORTED_PROVIDERS]
 
 
 def as_json(row: Row) -> dict:

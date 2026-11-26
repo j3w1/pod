@@ -484,20 +484,44 @@ def duplicates(paths: dict[str, Path]) -> list[str]:
 
 # Preferences: written once when absent, then only ever read.
 
-def default_preferences(source_bundle: Path) -> bytes:
-    """A first preference file: each registry route enabled, except efforts that are never a default."""
-    routes = []
+def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> bytes:
+    """Build initial preferences from `registry.json`: the single shipped default source.
+
+    When `include_routes` is True (first install), each registry route except `NEVER_DEFAULT`
+    efforts is enabled. When False (explicit edit creating a missing file), `routes: {}` is
+    written so only the person's explicit edit enables a route.
+    """
+    routes: list[str] = []
+    review_agents: list[str] | None = None
+    profiles: dict[str, str] = {}
     try:
         registry = json.loads((source_bundle / REGISTRY).read_text(encoding="utf-8"))
-        for model in registry["models"]:
-            routes += [f"{model['agent']}/{model['id']}/{effort}" for effort in model["efforts"]
-                       if effort not in NEVER_DEFAULT]
-        if any(not ROUTE.fullmatch(route) for route in routes) or len(set(routes)) != len(routes):
-            routes = []
+        if include_routes:
+            for model in registry["models"]:
+                routes += [f"{model['agent']}/{model['id']}/{effort}" for effort in model["efforts"]
+                           if effort not in NEVER_DEFAULT]
+            if any(not ROUTE.fullmatch(route) for route in routes) or len(set(routes)) != len(routes):
+                routes = []
+        defaults = registry.get("defaults")
+        if isinstance(defaults, dict):
+            raw_review = defaults.get("review_agents")
+            if isinstance(raw_review, list) and all(isinstance(a, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", a) for a in raw_review):
+                review_agents = raw_review
+            raw_profiles = defaults.get("profiles")
+            if isinstance(raw_profiles, dict) and all(
+                isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", k) and isinstance(v, str) and v.strip()
+                for k, v in raw_profiles.items()
+            ):
+                profiles = dict(raw_profiles)
     except (OSError, UnicodeError, ValueError, KeyError, TypeError):
-        routes = []
+        routes, review_agents, profiles = [], None, {}
     lines = ["schema: pod/v2", "routes:" if routes else "routes: {}", *(f"  {route}: enabled" for route in routes),
              "preferred: null", "pinned: null", "merge_authorization: person"]
+    if review_agents is not None:
+        lines.append("review_agents: [" + ", ".join(review_agents) + "]")
+    if profiles:
+        lines.append("profiles:")
+        lines += [f"  {name}: {spec}" for name, spec in profiles.items()]
     return ("\n".join(lines) + "\n").encode()
 
 

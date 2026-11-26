@@ -19,11 +19,29 @@ class RegistryTests(unittest.TestCase):
         self.assertIsNone(registry.find(models, "GPT-6.2"))
         self.assertIsNone(registry.find(models, "GPT-6.2 Astra Preview"))
 
-    def test_an_entry_is_only_identity_agent_provider_and_efforts(self):
+    def test_an_entry_is_only_identity_agent_provider_efforts_and_optional_wire(self):
         document = json.loads(registry.FILE.read_text())
-        self.assertEqual(set(document), {"schema", "models"})
+        self.assertEqual(set(document), {"schema", "models", "defaults"})
         for entry in document["models"]:
-            self.assertEqual(set(entry), {"id", "name", "agent", "provider", "efforts"})
+            self.assertLessEqual(set(entry), {"id", "name", "agent", "provider", "efforts", "wire"})
+            self.assertTrue({"id", "name", "agent", "provider", "efforts"} <= set(entry))
+
+    def test_gemini_4_neon_and_defaults_are_shipped_in_registry(self):
+        models = registry.load()
+        neon = registry.find(models, "Gemini 4 Neon")
+        self.assertIsNotNone(neon)
+        self.assertEqual((neon.id, neon.agent, neon.provider, neon.wire),
+                         ("gemini-4-neon", "antigravity", "Google", "model-suffix"))
+        self.assertEqual(neon.efforts, ("low", "medium", "high", "xhigh"))
+        defaults = registry.defaults()
+        self.assertEqual(defaults["schema"], "pod/v2")
+        self.assertEqual(defaults["merge_authorization"], "person")
+        self.assertEqual(defaults["review_agents"], ["codex", "claude", "antigravity"])
+        self.assertEqual(set(defaults["profiles"]),
+                         {"scout-fast", "scout", "build-fast", "build-deep",
+                          "ui-light", "ui-design", "review-fast", "review-deep"})
+        self.assertTrue(defaults["profiles"]["scout"].startswith("investigate+mcp "))
+        self.assertTrue(defaults["profiles"]["scout-fast"].startswith("investigate "))
 
     def test_fable_5_2_and_ultra_are_routable(self):
         routes = registry.routes(registry.load())

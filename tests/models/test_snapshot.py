@@ -213,7 +213,7 @@ class PreferenceIsolationTests(ModelCase):
 
 class AdapterTests(ModelCase):
     def test_the_catalog_is_optional_and_read_defensively(self):
-        self.assertEqual(adapters.catalogs(), {"codex": None, "claude": None})
+        self.assertEqual(adapters.catalogs(), {"antigravity": None, "codex": None, "claude": None})
         self.codex_catalog({"gpt-6.1-sol": ["low", "ultra"]})
         self.assertEqual(adapters.codex(), {"gpt-6.1-sol": {"efforts": ["low", "ultra"], "name": "GPT-6.1-SOL",
                                                             "context_tokens": 500000}})
@@ -223,6 +223,32 @@ class AdapterTests(ModelCase):
         for text in ("{", "{}", '{"models": 3}', '{"models": [{"slug": 7}, "x", {"slug": "h", "visibility": "hide"}]}'):
             target.write_text(text)
             self.assertIn(adapters.codex(), (None, {}), text)
+
+    def test_antigravity_adapter_is_offline_first_and_filters_non_google_proxies(self):
+        sample = (
+            "\r⠋ Fetching available models...\rgemini-4-neon-high             Gemini 4 Neon (High)\n"
+            "gemini-4-neon-xhigh            Gemini 4 Neon (XHigh)\n"
+            "gemini-4-neon-low              Gemini 4 Neon (Low)\n"
+            "gemini-4-neon-medium           Gemini 4 Neon (Medium)\n"
+            "gemini-4-carbon-high           Gemini 4 Carbon (High)\n"
+            "claude-opus-5-5-high           Claude Opus 5.5 (High)\n"
+            "gpt-oss-120b-medium            GPT-OSS 120B (Medium)\n"
+        )
+        self.assertIsNone(adapters.antigravity())
+        result = adapters.refresh_antigravity(run=lambda: sample)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["models"], 2)
+        self.assertEqual(result["ignored_non_google"], ["claude-opus-5-5-high", "gpt-oss-120b-medium"])
+        cached = adapters.antigravity()
+        self.assertEqual(cached["gemini-4-neon"]["efforts"], ["low", "medium", "high", "xhigh"])
+        self.assertEqual(cached["gemini-4-neon"]["name"], "Gemini 4 Neon")
+        self.assertNotIn("claude-opus-5-5", cached)
+        self.assertNotIn("gpt-oss-120b", cached)
+        self.assertFalse(routefile.load().path.exists())
+        failed = adapters.refresh_antigravity(run=lambda: (_ for _ in ()).throw(FileNotFoundError("agy")))
+        self.assertFalse(failed["ok"])
+        self.assertFalse(failed["installed"])
+        self.assertEqual(adapters.antigravity(), cached)
 
     def test_the_adapter_home_override_is_honoured(self):
         import os

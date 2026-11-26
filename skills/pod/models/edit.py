@@ -12,12 +12,11 @@ from pathlib import Path
 import re
 import tempfile
 
-from .. import paths, routefile, yamlsubset
+from .. import installer, paths, routefile, yamlsubset
 from ..errors import PodError
 from . import registry
 
 KEEP = object()
-NEW_FILE = "schema: pod/v2\nroutes: {}\npreferred: null\npinned: null\n"
 _VALUE = re.compile(r"^(?P<head>\s*(?:\"[^\"]*\"|'[^']*'|[^:#]+?)\s*:)"
                     r"(?P<gap>\s*)(?P<value>[^#]*?)(?P<tail>\s*(?:#.*)?)$")
 
@@ -43,34 +42,58 @@ def _set_line(line: str, value: str) -> str:
     return f"{match['head']} {value}{match['tail']}{ending}"
 
 
-def _rewrite(text: str, routes: dict, scalars: dict) -> str:
-    lines = text.split("\n")
-    blocks = yamlsubset.parse(text)
-    ending = "\r" if lines and lines[0].endswith("\r") else ""
-    if routes:
-        block = blocks.get("routes")
-        if block is None:
-            if lines and lines[-1] == "":
-                lines.pop()
-            lines += ["routes:" + ending, *[f"  {key}: {state}{ending}" for key, state in routes.items()], ""]
+def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None], ending: str) -> list[str]:
+    if not updates:
+        return lines
+    blocks = yamlsubset.parse("\n".join(lines))
+    block = blocks.get(key)
+    if block is None:
+        added = [f"  {name}: {value}{ending}" for name, value in updates.items() if value is not None]
+        if not added:
+            return lines
+        if lines and lines[-1] == "":
+            lines.pop()
+        return lines + [f"{key}:{ending}", *added, ""]
+    present = {}
+    for index, content in block.lines:
+        name = content.strip().split(":", 1)[0].strip().strip("'\"")
+        present[name] = index
+    indent = "  "
+    if block.lines:
+        first = lines[block.lines[0][0]]
+        indent = first[:len(first) - len(first.lstrip())]
+    removed_indices = set()
+    added = []
+    for name, value in updates.items():
+        if value is None:
+            if name in present:
+                removed_indices.add(present[name])
+        elif name in present:
+            lines[present[name]] = _set_line(lines[present[name]], value)
         else:
-            present = {}
-            for index, content in block.lines:
-                name = content.strip().split(":", 1)[0].strip().strip("'\"")
-                present[name] = index
-            indent = "  "
-            if block.lines:
-                first = lines[block.lines[0][0]]
-                indent = first[:len(first) - len(first.lstrip())]
-            added = [f"{indent}{key}: {state}{ending}" for key, state in routes.items() if key not in present]
-            for key, state in routes.items():
-                if key in present:
-                    lines[present[key]] = _set_line(lines[present[key]], state)
-            if block.value is not None:            # `routes: {}` written inline
-                lines[block.start] = "routes:" + ending
-                lines[block.start + 1:block.start + 1] = added
-            else:
-                lines[block.end:block.end] = added
+            added.append(f"{indent}{name}: {value}{ending}")
+    if block.value is not None:            # `<key>: {}` written inline
+        if added:
+            lines[block.start] = f"{key}:{ending}"
+            lines[block.start + 1:block.start + 1] = added
+        return lines
+    if added:
+        lines[block.end:block.end] = added
+    if removed_indices:
+        lines = [line for idx, line in enumerate(lines) if idx not in removed_indices]
+        # If every child line of the mapping was removed, turn `<key>:` into `<key>: {}` so YAML stays valid.
+        re_blocks = yamlsubset.parse("\n".join(lines))
+        re_block = re_blocks.get(key)
+        if re_block is not None and re_block.value is None and not re_block.lines:
+            lines[re_block.start] = f"{key}: {{}}{ending}"
+    return lines
+
+
+def _rewrite(text: str, routes: dict, scalars: dict, profiles: dict | None = None) -> str:
+    lines = text.split("\n")
+    ending = "\r" if lines and lines[0].endswith("\r") else ""
+    lines = _rewrite_mapping(lines, "routes", routes, ending)
+    lines = _rewrite_mapping(lines, "profiles", profiles or {}, ending)
     if scalars:
         blocks = yamlsubset.parse("\n".join(lines))
         for name, value in scalars.items():
@@ -85,8 +108,28 @@ def _rewrite(text: str, routes: dict, scalars: dict) -> str:
     return "\n".join(lines)
 
 
-def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP, expected: bytes | None = None,
-          path: Path | None = None, models=None) -> routefile.Preferences:
+def _validate_agent_list(value: object, field_name: str) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        raise PodError("agent_invalid", f"{field_name} must be a list of agent names.",
+                       fix="pass plain agent names such as codex, claude or antigravity")
+    cleaned: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not routefile.AGENT.fullmatch(item):
+            raise PodError("agent_invalid", f"{item!r} is not a valid agent name for {field_name}.",
+                           fix="use plain lowercase agent names such as codex, claude or antigravity")
+        if item not in cleaned:
+            cleaned.append(item)
+    return cleaned
+
+
+def _initial_text() -> str:
+    """Single shipped default source (`registry.json`) with empty `routes: {}` so only explicit edits enable routes."""
+    return installer.default_preferences(registry.FILE.parent.parent, include_routes=False).decode("utf-8")
+
+
+def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
+          profiles: dict[str, str | None] | None = None, paused_agents=KEEP, review_agents=KEEP,
+          expected: bytes | None = None, path: Path | None = None, models=None) -> routefile.Preferences:
     """Apply one explicit change. `expected` is the file content the person was looking at.
 
     Enabling needs a route in the shipped registry; a stored key the registry does not list can
@@ -94,6 +137,7 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP, expected: 
     """
     path = paths.route_file() if path is None else path
     routes = dict(routes or {})
+    profile_updates = dict(profiles or {})
     known = registry.routes(registry.load() if models is None else models)
     with _locked(path):
         current = routefile.load(path)
@@ -109,6 +153,19 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP, expected: 
             if state == "enabled" and key not in known:
                 raise PodError("route_not_routable", f"{key} is not in the shipped registry, so it cannot be enabled.",
                                fix="choose a route `pod models` shows as routable")
+        parsed_profiles: dict[str, routefile.Profile | None] = {}
+        for name, spec in profile_updates.items():
+            if not routefile.PROFILE.fullmatch(name or ""):
+                raise PodError("profile_invalid", f"{name!r} is not a valid profile name.",
+                               fix="use a lowercase profile name such as scout-fast or build-deep")
+            if spec is None:
+                parsed_profiles[name] = None
+            else:
+                try:
+                    parsed_profiles[name] = routefile.parse_profile(name, spec)
+                except ValueError as exc:
+                    raise PodError("profile_invalid", str(exc),
+                                   fix="use '<role>[+mcp] <agent/model/effort> [...]'") from exc
         after = {**current.routes, **routes}
         scalars = {}
         for name, value in (("preferred", preferred), ("pinned", pinned)):
@@ -124,10 +181,31 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP, expected: 
                                fix="enable the route first")
             if value != held:
                 scalars[name] = value
+        wanted_paused = current.paused_agents
+        if paused_agents is not KEEP:
+            wanted_paused = _validate_agent_list(paused_agents, "paused_agents")
+            if wanted_paused != current.paused_agents:
+                scalars["paused_agents"] = "[" + ", ".join(wanted_paused) + "]"
+        wanted_review = current.review_agents
+        if review_agents is not KEEP:
+            wanted_review = _validate_agent_list(review_agents, "review_agents")
+            if wanted_review != current.review_agents:
+                scalars["review_agents"] = "[" + ", ".join(wanted_review) + "]"
+
         routes = {key: state for key, state in routes.items() if current.routes.get(key) != state}
-        if not routes and not scalars:
+        formatted_profiles: dict[str, str | None] = {}
+        for name, parsed in parsed_profiles.items():
+            if parsed is None:
+                if name in current.profiles:
+                    formatted_profiles[name] = None
+            elif current.profiles.get(name) != parsed:
+                formatted_profiles[name] = routefile.format_profile(parsed)
+
+        if not routes and not scalars and not formatted_profiles:
             return current
-        text = _rewrite(raw.decode("utf-8") if current.status == "ok" else NEW_FILE, routes, scalars)
+        base_text = raw.decode("utf-8") if current.status == "ok" else _initial_text()
+        base_prefs = current if current.status == "ok" else None
+        text = _rewrite(base_text, routes, scalars, formatted_profiles)
         handle, temporary = tempfile.mkstemp(prefix=".config.", dir=path.parent)
         try:
             with os.fdopen(handle, "wb") as stream:
@@ -136,10 +214,20 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP, expected: 
                 os.fsync(stream.fileno())
             os.chmod(temporary, 0o600)
             result = routefile.load(Path(temporary))
-            wanted = {**current.routes, **routes}
-            if (result.status != "ok" or result.routes != wanted
+            wanted_routes = {**current.routes, **routes}
+            expected_profiles = dict(base_prefs.profiles) if base_prefs is not None else dict(result.profiles)
+            for name, parsed in parsed_profiles.items():
+                if parsed is None:
+                    expected_profiles.pop(name, None)
+                else:
+                    expected_profiles[name] = parsed
+            expected_review = wanted_review if (base_prefs is not None or review_agents is not KEEP) else result.review_agents
+            if (result.status != "ok" or result.routes != wanted_routes
                     or result.preferred != scalars.get("preferred", current.preferred)
-                    or result.pinned != scalars.get("pinned", current.pinned)):
+                    or result.pinned != scalars.get("pinned", current.pinned)
+                    or result.paused_agents != wanted_paused
+                    or result.review_agents != expected_review
+                    or result.profiles != expected_profiles):
                 raise PodError("preferences_edit_unsafe", "The change could not be written as a one-line edit.",
                                fix="make the change with `pod config edit`")
             os.replace(temporary, path)
