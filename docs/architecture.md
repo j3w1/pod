@@ -34,8 +34,7 @@ under a file lock (`skills/pod/log.py`). State is a fold over the file
 (`skills/pod/state.py`). An append names the length it read, so a writer with an older view is
 refused. A partial last line was never an entry and is ignored. There is no caller-supplied
 sequence, no limit on entries and no snapshot. Records written by 0.21 live beside this
-directory, are never read by the core and are never modified; `pod export --to DIR` writes
-each of them to plain JSON.
+directory, are never read by the core and are never modified.
 
 **Closure is derived.** An objective is closed when no criterion is open and every delivery it
 opened is merged (or it was opened with `--no-delivery`, or dropped). No command closes one.
@@ -83,8 +82,8 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
 ## Commands
 
 `open`, `dispatch`, `accept`, `record`, `status`, `deliver`, `resume`, `drop`
-(`skills/pod/commands.py`, `skills/pod/gate.py`), plus `config`, `models`, `doctor`, `update`
-and `export`. Each takes a handful of flags. A refusal has a code, a message and a `fix`.
+(`skills/pod/commands.py`, `skills/pod/gate.py`), plus `config`, `models`, `doctor`
+and `update`. Each takes a handful of flags. A refusal has a code, a message and a `fix`.
 
 **Worker result.** A worker finishes through Orca. Pod reads the Task's result from Orca and
 takes the last JSON object in the message body that states an `outcome`:
@@ -181,27 +180,54 @@ No file means no rule. A file this version cannot read requires review and says 
 
 ## Preferences
 
-`<config home>/config.yaml` is the only authority for enabled routes, Preferred, Pin,
-`review_agents`, `merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only
-the person changes it, through `pod models` or an editor. Coordination reads it with
+`<config home>/config.yaml` (`schema: pod/v2`) is the only authority for enabled routes,
+Preferred, Pin, `profiles`, `review_agents`, `paused_agents`, `soft_drained_agents`,
+`merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only the
+person changes it, through `pod models` or an editor. Coordination reads it with
 `skills/pod/routefile.py` and loads nothing else about models.
 
-An optional `review_agents` list such as `[codex]` limits new review dispatches to those agents.
-Omit it or use `[]` to allow any enabled agent for review. Explicit routes, Pin and Preferred
-all go through the same check. To use another agent, give the person's own `--words` for the
-review or use `--after aN --why "…"` after an allowed review of the same commit failed or was
-voided without a review result. The assignment records the exception before Orca starts and keeps
-it when `--retry` reads the start back.
+- **Profiles.** An optional flat `profiles:` map defines one line per profile:
+  `<role>[+mcp] <route1> [<route2> ...]`. The first route is the default and the rest are the
+  ordered fallback chain; `+mcp` declares MCP access (default: no MCP). `pod dispatch --profile`,
+  `pod dispatch --dry-run` and `pod models` What-If share the same pure `resolve_dispatch()`
+  function, respecting active `paused_agents` and `soft_drained_agents` holds (by quota pool id
+  such as `agy-gemini`, `agy-claude`, `codex`, `claude-max`, or by agent name, with optional
+  reason and TTL/`until` expiry), `--exclude-agent` and fail-closed `Pin`.
+- **Review agents & reviewer notes.** An optional `review_agents` list such as
+  `[codex, antigravity, claude]` limits new review dispatches to those agents in preference order.
+  Review independence compares model families (`provider`: `Anthropic`, `OpenAI`, `Google`) rather
+  than raw agent names. For multi-candidate review profiles, eligible candidates are stable-sorted
+  so model families outside the diff's author set (all accepted `implement` dispatches, including
+  mixed authorship after a handoff) come first, ties by `review_agents` order, and each review
+  records a factual `review_independence` tag (`cross_provider`, `cross_provider_fallback`,
+  `same_provider`, `same_provider_fallback`, `unknown_author`, or `fallback_unknown_author`).
+  Reviews must run in a separate session from any implementer, and optional reviewer `notes` (or
+  partial findings on an interrupted review) are persisted in the objective log and passed into
+  successor dispatches. Omit `review_agents` or use `[]` to allow any enabled agent. To use an
+  agent outside `review_agents`, give the person's own `--words` or use `--after aN --why "…"`
+  after an allowed review of the same commit failed or was voided without a review result.
+- **Antigravity wire format.** `routefile.wire_route()` translates model-suffix routes such as
+  `antigravity/gemini-4-neon/<effort>` and `antigravity/claude-opus-5-5/<effort>` to
+  `--agent antigravity --model <id>-<effort>` (omitting `--effort`), refusing efforts not listed
+  for that `(agent, model)` in `registry.json`. `canonical_effective()` normalizes Orca's
+  `launch.effective` back to the 3-part canonical route.
+- **Implement concurrency.** At most one live `implement` assignment may run in the same worktree
+  (`worktree_busy`); a second concurrent implementer requires `--worktree new-child`. Scouts and
+  reviewers may run concurrently.
 
 ## Models
 
-`pod models` lives in `skills/pod/models/`, which only that command imports.
+`pod models` lives in `skills/pod/models/` (interactive TUI in `skills/pod/models/tui.py`), which
+only that command imports. The view, adapters and TUI are scoped strictly to Anthropic, Google and
+OpenAI. Every route, profile, `paused_agents` and `soft_drained_agents` edit has a CLI flag twin
+(`--enable`, `--disable`, `--preferred`, `--pin`, `--pause`, `--drain`, `--unpause`, `--reason`,
+`--ttl`, `--profile`, `--delete-profile`, `--review-agents`).
 
 | State | Source |
 | --- | --- |
 | Observed publicly | The last good leaderboard snapshot in the cache |
-| Known to the installed adapter | The adapter's own local catalog, read defensively |
-| Routable | `skills/pod/models/registry.json` |
+| Known to the installed adapter | The adapter's own local catalog (Codex cache, or cached `agy models` after explicit refresh), read defensively |
+| Routable | `skills/pod/models/registry.json` (also the single shipped source of initial defaults) |
 | Enabled | The preference file |
 | No route | Everything else, with the reason |
 
@@ -228,7 +254,7 @@ it when `--retry` reads the start back.
   the active sort. ←→ cycles the selected model’s exact efforts and public profiles. The
   browser shows each profile’s numeric intelligence index with a bar scaled to the largest
   visible index, and the benchmark cost per task. The selection pane shows publication and
-  route state, measurements and guidance. On narrow terminals it sits below the list.
+  route state and measurements. On narrow terminals it sits below the list.
   Enter opens scrollable details and sources, `/` searches, and `?` shows all shortcuts.
   Only explicit route edits change preferences. The plain table keeps its OpenAI and Opus
   selection. JSON diagnostics can include every provider with `--all`.

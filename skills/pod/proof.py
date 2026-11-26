@@ -53,7 +53,7 @@ def _clean(review: dict, name: str, locations: dict) -> bool:
     findings elsewhere. So a full review that fails over two files still covers the others, and
     only the corrected files need another look.
     """
-    if not review.get("completed", True) or review.get("wrote"):
+    if not review.get("completed", True) or review.get("wrote") or review.get("same_session"):
         return False
     required = [finding for finding in review.get("findings", []) if finding.get("required")]
     if any(not finding.get("path") or locations[review["n"]][finding["path"]] in (None, name) for finding in required):

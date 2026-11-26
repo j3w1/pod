@@ -1,16 +1,37 @@
 {
   "schema": "pod-registry/v1",
   "models": [
-    {"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "agent": "claude", "provider": "Anthropic", "efforts": ["low", "medium", "high", "xhigh", "max"]},
-    {"id": "claude-fable-5-1", "name": "Claude Fable 5.1", "agent": "claude", "provider": "Anthropic", "efforts": ["low", "medium", "high", "xhigh", "max"]},
-    {"id": "claude-fable-5-2", "name": "Claude Fable 5.2", "agent": "claude", "provider": "Anthropic", "efforts": ["low", "medium", "high", "xhigh", "max"]},
-    {"id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "agent": "claude", "provider": "Anthropic", "efforts": ["low", "medium", "high", "xhigh", "max"]},
-    {"id": "claude-haiku-5-5", "name": "Claude Haiku 5.5", "agent": "claude", "provider": "Anthropic", "efforts": ["low", "medium", "high", "xhigh", "max"]},
-    {"id": "gpt-6-astra", "name": "GPT-6 Astra", "agent": "codex", "provider": "OpenAI", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
-    {"id": "gpt-6.2-astra", "name": "GPT-6.2 Astra", "agent": "codex", "provider": "OpenAI", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
-    {"id": "gpt-6.2-sol", "name": "GPT-6.2 Sol", "agent": "codex", "provider": "OpenAI", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
-    {"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "agent": "codex", "provider": "OpenAI", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
-    {"id": "gpt-6.1-terra", "name": "GPT-6.1 Terra", "agent": "codex", "provider": "OpenAI", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
-    {"id": "gpt-6-luna", "name": "GPT-6 Luna", "agent": "codex", "provider": "OpenAI", "efforts": ["low", "medium", "high", "xhigh", "max"]}
-  ]
+    {"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "agent": "claude", "provider": "Anthropic", "pool": "claude-max", "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-fable-5-1", "name": "Claude Fable 5.1", "agent": "claude", "provider": "Anthropic", "pool": "claude-max", "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-fable-5-2", "name": "Claude Fable 5.2", "agent": "claude", "provider": "Anthropic", "pool": "claude-max", "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "agent": "claude", "provider": "Anthropic", "pool": "claude-max", "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-haiku-5-5", "name": "Claude Haiku 5.5", "agent": "claude", "provider": "Anthropic", "pool": "claude-max", "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "gemini-4-neon", "name": "Gemini 4 Neon", "agent": "antigravity", "provider": "Google", "pool": "agy-gemini", "efforts": ["low", "medium", "high", "xhigh"], "wire": "model-suffix"},
+    {"id": "claude-opus-5-5", "name": "Claude Opus 5.5 (AGY)", "agent": "antigravity", "provider": "Anthropic", "pool": "agy-claude", "efforts": ["low", "medium", "high"], "wire": "model-suffix"},
+    {"id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5 (AGY)", "agent": "antigravity", "provider": "Anthropic", "pool": "agy-claude", "efforts": ["low", "medium", "high"], "wire": "model-suffix"},
+    {"id": "gpt-6-astra", "name": "GPT-6 Astra", "agent": "codex", "provider": "OpenAI", "pool": "codex", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
+    {"id": "gpt-6.2-astra", "name": "GPT-6.2 Astra", "agent": "codex", "provider": "OpenAI", "pool": "codex", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
+    {"id": "gpt-6.2-sol", "name": "GPT-6.2 Sol", "agent": "codex", "provider": "OpenAI", "pool": "codex", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
+    {"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "agent": "codex", "provider": "OpenAI", "pool": "codex", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
+    {"id": "gpt-6.1-terra", "name": "GPT-6.1 Terra", "agent": "codex", "provider": "OpenAI", "pool": "codex", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]},
+    {"id": "gpt-6-luna", "name": "GPT-6 Luna", "agent": "codex", "provider": "OpenAI", "pool": "codex", "efforts": ["low", "medium", "high", "xhigh", "max"]}
+  ],
+  "defaults": {
+    "schema": "pod/v2",
+    "preferred": null,
+    "pinned": null,
+    "merge_authorization": "person",
+    "review_agents": ["codex", "antigravity", "claude"],
+    "profiles": {
+      "scout-fast": "investigate codex/gpt-6.1-terra/low antigravity/gemini-4-neon/low codex/gpt-6-luna/low",
+      "scout": "investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium antigravity/claude-sonnet-5-5/high claude/claude-sonnet-5-5/high",
+      "scout-deep": "investigate+mcp antigravity/gemini-4-neon/medium codex/gpt-6.2-sol/medium antigravity/claude-sonnet-5-5/high claude/claude-sonnet-5-5/high",
+      "build-fast": "implement antigravity/gemini-4-neon/medium codex/gpt-6.2-sol/medium antigravity/claude-sonnet-5-5/high claude/claude-sonnet-5-5/high",
+      "build-deep": "implement antigravity/gemini-4-neon/high codex/gpt-6.2-sol/high antigravity/claude-opus-5-5/high codex/gpt-6.2-astra/high claude/claude-opus-5-5/high",
+      "ui-light": "implement antigravity/claude-sonnet-5-5/high claude/claude-sonnet-5-5/high antigravity/claude-opus-5-5/high",
+      "ui-design": "implement antigravity/claude-opus-5-5/high claude/claude-opus-5-5/high antigravity/claude-sonnet-5-5/high",
+      "review-fast": "review codex/gpt-6.1-terra/high codex/gpt-6.2-sol/high antigravity/claude-sonnet-5-5/high antigravity/gemini-4-neon/high claude/claude-sonnet-5-5/high",
+      "review-deep": "review codex/gpt-6.2-sol/high codex/gpt-6.2-astra/high antigravity/claude-opus-5-5/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high"
+    }
+  }
 }

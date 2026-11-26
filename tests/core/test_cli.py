@@ -85,7 +85,7 @@ class CliTests(CoreCase):
     def test_the_coordinator_facing_surface_is_the_eight_commands(self):
         choices = cli.parser()._subparsers._group_actions[0].choices
         self.assertEqual(sorted(choices), sorted(["open", "dispatch", "accept", "record", "status", "deliver", "resume", "drop",
-                                                  "config", "models", "doctor", "update", "export"]))
+                                                  "config", "models", "doctor", "update"]))
         self.assertEqual(self.run_pod("status", "--local")[0], 2)
 
     def test_output_is_compact_text(self):
@@ -98,7 +98,7 @@ class ArchitectureTests(CoreCase):
             "evidence_closure", "retirement", "abandoned", "readiness", "admission", "admission_view", "process_exit",
             "listing", "placement", "cleanup_observations", "cleanup_archives", "cleanup_stashes", "history", "history_tree", "internal", "contracts", "records", "assurance",
             "lineage", "local_append", "display", "worker_tabs", "wake", "standing", "relay", "policy", "tool_permissions",
-            "pod_ticks", "pod_mapping", "issue_revision", "tui", "tui_state", "tui_render", "observations", "sources")
+            "pod_ticks", "pod_mapping", "issue_revision", "tui", "tui_state", "tui_render", "observations", "sources", "export")
 
     def test_the_replaced_modules_and_the_inventory_are_gone(self):
         for name in self.GONE:
@@ -110,8 +110,7 @@ class ArchitectureTests(CoreCase):
     def test_the_core_never_reads_records_written_by_0_21(self):
         import re
         users = [module.name for module in (ROOT / "skills" / "pod").glob("*.py")
-                 if module.name not in ("export.py", "cli.py")        # the command line only hands `pod export` over
-                 and re.search(r"from \. import .*\bexport\b|from \.export\b|import pod\.export", module.read_text())]
+                 if re.search(r"from \. import .*\bexport\b|from \.export\b|import pod\.export", module.read_text())]
         self.assertEqual(users, [])
 
     def test_the_writer_is_never_a_terminal_handle(self):

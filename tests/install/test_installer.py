@@ -374,6 +374,22 @@ class PreferenceTests(InstallerCase):
                                                   "merge_authorization: person\n")
         self.assertEqual(doctor(self.env)["preferences"]["enabled"], 0)
 
+    def test_a_fresh_install_with_shipped_registry_writes_profiles_review_agents_and_antigravity(self):
+        from pod import routefile
+        self.assertIn("(created)", self.installed().stdout)
+        loaded = routefile.load(self.config)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        self.assertIn("antigravity/gemini-4-neon/high", loaded.enabled())
+        self.assertIn("antigravity/claude-opus-5-5/high", loaded.enabled())
+        self.assertIn("antigravity/claude-sonnet-5-5/high", loaded.enabled())
+        self.assertEqual(loaded.review_agents, ["codex", "antigravity", "claude"])
+        self.assertEqual(set(loaded.profiles),
+                         {"scout-fast", "scout", "scout-deep", "build-fast", "build-deep",
+                          "ui-light", "ui-design", "review-fast", "review-deep"})
+        self.assertTrue(loaded.profiles["scout"].mcp)
+        self.assertTrue(loaded.profiles["scout-deep"].mcp)
+        self.assertFalse(loaded.profiles["scout-fast"].mcp)
+
 
 class PathTests(InstallerCase):
     def test_guarded_block_real_shell_resolution_and_untouched_linked_files(self):

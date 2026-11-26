@@ -11,7 +11,7 @@ import sys
 from . import __version__
 from .errors import PodError
 
-COMMANDS = "open, dispatch, accept, record, status, deliver, resume, drop; config, models, doctor, update, export"
+COMMANDS = "open, dispatch, accept, record, status, deliver, resume, drop; config, models, doctor, update"
 
 
 def _list(value: str) -> list[str]:
@@ -43,10 +43,15 @@ def parser() -> argparse.ArgumentParser:
 
     one = command("dispatch", "Start one supervised worker through Orca.")
     one.add_argument("--role", choices=("implement", "review", "investigate"))
+    one.add_argument("--profile", metavar="NAME", help="profile from config.yaml (sets role, route order and +mcp)")
     one.add_argument("--title", help="short task title")
     one.add_argument("--spec", help="the task text")
     one.add_argument("--spec-file", metavar="PATH", help="read the task text from a file, or - for standard input")
-    one.add_argument("--route", metavar="AGENT/MODEL/EFFORT", help="default: the Pin, else the Preferred route")
+    one.add_argument("--route", metavar="AGENT/MODEL/EFFORT", help="default: the Pin, else the profile or Preferred route")
+    one.add_argument("--exclude-agent", action="append", default=[], metavar="AGENT",
+                     help="exclude an agent from route selection (repeatable)")
+    one.add_argument("--dry-run", action="store_true",
+                     help="resolve the route and print the decision trace without starting a worker")
     one.add_argument("--paths", type=_list, metavar="A,B", help="implement: the only paths it may change; review: limit the review")
     one.add_argument("--commit", help="review: the commit to review (default: HEAD)")
     one.add_argument("--context", type=_list, metavar="A,B", help="review: paths whose later change lapses this review")
@@ -103,7 +108,6 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("models", help="model routes and public observations", add_help=False)
     command("doctor", "Read-only installation and capability diagnostics.", objective=False)
     sub.add_parser("update", help="update the installed bundle", add_help=False)
-    sub.add_parser("export", help="export records written by 0.21 to plain JSON", add_help=False)
     return top
 
 
@@ -119,6 +123,13 @@ def _config(edit: bool) -> dict:
     return {"path": str(target), "status": found.status, **({"problem": found.problem} if found.problem else {}),
             "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
             "merge_authorization": found.merge_authorization, "review_agents": found.review_agents,
+            "paused_agents": found.paused_agents,
+            **({"paused_meta": {k: routefile.hold_as_dict(v) for k, v in found.paused_meta.items() if v.has_metadata}}
+               if any(v.has_metadata for v in found.paused_meta.values()) else {}),
+            "soft_drained_agents": found.soft_drained_agents,
+            **({"soft_drained_meta": {k: routefile.hold_as_dict(v) for k, v in found.soft_drained_meta.items() if v.has_metadata}}
+               if any(v.has_metadata for v in found.soft_drained_meta.values()) else {}),
+            "profiles": {name: routefile.format_profile(prof) for name, prof in found.profiles.items()},
             "authorization_verifier": "configured" if found.authorization_verifier else None}
 
 
@@ -140,7 +151,8 @@ def execute(args: argparse.Namespace, cwd: Path) -> dict:
         spec = args.spec
         if args.spec_file:
             spec = sys.stdin.read() if args.spec_file == "-" else Path(args.spec_file).read_text(encoding="utf-8")
-        return commands.dispatch(cwd, args.objective, role=args.role, title=args.title, spec=spec, route=args.route,
+        return commands.dispatch(cwd, args.objective, role=args.role, profile=args.profile, title=args.title, spec=spec,
+                                 route=args.route, exclude_agents=args.exclude_agent, dry_run=args.dry_run,
                                  paths_=args.paths, commit=args.commit, context=args.context, worktree=args.worktree,
                                  retry=args.retry, name=args.name, words=args.words, after=args.after, why=args.why)
     if name == "accept":
@@ -185,9 +197,6 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["update"]:
         from . import maintenance
         return maintenance.update(argv[1:])
-    if argv[:1] == ["export"]:
-        from . import export
-        return export.main(argv[1:])
     args = parser().parse_args(argv)
     try:
         result = execute(args, Path.cwd())

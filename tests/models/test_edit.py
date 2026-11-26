@@ -56,10 +56,62 @@ class EditTests(ModelCase):
         target = routefile.load().path
         self.assertFalse(target.exists())
         edit.apply(routes={"codex/gpt-6.1-sol/low": "enabled"})
-        self.assertEqual(target.read_text(),
-                         "schema: pod/v2\nroutes:\n  codex/gpt-6.1-sol/low: enabled\npreferred: null\npinned: null\n")
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
-        self.assertEqual(routefile.load().enabled(), ["codex/gpt-6.1-sol/low"])
+        loaded = routefile.load()
+        self.assertEqual(loaded.status, "ok")
+        self.assertEqual(loaded.enabled(), ["codex/gpt-6.1-sol/low"])
+        self.assertEqual((loaded.preferred, loaded.pinned, loaded.merge_authorization), (None, None, "person"))
+        self.assertEqual(loaded.review_agents, ["codex", "antigravity", "claude"])
+        self.assertIn("scout-fast", loaded.profiles)
+        self.assertIn("scout-deep", loaded.profiles)
+        self.assertTrue(loaded.profiles["scout"].mcp)
+        self.assertTrue(loaded.profiles["scout-deep"].mcp)
+
+    def test_profiles_and_paused_agents_edit_surgically_and_preserve_every_other_byte(self):
+        target = self.write_routes(ROUTES)
+        result = edit.apply(
+            paused_agents=["antigravity"],
+            profiles={"scout-fast": "investigate antigravity/gemini-4-neon/low codex/gpt-6.1-terra/low"},
+        )
+        self.assertEqual(result.paused_agents, ["antigravity"])
+        self.assertEqual(result.profiles["scout-fast"].routes,
+                         ("antigravity/gemini-4-neon/low", "codex/gpt-6.1-terra/low"))
+        after = target.read_text()
+        self.assertIn("  codex/gpt-6.1-sol/medium: disabled   # kept comment\n", after)
+        self.assertIn("decision_policy:\n  preset: hands_off\n", after)
+        self.assertIn("paused_agents: [antigravity]\n", after)
+        updated = edit.apply(
+            paused_agents=[],
+            profiles={"scout-fast": "investigate+mcp antigravity/gemini-4-neon/low"},
+        )
+        self.assertEqual(updated.paused_agents, [])
+        self.assertTrue(updated.profiles["scout-fast"].mcp)
+        removed = edit.apply(profiles={"scout-fast": None})
+        self.assertEqual(removed.profiles, {})
+        self.assertEqual(routefile.load().status, "ok")
+        with self.assertRaises(PodError) as caught:
+            edit.apply(profiles={"bad": "unknownrole codex/gpt-6.1-sol/high"})
+        self.assertEqual(caught.exception.code, "profile_invalid")
+        with self.assertRaises(PodError) as caught:
+            edit.apply(paused_agents=["Not Valid"])
+        self.assertEqual(caught.exception.code, "agent_invalid")
+
+    def test_paused_and_soft_drained_holds_with_reason_and_ttl_round_trip_cleanly(self):
+        target = self.write_routes(ROUTES)
+        hold = routefile.AgentHold("antigravity", reason="rate_limit", until="2026-11-26T04:00:00Z", ttl=1800)
+        drain = routefile.AgentHold("claude", reason="weekly_10pct", until="2026-11-26T06:00:00Z", ttl=7200)
+        res = edit.apply(paused_agents={"antigravity": hold}, soft_drained_agents={"claude": drain})
+        self.assertEqual(res.paused_meta["antigravity"], hold)
+        self.assertEqual(res.soft_drained_meta["claude"], drain)
+        text = target.read_text()
+        self.assertIn("  codex/gpt-6.1-sol/medium: disabled   # kept comment\n", text)
+        self.assertIn("paused_agents:\n  antigravity: rate_limit ttl=1800 until=2026-11-26T04:00:00Z\n", text)
+        self.assertIn("soft_drained_agents:\n  claude: weekly_10pct ttl=7200 until=2026-11-26T06:00:00Z\n", text)
+        # Transition mapping back to simple inline list and then empty list
+        res2 = edit.apply(paused_agents=["codex"], soft_drained_agents=[])
+        self.assertEqual((res2.paused_agents, res2.soft_drained_agents), (["codex"], []))
+        self.assertIn("paused_agents: [codex]\n", target.read_text())
+        self.assertIn("soft_drained_agents: []\n", target.read_text())
 
     def test_an_invalid_file_is_refused_and_left_untouched(self):
         target = self.write_routes("schema: pod/v2\nroutes: [a, b]\n")

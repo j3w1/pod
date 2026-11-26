@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from pod import routefile
-from pod.models import leaderboard, registry, view
-from tests.models.support import ModelCase, ROUTES, current_page, live_page
+from pod.models import leaderboard, registry, table, view
+from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live_page
 
 EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]
 CODEX = {"gpt-6.1-sol": EFFORTS, "gpt-6.1-terra": EFFORTS, "gpt-6-astra": EFFORTS, "gpt-6-luna": EFFORTS[:5],
@@ -86,7 +86,7 @@ class StateTests(ViewCase):
     def test_a_public_observation_never_makes_or_enables_a_route(self):
         model = self.build(leaderboard.parse(live_page())["rows"])
         self.assertEqual({row.state for row in model.rows}, {"routable", "no route"})
-        self.assertFalse(any(row.routable for row in model.rows if row.provider not in ("Anthropic", "OpenAI")))
+        self.assertTrue(all(row.provider in registry.SUPPORTED_PROVIDERS for row in model.rows))
         self.assertEqual(sum(row.routable for row in model.rows), len(registry.routes(registry.load())))
         self.assertFalse(routefile.load().path.exists())
 
@@ -153,10 +153,12 @@ class StateTests(ViewCase):
                          (40.8, 221.82))
 
     def test_a_public_model_with_the_same_name_from_another_provider_cannot_supply_route_metrics(self):
-        model = self.build([public("GPT-6.1 Sol (high)", 65, 0.5, "Other")])
+        model = self.build([public("GPT-6.1 Sol (high)", 65, 0.5, "Other"),
+                            public("GPT-6.1 Sol (high)", 64, 0.5, "Google")])
         rows = [row for row in model.rows if row.name == "GPT-6.1 Sol (high)"]
+        # Non-3-provider rows ("Other") are dropped at ingest; Google row stays separate with no model_id.
         self.assertEqual([(row.provider, row.observed, row.metrics["intelligence_index"]) for row in rows],
-                         [("OpenAI", False, None), ("Other", True, 65)])
+                         [("OpenAI", False, None), ("Google", True, 64)])
         self.assertIsNone(rows[1].model_id)
 
     def test_duplicate_observations_remain_inspectable_with_their_own_values(self):
@@ -246,9 +248,10 @@ class SelectTests(ViewCase):
 
     def test_default_filter_keeps_routed_providers_and_all_keeps_everything(self):
         routed = view.select(self.model)
-        self.assertEqual({row.provider for row in routed}, {"Anthropic", "OpenAI"})
+        self.assertEqual({row.provider for row in routed}, {"Anthropic", "Google", "OpenAI"})
         self.assertEqual(len(view.select(self.model, provider="all")), len(self.model.rows))
         self.assertEqual({row.provider for row in view.select(self.model, provider="Anthropic")}, {"Anthropic"})
+        self.assertEqual({row.provider for row in view.select(self.model, provider="Google")}, {"Google"})
 
     def test_sorting_puts_unavailable_values_last_in_both_directions(self):
         for reverse in (False, True):
@@ -264,6 +267,62 @@ class SelectTests(ViewCase):
                          {"gpt-6.1-terra"})
         self.assertEqual({row.state for row in view.select(self.model, search="enabled")}, {"enabled"})
         self.assertEqual(view.select(self.model, search="no such thing"), [])
+
+
+class SupplementalDetailsTests(ModelCase):
+    @classmethod
+    def setUpClass(cls):
+        source = (FIXTURES / "leaderboard-profiles.html").read_text(encoding="utf-8")
+        cls.shot = {**leaderboard.parse(source), "units": leaderboard.UNITS}
+
+    def test_detail_shows_full_measurements_and_their_leaderboard_source(self):
+        shot_doc = {"source": leaderboard.URL, "units": leaderboard.UNITS}
+        row = view.Row("Claude Fable 5.2 (max with fallback)", "Anthropic", "no route",
+                       observed=True, fallback=True)
+        row.metrics.update(intelligence_index=64.987654, cost_per_task_usd=26.543219,
+                           time_per_task_min=40.81234, first_answer_token_s=221.823456)
+        lines = [line.strip() for line in table.detail(row, shot_doc)]
+        self.assertIn("State: no route", lines)
+        self.assertIn("intelligence_index: 64.987654  [index points]", lines)
+        self.assertIn("cost_per_task_usd: 26.543219  [US dollars per benchmark task]", lines)
+        self.assertIn("time_per_task_min: 40.81234  [minutes per benchmark task]", lines)
+        self.assertIn("first_answer_token_s: 221.823456  [seconds]", lines)
+        self.assertTrue(any(leaderboard.URL in line for line in lines))
+
+    def test_detail_displays_exact_supplemental_metrics_and_scores_for_the_selected_profile(self):
+        model = view.build(shot=self.shot, attempt=None, catalogs={})
+        low = next(row for row in model.rows if row.name == "Claude Fable 5.2 (low with fallback)")
+        maximum = next(row for row in model.rows if row.name == "Claude Fable 5.2 (max with fallback)")
+        lines = [line.strip() for line in table.detail(low, model.snapshot)]
+        for expected in (
+            "Time to first token: 7.313568137324001  [seconds]",
+            "Output speed: 111.74295995068549  [tokens per second]",
+            "Omniscience: 62.93333333333333  [net score points]",
+            "Input token price: 8  [US dollars per million tokens]",
+            "Output token price: 40  [US dollars per million tokens]",
+            "Cache hit price: 0.2  [US dollars per million tokens]",
+            "Cache write price: 10  [US dollars per million tokens]",
+            "Benchmark critpt: 0.294285714285714  [each benchmark's native score]",
+            "Benchmark gdpval-aa-normalized: 1545.68  [each benchmark's native score]",
+        ):
+            self.assertIn(expected, lines)
+        self.assertIn("Benchmark critpt: 0.354285714285714  [each benchmark's native score]",
+                      [line.strip() for line in table.detail(maximum, model.snapshot)])
+
+    def test_detail_uses_the_observation_index_for_duplicate_names_and_summarizes_missing_values(self):
+        entry = next(row for row in self.shot["rows"] if row["name"] == "Claude Fable 5.2 (low with fallback)")
+        duplicate = {**entry, "name": "Gemini 4 Carbon (high)", "model_name": "Gemini 4 Carbon", "creator": "Google",
+                     "profile": None, "release": "gemini-4-carbon-second", "output_tokens_per_s": None,
+                     "benchmark_scores": {"critpt": 0, "gpqa-diamond": None}}
+        shot_doc = {**self.shot, "rows": [*self.shot["rows"], duplicate]}
+        model = view.build(shot=shot_doc, attempt=None, catalogs={})
+        selected = next(row for row in model.rows if row.release == duplicate["release"])
+        lines = [line.strip() for line in table.detail(selected, model.snapshot)]
+        self.assertIn("Benchmark critpt: 0  [each benchmark's native score]", lines)
+        self.assertFalse(any("gpqa-diamond" in line for line in lines))
+        summary = next(line for line in lines if line.startswith("Supplemental measurements unavailable"))
+        self.assertIn("Output speed", summary)
+        self.assertIn("1 of 2 benchmark scores", summary)
 
 
 if __name__ == "__main__":

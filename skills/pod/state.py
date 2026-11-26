@@ -64,6 +64,55 @@ class State:
         numbers = [int(key[len(prefix):]) for key in existing if key.startswith(prefix) and key[len(prefix):].isdigit()]
         return f"{prefix}{1 + max(numbers or [0])}"
 
+    def author_routes(self) -> set[str]:
+        """Canonical routes with an accepted (integrated) implement assignment on this objective."""
+        routes = set()
+        for row in self.assignments.values():
+            if row.get("role") != "implement" or row.get("void"):
+                continue
+            done = self.result(row["id"])
+            if not done or done.get("decision") != "integrated":
+                continue
+            route = row.get("effective") or row.get("route") or ""
+            if route:
+                routes.add(route)
+        return routes
+
+    def author_families(self) -> set[str]:
+        """Model families (providers) with an accepted implement assignment on this objective."""
+        from . import routefile
+        return {routefile.route_family(route) for route in self.author_routes()}
+
+    def implement_dispatches(self) -> set[str]:
+        """Dispatch ids of non-void implement assignments on this objective."""
+        return {row["dispatch"] for row in self.assignments.values()
+                if row.get("role") == "implement" and not row.get("void") and row.get("dispatch")}
+
+    def reviewer_notes(self) -> list[dict]:
+        """Persisted reviewer notes and partial findings from review and result facts."""
+        notes: list[dict] = []
+        for fact in self.facts:
+            kind = fact.get("fact")
+            if kind == "review" and fact.get("notes"):
+                notes.append({
+                    "assignment": fact.get("reviewer"),
+                    "commit": fact.get("commit"),
+                    "verdict": fact.get("verdict"),
+                    "notes": fact["notes"],
+                })
+            elif kind == "result" and fact.get("role") == "review" and (
+                fact.get("reviewer_notes") or fact.get("partial_findings")
+            ):
+                row = self.assignments.get(fact.get("assignment") or "") or {}
+                notes.append({
+                    "assignment": fact.get("assignment"),
+                    "commit": row.get("base"),
+                    "verdict": None,
+                    "notes": fact.get("reviewer_notes") or "",
+                    "partial_findings": list(fact.get("partial_findings") or []),
+                })
+        return notes
+
 
 def fold(entries: list[dict]) -> State:
     state = State(entries=entries)

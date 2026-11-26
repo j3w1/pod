@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from pod import routefile
-from pod.models import snapshot, table, view, workspace
+from pod.models import snapshot, table, tui, view
 from tests.models.support import FIXTURES, ModelCase, ROUTES, current_page, live_page, page, without
 from tests.support import ROOT
 
@@ -25,7 +25,10 @@ class WorkspaceCase(ModelCase):
         self.target = self.write_routes(ROUTES)
         self.refresh_from(live_page())
         self.fetches = []
-        self.space = workspace.Workspace(refresh=lambda: self.fetches.append(1) or snapshot.refresh(live_page))
+        self.space = tui.Workspace(
+            refresh=lambda: self.fetches.append(1) or snapshot.refresh(live_page),
+            refresh_antigravity=lambda: {"ok": False, "installed": False, "failure": "agy is not on PATH"},
+        )
 
     def go(self, name: str) -> None:
         self.space.cursor = [row.name for row in self.space.rows].index(name)
@@ -75,6 +78,14 @@ class KeyTests(WorkspaceCase):
         self.assertEqual(set(routefile.load().routes[f"codex/gpt-6.1-terra/{effort}"] for effort in ("low", "ultra")),
                          {"disabled"})
 
+    def test_bulk_keys_on_agy_claude_do_not_touch_claude_max_routes(self):
+        self.go("Claude Opus 5.5 (AGY) (high)")
+        self.keys("E")
+        routes = routefile.load().routes
+        self.assertEqual({routes[f"antigravity/claude-opus-5-5/{e}"] for e in ("low", "medium", "high")}, {"enabled"})
+        self.assertNotIn("claude/claude-opus-5-5/low", routes)
+        self.assertNotIn("claude/claude-opus-5-5/medium", routes)
+
     def test_preferred_and_pin_toggle_on_an_enabled_route_only(self):
         self.go("GPT-6.1 Sol (high)")
         self.keys("p", "P")
@@ -101,7 +112,7 @@ class KeyTests(WorkspaceCase):
     def test_an_invalid_preference_file_is_shown_and_never_edited(self):
         self.target.write_text("schema: pod/v2\nroutes: [a]\n")
         before = self.target.read_bytes()
-        space = workspace.Workspace(refresh=lambda: self.fail("no fetch"))
+        space = tui.Workspace(refresh=lambda: self.fail("no fetch"))
         self.assertIn("Preference file is invalid", "\n".join(text(space.lines(160, 30))))
         space.cursor = [row.name for row in space.rows].index("GPT-6.1 Sol (high)")
         space.handle(" ")
@@ -114,7 +125,10 @@ class KeyTests(WorkspaceCase):
         self.space.refresh()
         self.assertEqual(len(self.fetches), 1)
         self.assertIn("Refreshed: 284 public rows", self.space.message)
-        failing = workspace.Workspace(refresh=lambda: snapshot.refresh(lambda: page(*without("Creator"))))
+        failing = tui.Workspace(
+            refresh=lambda: snapshot.refresh(lambda: page(*without("Creator"))),
+            refresh_antigravity=lambda: {"ok": False, "installed": False, "failure": "agy is not on PATH"},
+        )
         failing.refresh()
         self.assertIn("Refresh failed", failing.message)
         shown = "\n".join(text(failing.lines(160, 30)))
@@ -138,10 +152,10 @@ class KeyTests(WorkspaceCase):
 
 
 class DrawTests(WorkspaceCase):
-    def test_first_frame_identifies_the_profile_and_its_guidance_in_the_inspector(self):
+    def test_first_frame_identifies_the_profile_in_the_inspector(self):
         self.refresh_from(current_page())
         for width, height in ((120, 24), (40, 16)):
-            space = workspace.Workspace()
+            space = tui.Workspace()
             lines = text(space.lines(width, height))
             if width == 120:
                 pane = [line.split(" │ ", 1)[1] for line in lines if " │ " in line]
@@ -150,11 +164,10 @@ class DrawTests(WorkspaceCase):
                 pane = lines[divider + 1:]
             self.assertEqual(pane[0], "Claude Fable 5.2 (max with fallback)")
             self.assertIn("fallback", " ".join(pane).casefold())
-            self.assertIn(table.guidance(space.current)[0].split(".")[0][:25], " ".join(pane))
 
     def test_cached_fallback_is_inspectable_separately_from_the_ordinary_route(self):
         self.refresh_from(current_page())
-        space = workspace.Workspace(refresh=lambda: self.fail("opening the cache fetched the source"))
+        space = tui.Workspace(refresh=lambda: self.fail("opening the cache fetched the source"))
         self.assertEqual((space.current.name, space.current.route, space.current.metrics["intelligence_index"]),
                          ("Claude Fable 5.2 (max with fallback)", None, 65))
         space.handle("enter")
@@ -172,22 +185,20 @@ class DrawTests(WorkspaceCase):
 
     def test_first_answer_latency_uses_its_own_label_and_public_selection_survives_reordering(self):
         self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
-        space = workspace.Workspace()
-        space.handle("down")
-        space.handle("down")
-        self.assertEqual(space.current.name, "Qwen4 Max")
+        space = tui.Workspace()
+        self.assertEqual(space.current.name, "Claude Fable 5.2 (max with fallback)")
         inspector = "\n".join(text(space.lines(200, 50)))
-        self.assertIn("155.4 s to first answer token", inspector)
+        self.assertIn("215.3 s to first answer token", inspector)
         shot = snapshot.load()
         shot["rows"].reverse()
         with patch.object(snapshot, "load", return_value=shot):
             space.reload()
-        self.assertEqual(space.current.name, "Qwen4 Max")
-        self.assertEqual(space.current.release, "qwen4-max")
+        self.assertEqual(space.current.name, "Claude Fable 5.2 (max with fallback)")
+        self.assertEqual(space.current.release, "claude-fable-5-2")
 
     def test_table_only_profile_keeps_focus_when_snapshot_rows_move(self):
         self.refresh_from(current_page())
-        space = workspace.Workspace()
+        space = tui.Workspace()
         space.handle("down")
         space.handle("down")
         self.assertEqual(space.current.name, "Gemini 4 Carbon (high)")
@@ -201,16 +212,61 @@ class DrawTests(WorkspaceCase):
     def test_refresh_keeps_a_unique_public_selection_when_the_snapshot_gains_release_ids(self):
         self.refresh_from(current_page())
         self.space.reload()
-        self.go("Qwen4 Max")
+        self.go("Claude Fable 5.2 (max with fallback)")
         self.assertIsNone(self.space.current.release)
         self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
         self.space.reload()
-        self.assertEqual(self.space.current.release, "qwen4-max")
-        self.assertEqual(self.space.current.provider, "Alibaba")
+        self.assertEqual(self.space.current.release, "claude-fable-5-2")
+        self.assertEqual(self.space.current.provider, "Anthropic")
+
+    def test_three_provider_filters_and_profiles_what_if_tab_match_resolve_dispatch(self):
+        self.assertEqual(self.space.filters(), ["all", "Anthropic", "Google", "OpenAI"])
+        self.write_routes(
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  codex/gpt-6.1-terra/low: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  claude/claude-sonnet-5-5/high: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, claude, antigravity]\n"
+            "profiles:\n"
+            "  scout-fast: investigate antigravity/gemini-4-neon/low codex/gpt-6.1-terra/low\n"
+            "  review-fast: review codex/gpt-6.1-terra/high claude/claude-sonnet-5-5/high antigravity/gemini-4-neon/high\n"
+        )
+        self.space.reload()
+        self.keys("\t")
+        self.assertEqual(self.space.tab, "profiles")
+        self.assertEqual(self.space.preview_profile("scout-fast").route, "antigravity/gemini-4-neon/low")
+        # What-If exclude agy-gemini -> falls back to codex/gpt-6.1-terra/low
+        self.keys("w")
+        self.assertEqual(self.space.what_if_exclude, ("agy-gemini",))
+        self.assertEqual(self.space.preview_profile("scout-fast"),
+                         routefile.resolve_dispatch(self.space.view.preferences, profile="scout-fast",
+                                                    exclude_agents=("agy-gemini",)))
+        self.assertEqual(self.space.preview_profile("scout-fast").route, "codex/gpt-6.1-terra/low")
+        # Toggle +mcp on scout-fast with `m`, and toggle pool pause with `x`
+        self.keys("m")
+        self.assertTrue(routefile.load().profiles["scout-fast"].mcp)
+        self.keys("x")
+        self.assertEqual(routefile.load().paused_agents, ["agy-gemini"])
+        screen = "\n".join(text(self.space.lines(120, 30)))
+        self.assertIn("Paused agents: agy-gemini", screen)
+        self.assertIn("Decision trace", screen)
+        self.keys("x")
+        self.assertEqual(routefile.load().paused_agents, [])
+        # Toggle soft_drained_agents with `d` and verify TUI visibility + Decision trace
+        self.keys("d")
+        self.assertEqual(routefile.load().soft_drained_agents, ["agy-gemini"])
+        screen = "\n".join(text(self.space.lines(120, 30)))
+        self.assertIn("Soft-drained agents: agy-gemini", screen)
+        self.assertEqual(self.space.preview_profile("scout-fast").route, "codex/gpt-6.1-terra/low")
+        self.keys("d")
+        self.assertEqual(routefile.load().soft_drained_agents, [])
 
     def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
         self.refresh_from(current_page())
-        space = workspace.Workspace()
+        space = tui.Workspace()
         screen = "\n".join(text(space.lines(200, 50)))
         self.assertIn("Model", screen)
         self.assertIn("Index", screen)
@@ -233,7 +289,7 @@ class DrawTests(WorkspaceCase):
 
     def test_expanded_profile_scores_follow_keyboard_navigation_without_changing_routes(self):
         self.refresh_from((FIXTURES / "leaderboard-profiles.html").read_text())
-        space = workspace.Workspace()
+        space = tui.Workspace()
         self.assertEqual(space.current.name, "Claude Fable 5.2 (max with fallback)")
         self.assertIsNone(space.current.route)
         self.assertEqual(space.current.profile, "Max, Default Fallback")
@@ -267,26 +323,9 @@ class DrawTests(WorkspaceCase):
                     self.assertIn("P Pin", "\n".join(text(self.space.lines(width, height))))
                     self.keys("?")
 
-    def test_opening_and_moving_show_the_selected_familys_advice(self):
-        self.refresh_from(current_page())
-        for width, height in ((120, 24), (40, 16)):
-            space = workspace.Workspace()
-            space.handle("/")
-            for key in "GPT-6.2":
-                space.handle(key)
-            space.handle("enter")
-            shown = "\n".join(text(space.lines(width, height)))
-            self.assertIn("GPT-6.2 Astra (max)", shown)
-            self.assertIn("Try high effort for a bug", shown)
-            space.handle("down")
-            shown = "\n".join(text(space.lines(width, height)))
-            self.assertIn("GPT-6.2 Sol (max)", shown)
-            self.assertIn("Start a well-specified feature", shown)
-            self.assertNotIn("Try high effort for a bug", shown)
-
     def test_every_wrapped_detail_line_can_be_read_in_order(self):
         self.refresh_from(current_page())
-        space = workspace.Workspace()
+        space = tui.Workspace()
         space.handle("down")  # Astra's detail title fits the 40-column scrolling fixture.
         space.handle("enter")
         expected = [part for item in table.detail(space.current, space.view.snapshot)[1:]
@@ -319,7 +358,7 @@ class DrawTests(WorkspaceCase):
 
     def test_without_a_snapshot_the_header_says_so_and_nothing_is_fetched(self):
         (snapshot.home() / "snapshot.json").unlink()
-        empty = workspace.Workspace(refresh=lambda: self.fail("no fetch on open"))
+        empty = tui.Workspace(refresh=lambda: self.fail("no fetch on open"))
         self.assertIn("No public snapshot yet", text(empty.lines(120, 20))[0])
         self.assertTrue(all(row.metrics["intelligence_index"] is None for row in empty.rows))
 
@@ -413,7 +452,7 @@ class KeyReadingTests(WorkspaceCase):
         for sequence in self.UNRECOGNISED:
             with self.subTest(sequence=sequence):
                 window = FakeWindow(sequence, PAUSE)
-                key = workspace._read_key(window)
+                key = tui._read_key(window)
                 self.assertIsNone(key)
                 self.assertEqual(window.pending, [])
                 self.assertEqual(window.waits[-1], -1, "reading blocks again afterwards")
@@ -424,14 +463,14 @@ class KeyReadingTests(WorkspaceCase):
         before = self.target.read_bytes()
         self.go("GPT-6.1 Sol (high)")
         chunks = [item for sequence in self.UNRECOGNISED for item in (sequence, PAUSE)]
-        workspace._loop(FakeWindow(*chunks, "q"), self.space)
+        tui._loop(FakeWindow(*chunks, "q"), self.space)
         self.assertEqual(self.target.read_bytes(), before)
         self.assertEqual(self.space.current.name, "GPT-6.1 Sol (high)")
         self.assertEqual((self.space.detail, self.space.searching, self.space.sort), (False, False, "index"))
 
     def test_a_lone_escape_and_ordinary_keys_keep_their_meaning(self):
         window = FakeWindow("/so\x1b", PAUSE, "D", curses.KEY_DOWN, curses.KEY_RESIZE, PAUSE)
-        read = [workspace._read_key(window) for _ in range(8)]
+        read = [tui._read_key(window) for _ in range(8)]
         self.assertEqual(read, ["/", "s", "o", "\x1b", "D", "down", None, None])
         self.keys("/", "s", "o", "\x1b")
         self.assertEqual((self.space.searching, self.space.search), (False, ""))
@@ -442,7 +481,7 @@ class LocaleTests(WorkspaceCase):
         opened = []
         with patch.object(locale, "setlocale", side_effect=locale.Error("unsupported locale setting")), \
                 patch.object(curses, "wrapper", lambda loop, space: opened.append(space)):
-            self.assertEqual(workspace.run(), 0)
+            self.assertEqual(tui.run(), 0)
         self.assertEqual(len(opened), 1)
 
 

@@ -1,10 +1,10 @@
-"""Turn rows into aligned text: the same lines for the plain table and for the workspace.
+"""Turn rows into aligned text: the same lines for the plain table and for the TUI.
 
-A line is a list of (text, style) segments. Styles are names; only the workspace maps them to
+A line is a list of (text, style) segments. Styles are names; only the TUI maps them to
 colours, and every state is also a word, so nothing depends on colour.
 """
 
-from . import leaderboard, registry, view
+from . import leaderboard, view
 
 # (key, title, width, align). Narrow terminals drop columns from the end of DROP_ORDER first.
 COLUMNS = (("state", "State", 9, "<"), ("mark", "Pick", 5, "<"), ("name", "Model and effort", 0, "<"),
@@ -81,59 +81,6 @@ def row_line(row: view.Row, columns: list, width: int) -> list:
     return line
 
 
-# The use cases and starting efforts are editorial suggestions. The links give the
-# provider's basis for choosing a model, independent of its local availability.
-_OPENAI = "https://developers.openai.com/api/docs"
-_SELECTION = _OPENAI + "/guides/model-selection"
-_CLAUDE = "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
-_ASTRA = "Try high effort for a bug whose cause spans components. Check the diagnosis against a failing test."
-_SOL = "Start a well-specified feature at medium effort. Try high if the implementation misses a dependency."
-_OSS = "https://openai.com/index/introducing-gpt-oss/"
-_GUIDANCE = {
-    "GPT-6 Astra": (_ASTRA, "https://openai.com/index/gpt-6-astra/"),
-    "GPT-6.2 Astra": (_ASTRA, _SELECTION),
-    "GPT-6 Sol": (_SOL, "https://openai.com/index/introducing-gpt-6-1-sol/"),
-    "GPT-6.1 Sol": (_SOL, "https://openai.com/index/introducing-gpt-6-1-sol/"),
-    "GPT-6.2 Sol": (_SOL, _SELECTION),
-    "GPT-6.1 Terra": ("Try medium effort to trace a UI problem from screenshots. Check each proposed click.",
-                      _SELECTION),
-    "GPT-6 Luna": ("Try low effort to extract fields from many similar records. Spot-check exceptions first.",
-                   _SELECTION),
-    "Claude Opus 5.5": ("Start a cross-file review at medium effort. Try high on a change with subtle invariants.",
-                        _CLAUDE),
-    "Astra for Law 6.2": ("Compare on a legal research question with known authorities. Judge extra effort "
-                          "by whether it surfaces relevant contrary cases.", "https://openai.com/index/astra-law-6-2/"),
-    "GPT-5.3 Codex": ("Compare at medium effort on a patch that needs several edits and a regression test.",
-                      _OPENAI + "/models/gpt-5.3-codex"),
-    "GPT-5.5 Instant": ("Compare on a first draft you can check quickly. Switch to a reasoning model "
-                        "if the task needs adjustable effort.", "https://openai.com/index/gpt-5-5-instant/"),
-    "GPT-5.5 Pro": ("Compare on a difficult analysis. Try higher effort when an unresolved step matters "
-                    "more than turnaround time.", _OPENAI + "/models/gpt-5.5-pro"),
-    "o3": ("Compare on a multi-step math problem at medium effort. Check the intermediate results.",
-           _OPENAI + "/models/o3"),
-    "gpt-oss-20b": ("Try the smaller open-weight model when memory is tight. Start at low effort "
-                    "on a short, verifiable task.", _OSS),
-    "gpt-oss-120b": ("Compare with 20b when you have memory for larger weights. Hold effort at medium "
-                     "to see whether size helps on your examples.", _OSS),
-}
-
-
-def guidance(row: view.Row) -> list[str]:
-    """Show a suggested use and effort, followed by the public sources for that judgment."""
-    name = row.model_name or registry.read_name(row.name).base
-    provider = row.provider.casefold()
-    if provider == "openai":
-        source = _SELECTION
-    elif provider == "anthropic":
-        source = _CLAUDE
-    else:
-        return ["Compare this profile on a task with a known answer and record quality, cost, and time."]
-    suggestion, source = _GUIDANCE.get(name, (
-        "Compare this model on a task with a known answer. Try its lowest supported effort first "
-        "if it offers a choice.", source))
-    return [suggestion, source]
-
-
 _SUPPLEMENTAL_LABELS = {
     "first_token_s": "Time to first token",
     "output_tokens_per_s": "Output speed",
@@ -173,7 +120,7 @@ def _supplemental_detail(observation: dict, units: dict) -> list[str]:
 def detail(row: view.Row, shot: dict | None) -> list[str]:
     """The one detail panel: each state with its source, the measurements with units, and why."""
     units = (shot or {}).get("units") or {}
-    lines = [row.name, *("  " + line for line in guidance(row)), f"  State: {row.state}" + (f" ({row.reason})" if row.reason else "")]
+    lines = [row.name, f"  State: {row.state}" + (f" ({row.reason})" if row.reason else "")]
     if row.route:
         lines.append(f"  Route: {row.route}")
     lines.append("  Observed publicly: " + ("yes, on the leaderboard snapshot" + (

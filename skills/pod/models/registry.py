@@ -1,8 +1,8 @@
 """The shipped registry: which exact agent, model and effort combinations Pod can route.
 
-An entry is an id, the public display name, the agent, the provider and the efforts. Adding a
-model is a change to `registry.json` alone. Being listed here makes a route routable; it never
-enables one. Only the personal preference file does that.
+An entry is an id, the public display name, the agent, the provider, the efforts and optional
+wire metadata. Adding a model is a change to `registry.json` alone. Being listed here makes a
+route routable; it never enables one. Only the personal preference file does that.
 """
 
 from dataclasses import dataclass
@@ -10,9 +10,13 @@ import json
 from pathlib import Path
 import re
 
+from .. import routefile
 from ..errors import PodError
 
-EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+EFFORTS = routefile.EFFORTS
+SUPPORTED_PROVIDERS = frozenset({"Anthropic", "Google", "OpenAI"})
+SUPPORTED_AGENTS = frozenset({"antigravity", "claude", "codex"})
+WIRE_MODES = ("effort-flag", "model-suffix")
 FILE = Path(__file__).with_name("registry.json")
 _ID = re.compile(r"[a-z][a-z0-9.\-]{1,63}")
 _ROW = re.compile(r"(?P<base>.+?)(?: \((?P<qualifier>[^()]+)\))?")
@@ -24,7 +28,9 @@ class Model:
     name: str
     agent: str
     provider: str
+    pool: str
     efforts: tuple
+    wire: str = "effort-flag"
 
     def route(self, effort: str) -> str:
         return f"{self.agent}/{self.id}/{effort}"
@@ -40,24 +46,66 @@ class RowName:
     qualifier: str | None = None    # the parenthesis text when it is none of the above
 
 
+def _validate_defaults(section: object) -> dict:
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise ValueError("defaults must be an object")
+    if section.get("schema", "pod/v2") != "pod/v2":
+        raise ValueError("defaults.schema")
+    if section.get("merge_authorization", "person") != "person":
+        raise ValueError("defaults.merge_authorization")
+    review = section.get("review_agents", [])
+    if not isinstance(review, list) or any(not isinstance(item, str) or not routefile.AGENT.fullmatch(item) for item in review):
+        raise ValueError("defaults.review_agents")
+    profiles = section.get("profiles", {})
+    if not isinstance(profiles, dict):
+        raise ValueError("defaults.profiles")
+    for name, spec in profiles.items():
+        routefile.parse_profile(name, spec)
+    return section
+
+
 def load(path: Path = FILE) -> list[Model]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
         models = []
         for entry in document["models"]:
-            model = Model(entry["id"], entry["name"], entry["agent"], entry["provider"], tuple(entry["efforts"]))
-            if (not _ID.fullmatch(model.id) or not _ID.fullmatch(model.agent) or not model.name.strip()
+            wire = entry.get("wire", "effort-flag")
+            pool = entry["pool"]
+            model = Model(entry["id"], entry["name"], entry["agent"], entry["provider"], pool, tuple(entry["efforts"]), wire)
+            if (not _ID.fullmatch(model.id) or not _ID.fullmatch(model.agent) or not _ID.fullmatch(model.pool)
+                    or not model.name.strip()
+                    or model.agent not in SUPPORTED_AGENTS or model.provider not in SUPPORTED_PROVIDERS
+                    or model.wire not in WIRE_MODES
                     or not model.efforts or len(set(model.efforts)) != len(model.efforts)
                     or any(effort not in EFFORTS for effort in model.efforts)):
                 raise ValueError(model.id)
             models.append(model)
-        if document.get("schema") != "pod-registry/v1" or len({m.id for m in models}) != len(models) \
-                or len({m.name.casefold() for m in models}) != len(models):
+        if (document.get("schema") != "pod-registry/v1"
+                or len({(m.agent, m.id) for m in models}) != len(models)
+                or len({(m.agent, m.name.casefold()) for m in models}) != len(models)):
             raise ValueError("schema or duplicate")
+        defaults_section = _validate_defaults(document.get("defaults"))
+        known_routes = routes(models)
+        for name, spec in (defaults_section.get("profiles") or {}).items():
+            for route in routefile.parse_profile(name, spec).routes:
+                if route not in known_routes:
+                    raise ValueError(f"defaults.profiles.{name} references unknown route {route}")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise PodError("registry_invalid", f"The model registry cannot be read ({exc}).",
                        fix="reinstall Pod; the registry ships with it") from exc
     return models
+
+
+def defaults(path: Path = FILE) -> dict:
+    """Return the validated defaults section shipped in `registry.json`."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        return _validate_defaults(document.get("defaults"))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise PodError("registry_invalid", f"The model registry defaults cannot be read ({exc}).",
+                       fix="reinstall Pod; the registry ships with it") from exc
 
 
 def routes(models: list[Model]) -> dict:
@@ -81,6 +129,11 @@ def read_name(name: str) -> RowName:
     return RowName(base, qualifier=qualifier)
 
 
-def find(models: list[Model], base: str) -> Model | None:
+def find(models: list[Model], base: str, *, agent: str | None = None) -> Model | None:
     wanted = " ".join(base.split()).casefold()
-    return next((model for model in models if model.name.casefold() == wanted), None)
+    return next((model for model in models
+                 if model.name.casefold() == wanted and (agent is None or model.agent == agent)), None)
+
+
+def find_by_id(models: list[Model], agent: str, model_id: str) -> Model | None:
+    return next((model for model in models if model.agent == agent and model.id == model_id), None)

@@ -105,10 +105,37 @@ def open_(cwd: Path, *, source: str | None = None, text: str | None = None, obje
 
 # --- dispatch --------------------------------------------------------------------------------------
 
+def _reviewer_note_lines(state: State, *, commit: str | None = None) -> list[str]:
+    lines: list[str] = []
+    for item in state.reviewer_notes():
+        if commit is not None and item.get("commit") not in (None, commit):
+            continue
+        who = item.get("assignment") or "review"
+        verdict = item.get("verdict") or "partial"
+        if item.get("notes"):
+            lines.append(f"- {who} ({verdict}): {_line(item['notes'], 300)}")
+        for finding in item.get("partial_findings") or []:
+            req = "required" if finding.get("required") else "advisory"
+            where = finding.get("path") or ""
+            lines.append(f"- {who} partial {req} {where}: {_line(str(finding.get('text') or ''), 200)}")
+    return lines[-10:]
+
+
+def _normalize_notes(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:2000]
+    if isinstance(value, list):
+        joined = "\n".join(str(item).strip() for item in value if isinstance(item, str) and item.strip())
+        return joined[:2000] if joined else None
+    return None
+
+
 def packet(state: State, assignment: dict, spec: str) -> str:
     role, paths_ = assignment["role"], assignment.get("paths") or []
     lines = [f"# Assignment {state.id} {assignment['id']} ({role})", "", spec.strip(), "", "## Boundaries", "",
              f"- Base commit: {assignment['base']}"]
+    if assignment.get("profile"):
+        lines.append(f"- Profile: {assignment['profile']} (mcp: {'on' if assignment.get('mcp') else 'off'})")
     if role == "implement":
         lines += ["- Change only: " + (", ".join(paths_) if paths_ else "what the task needs"),
                   "- Commit your work on the branch you are given. Do not push, merge or open a pull request."]
@@ -116,11 +143,20 @@ def packet(state: State, assignment: dict, spec: str) -> str:
         lines += [f"- Review commit {assignment['base']}, these paths: " + ", ".join(paths_),
                   "- Report every finding in one pass. Do not change any file; the writer makes corrections.",
                   "- Mark a finding required only when the change must not merge without it.",
-                  "- `outcome` says whether you completed the review; `verdict` says whether the change passes."]
+                  "- `outcome` says whether you completed the review; `verdict` says whether the change passes.",
+                  "- Include brief `notes` (checked invariants or partial progress) in your result JSON so findings persist across handoffs."]
         if assignment.get("context"):
             lines.append("- Read as context: " + ", ".join(assignment["context"]))
     else:
         lines.append("- Read only. Change nothing.")
+    if role == "implement":
+        note_lines = _reviewer_note_lines(state)
+        if note_lines:
+            lines += ["", "## Reviewer context", "", *note_lines]
+    elif role == "review":
+        prior_notes = _reviewer_note_lines(state, commit=assignment["base"])
+        if prior_notes:
+            lines += ["", "## Prior reviewer notes", "", *prior_notes]
     lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.",
               "- Leave this terminal's name as it is. Orca treats a renamed worker terminal as kept by a person and",
               "  will not release it when the work is done.", "",
@@ -155,23 +191,8 @@ def _failed_review(state: State, ident: str, base: str, agents: list[str]) -> bo
                and worker["state"] == "failed" for worker in orca.workers(run))
 
 
-def _review_exception(state: State, preferences: routefile.Preferences, role: str, route: str, base: str,
-                      *, words: str | None, after: str | None, why: str | None) -> dict | None:
-    agents = preferences.review_agents
-    agent = routefile.split(route)[0]
-    disallowed = role == "review" and agents and agent not in agents
-    if words is after is why is None:
-        if not disallowed:
-            return None
-        allowed = next((key for key in preferences.enabled() if key.partition("/")[0] in agents), None)
-        fix = f"pass --route {allowed}" if allowed else "enable a route on an allowed agent in `pod models`"
-        if preferences.pinned:
-            fix = (f"clear or change the Pin in `pod models`, then {fix}" if allowed
-                   else "enable a route on an allowed agent and clear or change the Pin in `pod models`")
-        raise PodError("reviewer_agent_not_allowed", f"The review agent {agent} is outside review_agents.", fix=fix)
-    if not disallowed:
-        raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",
-                       fix="omit --words, --after and --why")
+def _validate_review_exception(state: State, agents: list[str], base: str,
+                               *, words: str | None, after: str | None, why: str | None) -> dict:
     if words and words.strip() and after is why is None:
         return {"kind": "words", "words": words}
     if words is None and after and why and why.strip() and _failed_review(state, after, base, agents):
@@ -181,10 +202,75 @@ def _review_exception(state: State, preferences: routefile.Preferences, role: st
                        "by an allowed agent on the same commit without a review result")
 
 
-def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title: str | None = None, spec: str | None = None,
-             route: str | None = None, paths_: list[str] | None = None, commit: str | None = None,
+def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
+    _, model, effort = routefile.split(route)
+    label = profile or role
+    return f"{label} · {model}/{effort} · {objective}:{ident} {title}"
+
+
+def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
+                      route: str | None = None, exclude_agents: list[str] | None = None,
+                      words: str | None = None, after: str | None = None) -> dict:
+    """Pure read-only route resolution: never writes to the log and never calls Orca."""
+    authors: set[str] = set()
+    notes: list[str] = []
+    if objective:
+        target, _root, _ = locate(cwd, objective)
+        entries = log.read(target)
+        if not entries:
+            raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
+        folded = fold(entries)
+        authors = folded.author_families()
+        notes = _reviewer_note_lines(folded)
+    else:
+        try:
+            target, _root, _ = locate(cwd, None)
+            entries = log.read(target)
+            if entries:
+                folded = fold(entries)
+                authors = folded.author_families()
+                notes = _reviewer_note_lines(folded)
+        except PodError:
+            pass
+    preferences = routefile.load()
+    excluded = list(exclude_agents or ())
+    res = routefile.resolve_dispatch(
+        preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
+        author_families=authors, reviewer_notes=notes, allow_review_exception=bool(words or after))
+    active_paused = routefile.active_holds(preferences.paused_meta, agents=preferences.paused_agents)
+    active_drained = routefile.active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents)
+    output = {
+        "dry_run": True,
+        "pass": res.ok,
+        "ok": res.ok,
+        "role": res.role,
+        "profile": res.profile,
+        "mcp": res.mcp,
+        "route": res.route,
+        "wire": {"agent": res.wire[0], "model": res.wire[1], "effort": res.wire[2]} if res.wire else None,
+        "author_families": list(res.author_families),
+        "review_independence": res.review_independence,
+        "paused_agents": list(active_paused),
+        "soft_drained_agents": list(active_drained),
+        "excluded_agents": sorted({item.strip() for item in excluded if item and item.strip()}),
+        **({"reviewer_notes": list(res.reviewer_notes)} if res.reviewer_notes else {}),
+        "trace": [{"route": step.route, "status": step.status, "code": step.code, "reason": step.reason}
+                  for step in res.trace],
+    }
+    if not res.ok:
+        output["refused"] = {"code": res.error_code, "message": res.error_message, "fix": res.error_fix}
+    return output
+
+
+def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
+             title: str | None = None, spec: str | None = None, route: str | None = None,
+             exclude_agents: list[str] | None = None, dry_run: bool = False,
+             paths_: list[str] | None = None, commit: str | None = None,
              context: list[str] | None = None, worktree: str = "current", retry: str | None = None,
              name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None) -> dict:
+    if dry_run:
+        return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route,
+                                 exclude_agents=exclude_agents, words=words, after=after)
     target, root, _ = locate(cwd, objective)
     with log.writer(target) as writer:
         state = fold(writer.entries)
@@ -192,19 +278,43 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
             raise PodError("objective_closed", f"Objective {state.id} is closed or dropped.", fix="open a new objective")
         if retry:
             return _settle_start(writer, state, retry)
-        if role not in ROLES or not title or not spec:
-            raise PodError("dispatch_incomplete", "A dispatch needs a role, a title and the task text.",
-                           fix="pass --role implement|review|investigate, --title and --spec or --spec-file")
+        if (role is None and profile is None) or (role is not None and role not in ROLES) or not title or not spec:
+            raise PodError("dispatch_incomplete", "A dispatch needs a role (or profile), a title and the task text.",
+                           fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
-        route = route or preferences.pinned or preferences.preferred
-        if not route:
-            raise PodError("route_required", "No Pin or Preferred route is set.",
-                           fix="pass --route, one of: " + (", ".join(preferences.enabled()) or "none enabled; run `pod models`"))
-        preferences.check(route)
+        authors = state.author_families()
+        notes = _reviewer_note_lines(state)
+        excluded = list(exclude_agents or ())
+        has_exception_flags = not (words is after is why is None)
+        res = routefile.resolve_dispatch(
+            preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
+            author_families=authors, reviewer_notes=notes, allow_review_exception=False)
+        exception = None
         paths_ = gitio.declared(paths_)
         context = gitio.declared(context, keep_root=True)
         base = gitio.commit(root, commit or "HEAD")
-        exception = _review_exception(state, preferences, role, route, base, words=words, after=after, why=why)
+        if has_exception_flags:
+            if res.ok:
+                raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",
+                               fix="omit --words, --after and --why")
+            disallowed_seen = (res.error_code == "reviewer_agent_not_allowed"
+                               or any(step.code == "reviewer_agent_not_allowed" for step in res.trace))
+            if not disallowed_seen:
+                raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
+                               fix=res.error_fix)
+            res = routefile.resolve_dispatch(
+                preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
+                author_families=authors, reviewer_notes=notes, allow_review_exception=True)
+            if not res.ok:
+                raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
+                               fix=res.error_fix)
+            exception = _validate_review_exception(state, preferences.review_agents, base,
+                                                   words=words, after=after, why=why)
+        elif not res.ok:
+            raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
+                           fix=res.error_fix)
+        role = res.role
+        route = res.route
         if role == "review":
             against = gitio.merge_base(root, base, f"origin/{state.objective['target']}") or gitio.merge_base(
                 root, base, state.objective["target"])
@@ -225,11 +335,18 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
                                fix="name the commit and paths that hold the change")
         elif role == "implement":
             live = _live(state)
+            target_wt = None if worktree.startswith("new-") else (str(root) if worktree in ("current", f"path:{root}") else worktree)
             for other in state.assignments.values():
-                if (other["role"] == "implement" and live.get(other["id"]) is not False and other["id"] in live
-                        and gitio.overlap(paths_, other.get("paths") or [])):
+                if other["role"] != "implement" or other["id"] not in live or live.get(other["id"]) is False:
+                    continue
+                if gitio.overlap(paths_, other.get("paths") or []):
                     raise PodError("paths_overlap", f"Assignment {other['id']} is still running and may change the same files.",
                                    fix=f"wait for {other['id']}, stop it through Orca, or declare paths that do not overlap")
+                other_raw = other.get("worktree") or "current"
+                other_wt = None if other_raw.startswith("new-") else (str(root) if other_raw in ("current", f"path:{root}") else other_raw)
+                if target_wt is not None and other_wt == target_wt:
+                    raise PodError("worktree_busy", f"Assignment {other['id']} is already implementing in this worktree.",
+                                   fix=f"wait for {other['id']}, stop it through Orca, or pass --worktree new-child")
         run = state.objective.get("run")
         if not run:
             run = orca.run_create(f"{state.id}: {state.objective['source'].get('title') or state.objective['source'].get('text', '')}")
@@ -237,6 +354,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
         ident = state.next_id("a", state.assignments)
         assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
                       "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
+                      **({"profile": res.profile, "mcp": res.mcp} if res.profile else {}),
                       **({"context": context} if context else {}),
                       **({"review_exception": exception} if exception else {})}
         text = packet(state, assignment, spec)
@@ -244,8 +362,10 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
         writer.append(assignment)
         selector = f"path:{root}" if worktree == "current" else worktree
         try:
-            started = orca.start(run=run, spec=text, title=f"{title} [{state.id}:{ident}]", worktree=selector,
-                                 route=routefile.split(route), request=assignment["request"], name=name,
+            started = orca.start(run=run, spec=text,
+                                 title=_task_title(res.profile, role, route, state.id, ident, title),
+                                 worktree=selector,
+                                 route=res.wire, request=assignment["request"], name=name,
                                  new_from=(str(root), gitio.branch(root) or base) if worktree.startswith("new-") else None)
         except PodError as exc:
             if exc.code == "orca_unknown":
@@ -259,15 +379,32 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, title
                            "task": started["task"], "dispatch": started.get("dispatch")})
             raise PodError("start_failed", f"Orca started no worker for {ident}: {reason or 'it gave no reason'}",
                            fix="correct what Orca reported, then dispatch the work again as a new assignment")
-        return _started(writer, ident, started, route)
+        if role == "review" and started.get("dispatch") in state.implement_dispatches():
+            writer.append({"kind": "assignment", "id": ident, "void": True, "refused": "same_session_review",
+                           "task": started["task"], "dispatch": started["dispatch"]})
+            raise PodError("same_session_review",
+                           "A review must run in a separate fresh session from the implementer.",
+                           fix="dispatch the review in a fresh worker session")
+        return _started(writer, ident, started, route, resolution=res, authors=authors,
+                        primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
 
 
-def _started(writer, ident: str, started: dict, route: str) -> dict:
-    effective = started.get("effective") or {}
-    effective = "/".join(str(effective.get(key)) for key in ("agent", "model", "effort")) if effective else None
+def _started(writer, ident: str, started: dict, route: str, *, resolution: routefile.Resolution | None = None,
+             authors: set[str] | None = None, primary_agent: str | None = None) -> dict:
+    effective = routefile.canonical_effective(started.get("effective"))
     writer.append({"kind": "assignment", "id": ident, "task": started["task"], "dispatch": started["dispatch"],
                    **({"effective": effective} if effective and effective != route else {})})
     result = {"assignment": ident, "task": started["task"], "dispatch": started["dispatch"], "route": route}
+    if resolution and resolution.profile:
+        result["profile"] = resolution.profile
+        result["mcp"] = resolution.mcp
+    if resolution and resolution.role == "review":
+        actual_route = effective or route
+        result["review_independence"] = routefile.review_tag(actual_route, authors or set(), primary_agent)
+        if authors:
+            result["author_families"] = sorted(authors)
+    if resolution and any(step.status == "skipped" for step in resolution.trace):
+        result["trace"] = [step.reason for step in resolution.trace]
     if effective and effective != route:
         result["route_mismatch"] = f"asked for {route}, Orca started {effective}"
     if started.get("replayed"):
@@ -295,8 +432,9 @@ def _settle_start(writer, state: State, ident: str) -> dict:
         raise PodError("start_pending", f"Orca is still starting {ident}.", fix=f"run `pod dispatch --retry {ident}` again shortly")
     receipt = answer.get("receipt") or {}
     found = receipt.get("taskId") if answer.get("state") == "completed" else None
-    marker = f"[{state.id}:{ident}]"
-    found = found or next((key for key, task in orca.tasks(run).items() if marker in (task["title"] or "")), None)
+    markers = (f"· {state.id}:{ident} ", f"[{state.id}:{ident}]")
+    found = found or next((key for key, task in orca.tasks(run).items()
+                           if any(marker in (task["title"] or "") for marker in markers)), None)
     if found:
         worker = next((item for item in orca.workers(run) if item["task"] == found), {})
         dispatch_ = receipt.get("dispatchId") or worker.get("dispatch")
@@ -397,24 +535,56 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                           for item in stated.get("checks") or [] if isinstance(item, dict) and isinstance(item.get("exit"), int)]
         elif row["role"] == "review":
             verdict = stated.get("verdict") if stated.get("verdict") in ("pass", "fail") else None
+            reviewer_notes = _normalize_notes(stated.get("notes"))
+            found = [{"id": f"{ident}.{index}", "path": item.get("path") or None,
+                      "required": bool(item.get("required")), "text": str(item.get("text") or "")[:1000]}
+                     for index, item in enumerate(stated.get("findings") or [], 1) if isinstance(item, dict)]
             if discarded:
                 output["note"] = "discarded: no review is recorded"
             elif verdict:
-                found = [{"id": f"{ident}.{index}", "path": item.get("path") or None,
-                          "required": bool(item.get("required")), "text": str(item.get("text") or "")[:1000]}
-                         for index, item in enumerate(stated.get("findings") or [], 1) if isinstance(item, dict)]
+                impl_dispatches = state.implement_dispatches()
+                same_session = bool(row.get("dispatch") and row["dispatch"] in impl_dispatches)
+                if not same_session and row.get("dispatch") and impl_dispatches:
+                    try:
+                        by_dispatch = {item["dispatch"]: item.get("handle") for item in orca.workers(run) if item.get("dispatch")}
+                        review_handle = by_dispatch.get(row["dispatch"])
+                        impl_handles = {by_dispatch.get(d) for d in impl_dispatches} - {None, ""}
+                        same_session = bool(review_handle and review_handle in impl_handles)
+                    except PodError:
+                        pass
+                reviewer_route = row.get("effective") or row["route"]
+                prefs = routefile.load()
+                primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
+                authors = sorted(state.author_families())
+                tag = routefile.review_tag(reviewer_route, set(authors), primary_agent)
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
+                              "review_independence": tag,
+                              **({"author_families": authors} if authors else {}),
+                              **({"notes": reviewer_notes} if reviewer_notes else {}),
+                              **({"same_session": True} if same_session else {}),
                               "findings": found})
-                output.update(verdict=verdict, findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
-                                                         f"{item['path'] or ''}: {_line(item['text'])}" for item in found])
-                if changed:
+                output.update(verdict=verdict, review_independence=tag,
+                              **({"author_families": authors} if authors else {}),
+                              **({"notes": reviewer_notes} if reviewer_notes else {}),
+                              findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
+                                        f"{item['path'] or ''}: {_line(item['text'])}" for item in found])
+                if same_session:
+                    output["note"] = "the review ran in the same session as an implementer, so this review covers nothing"
+                elif changed:
                     output["note"] = "the reviewer changed files, so this review covers nothing"
                 elif outcome != "succeeded":
                     output["note"] = (f"Orca reports the review as {outcome}, not completed: its findings are kept, "
                                       "and it covers nothing and closes no finding")
             else:
+                if reviewer_notes:
+                    fact["reviewer_notes"] = reviewer_notes
+                    output["reviewer_notes"] = reviewer_notes
+                if found:
+                    fact["partial_findings"] = found
+                    output["partial_findings"] = [f"{item['id']} {'required' if item['required'] else 'advisory'} "
+                                                  f"{item['path'] or ''}: {_line(item['text'])}" for item in found]
                 output["note"] = ("the reviewer's message has no result object with a verdict, so no review is recorded; "
                                   "dispatch the review again if it is needed")
         if fact["summary"]:
@@ -594,6 +764,9 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
     found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state, gitio.commit(root))]
     if found:
         result["open_required_findings"] = found
+    notes = _reviewer_note_lines(state)
+    if notes:
+        result["reviewer_notes"] = notes
     if not gate:
         return result
     verdict = gates.evaluate(root, state, remote=remote)
