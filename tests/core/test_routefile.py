@@ -311,6 +311,26 @@ class RouteFileTests(PodCase):
         self.assertEqual((blocked.ok, blocked.error_code), (False, "pinned_agent_excluded"))
         self.assertIn("agy-gemini", blocked.error_message)
 
+    def test_two_part_effective_routes_and_unregistered_antigravity_models_resolve_safely(self):
+        neon_two_part = routefile.canonical_effective(
+            {"agent": "antigravity", "model": "gemini-4-neon", "effort": None}
+        )
+        opus_two_part = routefile.canonical_effective(
+            {"agent": "antigravity", "model": "claude-opus-5-5", "effort": None}
+        )
+        self.assertEqual(neon_two_part, "antigravity/gemini-4-neon")
+        self.assertEqual(opus_two_part, "antigravity/claude-opus-5-5")
+        self.assertEqual((routefile.route_family(neon_two_part), routefile.route_pool(neon_two_part)),
+                         ("Google", "agy-gemini"))
+        self.assertEqual((routefile.route_family(opus_two_part), routefile.route_pool(opus_two_part)),
+                         ("Anthropic", "agy-claude"))
+        self.assertEqual(routefile.review_tag(opus_two_part, {neon_two_part}, "codex"), "cross_provider_fallback")
+        self.assertEqual(routefile.review_tag(opus_two_part, {"Anthropic"}, None), "same_provider")
+        # Unregistered antigravity models never falsely guess Google when they are Claude or unknown.
+        self.assertEqual(routefile.route_family("antigravity/claude-opus-6-0/high"), "Anthropic")
+        self.assertEqual(routefile.route_pool("antigravity/claude-opus-6-0/high"), "agy-claude")
+        self.assertNotEqual(routefile.route_family("antigravity/other-model/high"), "Google")
+
     def test_soft_drained_and_paused_holds_support_reason_ttl_expiry_and_skip_trace(self):
         from datetime import datetime, timezone
         cfg = (

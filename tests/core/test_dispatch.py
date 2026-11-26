@@ -463,3 +463,36 @@ class DispatchTests(CoreCase):
         rev2 = commands.dispatch(self.repo, None, role="review", route="antigravity/claude-opus-5-5/high",
                                  title="same family", spec="Review.")
         self.assertEqual(rev2["review_independence"], "same_provider")
+
+    def test_two_part_antigravity_effective_route_never_crashes_dispatch_or_wedges_objective(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  antigravity/claude-opus-5-5/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity, claude]\n"
+            "profiles:\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high\n"
+            "  review-deep: review antigravity/claude-opus-5-5/high antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg)
+        # Orca reports a two-part effective launch for implementer -> recorded as route_mismatch without wedging.
+        self.set_orca(effective={"agent": "antigravity", "model": "gemini-4-neon", "effort": None})
+        built = commands.dispatch(self.repo, None, profile="build-deep", title="build", spec="Build.")
+        self.assertEqual(built["route_mismatch"],
+                         "asked for antigravity/gemini-4-neon/high, Orca started antigravity/gemini-4-neon")
+        commit = self.commit({"src/a.py": "a\n"})
+        self.finish(built["task"], {"outcome": "succeeded", "commit": commit})
+        commands.accept(self.repo, None, built["assignment"], integrated=commit)
+        # Subsequent dry-run, review dispatch (also with two-part effective), and review accept all succeed cleanly.
+        dry = commands.dispatch(self.repo, None, profile="review-deep", dry_run=True)
+        self.assertEqual((dry["ok"], dry["author_families"], dry["review_independence"]),
+                         (True, ["Google"], "cross_provider_fallback"))
+        self.set_orca(effective={"agent": "antigravity", "model": "claude-opus-5-5", "effort": None})
+        rev = commands.dispatch(self.repo, None, profile="review-deep", title="rev", spec="Review.")
+        self.assertEqual((rev["review_independence"], rev["author_families"]),
+                         ("cross_provider_fallback", ["Google"]))
+        self.finish(rev["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        accepted = commands.accept(self.repo, None, rev["assignment"])
+        self.assertEqual((accepted["verdict"], accepted["review_independence"], accepted["author_families"]),
+                         ("pass", "cross_provider_fallback", ["Google"]))

@@ -53,7 +53,7 @@ The bundle is whatever the skill directory holds: every Python, Markdown, JSON a
 | `${XDG_CONFIG_HOME:-~/.config}/pod/config.yaml` | Personal route preferences, Preferred, Pin and who may authorize a merge. Written only when absent; never rewritten by an install or an update. |
 | `${XDG_CACHE_HOME:-~/.cache}/pod/` | Cached public model observations. Disposable. |
 
-A first preference file enables each route the shipped registry lists, except `ultra` efforts, which are never enabled by default. If the registry cannot be read it enables nothing and says so. An existing file is byte-identical after every install and update, including a file this version cannot read: that one is reported, yields no eligible route, and waits for `pod config edit`.
+A first preference file enables each route the shipped registry lists, except `ultra` efforts, which are never enabled by default, and seeds `review_agents` and the default `profiles` from `registry.json`. If the registry cannot be read it enables nothing and says so. An existing file is byte-identical after every install and update, including a file this version cannot read: that one is reported, yields no eligible route, and waits for `pod config edit`.
 
 The installer may append one guarded PATH block to `.zshrc`, `.bashrc` and a Bash login file, or `.profile`, according to `$SHELL`. It never follows a symlinked rc file. It prints a `fish_add_path` instruction for fish instead of editing fish configuration. Reopen the shell when it adds a block; a child process cannot change its parent shell. A different `pod` earlier on PATH and any duplicate skill copy are reported for inspection, never removed. `CODEX_HOME` is not a second installation destination.
 

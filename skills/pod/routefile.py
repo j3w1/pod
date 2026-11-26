@@ -157,25 +157,45 @@ def split(route: str) -> tuple[str, str, str]:
     return agent, model, effort
 
 
+def _route_parts(route: str) -> tuple[str, str | None]:
+    """Extract (agent, model | None) from a 1-, 2-, or 3-part route without raising ValueError."""
+    parts = (route or "").split("/")
+    agent = parts[0]
+    model = parts[1] if len(parts) >= 2 and parts[1] else None
+    return agent, model
+
+
 def route_family(route: str) -> str:
-    """Model family (provider: Anthropic, OpenAI, Google) for a route or agent name."""
-    if "/" not in (route or ""):
-        return _AGENT_DEFAULT_FAMILY.get(route, route)
-    agent, model, _effort = split(route)
+    """Model family (provider: Anthropic, OpenAI, Google) for a route (2- or 3-part) or agent name."""
+    agent, model = _route_parts(route)
+    if model is None:
+        return _AGENT_DEFAULT_FAMILY.get(agent, agent)
     info = _registry_index().get((agent, model))
     if info is not None:
         return info.provider
+    if agent == "antigravity":
+        if model.startswith("gemini-"):
+            return "Google"
+        if model.startswith("claude-"):
+            return "Anthropic"
+        return f"{agent}/{model}"
     return _AGENT_DEFAULT_FAMILY.get(agent, agent)
 
 
 def route_pool(route: str) -> str:
-    """Quota pool id (claude-max, codex, agy-gemini, agy-claude) for a route or agent name."""
-    if "/" not in (route or ""):
-        return _AGENT_DEFAULT_POOL.get(route, route)
-    agent, model, _effort = split(route)
+    """Quota pool id (claude-max, codex, agy-gemini, agy-claude) for a route (2- or 3-part) or agent name."""
+    agent, model = _route_parts(route)
+    if model is None:
+        return _AGENT_DEFAULT_POOL.get(agent, agent)
     info = _registry_index().get((agent, model))
     if info is not None:
         return info.pool
+    if agent == "antigravity":
+        if model.startswith("gemini-"):
+            return "agy-gemini"
+        if model.startswith("claude-"):
+            return "agy-claude"
+        return agent
     return _AGENT_DEFAULT_POOL.get(agent, agent)
 
 
@@ -371,7 +391,7 @@ def format_profile(profile: Profile) -> str:
 
 def review_tag(reviewer: str, author_families: set[str] | frozenset[str], primary_agent: str | None) -> str:
     """Compute an honest factual proof tag for a review by comparing model families (providers)."""
-    reviewer_agent = split(reviewer)[0] if "/" in reviewer else reviewer
+    reviewer_agent = _route_parts(reviewer)[0]
     reviewer_family = route_family(reviewer)
     normalized_authors = {route_family(item) for item in author_families if item}
     on_primary = primary_agent is None or reviewer_agent == primary_agent
