@@ -133,7 +133,7 @@ class CliTests(CliCase):
         self.assertIsNone(status["snapshot"])
         self.assertEqual(status["preferences"]["enabled"], 2)
         self.assertEqual(status["adapters"], {"antigravity": "no catalog", "codex": "no catalog", "claude": "no catalog"})
-        self.assertEqual(status["registry"]["routes"], 64)
+        self.assertEqual(status["registry"]["routes"], 70)
         self.refresh_from(page(HEADERS_WITH_UNKNOWN, ROWS_WITH_UNKNOWN))
         code, out, _err = self.run_cli("status")
         self.assertIn("Columns not known to Pod, not shown: Median Tokens/s", out)
@@ -202,6 +202,17 @@ class CliTests(CliCase):
         self.assertEqual(self.run_cli("--pause", "claude", "--drain", "claude")[0], 2)
         self.assertEqual(self.run_cli("--reason", "orphan")[0], 2)
         self.assertEqual(self.run_cli("--drain", "claude", "--ttl", "bad")[0], 2)
+
+    def test_cli_twins_pause_and_unpause_by_quota_pool(self):
+        self.write_routes(ROUTES)
+        code, out, err = self.run_cli("--pause", "agy-gemini", "--reason", "manual_1pct")
+        self.assertEqual((code, err), (0, ""), out)
+        loaded = routefile.load()
+        self.assertEqual(loaded.paused_agents, ["agy-gemini"])
+        self.assertEqual(loaded.paused_meta["agy-gemini"].reason, "manual_1pct")
+        code, out, err = self.run_cli("--unpause", "agy-gemini")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(routefile.load().paused_agents, [])
 
     def test_refresh_isolates_antigravity_adapter_errors_from_aa_snapshot(self):
         from pod.models import adapters

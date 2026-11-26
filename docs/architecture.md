@@ -191,31 +191,38 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   `<role>[+mcp] <route1> [<route2> ...]`. The first route is the default and the rest are the
   ordered fallback chain; `+mcp` declares MCP access (default: no MCP). `pod dispatch --profile`,
   `pod dispatch --dry-run` and `pod models` What-If share the same pure `resolve_dispatch()`
-  function, respecting active `paused_agents`, `soft_drained_agents` (with optional reason and
-  TTL/`until` expiry), `--exclude-agent` and fail-closed `Pin`.
+  function, respecting active `paused_agents` and `soft_drained_agents` holds (by quota pool id
+  such as `agy-gemini`, `agy-claude`, `codex`, `claude-max`, or by agent name, with optional
+  reason and TTL/`until` expiry), `--exclude-agent` and fail-closed `Pin`.
 - **Review agents & reviewer notes.** An optional `review_agents` list such as
-  `[codex, claude, antigravity]` limits new review dispatches to those agents in preference order.
-  For multi-candidate review profiles, eligible candidates are stable-sorted so agents outside the
-  diff's author set (all accepted `implement` dispatches, including mixed authorship after a
-  handoff) come first, ties by `review_agents` order, and each review records a factual
-  `review_independence` tag (`cross_provider`, `cross_provider_fallback`, `same_provider`,
-  `same_provider_fallback`, or `unknown_author`). Reviews must run in a separate session from any
-  implementer, and optional reviewer `notes` (or partial findings on an interrupted review) are
-  persisted in the objective log and passed into successor dispatches. Omit `review_agents` or use
-  `[]` to allow any enabled agent. To use an agent outside `review_agents`, give the person's own
-  `--words` or use `--after aN --why "…"` after an allowed review of the same commit failed or was
-  voided without a review result.
-- **Antigravity wire format.** `routefile.wire_route()` translates `antigravity/gemini-4-neon/<effort>`
-  to `--agent antigravity --model gemini-4-neon-<effort>` (omitting `--effort`), and
-  `canonical_effective()` normalizes Orca's `launch.effective` back to the 3-part canonical route.
+  `[codex, antigravity, claude]` limits new review dispatches to those agents in preference order.
+  Review independence compares model families (`provider`: `Anthropic`, `OpenAI`, `Google`) rather
+  than raw agent names. For multi-candidate review profiles, eligible candidates are stable-sorted
+  so model families outside the diff's author set (all accepted `implement` dispatches, including
+  mixed authorship after a handoff) come first, ties by `review_agents` order, and each review
+  records a factual `review_independence` tag (`cross_provider`, `cross_provider_fallback`,
+  `same_provider`, `same_provider_fallback`, `unknown_author`, or `fallback_unknown_author`).
+  Reviews must run in a separate session from any implementer, and optional reviewer `notes` (or
+  partial findings on an interrupted review) are persisted in the objective log and passed into
+  successor dispatches. Omit `review_agents` or use `[]` to allow any enabled agent. To use an
+  agent outside `review_agents`, give the person's own `--words` or use `--after aN --why "…"`
+  after an allowed review of the same commit failed or was voided without a review result.
+- **Antigravity wire format.** `routefile.wire_route()` translates model-suffix routes such as
+  `antigravity/gemini-4-neon/<effort>` and `antigravity/claude-opus-5-5/<effort>` to
+  `--agent antigravity --model <id>-<effort>` (omitting `--effort`), refusing efforts not listed
+  for that `(agent, model)` in `registry.json`. `canonical_effective()` normalizes Orca's
+  `launch.effective` back to the 3-part canonical route.
+- **Implement concurrency.** At most one live `implement` assignment may run in the same worktree
+  (`worktree_busy`); a second concurrent implementer requires `--worktree new-child`. Scouts and
+  reviewers may run concurrently.
 
 ## Models
 
-`pod models` lives in `skills/pod/models/`, which only that command imports. The view, adapters
-and workspace are scoped strictly to Anthropic, Google and OpenAI. Every route, profile,
-`paused_agents` and `soft_drained_agents` edit has a CLI flag twin (`--enable`, `--disable`,
-`--preferred`, `--pin`, `--pause`, `--drain`, `--unpause`, `--reason`, `--ttl`, `--profile`,
-`--delete-profile`, `--review-agents`).
+`pod models` lives in `skills/pod/models/` (interactive TUI in `skills/pod/models/tui.py`), which
+only that command imports. The view, adapters and TUI are scoped strictly to Anthropic, Google and
+OpenAI. Every route, profile, `paused_agents` and `soft_drained_agents` edit has a CLI flag twin
+(`--enable`, `--disable`, `--preferred`, `--pin`, `--pause`, `--drain`, `--unpause`, `--reason`,
+`--ttl`, `--profile`, `--delete-profile`, `--review-agents`).
 
 | State | Source |
 | --- | --- |

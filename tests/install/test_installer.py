@@ -380,11 +380,14 @@ class PreferenceTests(InstallerCase):
         loaded = routefile.load(self.config)
         self.assertEqual(loaded.status, "ok", loaded.problem)
         self.assertIn("antigravity/gemini-4-neon/high", loaded.enabled())
-        self.assertEqual(loaded.review_agents, ["codex", "claude", "antigravity"])
+        self.assertIn("antigravity/claude-opus-5-5/high", loaded.enabled())
+        self.assertIn("antigravity/claude-sonnet-5-5/high", loaded.enabled())
+        self.assertEqual(loaded.review_agents, ["codex", "antigravity", "claude"])
         self.assertEqual(set(loaded.profiles),
-                         {"scout-fast", "scout", "build-fast", "build-deep",
+                         {"scout-fast", "scout", "scout-deep", "build-fast", "build-deep",
                           "ui-light", "ui-design", "review-fast", "review-deep"})
         self.assertTrue(loaded.profiles["scout"].mcp)
+        self.assertTrue(loaded.profiles["scout-deep"].mcp)
         self.assertFalse(loaded.profiles["scout-fast"].mcp)
 
 

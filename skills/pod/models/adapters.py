@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 
 from .. import paths, routefile
+from . import registry
 
 MAX_BYTES = 8 * 1024 * 1024
 AGY_SCHEMA = "pod-adapter-antigravity/v1"
@@ -78,11 +79,11 @@ def _read_antigravity_cache() -> dict | None:
                 "name": str(entry.get("name") or model_id)[:80],
                 "context_tokens": entry.get("context_tokens") if type(entry.get("context_tokens")) is int and entry["context_tokens"] > 0 else None,
             }
-        ignored = document.get("ignored_non_google")
+        ignored = document.get("ignored_unregistered")
         return {
             "fetched_at": document.get("fetched_at"),
             "models": cleaned,
-            "ignored_non_google": [item for item in ignored if isinstance(item, str)] if isinstance(ignored, list) else [],
+            "ignored_unregistered": [item for item in ignored if isinstance(item, str)] if isinstance(ignored, list) else [],
         }
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
@@ -99,8 +100,10 @@ def antigravity_meta() -> dict | None:
     return _read_antigravity_cache()
 
 
-def parse_antigravity_models(output: str) -> tuple[dict, list[str]]:
-    """Parse `agy models` stdout into native Google models and ignored non-Google proxy ids."""
+def parse_antigravity_models(output: str, *, registered: set[str] | frozenset[str] | None = None) -> tuple[dict, list[str]]:
+    """Parse `agy models` stdout into registered Antigravity models and ignored unregistered ids."""
+    if registered is None:
+        registered = frozenset(model.id for model in registry.load() if model.agent == "antigravity")
     models: dict[str, dict] = {}
     ignored: list[str] = []
     effort_rank = {effort: idx for idx, effort in enumerate(routefile.EFFORTS)}
@@ -113,19 +116,23 @@ def parse_antigravity_models(output: str) -> tuple[dict, list[str]]:
         if not match:
             continue
         slug, display = match.group(1), match.group(2).strip()
-        if not slug.startswith("gemini-"):
-            if slug not in ignored:
-                ignored.append(slug)
-            continue
         base, sep, suffix = slug.rpartition("-")
         if sep and base and suffix in effort_rank:
             model_id = base[:64]
+            if model_id not in registered:
+                if slug not in ignored:
+                    ignored.append(slug)
+                continue
             clean_name = _EFFORT_PARENS.sub("", display).strip() or model_id
             slot = models.setdefault(model_id, {"efforts": [], "name": clean_name[:80], "context_tokens": None})
             if suffix not in slot["efforts"]:
                 slot["efforts"].append(suffix)
         else:
             model_id = slug[:64]
+            if model_id not in registered:
+                if slug not in ignored:
+                    ignored.append(slug)
+                continue
             models.setdefault(model_id, {"efforts": [], "name": display[:80], "context_tokens": None})
     for slot in models.values():
         slot["efforts"].sort(key=lambda item: effort_rank.get(item, len(effort_rank)))
@@ -149,7 +156,7 @@ def _write_cache(path: Path, value: dict) -> None:
 
 
 def refresh_antigravity(run=None) -> dict:
-    """Run `agy models` once and cache native Google models. Isolated from AA refresh; enables nothing."""
+    """Run `agy models` once and cache registered Antigravity models. Isolated from AA refresh; enables nothing."""
     stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     try:
         if run is not None:
@@ -171,13 +178,13 @@ def refresh_antigravity(run=None) -> dict:
     models, ignored = parse_antigravity_models(output)
     if not models and not ignored:
         return {"ok": False, "installed": True, "attempted_at": stamp, "failure": "agy models returned no readable models"}
-    record = {"schema": AGY_SCHEMA, "fetched_at": stamp, "models": models, "ignored_non_google": ignored}
+    record = {"schema": AGY_SCHEMA, "fetched_at": stamp, "models": models, "ignored_unregistered": ignored}
     try:
         _write_cache(_antigravity_file(), record)
     except OSError as exc:
         return {"ok": False, "installed": True, "attempted_at": stamp,
                 "failure": f"adapter cache could not be written ({type(exc).__name__})"}
-    return {"ok": True, "installed": True, "attempted_at": stamp, "models": len(models), "ignored_non_google": ignored}
+    return {"ok": True, "installed": True, "attempted_at": stamp, "models": len(models), "ignored_unregistered": ignored}
 
 
 def catalogs() -> dict:

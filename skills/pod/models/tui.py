@@ -1,7 +1,7 @@
-"""The keyboard workspace for routes and profiles: browse, compare, simulate What-If, and edit preferences.
+"""The keyboard TUI for routes and profiles: browse, compare, simulate What-If, and edit preferences.
 
 `Workspace` holds the state and turns keys into changes; `run` is the thin curses loop around
-it. Opening the workspace reads local files only. The network is touched by the R key alone,
+it. Opening the TUI reads local files only. The network is touched by the R key alone,
 and the preference file by the keys that say so.
 """
 
@@ -17,18 +17,21 @@ HELP = ("Tab / 1 2   Switch Models and Profiles & What-If tabs",
         "↑↓ / j k   Previous or next model (or profile)", "←→ / h l   Previous or next effort",
         "Enter   Sources and exact measurements", "/ search   Match model, route or state",
         "space on/off   Toggle this route", "p Preferred   Set or clear preference", "P Pin   Set or clear pin",
-        "E/D   Enable or disable all model efforts", "x pause   Toggle agent in paused_agents",
-        "d drain   Toggle agent in soft_drained_agents",
-        "w what-if   Cycle simulated down provider (Profiles tab)",
-        "a author   Cycle simulated author provider (Profiles tab)",
+        "E/D   Enable or disable all model efforts", "x pause   Toggle pool in paused_agents",
+        "d drain   Toggle pool in soft_drained_agents",
+        "w what-if   Cycle simulated down pool/agent (Profiles tab)",
+        "a author   Cycle simulated author family (Profiles tab)",
         "m mcp   Toggle +mcp on selected profile (Profiles tab)",
         "R refresh   Fetch public measurements and Antigravity catalog",
         "s sort   Index, cost, time, first answer, name or state", "r reverse   Reverse order",
         "f provider   Cycle providers (Anthropic, Google, OpenAI)", "PgUp/PgDn   Move ten models",
         "Home/End   First or last item", "[ ]   Scroll source details")
 ESCAPE_WAIT_MS = 25   # how long the rest of an escape sequence may take to arrive after its ESC
-_WHAT_IF_EXCLUDES = ((), ("antigravity",), ("codex",), ("claude",), ("antigravity", "codex"), ("codex", "claude"))
-_WHAT_IF_AUTHORS = (None, "antigravity", "codex", "claude")
+_WHAT_IF_EXCLUDES = (
+    (), ("agy-gemini",), ("agy-claude",), ("antigravity",), ("codex",), ("claude",),
+    ("agy-gemini", "codex"), ("codex", "claude"),
+)
+_WHAT_IF_AUTHORS = (None, "Google", "OpenAI", "Anthropic")
 
 
 class Workspace:
@@ -64,12 +67,12 @@ class Workspace:
         releases = {}
         for row in self.view.rows:
             if row.model_id and row.release:
-                releases.setdefault(row.model_id, set()).add(row.release)
+                releases.setdefault((row.agent, row.model_id), set()).add(row.release)
         grouped = {}
         for i, row in enumerate(self.rows):
-            known = releases.get(row.model_id, ())
+            known = releases.get((row.agent, row.model_id), ())
             release = row.release or (next(iter(known)) if len(known) == 1 else None)
-            key = (row.provider, release, None if release else row.model_id or row.model_name)
+            key = (row.provider, row.agent, release, None if release else row.model_id or row.model_name)
             grouped.setdefault(key, []).append(i)
         self.groups = list(grouped.values())  # first row represents the group under the active sort
         self.group_for = {index: g for g, members in enumerate(self.groups) for index in members}
@@ -121,7 +124,7 @@ class Workspace:
             self.view.preferences,
             profile=name,
             exclude_agents=self.what_if_exclude,
-            author_agents=authors,
+            author_families=authors,
         )
 
     @property
@@ -151,7 +154,8 @@ class Workspace:
 
     def bulk(self, state: str) -> None:
         row = self.current
-        model = next((item for item in self.models if row and item.id == row.model_id and row.routable), None)
+        model = (registry.find_by_id(self.models, row.agent, row.model_id)
+                 if row and row.routable and row.agent and row.model_id else None)
         if model is None:
             self.message = "Select a routable model to change all its efforts."
             return
@@ -168,42 +172,46 @@ class Workspace:
         self._apply(f"{label} cleared." if held else f"{label} is now {row.route}.",
                     **{name: None if held else row.route})
 
-    def _selected_agent(self) -> str | None:
+    def _selected_pool(self) -> str | None:
         if self.tab == "profiles":
             prof = self.current_profile
-            return routefile.split(prof.routes[0])[0] if prof and prof.routes else None
+            return routefile.route_pool(prof.routes[0]) if prof and prof.routes else None
         row = self.current
-        return routefile.split(row.route)[0] if row and row.route else None
+        if row is None:
+            return None
+        if row.pool:
+            return row.pool
+        return routefile.route_pool(row.route) if row.route else None
 
     def toggle_pause(self) -> None:
-        agent = self._selected_agent()
-        if not agent:
-            self.message = "Select a routable item to pause or unpause its agent."
+        pool = self._selected_pool()
+        if not pool:
+            self.message = "Select a routable item to pause or unpause its pool."
             return
         paused = dict(self.view.preferences.paused_meta)
         drained = dict(self.view.preferences.soft_drained_meta)
-        if agent in paused:
-            paused.pop(agent, None)
-            self._apply(f"{agent} unpaused.", paused_agents=paused)
+        if pool in paused:
+            paused.pop(pool, None)
+            self._apply(f"{pool} unpaused.", paused_agents=paused)
         else:
-            paused[agent] = routefile.AgentHold(agent=agent)
-            drained.pop(agent, None)
-            self._apply(f"{agent} paused in paused_agents.", paused_agents=paused, soft_drained_agents=drained)
+            paused[pool] = routefile.AgentHold(agent=pool)
+            drained.pop(pool, None)
+            self._apply(f"{pool} paused in paused_agents.", paused_agents=paused, soft_drained_agents=drained)
 
     def toggle_drain(self) -> None:
-        agent = self._selected_agent()
-        if not agent:
-            self.message = "Select a routable item to soft-drain or unpause its agent."
+        pool = self._selected_pool()
+        if not pool:
+            self.message = "Select a routable item to soft-drain or unpause its pool."
             return
         drained = dict(self.view.preferences.soft_drained_meta)
         paused = dict(self.view.preferences.paused_meta)
-        if agent in drained:
-            drained.pop(agent, None)
-            self._apply(f"{agent} removed from soft_drained_agents.", soft_drained_agents=drained)
+        if pool in drained:
+            drained.pop(pool, None)
+            self._apply(f"{pool} removed from soft_drained_agents.", soft_drained_agents=drained)
         else:
-            drained[agent] = routefile.AgentHold(agent=agent)
-            paused.pop(agent, None)
-            self._apply(f"{agent} soft-drained in soft_drained_agents.", paused_agents=paused, soft_drained_agents=drained)
+            drained[pool] = routefile.AgentHold(agent=pool)
+            paused.pop(pool, None)
+            self._apply(f"{pool} soft-drained in soft_drained_agents.", paused_agents=paused, soft_drained_agents=drained)
 
     def toggle_profile_mcp(self) -> None:
         prof = self.current_profile

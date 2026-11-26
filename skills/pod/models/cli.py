@@ -1,4 +1,4 @@
-"""`pod models`: the workspace, the plain table, the explicit refresh and offline diagnostics."""
+"""`pod models`: the TUI, the plain table, the explicit refresh and offline diagnostics."""
 
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -25,12 +25,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--disable", action="append", default=[], metavar="ROUTE", help="disable agent/model/effort")
     parser.add_argument("--preferred", metavar="ROUTE|none", help="set or clear the Preferred route")
     parser.add_argument("--pin", metavar="ROUTE|none", help="set or clear the Pin")
-    parser.add_argument("--pause", action="append", default=[], metavar="AGENT",
-                        help="pause an agent host-wide in paused_agents (repeatable)")
-    parser.add_argument("--drain", action="append", default=[], metavar="AGENT",
-                        help="soft-drain an agent in soft_drained_agents to block new dispatches (repeatable)")
-    parser.add_argument("--unpause", action="append", default=[], metavar="AGENT",
-                        help="clear an agent from paused_agents and soft_drained_agents (repeatable)")
+    parser.add_argument("--pause", action="append", default=[], metavar="POOL|AGENT",
+                        help="pause a quota pool (e.g. agy-gemini) or agent host-wide in paused_agents (repeatable)")
+    parser.add_argument("--drain", action="append", default=[], metavar="POOL|AGENT",
+                        help="soft-drain a quota pool or agent in soft_drained_agents to block new dispatches (repeatable)")
+    parser.add_argument("--unpause", action="append", default=[], metavar="POOL|AGENT",
+                        help="clear a quota pool or agent from paused_agents and soft_drained_agents (repeatable)")
     parser.add_argument("--reason", metavar="TEXT",
                         help="optional reason attached to --pause or --drain")
     parser.add_argument("--ttl", metavar="DURATION",
@@ -58,8 +58,8 @@ def _refresh(args) -> int:
         for line in attempt["diagnostics"]:
             print("  " + line)
         if agy["ok"]:
-            extra = f" ({len(agy['ignored_non_google'])} non-Google ignored)" if agy.get("ignored_non_google") else ""
-            print(f"Antigravity adapter: {agy['models']} Google models cached{extra}.")
+            extra = f" ({len(agy['ignored_unregistered'])} unregistered ignored)" if agy.get("ignored_unregistered") else ""
+            print(f"Antigravity adapter: {agy['models']} models cached{extra}.")
         elif agy.get("installed"):
             print(f"Antigravity adapter refresh failed: {agy['failure']}.")
         print("No route was enabled, disabled or moved by this.")
@@ -68,7 +68,7 @@ def _refresh(args) -> int:
         print(f"Refresh failed: {attempt['failure']}.", file=sys.stderr)
         print("The earlier snapshot was kept." if kept else "There is no earlier snapshot.", file=sys.stderr)
         if agy["ok"]:
-            print(f"Antigravity adapter: {agy['models']} Google models cached.")
+            print(f"Antigravity adapter: {agy['models']} models cached.")
     return 0 if attempt["ok"] else 1
 
 
@@ -213,8 +213,8 @@ def main(argv: list[str]) -> int:
             if not args.json:
                 return 0
         if not (args.json or args.plain) and sys.stdin.isatty() and sys.stdout.isatty():
-            from . import workspace
-            return workspace.run()
+            from . import tui
+            return tui.run()
         model = view.build()
         rows = view.select(model, provider="all" if args.all else "routed")
         if args.json:

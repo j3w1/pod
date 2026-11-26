@@ -15,7 +15,7 @@ class DispatchTests(CoreCase):
     def test_it_starts_one_worker_on_the_requested_route_with_a_frozen_packet(self):
         started = self.start(paths_=["src/"], route="codex/sol/high")
         task = self.orca()["tasks"][started["task"]]
-        self.assertEqual(task["task_title"], "write [widget:a1]")
+        self.assertEqual(task["task_title"], "implement · sol/high · widget:a1 write")
         self.assertIn("Change only: src", task["spec"])
         self.assertIn('"outcome"', task["spec"])
         row = {**self.entries("widget")[-2], **self.entries("widget")[-1]}
@@ -37,15 +37,27 @@ class DispatchTests(CoreCase):
         self.write_routes(ROUTES.replace("preferred: claude/opus/high", "preferred: null"))
         self.assertIn("claude/opus/high", self.refused("route_required", self.start).fix)
 
-    def test_one_writer_per_overlapping_path_set_at_a_time(self):
+    def test_one_writer_per_overlapping_path_set_and_one_builder_per_worktree_at_a_time(self):
         first = self.start(paths_=["src/app"])
         self.refused("paths_overlap", self.start, paths_=["src"])
         self.refused("paths_overlap", self.start, paths_=["src/app/main.py"])
         self.refused("paths_overlap", self.start)                         # no declared paths means the whole tree
-        self.start(paths_=["docs"])
+        # Disjoint path in the same worktree is refused with worktree_busy; --worktree new-child is allowed.
+        busy = self.refused("worktree_busy", self.start, paths_=["docs"])
+        self.assertIn("--worktree new-child", busy.fix)
+        self.start(paths_=["docs"], worktree="new-child")
         self.finish(first["task"], {"outcome": "succeeded"})
         self.assertEqual(self.start(paths_=["src"])["assignment"], "a3")
         self.assertEqual(self.orca()["starts"], 3)
+
+    def test_worktree_busy_allows_concurrent_scouts_and_reviewers(self):
+        self.commit({"src/a.py": "a\n"})
+        self.start(paths_=["src"])
+        for index in range(4):
+            self.assertEqual(self.start(role="investigate", title=f"scout-{index}")["assignment"], f"a{index + 2}")
+        for index in range(2):
+            self.assertEqual(self.start(role="review", title=f"rev-{index}")["assignment"], f"a{index + 6}")
+        self.assertEqual(self.orca()["starts"], 7)
 
     def test_a_lost_start_reply_is_settled_by_reading_orca_and_never_starts_a_second_worker(self):
         self.set_orca(lose_reply=True)
@@ -75,15 +87,15 @@ class DispatchTests(CoreCase):
     def test_a_second_coordinator_cannot_start_work_until_it_takes_the_run_over(self):
         self.start(paths_=["src"])
         os.environ["FAKE_ORCA_CALLER"] = "term_two"
-        problem = self.refused("consumer_fenced", self.start, paths_=["docs"])
+        problem = self.refused("consumer_fenced", self.start, paths_=["docs"], worktree="new-child")
         self.assertIn("pod resume", problem.fix)
         self.assertEqual(self.orca()["starts"], 1)
         self.assertTrue(self.entries("widget")[-1]["void"])
         commands.resume(self.repo, None)
         self.refused("paths_overlap", self.start, paths_=["src"])          # it sees the first coordinator's worker
-        self.assertEqual(self.start(paths_=["docs"])["assignment"], "a3")
+        self.assertEqual(self.start(paths_=["docs"], worktree="new-child")["assignment"], "a3")
         os.environ["FAKE_ORCA_CALLER"] = "term_one"
-        self.refused("consumer_fenced", self.start, paths_=["tests"])      # the earlier conversation is fenced now
+        self.refused("consumer_fenced", self.start, paths_=["tests"], worktree="new-child")      # the earlier conversation is fenced now
         self.assertEqual(self.orca()["starts"], 2)
 
     def test_a_route_orca_did_not_honour_is_recorded_and_shown(self):
@@ -279,7 +291,7 @@ class DispatchTests(CoreCase):
         self.assertEqual(req, {"agent": "antigravity", "model": "gemini-4-neon-high", "effort": None})
         # Genuine mismatch on AGY (low instead of high) is still flagged.
         self.set_orca(effective={"agent": "antigravity", "model": "gemini-4-neon-low", "effort": None})
-        mismatch = self.start(paths_=["docs"], route="antigravity/gemini-4-neon/high")
+        mismatch = self.start(paths_=["docs"], route="antigravity/gemini-4-neon/high", worktree="new-child")
         self.assertEqual(mismatch["route_mismatch"],
                          "asked for antigravity/gemini-4-neon/high, Orca started antigravity/gemini-4-neon/low")
 
@@ -372,11 +384,13 @@ class DispatchTests(CoreCase):
         c2 = self.commit({"src/b.py": "part2\n"})
         self.finish(b2["task"], {"outcome": "succeeded", "commit": c2})
         commands.accept(self.repo, None, b2["assignment"], integrated=c2)
-        # Step 3: Review under mixed authorship {antigravity, codex} -> picks third provider Claude!
+        # Step 3: Review under mixed authorship {Google, OpenAI} -> picks third family Anthropic (Claude)!
         self.write_routes(cfg)
         rev1 = commands.dispatch(self.repo, None, profile="review-fast", title="rev1", spec="Review.")
-        self.assertEqual((rev1["route"], rev1["review_independence"], rev1["author_agents"]),
-                         ("claude/claude-sonnet-5-5/high", "cross_provider_fallback", ["antigravity", "codex"]))
+        self.assertEqual((rev1["route"], rev1["review_independence"], rev1["author_families"]),
+                         ("claude/claude-sonnet-5-5/high", "cross_provider_fallback", ["Google", "OpenAI"]))
+        self.assertEqual(self.orca()["tasks"][rev1["task"]]["task_title"],
+                         "review-fast · claude-sonnet-5-5/high · widget:a3 rev1")
         # Starved/interrupted Reviewer emits notes + partial finding without verdict -> persisted on result fact.
         self.finish(rev1["task"], {
             "outcome": "failed",
@@ -388,7 +402,7 @@ class DispatchTests(CoreCase):
         self.assertEqual(len(acc1["partial_findings"]), 1)
         # Dry-run and status surface persisted reviewer notes & mixed authors.
         dry = commands.dispatch(self.repo, None, profile="review-fast", dry_run=True)
-        self.assertEqual(dry["author_agents"], ["antigravity", "codex"])
+        self.assertEqual(dry["author_families"], ["Google", "OpenAI"])
         self.assertTrue(any("Checked src/a.py" in line for line in dry["reviewer_notes"]))
         # Successor Reviewer packet carries Prior reviewer notes!
         rev2 = commands.dispatch(self.repo, None, profile="review-fast", title="rev2", spec="Finish review.")
@@ -402,9 +416,50 @@ class DispatchTests(CoreCase):
         })
         acc2 = commands.accept(self.repo, None, rev2["assignment"])
         self.assertEqual(acc2["notes"], "Verified both files; fix src/a.py guard.")
-        self.assertEqual(acc2["author_agents"], ["antigravity", "codex"])
+        self.assertEqual(acc2["author_families"], ["Google", "OpenAI"])
         # Successor Builder packet receives Reviewer context automatically!
         b3 = commands.dispatch(self.repo, None, profile="build-deep", title="fix", spec="Fix finding.")
         b3_spec = self.orca()["tasks"][b3["task"]]["spec"]
         self.assertIn("## Reviewer context", b3_spec)
         self.assertIn("Verified both files; fix src/a.py guard.", b3_spec)
+
+    def test_agy_claude_review_of_neon_is_cross_provider_and_of_claude_is_same_provider(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  antigravity/claude-opus-5-5/high: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "  codex/gpt-6.2-sol/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity, claude]\n"
+            "profiles:\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+            "  review-deep: review codex/gpt-6.2-sol/high antigravity/claude-opus-5-5/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+        )
+        self.write_routes(cfg)
+        b1 = commands.dispatch(self.repo, None, profile="build-deep", title="neon work", spec="Build.")
+        c1 = self.commit({"src/a.py": "neon\n"})
+        self.finish(b1["task"], {"outcome": "succeeded", "commit": c1})
+        commands.accept(self.repo, None, b1["assignment"], integrated=c1)
+        # Pause codex + agy-gemini: antigravity/claude-opus-5-5 (agy-claude pool) still reviews Neon as cross_provider_fallback.
+        self.write_routes(cfg + "paused_agents: [codex, agy-gemini]\n")
+        rev = commands.dispatch(self.repo, None, profile="review-deep", title="opus review", spec="Review.")
+        self.assertEqual((rev["route"], rev["review_independence"], rev["author_families"]),
+                         ("antigravity/claude-opus-5-5/high", "cross_provider_fallback", ["Google"]))
+        self.assertEqual(self.orca()["tasks"][rev["task"]]["task_title"],
+                         "review-deep · claude-opus-5-5/high · widget:a2 opus review")
+        self.finish(rev["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        acc = commands.accept(self.repo, None, rev["assignment"])
+        self.assertEqual((acc["review_independence"], acc["author_families"]),
+                         ("cross_provider_fallback", ["Google"]))
+        # Now claude/claude-opus-5-5 also integrates -> authors = [Anthropic, Google];
+        # antigravity/claude-opus-5-5 reviewing Anthropic diff is same_provider (when no review_agents) / same_provider_fallback!
+        b2 = commands.dispatch(self.repo, None, role="implement", route="claude/claude-opus-5-5/high",
+                               title="claude work", spec="Edit.")
+        c2 = self.commit({"src/b.py": "claude\n"})
+        self.finish(b2["task"], {"outcome": "succeeded", "commit": c2})
+        commands.accept(self.repo, None, b2["assignment"], integrated=c2)
+        self.write_routes(cfg.replace("review_agents: [codex, antigravity, claude]\n", ""))
+        rev2 = commands.dispatch(self.repo, None, role="review", route="antigravity/claude-opus-5-5/high",
+                                 title="same family", spec="Review.")
+        self.assertEqual(rev2["review_independence"], "same_provider")

@@ -28,6 +28,7 @@ class Model:
     name: str
     agent: str
     provider: str
+    pool: str
     efforts: tuple
     wire: str = "effort-flag"
 
@@ -71,18 +72,26 @@ def load(path: Path = FILE) -> list[Model]:
         models = []
         for entry in document["models"]:
             wire = entry.get("wire", "effort-flag")
-            model = Model(entry["id"], entry["name"], entry["agent"], entry["provider"], tuple(entry["efforts"]), wire)
-            if (not _ID.fullmatch(model.id) or not _ID.fullmatch(model.agent) or not model.name.strip()
+            pool = entry["pool"]
+            model = Model(entry["id"], entry["name"], entry["agent"], entry["provider"], pool, tuple(entry["efforts"]), wire)
+            if (not _ID.fullmatch(model.id) or not _ID.fullmatch(model.agent) or not _ID.fullmatch(model.pool)
+                    or not model.name.strip()
                     or model.agent not in SUPPORTED_AGENTS or model.provider not in SUPPORTED_PROVIDERS
                     or model.wire not in WIRE_MODES
                     or not model.efforts or len(set(model.efforts)) != len(model.efforts)
                     or any(effort not in EFFORTS for effort in model.efforts)):
                 raise ValueError(model.id)
             models.append(model)
-        if document.get("schema") != "pod-registry/v1" or len({m.id for m in models}) != len(models) \
-                or len({m.name.casefold() for m in models}) != len(models):
+        if (document.get("schema") != "pod-registry/v1"
+                or len({(m.agent, m.id) for m in models}) != len(models)
+                or len({(m.agent, m.name.casefold()) for m in models}) != len(models)):
             raise ValueError("schema or duplicate")
-        _validate_defaults(document.get("defaults"))
+        defaults_section = _validate_defaults(document.get("defaults"))
+        known_routes = routes(models)
+        for name, spec in (defaults_section.get("profiles") or {}).items():
+            for route in routefile.parse_profile(name, spec).routes:
+                if route not in known_routes:
+                    raise ValueError(f"defaults.profiles.{name} references unknown route {route}")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise PodError("registry_invalid", f"The model registry cannot be read ({exc}).",
                        fix="reinstall Pod; the registry ships with it") from exc
@@ -120,6 +129,11 @@ def read_name(name: str) -> RowName:
     return RowName(base, qualifier=qualifier)
 
 
-def find(models: list[Model], base: str) -> Model | None:
+def find(models: list[Model], base: str, *, agent: str | None = None) -> Model | None:
     wanted = " ".join(base.split()).casefold()
-    return next((model for model in models if model.name.casefold() == wanted), None)
+    return next((model for model in models
+                 if model.name.casefold() == wanted and (agent is None or model.agent == agent)), None)
+
+
+def find_by_id(models: list[Model], agent: str, model_id: str) -> Model | None:
+    return next((model for model in models if model.agent == agent and model.id == model_id), None)

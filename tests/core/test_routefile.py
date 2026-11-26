@@ -162,9 +162,21 @@ class RouteFileTests(PodCase):
                 {"agent": "antigravity", "model": f"gemini-4-neon-{effort}", "effort": None}), canonical)
             self.assertEqual(routefile.canonical_effective(
                 {"agent": "antigravity", "model": f"gemini-4-neon-{effort}", "effort": effort}), canonical)
+        for model in ("claude-opus-5-5", "claude-sonnet-5-5"):
+            for effort in ("low", "medium", "high"):
+                canonical = f"antigravity/{model}/{effort}"
+                self.assertEqual(routefile.wire_route(canonical), ("antigravity", f"{model}-{effort}", None))
+                self.assertEqual(routefile.canonical_effective(
+                    {"agent": "antigravity", "model": f"{model}-{effort}", "effort": None}), canonical)
         self.assertEqual(routefile.wire_route("codex/gpt-6.2-sol/high"), ("codex", "gpt-6.2-sol", "high"))
         self.assertEqual(routefile.canonical_effective(
             {"agent": "codex", "model": "gpt-6.2-sol", "effort": "high"}), "codex/gpt-6.2-sol/high")
+        # Unlisted efforts for registered (agent, model) pairs are refused cleanly.
+        for bad in ("antigravity/claude-opus-5-5/xhigh", "antigravity/claude-sonnet-5-5/max",
+                    "antigravity/gemini-4-neon/ultra", "codex/gpt-6-luna/ultra"):
+            with self.subTest(bad=bad), self.assertRaises(PodError) as caught:
+                routefile.wire_route(bad)
+            self.assertEqual(caught.exception.code, "effort_not_supported")
 
     def test_resolve_dispatch_fallbacks_pin_fail_closed_and_review_author_set_sorting(self):
         cfg = (
@@ -198,25 +210,25 @@ class RouteFileTests(PodCase):
         self.assertIn("Paused:", paused.error_message)
         self.assertEqual(len(paused.trace), 2)
         # Review ordering + honest factual tags:
-        # 1. Neon built diff, all up -> Codex primary (cross_provider)
-        r1 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity"})
+        # 1. Neon built diff (Google), all up -> Codex primary (cross_provider)
+        r1 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Google"})
         self.assertEqual((r1.route, r1.review_independence), ("codex/gpt-6.1-terra/high", "cross_provider"))
-        # 2. Neon built diff, Codex down -> Claude Sonnet (cross_provider_fallback)
-        r2 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity"},
+        # 2. Neon built diff (Google), Codex down -> Claude Sonnet (cross_provider_fallback)
+        r2 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Google"},
                                         exclude_agents=["codex"])
         self.assertEqual((r2.route, r2.review_independence), ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
-        # 3. Claude built diff, Codex down -> AGY Neon beats Claude (cross_provider_fallback)
-        r3 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"claude"},
+        # 3. Claude built diff (Anthropic), Codex down -> AGY Neon beats Claude (cross_provider_fallback)
+        r3 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Anthropic"},
                                         exclude_agents=["codex"])
         self.assertEqual((r3.route, r3.review_independence), ("antigravity/gemini-4-neon/high", "cross_provider_fallback"))
-        # 4. Codex built diff, all up -> Claude Sonnet beats Codex (cross_provider_fallback)
-        r4 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"codex"})
+        # 4. Codex built diff (OpenAI), all up -> Claude Sonnet beats Codex (cross_provider_fallback)
+        r4 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"OpenAI"})
         self.assertEqual((r4.route, r4.review_independence), ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
-        # 5. Mixed authorship {antigravity, codex} -> Claude Sonnet (cross_provider_fallback)
-        r5 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity", "codex"})
+        # 5. Mixed authorship {Google, OpenAI} -> Claude Sonnet (cross_provider_fallback)
+        r5 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Google", "OpenAI"})
         self.assertEqual((r5.route, r5.review_independence), ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
-        # 6. Neon built diff, Codex & Claude down -> AGY Neon (same_provider_fallback)
-        r6 = routefile.resolve_dispatch(prefs, profile="review-fast", author_agents={"antigravity"},
+        # 6. Neon built diff (Google), Codex & Claude down -> AGY Neon (same_provider_fallback)
+        r6 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Google"},
                                         exclude_agents=["codex", "claude"])
         self.assertEqual((r6.route, r6.review_independence), ("antigravity/gemini-4-neon/high", "same_provider_fallback"))
         # Pin fail-closed when pinned agent is paused or excluded
@@ -226,6 +238,78 @@ class RouteFileTests(PodCase):
         blocked = routefile.resolve_dispatch(pin_prefs, profile="scout-fast")
         self.assertFalse(blocked.ok)
         self.assertEqual(blocked.error_code, "pinned_agent_excluded")
+
+    def test_two_key_identity_separates_model_family_from_quota_pool(self):
+        cfg = (
+            "schema: pod/v2\n"
+            "routes:\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  antigravity/claude-opus-5-5/high: enabled\n"
+            "  antigravity/claude-sonnet-5-5/high: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "  codex/gpt-6.2-sol/high: enabled\n"
+            "preferred: null\n"
+            "pinned: null\n"
+            "review_agents: [codex, antigravity, claude]\n"
+            "profiles:\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high antigravity/claude-opus-5-5/high\n"
+            "  review-deep: review codex/gpt-6.2-sol/high antigravity/claude-opus-5-5/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+        )
+        # Pausing pool agy-gemini skips gemini-4-neon while leaving antigravity/claude-* 100% routable!
+        prefs_paused_gemini = routefile.load(self.write_routes(cfg + "paused_agents: [agy-gemini]\n"))
+        built = routefile.resolve_dispatch(prefs_paused_gemini, profile="build-deep")
+        self.assertTrue(built.ok)
+        self.assertEqual(built.route, "antigravity/claude-opus-5-5/high")
+        self.assertEqual([step.code for step in built.trace], ["paused_agent", "selected"])
+        # Author antigravity/gemini-4-neon (Google), codex paused, agy-gemini paused:
+        # Reviewer antigravity/claude-opus-5-5 (Anthropic) is cross_provider_fallback and still routable!
+        prefs_no_codex_no_gemini = routefile.load(self.write_routes(cfg + "paused_agents: [codex, agy-gemini]\n"))
+        rev_cross = routefile.resolve_dispatch(prefs_no_codex_no_gemini, profile="review-deep",
+                                               author_families={"antigravity/gemini-4-neon/high"})
+        self.assertTrue(rev_cross.ok)
+        self.assertEqual((rev_cross.route, rev_cross.review_independence),
+                         ("antigravity/claude-opus-5-5/high", "cross_provider_fallback"))
+        # Author claude/claude-opus-5-5 (Anthropic), codex paused:
+        # Sort prefers antigravity/gemini-4-neon (Google, cross_provider_fallback) over antigravity/claude-opus-5-5 (Anthropic)!
+        prefs_no_codex = routefile.load(self.write_routes(cfg + "paused_agents: [codex]\n"))
+        rev_sorted = routefile.resolve_dispatch(prefs_no_codex, profile="review-deep",
+                                                author_families={"claude/claude-opus-5-5/high"})
+        self.assertEqual((rev_sorted.route, rev_sorted.review_independence),
+                         ("antigravity/gemini-4-neon/high", "cross_provider_fallback"))
+        # Author claude/claude-opus-5-5 (Anthropic), reviewer antigravity/claude-opus-5-5 (Anthropic):
+        # SAME model family -> same_provider (when primary/no review_agents) or same_provider_fallback (when codex is primary), NEVER cross_provider!
+        self.assertEqual(
+            routefile.review_tag("antigravity/claude-opus-5-5/high", {"Anthropic"}, None),
+            "same_provider",
+        )
+        self.assertEqual(
+            routefile.review_tag("antigravity/claude-opus-5-5/high", {"Anthropic"}, "codex"),
+            "same_provider_fallback",
+        )
+        self.assertEqual(
+            routefile.review_tag("antigravity/claude-opus-5-5/high", {"Google"}, "codex"),
+            "cross_provider_fallback",
+        )
+        self.assertEqual(
+            routefile.review_tag("codex/gpt-6.2-sol/high", set(), "codex"),
+            "unknown_author",
+        )
+        self.assertEqual(
+            routefile.review_tag("antigravity/claude-opus-5-5/high", set(), "codex"),
+            "fallback_unknown_author",
+        )
+        # Pin on antigravity/claude-opus-5-5/high survives paused_agents: [agy-gemini],
+        # while Pin on antigravity/gemini-4-neon/high is blocked fail-closed.
+        pin_claude = routefile.load(self.write_routes(
+            cfg.replace("pinned: null", "pinned: antigravity/claude-opus-5-5/high") + "paused_agents: [agy-gemini]\n"
+        ))
+        self.assertTrue(routefile.resolve_dispatch(pin_claude, role="implement").ok)
+        pin_gemini = routefile.load(self.write_routes(
+            cfg.replace("pinned: null", "pinned: antigravity/gemini-4-neon/high") + "paused_agents: [agy-gemini]\n"
+        ))
+        blocked = routefile.resolve_dispatch(pin_gemini, role="implement")
+        self.assertEqual((blocked.ok, blocked.error_code), (False, "pinned_agent_excluded"))
+        self.assertIn("agy-gemini", blocked.error_message)
 
     def test_soft_drained_and_paused_holds_support_reason_ttl_expiry_and_skip_trace(self):
         from datetime import datetime, timezone

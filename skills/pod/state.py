@@ -64,9 +64,9 @@ class State:
         numbers = [int(key[len(prefix):]) for key in existing if key.startswith(prefix) and key[len(prefix):].isdigit()]
         return f"{prefix}{1 + max(numbers or [0])}"
 
-    def author_agents(self) -> set[str]:
-        """Agents with an accepted (integrated) implement assignment on this objective."""
-        authors = set()
+    def author_routes(self) -> set[str]:
+        """Canonical routes with an accepted (integrated) implement assignment on this objective."""
+        routes = set()
         for row in self.assignments.values():
             if row.get("role") != "implement" or row.get("void"):
                 continue
@@ -74,10 +74,14 @@ class State:
             if not done or done.get("decision") != "integrated":
                 continue
             route = row.get("effective") or row.get("route") or ""
-            agent = route.partition("/")[0]
-            if agent:
-                authors.add(agent)
-        return authors
+            if route:
+                routes.add(route)
+        return routes
+
+    def author_families(self) -> set[str]:
+        """Model families (providers) with an accepted implement assignment on this objective."""
+        from . import routefile
+        return {routefile.route_family(route) for route in self.author_routes()}
 
     def implement_dispatches(self) -> set[str]:
         """Dispatch ids of non-void implement assignments on this objective."""

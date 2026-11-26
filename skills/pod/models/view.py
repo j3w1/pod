@@ -55,6 +55,8 @@ class Row:
     release: str | None = None      # public release identity when the snapshot supplies one
     profile: str | None = None      # published qualifier, or the route effort when unobserved
     public_index: int | None = None # position of this observation in the snapshot
+    agent: str | None = None        # agent owning the route or adapter entry
+    pool: str | None = None         # quota pool id from the shipped registry
 
 
 @dataclass
@@ -139,6 +141,17 @@ def _public_name(entry: dict) -> registry.RowName:
     return name if name.base == base else registry.RowName(base, qualifier=profile)
 
 
+def _provider_for(agent: str, model_id: str, agent_providers: dict[str, set[str]]) -> str:
+    providers = agent_providers.get(agent) or set()
+    if len(providers) == 1:
+        return next(iter(providers))
+    if model_id.startswith("gemini-"):
+        return "Google"
+    if model_id.startswith("claude-"):
+        return "Anthropic"
+    return agent
+
+
 def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt="load",
           separate_fallback: bool = False) -> View:
     models = registry.load() if models is None else models
@@ -152,13 +165,17 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
     orig_indices = [orig_idx for orig_idx, _ in indexed]
     public = [entry for _, entry in indexed]
     names = [_public_name(entry) for entry in public]
-    matched = [registry.find(models, name.base) for name in names]
-    matched = [model if model and model.provider.casefold() == (entry.get("creator") or "").casefold() else None
-               for entry, model in zip(public, matched)]
+    agents_in_registry = tuple(dict.fromkeys(model.agent for model in models))
+    matched = [[m for agent in agents_in_registry
+                if (m := registry.find(models, name.base, agent=agent)) is not None
+                and m.provider.casefold() == (entry.get("creator") or "").casefold()]
+               for entry, name in zip(public, names)]
     used: set = set()
     duplicates: set = set()
     rows: list = []
-    agents = {model.agent: model.provider for model in models}
+    agent_providers: dict[str, set[str]] = {}
+    for model in models:
+        agent_providers.setdefault(model.agent, set()).add(model.provider)
 
     def observe(row: Row, index: int) -> None:
         entry, name = public[index], names[index]
@@ -181,9 +198,9 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
             row = Row(f"{model.name} ({effort})", model.provider, preference or "routable", route=key, routable=True,
                       model_id=model.id, effort=effort, adapter=adapter, adapter_context=context,
                       preference=preference, preferred=preferences.preferred == key, pinned=preferences.pinned == key,
-                      model_name=model.name, profile=effort)
+                      model_name=model.name, profile=effort, agent=model.agent, pool=model.pool)
             matches = [index for index, name in enumerate(names)
-                       if name.effort == effort and matched[index] == model]
+                       if name.effort == effort and model in matched[index]]
             chosen = [index for index in matches if not names[index].fallback]
             if not chosen and not separate_fallback:
                 # Plain and JSON use the sole fallback result from a table-only capture.
@@ -200,13 +217,15 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
     for index, entry in enumerate(public):
         if index in used:
             continue
-        name, model = names[index], matched[index]
+        name, model = names[index], (matched[index][0] if matched[index] else None)
         row = Row(entry["name"], entry.get("creator") or "unknown", "no route")
         observe(row, index)
         if model is None:
             row.reason = "not in the shipped registry"
         else:
             row.model_id = model.id
+            row.agent = model.agent
+            row.pool = model.pool
             row.adapter, row.adapter_context = _adapter_state(catalogs.get(model.agent), model.id, None)
             if index in duplicates:
                 row.reason = "the leaderboard lists this profile more than once; measurements shown for information"
@@ -226,17 +245,19 @@ def build(*, models=None, shot="load", preferences=None, catalogs=None, attempt=
         if key in known:
             continue
         agent, model_id, effort = routefile.split(key)
-        rows.append(Row(key, agents.get(agent, agent), "unknown", route=key, model_id=model_id, effort=effort,
-                        preference=state, preferred=preferences.preferred == key, pinned=preferences.pinned == key,
+        rows.append(Row(key, _provider_for(agent, model_id, agent_providers), "unknown", route=key, model_id=model_id,
+                        effort=effort, agent=agent, preference=state, preferred=preferences.preferred == key,
+                        pinned=preferences.pinned == key,
                         reason=f"set to {state} in your preference file; not in the shipped registry, "
                                "so Pod cannot say whether it runs"))
-    listed = {model.id for model in models}
+    listed = {(model.agent, model.id) for model in models}
     for agent, catalog in catalogs.items():
-        if agent not in agents:
+        if agent not in agent_providers:
             continue
         for model_id, entry in (catalog or {}).items():
-            if model_id not in listed:
-                rows.append(Row(entry["name"], agents[agent], "no route", model_id=model_id,
+            if (agent, model_id) not in listed:
+                rows.append(Row(entry["name"], _provider_for(agent, model_id, agent_providers), "no route",
+                                model_id=model_id, agent=agent,
                                 adapter="listed", adapter_context=entry["context_tokens"],
                                 reason=f"known to the installed {agent}; not in the shipped registry"))
     mark_value(rows)
@@ -273,7 +294,7 @@ def visible(rows: list) -> list:
 
 
 def as_json(row: Row) -> dict:
-    return {"name": row.name, "provider": row.provider, "state": row.state, "route": row.route,
+    return {"name": row.name, "provider": row.provider, "pool": row.pool, "state": row.state, "route": row.route,
             "routable": row.routable, "reason": row.reason, "observed_publicly": row.observed,
             "adapter": row.adapter, "preference": row.preference, "preferred": row.preferred, "pinned": row.pinned,
             "metrics": row.metrics, "index_estimated": row.estimated, "fallback_profile": row.fallback,

@@ -61,9 +61,11 @@ class EditTests(ModelCase):
         self.assertEqual(loaded.status, "ok")
         self.assertEqual(loaded.enabled(), ["codex/gpt-6.1-sol/low"])
         self.assertEqual((loaded.preferred, loaded.pinned, loaded.merge_authorization), (None, None, "person"))
-        self.assertEqual(loaded.review_agents, ["codex", "claude", "antigravity"])
+        self.assertEqual(loaded.review_agents, ["codex", "antigravity", "claude"])
         self.assertIn("scout-fast", loaded.profiles)
+        self.assertIn("scout-deep", loaded.profiles)
         self.assertTrue(loaded.profiles["scout"].mcp)
+        self.assertTrue(loaded.profiles["scout-deep"].mcp)
 
     def test_profiles_and_paused_agents_edit_surgically_and_preserve_every_other_byte(self):
         target = self.write_routes(ROUTES)

@@ -202,6 +202,12 @@ def _validate_review_exception(state: State, agents: list[str], base: str,
                        "by an allowed agent on the same commit without a review result")
 
 
+def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
+    _, model, effort = routefile.split(route)
+    label = profile or role
+    return f"{label} · {model}/{effort} · {objective}:{ident} {title}"
+
+
 def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
                       route: str | None = None, exclude_agents: list[str] | None = None,
                       words: str | None = None, after: str | None = None) -> dict:
@@ -214,7 +220,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         if not entries:
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
         folded = fold(entries)
-        authors = folded.author_agents()
+        authors = folded.author_families()
         notes = _reviewer_note_lines(folded)
     else:
         try:
@@ -222,7 +228,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             entries = log.read(target)
             if entries:
                 folded = fold(entries)
-                authors = folded.author_agents()
+                authors = folded.author_families()
                 notes = _reviewer_note_lines(folded)
         except PodError:
             pass
@@ -230,7 +236,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
     excluded = list(exclude_agents or ())
     res = routefile.resolve_dispatch(
         preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
-        author_agents=authors, reviewer_notes=notes, allow_review_exception=bool(words or after))
+        author_families=authors, reviewer_notes=notes, allow_review_exception=bool(words or after))
     active_paused = routefile.active_holds(preferences.paused_meta, agents=preferences.paused_agents)
     active_drained = routefile.active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents)
     output = {
@@ -242,7 +248,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         "mcp": res.mcp,
         "route": res.route,
         "wire": {"agent": res.wire[0], "model": res.wire[1], "effort": res.wire[2]} if res.wire else None,
-        "author_agents": list(res.author_agents),
+        "author_families": list(res.author_families),
         "review_independence": res.review_independence,
         "paused_agents": list(active_paused),
         "soft_drained_agents": list(active_drained),
@@ -276,13 +282,13 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             raise PodError("dispatch_incomplete", "A dispatch needs a role (or profile), a title and the task text.",
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
-        authors = state.author_agents()
+        authors = state.author_families()
         notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
         res = routefile.resolve_dispatch(
             preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
-            author_agents=authors, reviewer_notes=notes, allow_review_exception=False)
+            author_families=authors, reviewer_notes=notes, allow_review_exception=False)
         exception = None
         paths_ = gitio.declared(paths_)
         context = gitio.declared(context, keep_root=True)
@@ -298,7 +304,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                                fix=res.error_fix)
             res = routefile.resolve_dispatch(
                 preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
-                author_agents=authors, reviewer_notes=notes, allow_review_exception=True)
+                author_families=authors, reviewer_notes=notes, allow_review_exception=True)
             if not res.ok:
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
                                fix=res.error_fix)
@@ -329,11 +335,18 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                                fix="name the commit and paths that hold the change")
         elif role == "implement":
             live = _live(state)
+            target_wt = None if worktree.startswith("new-") else (str(root) if worktree in ("current", f"path:{root}") else worktree)
             for other in state.assignments.values():
-                if (other["role"] == "implement" and live.get(other["id"]) is not False and other["id"] in live
-                        and gitio.overlap(paths_, other.get("paths") or [])):
+                if other["role"] != "implement" or other["id"] not in live or live.get(other["id"]) is False:
+                    continue
+                if gitio.overlap(paths_, other.get("paths") or []):
                     raise PodError("paths_overlap", f"Assignment {other['id']} is still running and may change the same files.",
                                    fix=f"wait for {other['id']}, stop it through Orca, or declare paths that do not overlap")
+                other_raw = other.get("worktree") or "current"
+                other_wt = None if other_raw.startswith("new-") else (str(root) if other_raw in ("current", f"path:{root}") else other_raw)
+                if target_wt is not None and other_wt == target_wt:
+                    raise PodError("worktree_busy", f"Assignment {other['id']} is already implementing in this worktree.",
+                                   fix=f"wait for {other['id']}, stop it through Orca, or pass --worktree new-child")
         run = state.objective.get("run")
         if not run:
             run = orca.run_create(f"{state.id}: {state.objective['source'].get('title') or state.objective['source'].get('text', '')}")
@@ -349,7 +362,9 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         writer.append(assignment)
         selector = f"path:{root}" if worktree == "current" else worktree
         try:
-            started = orca.start(run=run, spec=text, title=f"{title} [{state.id}:{ident}]", worktree=selector,
+            started = orca.start(run=run, spec=text,
+                                 title=_task_title(res.profile, role, route, state.id, ident, title),
+                                 worktree=selector,
                                  route=res.wire, request=assignment["request"], name=name,
                                  new_from=(str(root), gitio.branch(root) or base) if worktree.startswith("new-") else None)
         except PodError as exc:
@@ -385,10 +400,9 @@ def _started(writer, ident: str, started: dict, route: str, *, resolution: route
         result["mcp"] = resolution.mcp
     if resolution and resolution.role == "review":
         actual_route = effective or route
-        actual_agent = actual_route.partition("/")[0]
-        result["review_independence"] = routefile.review_tag(actual_agent, authors or set(), primary_agent)
+        result["review_independence"] = routefile.review_tag(actual_route, authors or set(), primary_agent)
         if authors:
-            result["author_agents"] = sorted(authors)
+            result["author_families"] = sorted(authors)
     if resolution and any(step.status == "skipped" for step in resolution.trace):
         result["trace"] = [step.reason for step in resolution.trace]
     if effective and effective != route:
@@ -418,8 +432,9 @@ def _settle_start(writer, state: State, ident: str) -> dict:
         raise PodError("start_pending", f"Orca is still starting {ident}.", fix=f"run `pod dispatch --retry {ident}` again shortly")
     receipt = answer.get("receipt") or {}
     found = receipt.get("taskId") if answer.get("state") == "completed" else None
-    marker = f"[{state.id}:{ident}]"
-    found = found or next((key for key, task in orca.tasks(run).items() if marker in (task["title"] or "")), None)
+    markers = (f"· {state.id}:{ident} ", f"[{state.id}:{ident}]")
+    found = found or next((key for key, task in orca.tasks(run).items()
+                           if any(marker in (task["title"] or "") for marker in markers)), None)
     if found:
         worker = next((item for item in orca.workers(run) if item["task"] == found), {})
         dispatch_ = receipt.get("dispatchId") or worker.get("dispatch")
@@ -537,21 +552,21 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                         same_session = bool(review_handle and review_handle in impl_handles)
                     except PodError:
                         pass
-                reviewer_agent = (row.get("effective") or row["route"]).partition("/")[0]
+                reviewer_route = row.get("effective") or row["route"]
                 prefs = routefile.load()
                 primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
-                authors = sorted(state.author_agents())
-                tag = routefile.review_tag(reviewer_agent, set(authors), primary_agent)
+                authors = sorted(state.author_families())
+                tag = routefile.review_tag(reviewer_route, set(authors), primary_agent)
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
                               "review_independence": tag,
-                              **({"author_agents": authors} if authors else {}),
+                              **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),
                               **({"same_session": True} if same_session else {}),
                               "findings": found})
                 output.update(verdict=verdict, review_independence=tag,
-                              **({"author_agents": authors} if authors else {}),
+                              **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),
                               findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
                                         f"{item['path'] or ''}: {_line(item['text'])}" for item in found])

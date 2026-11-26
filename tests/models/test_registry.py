@@ -19,29 +19,71 @@ class RegistryTests(unittest.TestCase):
         self.assertIsNone(registry.find(models, "GPT-6.2"))
         self.assertIsNone(registry.find(models, "GPT-6.2 Astra Preview"))
 
-    def test_an_entry_is_only_identity_agent_provider_efforts_and_optional_wire(self):
+    def test_an_entry_is_only_identity_agent_provider_pool_efforts_and_optional_wire(self):
         document = json.loads(registry.FILE.read_text())
         self.assertEqual(set(document), {"schema", "models", "defaults"})
         for entry in document["models"]:
-            self.assertLessEqual(set(entry), {"id", "name", "agent", "provider", "efforts", "wire"})
-            self.assertTrue({"id", "name", "agent", "provider", "efforts"} <= set(entry))
+            self.assertLessEqual(set(entry), {"id", "name", "agent", "provider", "pool", "efforts", "wire"})
+            self.assertTrue({"id", "name", "agent", "provider", "pool", "efforts"} <= set(entry))
 
-    def test_gemini_4_neon_and_defaults_are_shipped_in_registry(self):
+    def test_antigravity_models_pools_and_nine_defaults_are_shipped_in_registry(self):
         models = registry.load()
-        neon = registry.find(models, "Gemini 4 Neon")
+        neon = registry.find(models, "Gemini 4 Neon", agent="antigravity")
         self.assertIsNotNone(neon)
-        self.assertEqual((neon.id, neon.agent, neon.provider, neon.wire),
-                         ("gemini-4-neon", "antigravity", "Google", "model-suffix"))
+        self.assertEqual((neon.id, neon.agent, neon.provider, neon.pool, neon.wire),
+                         ("gemini-4-neon", "antigravity", "Google", "agy-gemini", "model-suffix"))
         self.assertEqual(neon.efforts, ("low", "medium", "high", "xhigh"))
+        agy_opus = registry.find_by_id(models, "antigravity", "claude-opus-5-5")
+        agy_sonnet = registry.find_by_id(models, "antigravity", "claude-sonnet-5-5")
+        claude_opus = registry.find_by_id(models, "claude", "claude-opus-5-5")
+        self.assertIsNotNone(agy_opus)
+        self.assertIsNotNone(agy_sonnet)
+        self.assertIsNotNone(claude_opus)
+        self.assertEqual((agy_opus.provider, agy_opus.pool, agy_opus.wire, agy_opus.efforts),
+                         ("Anthropic", "agy-claude", "model-suffix", ("low", "medium", "high")))
+        self.assertEqual((agy_sonnet.provider, agy_sonnet.pool, agy_sonnet.wire, agy_sonnet.efforts),
+                         ("Anthropic", "agy-claude", "model-suffix", ("low", "medium", "high")))
+        self.assertEqual((claude_opus.provider, claude_opus.pool), ("Anthropic", "claude-max"))
         defaults = registry.defaults()
         self.assertEqual(defaults["schema"], "pod/v2")
         self.assertEqual(defaults["merge_authorization"], "person")
-        self.assertEqual(defaults["review_agents"], ["codex", "claude", "antigravity"])
+        self.assertEqual(defaults["review_agents"], ["codex", "antigravity", "claude"])
         self.assertEqual(set(defaults["profiles"]),
-                         {"scout-fast", "scout", "build-fast", "build-deep",
+                         {"scout-fast", "scout", "scout-deep", "build-fast", "build-deep",
                           "ui-light", "ui-design", "review-fast", "review-deep"})
-        self.assertTrue(defaults["profiles"]["scout"].startswith("investigate+mcp "))
-        self.assertTrue(defaults["profiles"]["scout-fast"].startswith("investigate "))
+        self.assertTrue(defaults["profiles"]["scout-fast"].startswith("investigate codex/gpt-6.1-terra/low "))
+        self.assertTrue(defaults["profiles"]["scout"].startswith("investigate+mcp antigravity/gemini-4-neon/low "))
+        self.assertTrue(defaults["profiles"]["scout-deep"].startswith("investigate+mcp antigravity/gemini-4-neon/medium "))
+        self.assertTrue(defaults["profiles"]["ui-light"].startswith("implement antigravity/claude-sonnet-5-5/high "))
+        self.assertTrue(defaults["profiles"]["ui-design"].startswith("implement antigravity/claude-opus-5-5/high "))
+
+    def test_duplicate_slug_across_different_agents_loads_while_same_agent_duplicate_is_refused(self):
+        import tempfile
+        from pathlib import Path
+        from pod.errors import PodError
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "registry.json"
+            ok_doc = {"schema": "pod-registry/v1", "models": [
+                {"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "agent": "claude",
+                 "provider": "Anthropic", "pool": "claude-max", "efforts": ["high"]},
+                {"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "agent": "antigravity",
+                 "provider": "Anthropic", "pool": "agy-claude", "efforts": ["high"], "wire": "model-suffix"},
+            ]}
+            path.write_text(json.dumps(ok_doc))
+            loaded = registry.load(path)
+            self.assertEqual(len(loaded), 2)
+            self.assertEqual(registry.find(loaded, "Claude Opus 5.5", agent="claude").pool, "claude-max")
+            self.assertEqual(registry.find(loaded, "Claude Opus 5.5", agent="antigravity").pool, "agy-claude")
+            dup_id = {"schema": "pod-registry/v1", "models": [
+                {"id": "claude-opus-5-5", "name": "A", "agent": "antigravity",
+                 "provider": "Anthropic", "pool": "agy-claude", "efforts": ["high"]},
+                {"id": "claude-opus-5-5", "name": "B", "agent": "antigravity",
+                 "provider": "Anthropic", "pool": "agy-claude", "efforts": ["high"]},
+            ]}
+            path.write_text(json.dumps(dup_id))
+            with self.assertRaises(PodError) as caught:
+                registry.load(path)
+            self.assertEqual(caught.exception.code, "registry_invalid")
 
     def test_fable_5_2_and_ultra_are_routable(self):
         routes = registry.routes(registry.load())

@@ -8,6 +8,8 @@ or replaced.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import functools
+import json
 from pathlib import Path
 import re
 
@@ -19,6 +21,8 @@ STATES = ("enabled", "disabled")
 AUTHORIZERS = ("person", "coordinator")
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 MODEL_SUFFIX_AGENTS = frozenset({"antigravity"})
+_AGENT_DEFAULT_FAMILY = {"claude": "Anthropic", "codex": "OpenAI", "antigravity": "Google"}
+_AGENT_DEFAULT_POOL = {"claude": "claude-max", "codex": "codex", "antigravity": "agy-gemini"}
 AGENT = re.compile(r"[a-z][a-z0-9_-]*")
 PROFILE = re.compile(r"[a-z][a-z0-9_-]*")
 ROUTE = re.compile(rf"{AGENT.pattern}/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]*")
@@ -70,7 +74,7 @@ class Resolution:
     error_code: str | None = None
     error_message: str | None = None
     error_fix: str | None = None
-    author_agents: tuple[str, ...] = ()
+    author_families: tuple[str, ...] = ()
     reviewer_notes: tuple[str, ...] = ()
 
 
@@ -110,19 +114,97 @@ class Preferences:
                            fix="use one of: " + (", ".join(self.enabled()) or "none enabled; " + EDIT))
 
 
+@dataclass(frozen=True)
+class _ModelInfo:
+    agent: str
+    id: str
+    provider: str
+    pool: str
+    efforts: tuple[str, ...]
+    wire: str
+
+
+@functools.lru_cache(maxsize=1)
+def _registry_index() -> dict[tuple[str, str], _ModelInfo]:
+    """Read model metadata from shipped registry.json directly without importing pod.models."""
+    path = Path(__file__).resolve().parent / "models" / "registry.json"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    index: dict[tuple[str, str], _ModelInfo] = {}
+    for entry in document.get("models") or ():
+        if not isinstance(entry, dict):
+            continue
+        agent, model_id = entry.get("agent"), entry.get("id")
+        provider, pool = entry.get("provider"), entry.get("pool")
+        efforts = entry.get("efforts") or ()
+        wire = entry.get("wire", "effort-flag")
+        if isinstance(agent, str) and isinstance(model_id, str) and isinstance(provider, str):
+            index[(agent, model_id)] = _ModelInfo(
+                agent=agent,
+                id=model_id,
+                provider=provider,
+                pool=pool if isinstance(pool, str) else _AGENT_DEFAULT_POOL.get(agent, agent),
+                efforts=tuple(item for item in efforts if isinstance(item, str)),
+                wire=wire if isinstance(wire, str) else "effort-flag",
+            )
+    return index
+
+
 def split(route: str) -> tuple[str, str, str]:
     agent, model, effort = route.split("/")
     return agent, model, effort
 
 
+def route_family(route: str) -> str:
+    """Model family (provider: Anthropic, OpenAI, Google) for a route or agent name."""
+    if "/" not in (route or ""):
+        return _AGENT_DEFAULT_FAMILY.get(route, route)
+    agent, model, _effort = split(route)
+    info = _registry_index().get((agent, model))
+    if info is not None:
+        return info.provider
+    return _AGENT_DEFAULT_FAMILY.get(agent, agent)
+
+
+def route_pool(route: str) -> str:
+    """Quota pool id (claude-max, codex, agy-gemini, agy-claude) for a route or agent name."""
+    if "/" not in (route or ""):
+        return _AGENT_DEFAULT_POOL.get(route, route)
+    agent, model, _effort = split(route)
+    info = _registry_index().get((agent, model))
+    if info is not None:
+        return info.pool
+    return _AGENT_DEFAULT_POOL.get(agent, agent)
+
+
 def wire_route(route: str) -> tuple[str, str, str | None]:
     """Translate a canonical agent/model/effort route to Orca CLI (agent, model, effort | None).
 
-    Agents in MODEL_SUFFIX_AGENTS (antigravity) embed effort in the model id (`gemini-4-neon-high`)
-    and omit the separate `--effort` flag.
+    Refuses efforts not listed by the shipped registry for a known `(agent, model)`.
+    Model-suffix routes (such as Antigravity) embed effort in the model id and omit `--effort`.
     """
     agent, model, effort = split(route)
-    if agent in MODEL_SUFFIX_AGENTS:
+    info = _registry_index().get((agent, model))
+    if info is not None:
+        if effort not in info.efforts:
+            supported = ", ".join(info.efforts)
+            raise PodError(
+                "effort_not_supported",
+                f"{route} uses effort {effort!r}, which {agent}/{model} does not support (supported: {supported}).",
+                fix=f"use one of the supported efforts for {agent}/{model}: {supported}",
+            )
+        use_suffix = info.wire == "model-suffix"
+    else:
+        if effort not in EFFORTS:
+            raise PodError(
+                "effort_not_supported",
+                f"{route} uses unsupported effort {effort!r}.",
+                fix=f"use one of: {', '.join(EFFORTS)}",
+            )
+        use_suffix = agent in MODEL_SUFFIX_AGENTS
+    if use_suffix:
         if model.endswith(f"-{effort}"):
             return agent, model, None
         return agent, f"{model}-{effort}", None
@@ -287,12 +369,15 @@ def format_profile(profile: Profile) -> str:
     return " ".join((head, *profile.routes))
 
 
-def review_tag(reviewer_agent: str, author_agents: set[str] | frozenset[str], primary_agent: str | None) -> str:
-    """Compute an honest factual proof tag for a review from observed agents."""
+def review_tag(reviewer: str, author_families: set[str] | frozenset[str], primary_agent: str | None) -> str:
+    """Compute an honest factual proof tag for a review by comparing model families (providers)."""
+    reviewer_agent = split(reviewer)[0] if "/" in reviewer else reviewer
+    reviewer_family = route_family(reviewer)
+    normalized_authors = {route_family(item) for item in author_families if item}
     on_primary = primary_agent is None or reviewer_agent == primary_agent
-    if not author_agents:
+    if not normalized_authors:
         return "unknown_author" if on_primary else "fallback_unknown_author"
-    if reviewer_agent not in author_agents:
+    if reviewer_family not in normalized_authors:
         return "cross_provider" if on_primary else "cross_provider_fallback"
     return "same_provider" if on_primary else "same_provider_fallback"
 
@@ -355,6 +440,27 @@ def _hold_clause(hold: AgentHold) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
+def _matched_hold(route: str, holds: dict[str, AgentHold]) -> tuple[str, str, AgentHold] | None:
+    """Match a route against holds keyed by agent name or quota pool id."""
+    agent = split(route)[0]
+    if agent in holds:
+        return "agent", agent, holds[agent]
+    pool = route_pool(route)
+    if pool in holds:
+        return "pool", pool, holds[pool]
+    return None
+
+
+def _matched_exclude(route: str, excluded: set[str]) -> tuple[str, str] | None:
+    agent = split(route)[0]
+    if agent in excluded:
+        return "agent", agent
+    pool = route_pool(route)
+    if pool in excluded:
+        return "pool", pool
+    return None
+
+
 def resolve_dispatch(
     preferences: Preferences,
     *,
@@ -362,19 +468,20 @@ def resolve_dispatch(
     profile: str | None = None,
     route: str | None = None,
     exclude_agents: list[str] | tuple[str, ...] | set[str] = (),
-    author_agents: set[str] | frozenset[str] = frozenset(),
+    author_families: set[str] | frozenset[str] = frozenset(),
     reviewer_notes: list[str] | tuple[str, ...] = (),
     allow_review_exception: bool = False,
     now: datetime | None = None,
 ) -> Resolution:
     """Single pure dispatch resolver used by `pod dispatch`, `--dry-run`, and `pod models` What-If."""
-    sorted_authors = tuple(sorted(author_agents))
+    normalized_authors = frozenset(route_family(item) for item in author_families if item)
+    sorted_authors = tuple(sorted(normalized_authors))
     kept_notes = tuple(str(note) for note in reviewer_notes if str(note).strip())
     if preferences.status != "ok":
         return Resolution(False, role, None, None, profile, False, None, [],
                           "routes_unavailable",
                           f"No route is eligible: {preferences.problem or 'no preference file'}.", EDIT,
-                          author_agents=sorted_authors, reviewer_notes=kept_notes)
+                          author_families=sorted_authors, reviewer_notes=kept_notes)
     prof: Profile | None = None
     mcp = False
     if profile is not None:
@@ -384,27 +491,27 @@ def resolve_dispatch(
             return Resolution(False, role, None, None, profile, False, None, [],
                               "profile_unknown", f"There is no profile {profile!r}.",
                               f"choose one of: {known}",
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         if role is not None and role != prof.role:
             return Resolution(False, role, None, None, profile, prof.mcp, None, [],
                               "profile_role_mismatch",
                               f"Profile {profile!r} has role {prof.role}, not {role}.",
                               f"omit --role or pass --role {prof.role}",
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         role = prof.role
         mcp = prof.mcp
     if role not in ROLES:
         return Resolution(False, role, None, None, profile, mcp, None, [],
                           "dispatch_incomplete", "A dispatch needs a valid role.",
                           "pass --role implement|review|investigate or --profile NAME",
-                          author_agents=sorted_authors, reviewer_notes=kept_notes)
+                          author_families=sorted_authors, reviewer_notes=kept_notes)
     excluded_list = [item.strip() for item in exclude_agents if item and item.strip()]
     for item in excluded_list:
         if not AGENT.fullmatch(item):
             return Resolution(False, role, None, None, profile, mcp, None, [],
-                              "agent_invalid", f"{item!r} is not a valid agent name.",
-                              "pass a plain agent name such as codex, claude or antigravity",
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              "agent_invalid", f"{item!r} is not a valid agent or pool name.",
+                              "pass a plain agent or pool name such as codex, claude, antigravity, agy-gemini or agy-claude",
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
     paused = active_holds(preferences.paused_meta, agents=preferences.paused_agents, now=now)
     drained = active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents, now=now)
     excluded = set(excluded_list)
@@ -419,24 +526,30 @@ def resolve_dispatch(
                               "route_not_pinned",
                               f"The Pin is {preferences.pinned}; {route} cannot be used while it is set.",
                               f"use --route {preferences.pinned}, or clear the Pin in `pod models`",
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         pin_agent = split(preferences.pinned)[0]
-        if pin_agent in paused or pin_agent in drained or pin_agent in excluded:
-            if pin_agent in paused:
-                why = f"agent {pin_agent} is paused in paused_agents{_hold_clause(paused[pin_agent])}"
-                fix = f"unpause {pin_agent} with `pod models --unpause {pin_agent}` or clear the Pin in `pod models`"
-            elif pin_agent in drained:
-                why = f"agent {pin_agent} is soft-drained in soft_drained_agents{_hold_clause(drained[pin_agent])}"
-                fix = f"unpause {pin_agent} with `pod models --unpause {pin_agent}` or clear the Pin in `pod models`"
+        paused_hit = _matched_hold(preferences.pinned, paused)
+        drained_hit = _matched_hold(preferences.pinned, drained)
+        excluded_hit = _matched_exclude(preferences.pinned, excluded)
+        if paused_hit or drained_hit or excluded_hit:
+            if paused_hit:
+                kind, key, hold = paused_hit
+                why = f"{kind} {key} is paused in paused_agents{_hold_clause(hold)}"
+                fix = f"unpause {key} with `pod models --unpause {key}` or clear the Pin in `pod models`"
+            elif drained_hit:
+                kind, key, hold = drained_hit
+                why = f"{kind} {key} is soft-drained in soft_drained_agents{_hold_clause(hold)}"
+                fix = f"unpause {key} with `pod models --unpause {key}` or clear the Pin in `pod models`"
             else:
-                why = f"agent {pin_agent} is excluded by --exclude-agent"
-                fix = f"omit --exclude-agent {pin_agent} or clear the Pin in `pod models`"
+                kind, key = excluded_hit
+                why = f"{kind} {key} is excluded by --exclude-agent"
+                fix = f"omit --exclude-agent {key} or clear the Pin in `pod models`"
             trace.append(TraceStep(preferences.pinned, "blocked", "pinned_agent_excluded",
                                    f"Blocked Pin {preferences.pinned}: {why}."))
             return Resolution(False, role, None, None, profile, mcp, None, trace,
                               "pinned_agent_excluded",
                               f"The Pin {preferences.pinned} cannot run because {why}.", fix,
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         if (role == "review" and preferences.review_agents and pin_agent not in preferences.review_agents
                 and not allow_review_exception):
             trace.append(TraceStep(preferences.pinned, "blocked", "reviewer_agent_not_allowed",
@@ -445,16 +558,23 @@ def resolve_dispatch(
                               "reviewer_agent_not_allowed",
                               f"The review agent {pin_agent} is outside review_agents.",
                               _review_disallowed_fix(preferences),
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         chosen = preferences.pinned
+        try:
+            wired = wire_route(chosen)
+        except PodError as exc:
+            trace.append(TraceStep(chosen, "blocked", exc.code, f"Blocked Pin {chosen}: {exc}"))
+            return Resolution(False, role, None, None, profile, mcp, None, trace,
+                              exc.code, str(exc), exc.fix,
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
-        tag = review_tag(pin_agent, author_agents, primary_agent) if role == "review" else None
+        tag = review_tag(chosen, normalized_authors, primary_agent) if role == "review" else None
         extra = ""
         if tag:
             extra = f" ({tag}" + (f"; authors: {', '.join(sorted_authors)}" if sorted_authors else "") + ")"
         trace.append(TraceStep(chosen, "selected", "selected", f"Selected Pin {chosen}{extra}."))
-        return Resolution(True, role, chosen, wire_route(chosen), profile, mcp, tag, trace,
-                          author_agents=sorted_authors, reviewer_notes=kept_notes)
+        return Resolution(True, role, chosen, wired, profile, mcp, tag, trace,
+                          author_families=sorted_authors, reviewer_notes=kept_notes)
 
     # Ordered candidate list: explicit --route, else --profile routes, else Preferred.
     if route is not None:
@@ -462,7 +582,7 @@ def resolve_dispatch(
             return Resolution(False, role, None, None, profile, mcp, None, [],
                               "route_invalid", f"{route!r} is not an agent/model/effort route.",
                               "name one enabled route, for example " + (preferences.enabled() or ["agent/model/effort"])[0],
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         candidates = [route]
     elif prof is not None:
         candidates = list(prof.routes)
@@ -472,23 +592,33 @@ def resolve_dispatch(
         return Resolution(False, role, None, None, profile, mcp, None, [],
                           "route_required", "No Pin or Preferred route is set.",
                           "pass --route, one of: " + (", ".join(preferences.enabled()) or "none enabled; run `pod models`"),
-                          author_agents=sorted_authors, reviewer_notes=kept_notes)
+                          author_families=sorted_authors, reviewer_notes=kept_notes)
 
     eligible: list[str] = []
+    held_keys: set[str] = set()
+    effort_errors: dict[str, PodError] = {}
     for cand in candidates:
         agent = split(cand)[0]
-        if agent in paused:
+        paused_hit = _matched_hold(cand, paused)
+        if paused_hit:
+            kind, key, hold = paused_hit
+            held_keys.add(key)
             trace.append(TraceStep(cand, "skipped", "paused_agent",
-                                   f"Skipped {cand}: agent {agent} is paused in paused_agents{_hold_clause(paused[agent])}."))
+                                   f"Skipped {cand}: {kind} {key} is paused in paused_agents{_hold_clause(hold)}."))
             continue
-        if agent in drained:
+        drained_hit = _matched_hold(cand, drained)
+        if drained_hit:
+            kind, key, hold = drained_hit
+            held_keys.add(key)
             trace.append(TraceStep(cand, "skipped", "soft_drained_agent",
-                                   f"Skipped {cand}: agent {agent} is soft-drained in soft_drained_agents"
-                                   f"{_hold_clause(drained[agent])}."))
+                                   f"Skipped {cand}: {kind} {key} is soft-drained in soft_drained_agents"
+                                   f"{_hold_clause(hold)}."))
             continue
-        if agent in excluded:
+        excluded_hit = _matched_exclude(cand, excluded)
+        if excluded_hit:
+            kind, key = excluded_hit
             trace.append(TraceStep(cand, "skipped", "excluded_agent",
-                                   f"Skipped {cand}: agent {agent} is excluded by --exclude-agent."))
+                                   f"Skipped {cand}: {kind} {key} is excluded by --exclude-agent."))
             continue
         if preferences.routes.get(cand) != "enabled":
             trace.append(TraceStep(cand, "skipped", "route_not_enabled",
@@ -500,25 +630,30 @@ def resolve_dispatch(
                                    f"Skipped {cand}: agent {agent} is outside review_agents "
                                    f"({', '.join(preferences.review_agents)})."))
             continue
+        try:
+            wire_route(cand)
+        except PodError as exc:
+            effort_errors[cand] = exc
+            trace.append(TraceStep(cand, "skipped", exc.code, f"Skipped {cand}: {exc}"))
+            continue
         eligible.append(cand)
 
     if role == "review" and len(eligible) > 1:
         order = {agent: index for index, agent in enumerate(preferences.review_agents)}
         fallback_rank = len(order)
-        eligible = sorted(eligible, key=lambda item: (split(item)[0] in author_agents,
+        eligible = sorted(eligible, key=lambda item: (route_family(item) in normalized_authors,
                                                       order.get(split(item)[0], fallback_rank)))
 
     if eligible:
         chosen = eligible[0]
-        chosen_agent = split(chosen)[0]
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
-        tag = review_tag(chosen_agent, author_agents, primary_agent) if role == "review" else None
+        tag = review_tag(chosen, normalized_authors, primary_agent) if role == "review" else None
         extra = ""
         if tag:
             extra = f" ({tag}" + (f"; authors: {', '.join(sorted_authors)}" if sorted_authors else "") + ")"
         trace.append(TraceStep(chosen, "selected", "selected", f"Selected {chosen}{extra}."))
         return Resolution(True, role, chosen, wire_route(chosen), profile, mcp, tag, trace,
-                          author_agents=sorted_authors, reviewer_notes=kept_notes)
+                          author_families=sorted_authors, reviewer_notes=kept_notes)
 
     # Zero candidates remain: preserve exact refusal codes for single-route mode, clean pause for profiles.
     if prof is None and len(trace) == 1:
@@ -527,32 +662,39 @@ def resolve_dispatch(
             return Resolution(False, role, None, None, profile, mcp, None, trace,
                               "route_not_enabled", f"{only.route} is not enabled.",
                               "use one of: " + (", ".join(preferences.enabled()) or "none enabled; " + EDIT),
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         if only.code == "reviewer_agent_not_allowed":
             agent = split(only.route)[0]
             return Resolution(False, role, None, None, profile, mcp, None, trace,
                               "reviewer_agent_not_allowed",
                               f"The review agent {agent} is outside review_agents.",
                               _review_disallowed_fix(preferences),
-                              author_agents=sorted_authors, reviewer_notes=kept_notes)
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
+        if only.code == "effort_not_supported" and only.route in effort_errors:
+            exc = effort_errors[only.route]
+            return Resolution(False, role, None, None, profile, mcp, None, trace,
+                              exc.code, str(exc), exc.fix,
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
 
     reasons = " ".join(step.reason for step in trace)
     hints = []
-    held_names = sorted({split(step.route)[0] for step in trace if step.code in ("paused_agent", "soft_drained_agent")})
+    held_names = sorted(held_keys)
     if held_names:
-        hints.append("unpause " + ", ".join(held_names) + " with `pod models --unpause <agent>`")
+        hints.append("unpause " + ", ".join(held_names) + " with `pod models --unpause <pool|agent>`")
     if any(step.code == "excluded_agent" for step in trace):
         hints.append("omit --exclude-agent")
     if any(step.code == "route_not_enabled" for step in trace):
         hints.append("enable a candidate route in `pod models`")
     if any(step.code == "reviewer_agent_not_allowed" for step in trace):
         hints.append("allow one of the candidate agents in review_agents")
+    if any(step.code == "effort_not_supported" for step in trace):
+        hints.append("choose a supported effort for the model")
     subject = f"profile {profile}" if profile else f"route {candidates[0]}"
     return Resolution(False, role, None, None, profile, mcp, None, trace,
                       "no_eligible_route",
                       f"Paused: no eligible route remains for {subject}. {reasons}",
                       "; or ".join(hints) or EDIT,
-                      author_agents=sorted_authors, reviewer_notes=kept_notes)
+                      author_families=sorted_authors, reviewer_notes=kept_notes)
 
 
 def load(path: Path | None = None) -> Preferences:

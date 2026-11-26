@@ -50,7 +50,8 @@ number, state or wait to maintain.
    so: `pod record --after-merge c3`.
 2. Work directly, or `pod dispatch` workers. Give each worker a task text that stands on its
    own: the goal, what is already known, the files to read, what done looks like. Declare
-   `--paths` for an implementer; two implementers never run on overlapping paths.
+   `--paths` for an implementer; at most one implementer runs per worktree (pass
+   `--worktree new-child` for a second concurrent implementer on non-overlapping paths).
 3. Orca wakes you when a worker reports. `pod accept a1 --integrated COMMIT` after you have
    brought its commit into the branch (or `--discarded`). Read what it flags: paths outside
    the declared set, a missing result commit, findings.
@@ -128,10 +129,10 @@ Workers run only on routes the person enabled; the Pin, when set, is the only ro
 `pod dispatch` accepts `--profile NAME` (which sets role, ordered fallback routes and optional
 `+mcp`), `--route`, `--exclude-agent AGENT`, and `--dry-run` (pure read-only route preview with
 a plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, else the
-Preferred route. Host-wide `paused_agents` and `soft_drained_agents` (with optional reason and
-TTL) skip unavailable or draining providers automatically. Choose by the task: its difficulty,
-risk and size. `pod models` is the person's workspace (and CLI flag twins `--pause`, `--drain`,
-`--unpause`, `--profile`) for comparing and configuring routes, profiles and provider holds; do
+Preferred route. Host-wide `paused_agents` and `soft_drained_agents` (by quota pool or agent, with optional reason and
+TTL) skip unavailable or draining pools automatically. Choose by the task: its difficulty,
+risk and size. `pod models` is the person's TUI (and CLI flag twins `--pause`, `--drain`,
+`--unpause`, `--profile`) for comparing and configuring routes, profiles and pool holds; do
 not change their preferences without their direction.
 
 ## Document types
