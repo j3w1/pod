@@ -90,7 +90,22 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
         raise PodError("orca_unknown", "Orca accepted the start and does not know whether the worker is running.", fix=REPEAT)
     return {"task": result.get("taskId"), "dispatch": result.get("dispatchId"), "state": result.get("state"),
             "replayed": bool((result.get("mutation") or {}).get("replayed")),
-            "effective": launch.get("effective"), "requested": launch.get("requested")}
+            "effective": launch.get("effective"), "requested": launch.get("requested"),
+            "handle": launch.get("terminalHandle") or result.get("terminalHandle")}
+
+
+def rename(run: str, started: dict, title: str) -> str | None:
+    """Give the worker's tab a readable title. Returns why it could not, or None; never raises."""
+    try:
+        handle = started.get("handle")
+        if not handle:
+            handle = next((row["handle"] for row in workers(run) if row["dispatch"] == started.get("dispatch")), None)
+        if not handle:
+            return "Orca named no terminal for the worker"
+        call("terminal", "rename", "--terminal", handle, "--title", title)
+    except PodError as exc:
+        return exc.code
+    return None
 
 
 def failure(dispatch: str) -> str:

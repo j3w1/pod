@@ -25,6 +25,19 @@ class DispatchTests(CoreCase):
         self.assertEqual(row["packet"], hashlib.sha256(task["spec"].encode()).hexdigest())
         self.assertNotIn("spec", row)                # the task text is Orca's; Pod keeps its digest
 
+    def test_the_worker_tab_is_renamed_and_a_failed_rename_only_adds_a_note(self):
+        started = self.start(title="roles cards", route="codex/sol/high", paths_=["first/"])
+        self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "implement · roles cards · sol/high"})
+        self.assertNotIn("note", started)
+        self.set_orca(rename_fails=True)
+        later = self.start(title="x" * 80, paths_=["other/"], worktree="new-child")
+        self.assertIn("note", later)
+        self.assertEqual(len(self.orca()["titles"]), 1)
+        self.assertEqual(self.orca()["starts"], 2)
+        self.set_orca(rename_fails=False)
+        long = self.start(title="y" * 80, paths_=["third/"], worktree="new-child")
+        self.assertLessEqual(len(self.orca()["titles"][f"term_{long['dispatch']}"]), 60)
+
     def test_only_enabled_routes_and_the_pin_are_used(self):
         self.refused("route_not_enabled", self.start, route="codex/sol/low")
         self.refused("route_not_enabled", self.start, route="codex/unlisted/high")

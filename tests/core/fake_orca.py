@@ -122,6 +122,11 @@ def main():
         if done is None or done.returncode:
             reply(False, {"code": "worktree_remove_failed", "message": done.stderr if done else "the disk said no"}, state)
         reply(True, {"removed": True}, state)
+    if args[:2] == ["terminal", "rename"]:
+        if state.get("rename_fails"):
+            reply(False, {"code": "terminal_not_found", "message": "no such terminal"})
+        state.setdefault("titles", {})[option(args, "--terminal")] = option(args, "--title")
+        reply(True, {"renamed": True}, state)
     if args[:2] == ["terminal", "list"]:
         place = option(args, "--worktree")[len("path:"):]
         own = [{"handle": row["agentTerminalHandle"]} for row in state["workers"].values()

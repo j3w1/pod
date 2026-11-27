@@ -202,6 +202,17 @@ def _validate_review_exception(state: State, agents: list[str], base: str,
                        "by an allowed agent on the same commit without a review result")
 
 
+def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
+    """`<profile> · <short title> · <model>/<effort>`, about 60 characters."""
+    _, model, effort = routefile.split(route)
+    tail = f" · {model}/{effort}"
+    head = f"{profile or role} · "
+    room = max(8, 60 - len(head) - len(tail))
+    short = " ".join(title.split())
+    short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
+    return head + short + tail
+
+
 def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
     _, model, effort = routefile.split(route)
     label = profile or role
@@ -385,8 +396,12 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             raise PodError("same_session_review",
                            "A review must run in a separate fresh session from the implementer.",
                            fix="dispatch the review in a fresh worker session")
-        return _started(writer, ident, started, route, resolution=res, authors=authors,
-                        primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
+        result = _started(writer, ident, started, route, resolution=res, authors=authors,
+                          primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
+        failed = orca.rename(run, started, _tab_title(res.profile, role, route, title))
+        if failed:
+            result["note"] = f"the worker tab keeps Orca's title (rename: {failed})"
+        return result
 
 
 def _started(writer, ident: str, started: dict, route: str, *, resolution: routefile.Resolution | None = None,
