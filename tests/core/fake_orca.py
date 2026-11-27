@@ -76,6 +76,7 @@ def main():
         task, dispatch = f"task_{number}", f"ctx_{number}"
         state["tasks"][task] = {"id": task, "run_id": run["id"], "task_title": option(args, "--task-title"),
                                 "status": "dispatched", "result": None, "spec": spec,
+                                "worktree": option(args, "--worktree"),
                                 "base_branch": option(args, "--base-branch"), "repo": option(args, "--repo"),
                                 "name": option(args, "--name"), "display_name": option(args, "--display-name")}
         where = option(args, "--worktree", "")

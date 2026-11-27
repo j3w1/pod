@@ -82,9 +82,14 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   `<Role> · <topic> · <model>/<effort>` (capped at 60 characters, using profile role labels such
   as `Builder`, `Builder (deep)`, `Builder (UI)` for `ui-*`, `Reviewer (fast)`, `Reviewer (deep)`,
   `Scout`, `Scout (deep)`, `Analyst` or `Challenger` and short model names); an unreadable title
-  or failed rename is a `note`. Orca has no atomic conditional rename, so this read-then-rename
-  guard accepts a narrow concurrent-rename window. A start recovered by `--retry` keeps Orca's
-  title.
+  or failed rename is a `note`. Single-owner rule: Pod names only the workers it dispatches, once,
+  and only from a default title; it never touches role or coordinator tabs. Downstream daemons can
+  identify Pod dispatches by two stable markers: the `worker-start` `--task-title` keeps
+  ` · <objective>:<ident> ` (objective id and assignment id, e.g. `pod-…:a3`, also used by
+  `--retry` recovery), and request ids are derived from the objective and assignment
+  (`orca.request_id`). Orca has no atomic conditional rename, so this read-then-rename
+  guard accepts a narrow concurrent-rename window. A start recovered by `--retry` also applies the
+  guarded rename when its effective route is known.
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 

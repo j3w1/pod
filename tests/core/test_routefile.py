@@ -664,10 +664,16 @@ class RouteFileTests(PodCase):
         self.assertEqual((native_only_claude.ok, native_only_claude.error_code, native_only_claude.route),
                          (False, "reviewer_same_family", None))
 
-        # 7. Non-quota hold reasons (e.g. scheduled maintenance) do NOT authorize fallback; unreasoned/quota holds do.
+        # 7. Non-quota hold reasons (maintenance, migration, negation, free text) do NOT authorize fallback; unreasoned/quota holds do.
         for non_quota in (
             "paused_agents:\n  antigravity: scheduled maintenance\n",
             "soft_drained_agents:\n  agy-gemini: scheduled maintenance\n",
+            "paused_agents:\n  antigravity: scheduled pool maintenance\n",
+            "soft_drained_agents:\n  agy-gemini: manual drain for migration\n",
+            "paused_agents:\n  antigravity: no quota issue, taking offline\n",
+            "paused_agents:\n  antigravity: random free text\n",
+            "paused_agents:\n  antigravity: quota\nsoft_drained_agents:\n  agy-gemini: scheduled maintenance\n",
+            "paused_agents:\n  antigravity: quota\n  agy-gemini: scheduled maintenance\n",
         ):
             with self.subTest(non_quota=non_quota):
                 blocked_maint = routefile.resolve_dispatch(
@@ -676,6 +682,7 @@ class RouteFileTests(PodCase):
                 self.assertEqual((blocked_maint.ok, blocked_maint.error_code), (False, "reviewer_same_family"))
         for quota_hold in (
             "paused_agents: [antigravity]\n",
+            "paused_agents:\n  antigravity: out of quota\n",
             "paused_agents:\n  antigravity: rate_limit\n",
             "soft_drained_agents:\n  agy-gemini: weekly_10pct\n",
         ):

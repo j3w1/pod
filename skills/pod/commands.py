@@ -270,35 +270,32 @@ def _tab_role(profile: str | None, role: str) -> str:
     return ROLE_WORDS.get(role.strip().lower(), role)
 
 
+_SHORT_MODEL_MAX = 16
+
+
 def _short_model(model: str) -> str:
-    """Short model label for a worker tab; falls back to last non-version word or the full id."""
+    """Bounded short model label (<= 16 chars) for a worker tab; never ellipsized."""
     key = model.strip().lower()
     if key in SHORT_MODELS:
         return SHORT_MODELS[key]
-    for part in reversed(model.strip().split("-")):
+    chosen = model.strip()
+    for part in reversed(chosen.split("-")):
         if part and not _VERSION_TOKEN.fullmatch(part):
-            return part
-    return model
+            chosen = part
+            break
+    return chosen[:_SHORT_MODEL_MAX]
 
 
 def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
-    """`<Role> · <topic> · <model>/<effort>`, capped at 60 characters."""
-    limit, min_topic = 60, 8
+    """`<Role> · <topic> · <model>/<effort>`, capped at 60 characters; ellipsizes only the topic."""
+    limit = 60
     head = f"{_tab_role(profile, role)} · "
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
     short_model = _short_model(raw_model) if raw_model else ""
-    tail_budget = max(0, limit - len(head) - min_topic)
-    if short_model:
-        effort_suffix = f"/{effort}" if effort else ""
-        model_budget = max(4, tail_budget - 3 - len(effort_suffix))
-        if len(short_model) > model_budget:
-            short_model = short_model[:model_budget - 1].rstrip("-_.") + "…"
     model_parts = ([short_model] if short_model else []) + ([effort] if effort else [])
     tail = " · " + "/".join(model_parts) if model_parts else ""
-    if len(tail) > tail_budget:
-        tail = tail[:max(1, tail_budget - 1)].rstrip() + "…" if tail_budget >= 4 else ""
     room = max(1, limit - len(head) - len(tail))
     short = _clean_topic(title) or " ".join(title.split())
     short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
@@ -529,7 +526,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                       **({"reason": res.reason} if res.reason else {}),
                       **({"context": context} if context else {}),
                       **({"review_exception": exception} if exception else {}),
-                      **({"review_fallback_reason": res.review_fallback_reason}
+                      **({"requested_review_fallback_reason": res.review_fallback_reason}
                          if res.review_fallback_reason else {})}
         text = packet(state, assignment, spec)
         assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
@@ -568,7 +565,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title), task_title=task_title)
+                started.get("effective")) or route, title), task_title=task_title,
+                role_label=ROLE_WORDS.get(role))
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
@@ -577,17 +575,31 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
 
 
 def _effective_review_proof(
-    actual_route: str,
+    requested_route: str,
+    actual_route: str | None,
     authors: set[str],
     primary_agent: str | None,
     fallback_reason: str | None,
-) -> tuple[str, str | None]:
+    *,
+    observed_effective: bool = True,
+) -> tuple[str | None, str | None]:
+    if not observed_effective or not actual_route:
+        if fallback_reason:
+            return None, None
+        actual_route = requested_route
     normalized = {routefile.route_family(item) for item in authors if item}
-    same_family_fallback = bool(
-        fallback_reason and normalized and routefile.route_family(actual_route) in normalized
-    )
-    tag = routefile.review_tag(actual_route, normalized, primary_agent, fallback=same_family_fallback)
-    return tag, (fallback_reason if same_family_fallback else None)
+    actual_family = routefile.route_family(actual_route)
+    requested_family = routefile.route_family(requested_route)
+    if fallback_reason:
+        if actual_family not in normalized:
+            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=False), None
+        authorized_fallback = (
+            actual_family == requested_family and not routefile._is_claude_route(actual_route)
+        )
+        if authorized_fallback:
+            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=True), fallback_reason
+        return "same_provider", None
+    return routefile.review_tag(actual_route, normalized, primary_agent, fallback=False), None
 
 
 def _started(writer, ident: str, started: dict, route: str, *, resolution: routefile.Resolution | None = None,
@@ -605,13 +617,18 @@ def _started(writer, ident: str, started: dict, route: str, *, resolution: route
     if resolution and resolution.reason:
         result["reason"] = resolution.reason
     if actual_role == "review":
-        actual_route = effective or route
-        tag, applied_reason = _effective_review_proof(actual_route, authors or set(), primary_agent, req_fallback)
-        update["review_independence"] = tag
-        if req_fallback is not None:
+        observed_effective = bool(effective)
+        if not observed_effective and req_fallback:
+            update["effective_unknown"] = True
+        tag, applied_reason = _effective_review_proof(
+            route, effective or route, authors or set(), primary_agent, req_fallback,
+            observed_effective=observed_effective,
+        )
+        if tag is not None:
+            update["review_independence"] = tag
+            result["review_independence"] = tag
+        if applied_reason is not None:
             update["review_fallback_reason"] = applied_reason
-        result["review_independence"] = tag
-        if applied_reason:
             result["review_fallback_reason"] = applied_reason
         if authors:
             result["author_families"] = sorted(authors)
@@ -655,16 +672,30 @@ def _settle_start(writer, state: State, ident: str) -> dict:
             launch = receipt.get("launch") if isinstance(receipt.get("launch"), dict) else {}
             prefs = routefile.load()
             primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
-            return _started(
-                writer, ident,
-                {"task": found, "dispatch": dispatch_,
-                 **({"effective": launch.get("effective")} if launch.get("effective") else {})},
-                row["route"],
+            effective_raw = launch.get("effective")
+            started_info = {"task": found, "dispatch": dispatch_,
+                            **({"effective": effective_raw} if effective_raw else {})}
+            result = _started(
+                writer, ident, started_info, row["route"],
                 role=row.get("role"),
                 authors=state.author_families() if row.get("role") == "review" else None,
                 primary_agent=primary_agent,
-                fallback_reason=row.get("review_fallback_reason"),
+                fallback_reason=row.get("requested_review_fallback_reason"),
             )
+            effective_canon = routefile.canonical_effective(effective_raw)
+            if effective_canon and row.get("title"):
+                task_title = _task_title(row.get("profile"), row["role"], row["route"], state.id, ident, row["title"])
+                try:
+                    failed = orca.rename(
+                        run, started_info,
+                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"]),
+                        task_title=task_title, role_label=ROLE_WORDS.get(row["role"]),
+                    )
+                except Exception as exc:
+                    failed = type(exc).__name__
+                if failed:
+                    result["note"] = f"the worker tab may keep Orca's title (rename: {failed})"
+            return result
         if answer.get("state") != "completed" and not dispatch_:
             raise PodError("start_pending", f"Orca has a task for {ident} and no worker yet.",
                            fix=f"run `pod dispatch --retry {ident}` again shortly")
@@ -782,17 +813,21 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
                 authors = sorted(state.author_families())
                 tag, fallback_reason = _effective_review_proof(
-                    reviewer_route, set(authors), primary_agent, row.get("review_fallback_reason"))
+                    row["route"], reviewer_route, set(authors), primary_agent,
+                    row.get("requested_review_fallback_reason") or row.get("review_fallback_reason"),
+                    observed_effective=not row.get("effective_unknown"),
+                )
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
-                              "review_independence": tag,
+                              **({"review_independence": tag} if tag is not None else {}),
                               **({"review_fallback_reason": fallback_reason} if fallback_reason else {}),
                               **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),
                               **({"same_session": True} if same_session else {}),
                               "findings": found})
-                output.update(verdict=verdict, review_independence=tag,
+                output.update(verdict=verdict,
+                              **({"review_independence": tag} if tag is not None else {}),
                               **({"review_fallback_reason": fallback_reason} if fallback_reason else {}),
                               **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),

@@ -95,27 +95,30 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
             "effective": launch.get("effective"), "requested": launch.get("requested")}
 
 
-def _is_default_tab_title(current: str, task_title: str | None = None) -> bool:
-    """True when the terminal still holds an empty, worker-task_*, or task-title-derived default."""
-    stripped = current.strip()
-    if not stripped or stripped.startswith("worker-task_"):
+_MIN_TRUNCATED_PREFIX = 24
+
+
+def _is_default_tab_title(current: str, task_title: str | None = None, *, role_label: str | None = None) -> bool:
+    """True only for empty, worker-task_*, exact task_title, or known Orca role-wrapped/truncated forms."""
+    if not current.strip() or current.strip().startswith("worker-task_"):
         return True
     if not task_title:
         return False
-    if stripped == task_title:
-        return True
-    if stripped.endswith("…") and len(stripped) > 1 and task_title.startswith(stripped[:-1]):
-        return True
-    if " · " in stripped:
-        after_prefix = stripped.split(" · ", 1)[1]
-        if after_prefix == task_title:
+    candidates = [task_title]
+    if role_label:
+        candidates.append(f"{role_label} · {task_title}")
+    for expected in candidates:
+        if current == expected:
             return True
-        if after_prefix.endswith("…") and len(after_prefix) > 1 and task_title.startswith(after_prefix[:-1]):
-            return True
+        if current.endswith("…"):
+            prefix = current[:-1]
+            if len(prefix) >= _MIN_TRUNCATED_PREFIX and len(prefix) < len(expected) and expected.startswith(prefix):
+                return True
     return False
 
 
-def rename(run: str, started: dict, title: str, *, task_title: str | None = None) -> str | None:
+def rename(run: str, started: dict, title: str, *, task_title: str | None = None,
+           role_label: str | None = None) -> str | None:
     """Give a default-titled worker tab a readable title. Returns why it could not, or None; never raises."""
     try:
         worker = next((row for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
@@ -133,7 +136,7 @@ def rename(run: str, started: dict, title: str, *, task_title: str | None = None
         current = terminal.get("title") if isinstance(terminal, dict) else None
         if not isinstance(current, str):
             return "terminal title could not be read"
-        if not _is_default_tab_title(current, task_title):
+        if not _is_default_tab_title(current, task_title, role_label=role_label):
             return None
         try:
             call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)
