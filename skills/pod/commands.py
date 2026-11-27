@@ -140,8 +140,8 @@ def packet(state: State, assignment: dict, spec: str) -> str:
     if role == "implement":
         lines += ["- Change only: " + (", ".join(paths_) if paths_ else "what the task needs"),
                   "- Commit your work on the branch you are given. Do not push, merge or open a pull request.",
-                  "- Run tests in the foreground. Send worker_done only with the commit and the test result;",
-                  "  never end a turn while a background run is pending."]
+                  "- Run tests in the foreground. Never end a turn while a background run is pending: send",
+                  "  worker_done with the commit and the test result, or, when you cannot finish, with what blocked you."]
     elif role == "review":
         lines += [f"- Review commit {assignment['base']}, these paths: " + ", ".join(paths_),
                   "- Report every finding in one pass. Do not change any file; the writer makes corrections.",
