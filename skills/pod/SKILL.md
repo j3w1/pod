@@ -78,7 +78,9 @@ review by a worker that changed nothing.
   available; if every other-family reviewer route in `review_agents` is paused or soft-drained for
   quota, Pod falls back to an available non-Claude author-family route within `review_agents`
   (never Claude-family routes) in a fresh session and records `same_provider_fallback` with the
-  reason, returning to cross-family once another family is available. To use another agent outside
+  reason, returning to cross-family once another family is available. When every non-Claude family
+  authored part of the diff, review still proceeds with the least-authored family as
+  `mixed_author_fallback`. To use another agent outside
   `review_agents` or override a non-quota same-family refusal, pass their own `--words` for this
   review or use `--after aN --why "…"` for a failed or void allowed assignment on the same commit
   without a review result.

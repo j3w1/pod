@@ -286,20 +286,22 @@ def _short_model(model: str) -> str:
     return chosen[:_SHORT_MODEL_MAX]
 
 
+_EFFORT_SHORT = {"medium": "med"}
+_TAB_DESCRIPTION_MAX = 34
+
+
 def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
-    """`<Role> · <topic> · <model>/<effort>`, capped at 60 characters; ellipsizes only the topic."""
-    limit = 60
-    head = f"{_tab_role(profile, role)} · "
+    """`<Role> │ <model>/<effort> │ <description>` (U+2502 bar, one space each side); the description is cut to 34 characters."""
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
+    effort = _EFFORT_SHORT.get(effort, effort)
     short_model = _short_model(raw_model) if raw_model else ""
-    model_parts = ([short_model] if short_model else []) + ([effort] if effort else [])
-    tail = " · " + "/".join(model_parts) if model_parts else ""
-    room = max(1, limit - len(head) - len(tail))
+    model_part = "/".join(([short_model] if short_model else []) + ([effort] if effort else []))
     short = _clean_topic(title) or " ".join(title.split())
-    short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
-    return head + short + tail
+    if len(short) > _TAB_DESCRIPTION_MAX:
+        short = short[:_TAB_DESCRIPTION_MAX - 1].rstrip() + "…"
+    return " │ ".join(part for part in (_tab_role(profile, role), model_part, short) if part)
 
 
 def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
@@ -344,6 +346,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
                       why: str | None = None) -> dict:
     """Pure read-only route resolution: never writes to the log and never calls Orca."""
     authors: set[str] = set()
+    counts: dict[str, int] = {}
     notes: list[str] = []
     folded: State | None = None
     root: Path | None = None
@@ -354,6 +357,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
         folded = fold(entries)
         authors = folded.author_families()
+        counts = folded.author_counts()
         notes = _reviewer_note_lines(folded)
     else:
         try:
@@ -362,6 +366,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             if entries:
                 folded = fold(entries)
                 authors = folded.author_families()
+                counts = folded.author_counts()
                 notes = _reviewer_note_lines(folded)
         except PodError:
             pass
@@ -370,7 +375,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
     has_exception_flags = not (words is after is why is None)
     res = routefile.resolve_dispatch(
         preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-        author_families=authors, reviewer_notes=notes, allow_review_exception=False)
+        author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=False)
     refused_override: dict | None = None
     preview_note: str | None = None
     if has_exception_flags:
@@ -397,7 +402,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
                 else:
                     res = routefile.resolve_dispatch(
                         preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-                        author_families=authors, reviewer_notes=notes, allow_review_exception=True)
+                        author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=True)
     ok = res.ok and refused_override is None
     active_paused = routefile.active_holds(preferences.paused_meta, agents=preferences.paused_agents)
     active_drained = routefile.active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents)
@@ -450,12 +455,13 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
         authors = state.author_families()
+        counts = state.author_counts()
         notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
         res = routefile.resolve_dispatch(
             preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-            author_families=authors, reviewer_notes=notes, allow_review_exception=False)
+            author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=False)
         exception = None
         paths_ = gitio.declared(paths_)
         context = gitio.declared(context, keep_root=True)
@@ -472,7 +478,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                                fix=res.error_fix)
             res = routefile.resolve_dispatch(
                 preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-                author_families=authors, reviewer_notes=notes, allow_review_exception=True)
+                author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=True)
             if not res.ok:
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
                                fix=res.error_fix)
@@ -565,7 +571,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title), task_title=task_title)
+                started.get("effective")) or route, title), task_title=task_title, marker=f"[{state.id}:{ident}]")
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
@@ -595,7 +601,8 @@ def _effective_review_proof(
             actual_route == requested_route and not routefile._is_claude_route(actual_route)
         )
         if authorized_fallback:
-            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=True), fallback_reason
+            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=True,
+                                        mixed=fallback_reason.startswith(routefile.MIXED_PREFIX)), fallback_reason
         return "same_provider", None
     return routefile.review_tag(actual_route, normalized, primary_agent, fallback=False), None
 
@@ -687,7 +694,7 @@ def _settle_start(writer, state: State, ident: str) -> dict:
                     failed = orca.rename(
                         run, started_info,
                         _tab_title(row.get("profile"), row["role"], effective_canon, row["title"]),
-                        task_title=task_title,
+                        task_title=task_title, marker=f"[{state.id}:{ident}]",
                     )
                 except Exception as exc:
                     failed = type(exc).__name__

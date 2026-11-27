@@ -563,6 +563,24 @@ class RouteFileTests(PodCase):
                 invalid = routefile.load(self.write_routes(cfg + bad))
                 self.assertEqual(invalid.status, "invalid")
 
+    def test_review_mixed_author_fallback_picks_the_least_authored_family(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.2-sol/high: enabled\n  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: null\npinned: null\nreview_agents: [codex, antigravity]\n"
+            "profiles:\n  review-deep: review codex/gpt-6.2-sol/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n")
+        prefs = routefile.load(self.write_routes(cfg))
+        res = routefile.resolve_dispatch(prefs, role="review", profile="review-deep",
+                                         author_families={"OpenAI", "Google"},
+                                         author_counts={"OpenAI": 3, "Google": 1})
+        self.assertEqual((res.ok, res.route, res.review_independence), (True, "antigravity/gemini-4-neon/high", "mixed_author_fallback"))
+        self.assertTrue(res.review_fallback_reason.startswith("mixed authors: "))
+        tie = routefile.resolve_dispatch(prefs, role="review", profile="review-deep", author_families={"OpenAI", "Google"})
+        self.assertEqual((tie.route, tie.review_independence), ("codex/gpt-6.2-sol/high", "mixed_author_fallback"))
+        single = routefile.resolve_dispatch(prefs, role="review", profile="review-deep", author_families={"OpenAI"})
+        self.assertEqual(single.review_independence, "cross_provider_fallback" if single.ok else single.review_independence)
+        self.assertNotIn("claude", res.route)
+
     def test_review_same_family_quota_fallback_and_boundaries(self):
         from datetime import datetime, timezone
         base = (

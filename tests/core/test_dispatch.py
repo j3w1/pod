@@ -27,7 +27,7 @@ class DispatchTests(CoreCase):
 
     def test_the_worker_tab_is_renamed_and_a_failed_rename_only_adds_a_note(self):
         started = self.start(title="roles cards", route="codex/sol/high", reason="test route", paths_=["first/"])
-        self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "Builder · roles cards · sol/high"})
+        self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "Builder │ sol/high │ roles cards"})
         self.assertNotIn("note", started)
         self.set_orca(rename_fails=True)
         later = self.start(title="x" * 80, paths_=["other/"], worktree="new-child")
@@ -39,13 +39,14 @@ class DispatchTests(CoreCase):
         self.set_orca(rename_fails=False)
         long = self.start(title="y" * 80, paths_=["third/"], worktree="new-child")
         long_title = self.orca()["titles"][f"term_{long['dispatch']}"]
-        self.assertTrue(long_title.startswith("Builder · "))
-        self.assertLessEqual(len(long_title), 60)
+        self.assertTrue(long_title.startswith("Builder │ opus/high │ "), long_title)
+        self.assertTrue(long_title.endswith("…"))
+        self.assertLessEqual(len(long_title.split(" │ ")[2]), 34)
 
     def test_the_tab_title_shows_the_route_orca_started(self):
         self.set_orca(effective={"agent": "codex", "model": "sol", "effort": "low"})
         started = self.start(title="t", route="codex/sol/high", reason="test route", paths_=["e/"])
-        self.assertEqual(self.orca()["titles"][f"term_{started['dispatch']}"], "Builder · t · sol/low")
+        self.assertEqual(self.orca()["titles"][f"term_{started['dispatch']}"], "Builder │ sol/low │ t")
 
     def test_tab_title_uses_ce_dev_role_words_and_short_models(self):
         role_cases = (
@@ -76,41 +77,38 @@ class DispatchTests(CoreCase):
         for profile, role, expected in role_cases:
             with self.subTest(profile=profile, role=role):
                 rendered = commands._tab_title(profile, role, "codex/gpt-6.2-sol/high", "check tabs")
-                self.assertEqual(rendered, f"{expected} · check tabs · sol/high")
-                first_word = rendered.split(" · ", 1)[0].lower()
+                self.assertEqual(rendered, f"{expected} │ sol/high │ check tabs")
+                first_word = rendered.split(" │ ", 1)[0].lower()
                 self.assertNotIn(first_word, ("implement", "investigate", "review"))
                 if profile:
                     self.assertNotIn(profile, rendered)
         # Long topics and 96-character model tokens stay <= 60 chars while keeping role, topic and effort.
         long_rev = commands._tab_title("review-deep", "review", "codex/gpt-6.2-astra/xhigh", "very " * 20)
-        self.assertTrue(long_rev.startswith("Reviewer (deep) · "))
-        self.assertTrue(long_rev.endswith(" · astra/xhigh"))
-        self.assertLessEqual(len(long_rev), 60)
+        self.assertTrue(long_rev.startswith("Reviewer (deep) │ astra/xhigh │ "))
+        self.assertTrue(long_rev.endswith("…"))
+        self.assertLessEqual(len(long_rev.split(" │ ")[2]), 34)
         long_model = commands._tab_title("review-deep", "review", "codex/" + "m" * 96 + "/high", "audit tab title length")
-        self.assertTrue(long_model.startswith("Reviewer (deep) · "))
-        self.assertTrue(long_model.endswith(f" · {'m' * 16}/high"))
-        self.assertNotIn("…/", long_model)
-        self.assertLessEqual(len(long_model), 60)
+        self.assertEqual(long_model, f"Reviewer (deep) │ {'m' * 16}/high │ audit tab title length")
         model_cases = (
             ("claude/claude-opus-5-5/high", "opus/high"),
-            ("claude/claude-sonnet-5-5/medium", "sonnet/medium"),
+            ("claude/claude-sonnet-5-5/medium", "sonnet/med"),
             ("claude/claude-haiku-5-5/low", "haiku/low"),
             ("claude/claude-fable-5-2/high", "fable/high"),
             ("antigravity/gemini-4-neon/xhigh", "neon/xhigh"),
             ("antigravity/gemini-4-neon", "neon"),
-            ("codex/gpt-6.2-sol/medium", "sol/medium"),
+            ("codex/gpt-6.2-sol/medium", "sol/med"),
             ("codex/gpt-6.1-terra/low", "terra/low"),
             ("codex/gpt-6.2-astra/high", "astra/high"),
             ("codex/gpt-6-luna/low", "luna/low"),
             ("codex/acme-7-nova-2.1/high", "nova/high"),
-            ("codex/vendor-zephyr-v3/medium", "zephyr/medium"),
+            ("codex/vendor-zephyr-v3/medium", "zephyr/med"),
             ("codex/1-2-3/low", "1-2-3/low"),
             ("codex/4.0-5.1/high", "4.0-5.1/high"),
         )
         for route, expected_tail in model_cases:
             with self.subTest(route=route):
                 self.assertEqual(commands._tab_title("build-fast", "implement", route, "topic"),
-                                 f"Builder · topic · {expected_tail}")
+                                 f"Builder │ {expected_tail} │ topic")
         cfg = (
             "schema: pod/v2\nroutes:\n"
             "  claude/claude-opus-5-5/high: enabled\n"
@@ -137,12 +135,12 @@ class DispatchTests(CoreCase):
         reviewer = commands.dispatch(self.repo, None, profile="review-fast", title="check diff", spec="Review.")
         scout = commands.dispatch(self.repo, None, profile="scout-deep", title="find callers", spec="Search.")
         titles = self.orca()["titles"]
-        self.assertEqual(titles[f"term_{deep['dispatch']}"], "Builder (deep) · core refactor · neon/high")
-        self.assertEqual(titles[f"term_{ui['dispatch']}"], "Builder (UI) · card contrast · opus/high")
-        self.assertEqual(titles[f"term_{analyst['dispatch']}"], "Analyst · latency study · neon/high")
-        self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger · stress check · sol/medium")
-        self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) · check diff · terra/high")
-        self.assertEqual(titles[f"term_{scout['dispatch']}"], "Scout (deep) · find callers · neon/high")
+        self.assertEqual(titles[f"term_{deep['dispatch']}"], "Builder (deep) │ neon/high │ core refactor")
+        self.assertEqual(titles[f"term_{ui['dispatch']}"], "Builder (UI) │ opus/high │ card contrast")
+        self.assertEqual(titles[f"term_{analyst['dispatch']}"], "Analyst │ neon/high │ latency study")
+        self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger │ sol/med │ stress check")
+        self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) │ terra/high │ check diff")
+        self.assertEqual(titles[f"term_{scout['dispatch']}"], "Scout (deep) │ neon/high │ find callers")
         # worker-start --task-title starts with the stable '[<objective>:<ident>]' marker so 80-char truncation keeps it.
         self.assertTrue(
             self.orca()["tasks"][deep["task"]]["task_title"].startswith(f"[widget:{deep['assignment']}] ")
@@ -151,24 +149,24 @@ class DispatchTests(CoreCase):
         self.assertEqual(
             commands._tab_title("build-deep", "implement", "antigravity/gemini-4-neon/high",
                                 "#520 lifecycle implementation"),
-            "Builder (deep) · #520 lifecycle implementation · neon/high",
+            "Builder (deep) │ neon/high │ #520 lifecycle implementation",
         )
         self.assertEqual(
             commands._tab_title("build-deep", "implement", "antigravity/gemini-4-neon/high",
                                 "issue-520-v5:a11 #520 lifecycle implementation"),
-            "Builder (deep) · #520 lifecycle implementation · neon/high",
+            "Builder (deep) │ neon/high │ #520 lifecycle implementation",
         )
         director_case = commands._tab_title(
             "build-deep", "implement", "antigravity/gemini-4-neon/high",
             "issue-588:a27 Finish native Analyst projection",
         )
-        self.assertEqual(director_case, "Builder (deep) · Finish native Analyst projecti… · neon/high")
+        self.assertEqual(director_case, "Builder (deep) │ neon/high │ Finish native Analyst projection")
         self.assertEqual(director_case.count("neon/high"), 1)
-        self.assertTrue(director_case.startswith("Builder (deep) · "))
+        self.assertTrue(director_case.startswith("Builder (deep) │ "))
         # Role comes only from profile (never 'Reviewer · build-deep …'), and dispatch refuses role/profile mismatch.
         self.assertEqual(
             commands._tab_title("build-deep", "review", "antigravity/gemini-4-neon/high", "check diff"),
-            "Builder (deep) · check diff · neon/high",
+            "Builder (deep) │ neon/high │ check diff",
         )
         self.refused("profile_role_mismatch", commands.dispatch, self.repo, None,
                      role="review", profile="build-deep", title="mismatch", spec="Review.")
@@ -213,25 +211,29 @@ class DispatchTests(CoreCase):
         self.assertEqual(self.orca().get("rename_calls", []), [])
         empty = commands.dispatch(self.repo, None, profile="build-fast", title="empty title", spec="Do.", paths_=["b/"], worktree="new-child")
         self.assertNotIn("note", empty)
-        self.assertEqual(self.orca()["titles"]["term_ctx_2"], "Builder · empty title · sol/high")
+        self.assertEqual(self.orca()["titles"]["term_ctx_2"], "Builder │ sol/high │ empty title")
         self.assertEqual(len(self.orca()["rename_calls"]), 1)
         default = commands.dispatch(self.repo, None, profile="build-fast", title="default title", spec="Do.", paths_=["c/"], worktree="new-child")
         self.assertNotIn("note", default)
-        self.assertEqual(self.orca()["titles"]["term_ctx_3"], "Builder · default title · sol/high")
+        self.assertEqual(self.orca()["titles"]["term_ctx_3"], "Builder │ sol/high │ default title")
         self.assertEqual(len(self.orca()["rename_calls"]), 2)
         # Exact --task-title passed to worker-start IS treated as default and renamed.
         exact_task = commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
                                        spec="Do.", paths_=["d/"], worktree="new-child")
         self.assertNotIn("note", exact_task)
         self.assertEqual(self.orca()["titles"]["term_ctx_4"],
-                         "Builder (deep) · #520 lifecycle implementation · neon/high")
-        # Coincidental prefix+ellipsis, custom worker-task_notes, and arbitrary wrappers are NEVER overwritten.
+                         "Builder (deep) │ neon/high │ #520 lifecycle implementation")
+        # A truncated task title still carrying this assignment's own marker is Orca's default and is renamed.
+        marked = commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
+                                   spec="Do.", paths_=["e/"], worktree="new-child")
+        self.assertNotIn("note", marked)
+        self.assertEqual(self.orca()["titles"]["term_ctx_5"], "Builder (deep) │ neon/high │ #520 lifecycle implementation")
+        # Custom worker-task_notes, and arbitrary wrappers are NEVER overwritten.
         for idx, (path, expected_kept) in enumerate((
-            ("e/", coincidental_prefix_5),
             ("f/", "worker-task_notes"),
             ("g/", "Custom · build-deep…"),
             ("h/", "Builder · " + task_title_4),
-        ), start=5):
+        ), start=6):
             commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
                               spec="Do.", paths_=[path], worktree="new-child")
             self.assertEqual(self.orca()["titles"][f"term_ctx_{idx}"], expected_kept)
@@ -239,8 +241,20 @@ class DispatchTests(CoreCase):
         trailing = commands.dispatch(self.repo, None, profile="build-deep", title="trailing spaces  ",
                                      spec="Do.", paths_=["i/"], worktree="new-child")
         self.assertNotIn("note", trailing)
-        self.assertEqual(self.orca()["titles"]["term_ctx_9"], "Builder (deep) · trailing spaces · neon/high")
-        self.assertEqual(len(self.orca()["rename_calls"]), 4)
+        self.assertEqual(self.orca()["titles"]["term_ctx_9"], "Builder (deep) │ neon/high │ trailing spaces")
+        self.assertEqual(len(self.orca()["rename_calls"]), 5)
+
+    def test_a_daemon_renamed_tab_carrying_this_assignments_marker_is_renamed(self):
+        self.write_routes(
+            "schema: pod/v2\nroutes:\n  antigravity/gemini-4-neon/high: enabled\npreferred: null\npinned: null\n"
+            "profiles:\n  review-deep: review antigravity/gemini-4-neon/high\n  build-deep: implement antigravity/gemini-4-neon/high\n")
+        own = commands._task_title("build-deep", "implement", "antigravity/gemini-4-neon/high", "widget", "a1", "Daemon named")
+        other = commands._task_title("build-deep", "implement", "antigravity/gemini-4-neon/high", "widget", "a9", "Daemon named")
+        self.set_orca(titles={"term_ctx_1": "Builder · " + own[:70] + "…", "term_ctx_2": "Builder · " + other})
+        commands.dispatch(self.repo, None, profile="build-deep", title="Daemon named", spec="Do.", paths_=["a/"], worktree="new-child")
+        self.assertEqual(self.orca()["titles"]["term_ctx_1"], "Builder (deep) │ neon/high │ Daemon named")
+        commands.dispatch(self.repo, None, profile="build-deep", title="Daemon named", spec="Do.", paths_=["b/"], worktree="new-child")
+        self.assertEqual(self.orca()["titles"]["term_ctx_2"], "Builder · " + other)
 
     def test_unreadable_tab_title_returns_a_note_and_does_not_rename(self):
         self.set_orca(list_fails=True)
@@ -258,7 +272,7 @@ class DispatchTests(CoreCase):
         try:
             orca.workers = lambda run, *rest: [{"dispatch": "ctx_9", "handle": "term_ctx_9", "worktree": None}]
             orca.call = lambda *args, **kw: (calls.append(args), {"terminals": []})[1]
-            self.assertEqual(orca.rename("run_1", {"dispatch": "ctx_9"}, "Builder · x · sol/high"),
+            self.assertEqual(orca.rename("run_1", {"dispatch": "ctx_9"}, "Builder │ sol/high │ x"),
                              "terminal title could not be read")
             self.assertEqual(calls, [("terminal", "list")])
         finally:
@@ -1022,7 +1036,7 @@ class DispatchTests(CoreCase):
         self.assertNotIn("review_fallback_reason", fact2)
         # Recovered start with known effective route also renames its default worker-task_* tab title.
         self.assertEqual(self.orca()["titles"][f"term_{settled['dispatch']}"],
-                         "Reviewer (fast) · lost reply review · neon/high")
+                         "Reviewer (fast) │ neon/high │ lost reply review")
 
         # Lost reply where Orca receipt is absent (effective route unknown) -> NO fallback proof recorded.
         self.set_orca(lose_reply=True, effective={"agent": "antigravity", "model": "gemini-4-neon-high", "effort": None})

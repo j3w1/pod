@@ -78,8 +78,8 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   starting again. For `new-*` worktrees it derives a human `--display-name` and `--name` slug from
   the assignment title (unless `--name` is given). After a successful start it reads the worker's
   current tab title and, only when it is empty, matches `worker-<taskId>` for the observed task,
-  or matches the exact `--task-title` Pod passed, renames it to
-  `<Role> · <topic> · <model>/<effort>` (capped at 60 characters, using profile role labels such
+  matches the exact `--task-title` Pod passed, or carries this assignment's own `[<objective>:<ident>]` marker (a daemon's `<Role> · <task title>` rename), renames it to
+  `<Role> │ <model>/<effort> │ <description>` (U+2502 bar with one space each side, effort `medium` shown as `med`, description cut to 34 characters with `…`, no marker, no assignment id, using profile role labels such
   as `Builder`, `Builder (deep)`, `Builder (UI)` for `ui-*`, `Reviewer (fast)`, `Reviewer (deep)`,
   `Scout`, `Scout (deep)`, `Analyst` or `Challenger` and short model names); an unreadable title
   or failed rename is a `note`. Single-owner rule: Pod names only the workers it dispatches, once,
@@ -271,7 +271,11 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   unavailable because it was disabled, paused, soft-drained or excluded, Pod refuses with
   `no_eligible_route`. Each review records a
   factual `review_independence` tag (`cross_provider`, `cross_provider_fallback`, `same_provider`,
-  `same_provider_fallback`, `unknown_author`, or `fallback_unknown_author`).
+  `same_provider_fallback`, `mixed_author_fallback`, `unknown_author`, or `fallback_unknown_author`).
+  When every enabled non-Claude family authored part of the diff (two or more author families, no
+  other-family candidate), a review never blocks: Pod picks the author family with the fewest
+  integrated implement assignments (ties by `review_agents` order, never Claude) and records
+  `mixed_author_fallback` with a `review_fallback_reason` beginning `mixed authors:`.
   Reviews must run in a separate session from any implementer, and optional reviewer `notes` (or
   partial findings on an interrupted review) are persisted in the objective log and passed into
   successor dispatches. Omit `review_agents` or use `[]` to allow any enabled agent. To use an
