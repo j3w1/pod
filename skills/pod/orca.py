@@ -70,7 +70,8 @@ def run_show(run: str) -> dict:
 
 
 def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, str, str | None], request: str,
-          name: str | None = None, new_from: tuple[str, str] | None = None) -> dict:
+          name: str | None = None, worktree_name: str | None = None,
+          new_from: tuple[str, str] | None = None) -> dict:
     """Start one worker. Repeating the call with the same request returns the first outcome.
 
     `new_from` is the repository and branch a new worktree is made from. Without it Orca would
@@ -82,7 +83,8 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
     if effort:
         args += ["--effort", effort]
     args += ["--run", run, "--retry-request", request]
-    args += (["--display-name", name] if name else []) + (
+    args += (["--name", worktree_name] if (new_from and worktree_name) else []) + (
+        ["--display-name", name] if name else []) + (
         ["--repo", f"path:{new_from[0]}", "--base-branch", new_from[1]] if new_from else [])
     result = call(*args, stdin=spec, timeout=180)
     launch = result.get("launch") or {}
@@ -93,7 +95,27 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
             "effective": launch.get("effective"), "requested": launch.get("requested")}
 
 
-def rename(run: str, started: dict, title: str) -> str | None:
+def _is_default_tab_title(current: str, task_title: str | None = None) -> bool:
+    """True when the terminal still holds an empty, worker-task_*, or task-title-derived default."""
+    stripped = current.strip()
+    if not stripped or stripped.startswith("worker-task_"):
+        return True
+    if not task_title:
+        return False
+    if stripped == task_title:
+        return True
+    if stripped.endswith("…") and len(stripped) > 1 and task_title.startswith(stripped[:-1]):
+        return True
+    if " · " in stripped:
+        after_prefix = stripped.split(" · ", 1)[1]
+        if after_prefix == task_title:
+            return True
+        if after_prefix.endswith("…") and len(after_prefix) > 1 and task_title.startswith(after_prefix[:-1]):
+            return True
+    return False
+
+
+def rename(run: str, started: dict, title: str, *, task_title: str | None = None) -> str | None:
     """Give a default-titled worker tab a readable title. Returns why it could not, or None; never raises."""
     try:
         worker = next((row for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
@@ -111,7 +133,7 @@ def rename(run: str, started: dict, title: str) -> str | None:
         current = terminal.get("title") if isinstance(terminal, dict) else None
         if not isinstance(current, str):
             return "terminal title could not be read"
-        if current.strip() and not current.startswith("worker-task_"):
+        if not _is_default_tab_title(current, task_title):
             return None
         try:
             call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)

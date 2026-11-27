@@ -30,6 +30,11 @@ ROUTE = re.compile(rf"{AGENT.pattern}/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]
 AGENT_LIST = re.compile(rf"\[ *(?:{AGENT.pattern}(?: *, *{AGENT.pattern})* *)?\]", re.ASCII)
 _TTL = re.compile(r"^([1-9][0-9]*)([smhd]?)$")
 _TTL_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+_QUOTA_HOLD_TERMS = re.compile(
+    r"(?:quota|rate[ _-]?limit|429|limit(?:ed|s)?|exhaust(?:ed)?|cap(?:ped)?|budget|credit|usage|"
+    r"throttl\w*|weekly|daily|monthly|pct|%|pool|drain)",
+    re.IGNORECASE,
+)
 MAX_BYTES = 256 * 1024
 EDIT = "run `pod models` to choose routes, or `pod config edit` to correct the file"
 
@@ -520,6 +525,18 @@ def _hold_clause(hold: AgentHold) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
+def _is_claude_route(route: str) -> bool:
+    agent, model = _route_parts(route)
+    return agent == "claude" or route_family(route) == "Anthropic" or (model is not None and model.startswith("claude-"))
+
+
+def _is_quota_hold(hold: AgentHold) -> bool:
+    """True for unreasoned holds or holds whose reason indicates quota/rate-limit exhaustion."""
+    if not hold.reason or not hold.reason.strip():
+        return True
+    return bool(_QUOTA_HOLD_TERMS.search(hold.reason))
+
+
 def _matched_hold(route: str, holds: dict[str, AgentHold]) -> tuple[str, str, AgentHold] | None:
     """Match a route against holds keyed by agent name or quota pool id."""
     agent = split(route)[0]
@@ -774,18 +791,19 @@ def resolve_dispatch(
     quota_blocked_other: dict[tuple[str, str, str], str] = {}
     other_family_non_quota_blocked = False
 
-    def _is_enabled_other_family_reviewer(cand: str, agent: str) -> bool:
+    def _is_other_family_allowed_enabled(cand: str, agent: str) -> bool:
         if not auto_review_family_check or route_family(cand) in normalized_authors:
             return False
         if preferences.review_agents and agent not in preferences.review_agents:
             return False
-        if preferences.routes.get(cand) != "enabled":
-            return False
+        return preferences.routes.get(cand) == "enabled"
+
+    def _wire_valid(cand: str) -> bool:
         try:
             wire_route(cand)
+            return True
         except PodError:
             return False
-        return True
 
     for cand in candidates:
         agent = split(cand)[0]
@@ -793,9 +811,12 @@ def resolve_dispatch(
         if paused_hit:
             kind, key, hold = paused_hit
             held_keys.add(key)
-            if _is_enabled_other_family_reviewer(cand, agent):
-                quota_blocked_other.setdefault(
-                    (kind, key, "paused"), f"{kind} {key} paused{_hold_clause(hold)}")
+            if _is_other_family_allowed_enabled(cand, agent):
+                if not _wire_valid(cand) or _matched_exclude(cand, excluded) or not _is_quota_hold(hold):
+                    other_family_non_quota_blocked = True
+                else:
+                    quota_blocked_other.setdefault(
+                        (kind, key, "paused"), f"{kind} {key} paused{_hold_clause(hold)}")
             trace.append(TraceStep(cand, "skipped", "paused_agent",
                                    f"Skipped {cand}: {kind} {key} is paused in paused_agents{_hold_clause(hold)}."))
             continue
@@ -803,9 +824,12 @@ def resolve_dispatch(
         if drained_hit:
             kind, key, hold = drained_hit
             held_keys.add(key)
-            if _is_enabled_other_family_reviewer(cand, agent):
-                quota_blocked_other.setdefault(
-                    (kind, key, "soft_drained"), f"{kind} {key} soft-drained{_hold_clause(hold)}")
+            if _is_other_family_allowed_enabled(cand, agent):
+                if not _wire_valid(cand) or _matched_exclude(cand, excluded) or not _is_quota_hold(hold):
+                    other_family_non_quota_blocked = True
+                else:
+                    quota_blocked_other.setdefault(
+                        (kind, key, "soft_drained"), f"{kind} {key} soft-drained{_hold_clause(hold)}")
             trace.append(TraceStep(cand, "skipped", "soft_drained_agent",
                                    f"Skipped {cand}: {kind} {key} is soft-drained in soft_drained_agents"
                                    f"{_hold_clause(hold)}."))
@@ -813,7 +837,7 @@ def resolve_dispatch(
         excluded_hit = _matched_exclude(cand, excluded)
         if excluded_hit:
             kind, key = excluded_hit
-            if _is_enabled_other_family_reviewer(cand, agent):
+            if _is_other_family_allowed_enabled(cand, agent):
                 other_family_non_quota_blocked = True
             trace.append(TraceStep(cand, "skipped", "excluded_agent",
                                    f"Skipped {cand}: {kind} {key} is excluded by --exclude-agent."))
@@ -826,6 +850,8 @@ def resolve_dispatch(
             wire_route(cand)
         except PodError as exc:
             effort_errors[cand] = exc
+            if _is_other_family_allowed_enabled(cand, agent):
+                other_family_non_quota_blocked = True
             trace.append(TraceStep(cand, "skipped", exc.code, f"Skipped {cand}: {exc}"))
             continue
         if (role == "review" and preferences.review_agents and agent not in preferences.review_agents
@@ -835,7 +861,8 @@ def resolve_dispatch(
                                    f"({', '.join(preferences.review_agents)})."))
             continue
         if auto_review_family_check and route_family(cand) in normalized_authors:
-            same_family_eligible.append(cand)
+            if not _is_claude_route(cand):
+                same_family_eligible.append(cand)
             trace.append(TraceStep(cand, "skipped", "author_family",
                                    f"Skipped {cand}: model family {route_family(cand)} authored this diff."))
             continue
@@ -859,6 +886,8 @@ def resolve_dispatch(
         chosen = eligible[0]
         if route is not None and chosen not in profile_routes and not cleaned_reason:
             return _refuse_outside_profiles(chosen)
+        if review_fallback_reason:
+            trace = [step for step in trace if not (step.route == chosen and step.code == "author_family")]
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
         tag = review_tag(chosen, normalized_authors, primary_agent,
                          fallback=bool(review_fallback_reason)) if role == "review" else None

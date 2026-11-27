@@ -76,7 +76,8 @@ def main():
         task, dispatch = f"task_{number}", f"ctx_{number}"
         state["tasks"][task] = {"id": task, "run_id": run["id"], "task_title": option(args, "--task-title"),
                                 "status": "dispatched", "result": None, "spec": spec,
-                                "base_branch": option(args, "--base-branch"), "repo": option(args, "--repo")}
+                                "base_branch": option(args, "--base-branch"), "repo": option(args, "--repo"),
+                                "name": option(args, "--name"), "display_name": option(args, "--display-name")}
         where = option(args, "--worktree", "")
         if where.startswith("new-"):               # Orca makes a real worktree from the named repository and branch
             repo = option(args, "--repo", "")[len("path:"):]

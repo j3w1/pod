@@ -143,21 +143,68 @@ class DispatchTests(CoreCase):
         self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger · stress check · sol/medium")
         self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) · check diff · terra/high")
         self.assertEqual(titles[f"term_{scout['dispatch']}"], "Scout (deep) · find callers · neon/high")
+        # Exact example string, stripping accidental objective:aN prefix from topic.
+        self.assertEqual(
+            commands._tab_title("build-deep", "implement", "antigravity/gemini-4-neon/high",
+                                "#520 lifecycle implementation"),
+            "Builder (deep) · #520 lifecycle implementation · neon/high",
+        )
+        self.assertEqual(
+            commands._tab_title("build-deep", "implement", "antigravity/gemini-4-neon/high",
+                                "issue-520-v5:a11 #520 lifecycle implementation"),
+            "Builder (deep) · #520 lifecycle implementation · neon/high",
+        )
 
     def test_pre_named_tab_is_not_overwritten_and_empty_or_default_tab_is_renamed(self):
-        self.set_orca(titles={"term_ctx_1": "Coordinator · pod · sol/med", "term_ctx_2": ""})
-        preserved = self.start(title="keep coordinator", route="codex/sol/high", reason="test route", paths_=["a/"])
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  codex/gpt-6.2-sol/high: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "profiles:\n"
+            "  build-fast: implement codex/gpt-6.2-sol/high\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg)
+        task_title_4 = commands._task_title(
+            "build-deep", "implement", "antigravity/gemini-4-neon/high",
+            "widget", "a4", "#520 lifecycle implementation",
+        )
+        task_title_5 = commands._task_title(
+            "build-deep", "implement", "antigravity/gemini-4-neon/high",
+            "widget", "a5", "#520 lifecycle implementation",
+        )
+        orca_prefixed_5 = "Builder · " + task_title_5[:52] + "…"
+        self.set_orca(titles={
+            "term_ctx_1": "Coordinator · pod · sol/med",
+            "term_ctx_2": "",
+            "term_ctx_4": task_title_4,
+            "term_ctx_5": orca_prefixed_5,
+        })
+        preserved = commands.dispatch(self.repo, None, profile="build-fast", title="keep coordinator", spec="Do.", paths_=["a/"])
         self.assertNotIn("note", preserved)
         self.assertEqual(self.orca()["titles"]["term_ctx_1"], "Coordinator · pod · sol/med")
         self.assertEqual(self.orca().get("rename_calls", []), [])
-        empty = self.start(title="empty title", route="codex/sol/high", reason="test route", paths_=["b/"], worktree="new-child")
+        empty = commands.dispatch(self.repo, None, profile="build-fast", title="empty title", spec="Do.", paths_=["b/"], worktree="new-child")
         self.assertNotIn("note", empty)
         self.assertEqual(self.orca()["titles"]["term_ctx_2"], "Builder · empty title · sol/high")
         self.assertEqual(len(self.orca()["rename_calls"]), 1)
-        default = self.start(title="default title", route="codex/sol/high", reason="test route", paths_=["c/"], worktree="new-child")
+        default = commands.dispatch(self.repo, None, profile="build-fast", title="default title", spec="Do.", paths_=["c/"], worktree="new-child")
         self.assertNotIn("note", default)
         self.assertEqual(self.orca()["titles"]["term_ctx_3"], "Builder · default title · sol/high")
         self.assertEqual(len(self.orca()["rename_calls"]), 2)
+        # Real 0.23.2 failure: live tab title equals --task-title OR Orca's '<Role> · <task_title>…' -> renamed!
+        exact_task = commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
+                                       spec="Do.", paths_=["d/"], worktree="new-child")
+        self.assertNotIn("note", exact_task)
+        self.assertEqual(self.orca()["titles"]["term_ctx_4"],
+                         "Builder (deep) · #520 lifecycle implementation · neon/high")
+        prefixed_task = commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
+                                          spec="Do.", paths_=["e/"], worktree="new-child")
+        self.assertNotIn("note", prefixed_task)
+        self.assertEqual(self.orca()["titles"]["term_ctx_5"],
+                         "Builder (deep) · #520 lifecycle implementation · neon/high")
+        self.assertEqual(len(self.orca()["rename_calls"]), 4)
 
     def test_unreadable_tab_title_returns_a_note_and_does_not_rename(self):
         self.set_orca(list_fails=True)
@@ -313,11 +360,18 @@ class DispatchTests(CoreCase):
                      paths_=["missing.py"])
 
     def test_a_new_worktree_starts_from_the_objectives_branch(self):
-        here = self.start(paths_=["src"])
-        there = self.start(paths_=["docs"], worktree="new-child")
+        here = self.start(title="#520 lifecycle implementation", paths_=["src"])
+        there = self.start(title="#520 lifecycle implementation", paths_=["docs"], worktree="new-child")
+        custom = self.start(title="#520 lifecycle implementation", paths_=["tests"], worktree="new-child", name="Custom WT")
         tasks = self.orca()["tasks"]
         self.assertEqual((tasks[here["task"]]["base_branch"], tasks[there["task"]]["base_branch"]), (None, "work"))
         self.assertEqual((tasks[here["task"]]["repo"], tasks[there["task"]]["repo"]), (None, f"path:{self.repo}"))
+        # Current worktree gets no creation flags; new-child gets human --display-name and --name derived from title.
+        self.assertEqual((tasks[here["task"]]["name"], tasks[here["task"]]["display_name"]), (None, None))
+        self.assertEqual(tasks[there["task"]]["display_name"], "#520 lifecycle implementation")
+        self.assertEqual(tasks[there["task"]]["name"], "520-lifecycle-implementation")
+        self.assertEqual(tasks[custom["task"]]["display_name"], "Custom WT")
+        self.assertEqual(tasks[custom["task"]]["name"], "custom-wt")
 
     def test_a_start_orca_reports_as_failed_is_a_refusal_with_its_reason_and_holds_no_paths(self):
         self.set_orca(start_fails="fatal: invalid reference: work")
@@ -818,10 +872,11 @@ class DispatchTests(CoreCase):
         self.assertEqual((rev["route"], rev["review_independence"]),
                          ("codex/gpt-6.1-terra/high", "same_provider_fallback"))
         self.assertIn("antigravity", rev["review_fallback_reason"])
-        assignment_row = self.entries("widget")[-2]
+        assignment_row = state.fold(self.entries("widget")).assignments[rev["assignment"]]
         self.assertEqual(assignment_row["id"], rev["assignment"])
         self.assertEqual(assignment_row["review_independence"], "same_provider_fallback")
         self.assertIn("antigravity", assignment_row["review_fallback_reason"])
+        self.assertFalse(any(step["route"] == rev["route"] and step["status"] == "skipped" for step in dry["trace"]))
 
         # Even if antigravity is unpaused before accept, the accepted review fact keeps same_provider_fallback + reason.
         self.write_routes(cfg)
@@ -839,7 +894,90 @@ class DispatchTests(CoreCase):
                          ("antigravity/gemini-4-neon/high", "cross_provider_fallback"))
         self.assertNotIn("review_fallback_reason", cross)
 
+        # Explicit review exceptions (--words and --after/--why) keep working in the quota-fallback case (dry-run & dispatch).
+        self.finish(cross["task"], {"outcome": "failed"}, outcome="failed")
+        commands.accept(self.repo, None, cross["assignment"])
+        self.write_routes(
+            cfg.replace("claude/claude-opus-5-5/high: enabled", "claude/claude-opus-5-5/high: disabled")
+            + "paused_agents:\n  antigravity: quota\n"
+        )
+        dry_words = commands.dispatch(self.repo, None, role="review", dry_run=True, words="Use Codex.")
+        self.assertEqual((dry_words["ok"], dry_words["route"]), (True, "codex/gpt-6.1-terra/high"))
+        dry_after = commands.dispatch(self.repo, None, role="review", dry_run=True,
+                                      after=cross["assignment"], why="Gemini failed")
+        self.assertEqual((dry_after["ok"], dry_after["route"]), (True, "codex/gpt-6.1-terra/high"))
+        bad_exc = commands.dispatch(self.repo, None, role="review", dry_run=True, words="   ")
+        self.assertEqual((bad_exc["ok"], bad_exc["refused"]["code"]), (False, "review_exception_invalid"))
+        exc_after = commands.dispatch(self.repo, None, role="review", title="explicit after", spec="Review.",
+                                      after=cross["assignment"], why="Gemini failed")
+        self.assertEqual(exc_after["route"], "codex/gpt-6.1-terra/high")
+        self.assertEqual(state.fold(self.entries("widget")).assignments[exc_after["assignment"]]["review_exception"],
+                         {"kind": "after", "after": cross["assignment"], "why": "Gemini failed"})
+        exc_words = commands.dispatch(self.repo, None, role="review", title="explicit words", spec="Review.",
+                                      words="Run on Codex.")
+        self.assertEqual(exc_words["route"], "codex/gpt-6.1-terra/high")
+        self.assertEqual(state.fold(self.entries("widget")).assignments[exc_words["assignment"]]["review_exception"],
+                         {"kind": "words", "words": "Run on Codex."})
+
         # If both codex and antigravity are paused, only Claude remains -> refused (Claude is never chosen).
         self.write_routes(cfg + "paused_agents: [codex, antigravity]\n")
         self.refused("no_eligible_route", commands.dispatch, self.repo, None,
                      role="review", title="all paused", spec="Review.")
+
+    def test_review_fallback_proof_binds_to_observed_effective_launch_and_retry(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "profiles:\n"
+            "  build-fast: implement codex/gpt-6.2-sol/medium\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg)
+        built = commands.dispatch(self.repo, None, role="implement", title="build", spec="Build.", paths_=["src/"])
+        commit = self.commit({"src/a.py": "openai\n"})
+        self.finish(built["task"], {"outcome": "succeeded", "commit": commit})
+        commands.accept(self.repo, None, built["assignment"], integrated=commit)
+
+        # Pause antigravity so Pod requests Codex fallback, but Orca actually launches Gemini.
+        self.write_routes(cfg + "paused_agents:\n  antigravity: quota\n")
+        self.set_orca(effective={"agent": "antigravity", "model": "gemini-4-neon-high", "effort": None})
+        mismatched = commands.dispatch(self.repo, None, role="review", title="mismatch review", spec="Review.")
+        self.assertEqual(mismatched["review_independence"], "cross_provider_fallback")
+        self.assertNotIn("review_fallback_reason", mismatched)
+        self.assertIn("route_mismatch", mismatched)
+        row1 = state.fold(self.entries("widget")).assignments[mismatched["assignment"]]
+        self.assertEqual(row1["effective"], "antigravity/gemini-4-neon/high")
+        self.assertEqual(row1["review_independence"], "cross_provider_fallback")
+        self.assertIsNone(row1.get("review_fallback_reason"))
+        self.finish(mismatched["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        acc1 = commands.accept(self.repo, None, mismatched["assignment"])
+        self.assertEqual(acc1["review_independence"], "cross_provider_fallback")
+        self.assertNotIn("review_fallback_reason", acc1)
+        fact1 = [e for e in self.entries("widget") if e.get("fact") == "review"][-1]
+        self.assertEqual(fact1["review_independence"], "cross_provider_fallback")
+        self.assertNotIn("review_fallback_reason", fact1)
+
+        # Lost-reply + --retry must also read receipt.launch.effective and bind proof to Gemini, not Codex fallback.
+        self.set_orca(lose_reply=True, effective={"agent": "antigravity", "model": "gemini-4-neon-high", "effort": None})
+        problem = self.refused("orca_unknown", commands.dispatch, self.repo, None,
+                               role="review", title="lost reply review", spec="Review.")
+        retry_id = problem.fix.split("--retry ")[1].split("`")[0]
+        settled = commands.dispatch(self.repo, None, retry=retry_id)
+        self.assertEqual(settled["review_independence"], "cross_provider_fallback")
+        self.assertNotIn("review_fallback_reason", settled)
+        self.assertIn("route_mismatch", settled)
+        row2 = state.fold(self.entries("widget")).assignments[retry_id]
+        self.assertEqual(row2["effective"], "antigravity/gemini-4-neon/high")
+        self.assertEqual(row2["review_independence"], "cross_provider_fallback")
+        self.assertIsNone(row2.get("review_fallback_reason"))
+        self.finish(settled["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        acc2 = commands.accept(self.repo, None, retry_id)
+        self.assertEqual(acc2["review_independence"], "cross_provider_fallback")
+        self.assertNotIn("review_fallback_reason", acc2)
+        fact2 = [e for e in self.entries("widget") if e.get("fact") == "review"][-1]
+        self.assertEqual(fact2["review_independence"], "cross_provider_fallback")
+        self.assertNotIn("review_fallback_reason", fact2)
