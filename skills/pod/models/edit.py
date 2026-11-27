@@ -118,6 +118,13 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
         if live is None or live_identity != identity or live != original:
             raise keep("preferences_changed", "The preference file changed, was replaced or removed while you edited.",
                        f"merge {copy} into {path} by hand, then delete the copy")
+        try:
+            again, _ = _read_regular(copy)
+        except OSError:
+            again = None
+        if again != edited:                          # the editor saved again while Pod waited for the lock
+            raise keep("preferences_changed", "The editor's output changed while it was being saved; nothing was saved.",
+                       f"run `pod config edit` again or merge {copy} into {path} by hand")
         staged = stage(edited)
         try:
             if original_ok:
@@ -129,7 +136,11 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
             os.replace(staged, path)
         finally:
             staged.unlink(missing_ok=True)
-        copy.unlink(missing_ok=True)
+        try:
+            if _read_regular(copy)[0] == edited:      # never delete a copy the editor saved again
+                copy.unlink()
+        except OSError:
+            pass
 
 
 def _refuse_invalid(preferences: routefile.Preferences) -> None:

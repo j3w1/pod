@@ -168,15 +168,32 @@ class ConfigEditLockTests(CoreCase):
         os.chmod(kept[0], 0o600)
         self.assertEqual(kept[0].read_text(), "# edited\n")
 
-    def test_the_edited_copy_is_read_exactly_once(self):
+    def test_an_editor_save_that_lands_while_waiting_for_the_lock_is_kept_not_discarded(self):
         target = paths.route_file()
-        reads = []
-        real = edit._read_regular
+        before = target.read_bytes()
+        real = edit._locked
 
-        def counting(path):
-            reads.append(Path(path).name)
+        def later_save(path):
+            for copy in path.parent.glob(".config-edit-*"):
+                copy.write_text(copy.read_text() + "# later\n")
             return real(path)
-        with self.editor(), patch.object(edit, "_read_regular", side_effect=counting):
-            edit.edit_in_editor(target, ["ed"])
-        self.assertEqual([name for name in reads if name.startswith(".config-edit-")], reads[1:2])
-        self.assertEqual(sum(name.startswith(".config-edit-") for name in reads), 1)
+        for variant in ("regular", "directory"):
+            with self.subTest(variant=variant):
+                def hook(path, variant=variant):
+                    if variant == "regular":
+                        return later_save(path)
+                    for copy in path.parent.glob(".config-edit-*"):
+                        copy.unlink()
+                        copy.mkdir()
+                    return real(path)
+                with self.editor(), patch.object(edit, "_locked", side_effect=hook):
+                    with self.assertRaises(PodError) as caught:
+                        edit.edit_in_editor(target, ["ed"])
+                self.assertIn(caught.exception.code, ("preferences_changed", "editor_failed"))
+                self.assertEqual(target.read_bytes(), before)
+                for leftover in self.kept():
+                    if leftover.is_dir():
+                        leftover.rmdir()
+                    else:
+                        self.assertTrue(leftover.read_text().endswith("# later\n"))     # the newer save survives
+                        leftover.unlink()
