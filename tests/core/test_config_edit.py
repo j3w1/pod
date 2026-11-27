@@ -110,8 +110,9 @@ class ConfigEditLockTests(CoreCase):
         original = target.read_bytes()
 
         def swap_same_bytes():
-            target.unlink()
-            target.write_bytes(original)
+            other = target.with_name("replacement.yaml")           # made while the old file still exists: a new inode
+            other.write_bytes(original)
+            os.replace(other, target)
         with self.editor(change=swap_same_bytes):
             with self.assertRaises(PodError) as same:
                 edit.edit_in_editor(target, ["ed"])
