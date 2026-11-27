@@ -286,20 +286,27 @@ def _short_model(model: str) -> str:
     return chosen[:_SHORT_MODEL_MAX]
 
 
-def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
-    """`<Role> · <topic> · <model>/<effort>`, capped at 60 characters; ellipsizes only the topic."""
-    limit = 60
-    head = f"{_tab_role(profile, role)} · "
+_EFFORT_SHORT = {"medium": "med"}
+_MARKER_TOKEN = re.compile(r"\s*\[[^\[\]\s]+:a\d+\]\s*")
+_TAB_DESCRIPTION_MAX = 34
+
+
+def _tab_title(profile: str | None, role: str, route: str, title: str, requested: str | None = None) -> str:
+    """`<Role> │ <model>/<effort> │ <description>` (U+2502 bar, one space each side); the description is cut to 34 characters."""
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
+    if not effort and requested:
+        asked = requested.split("/")
+        effort = asked[2] if len(asked) > 2 and asked[2] != "None" else ""
+    effort = _EFFORT_SHORT.get(effort, effort)
     short_model = _short_model(raw_model) if raw_model else ""
-    model_parts = ([short_model] if short_model else []) + ([effort] if effort else [])
-    tail = " · " + "/".join(model_parts) if model_parts else ""
-    room = max(1, limit - len(head) - len(tail))
-    short = _clean_topic(title) or " ".join(title.split())
-    short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
-    return head + short + tail
+    model_part = "/".join(([short_model] if short_model else []) + ([effort] if effort else []))
+    bare = _MARKER_TOKEN.sub(lambda m: "" if re.match(r"[,.;:!?)\]]", title[m.end():m.end() + 1]) else " ", title)
+    short = _clean_topic(bare) or " ".join(bare.split())
+    if len(short) > _TAB_DESCRIPTION_MAX:
+        short = short[:_TAB_DESCRIPTION_MAX - 1].rstrip() + "…"
+    return " │ ".join(part for part in (_tab_role(profile, role), model_part, short) if part)
 
 
 def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
@@ -319,11 +326,8 @@ def _validate_dry_run_review_exception(folded: State | None, root: Path | None, 
         if not prior or prior["role"] != "review":
             return False, None
         if root is not None:
-            try:
-                base = gitio.commit(root, commit or "HEAD")
-            except PodError:
-                base = None
-            if base and prior["base"] != base:
+            # `commit` is the one SHA the dry run resolved; an unresolvable candidate cannot establish eligibility
+            if not commit or prior["base"] != commit:
                 return False, None
         if agents and (prior["route"].partition("/")[0] not in agents
                        or prior.get("effective", prior["route"]).partition("/")[0] not in agents):
@@ -338,12 +342,21 @@ def _validate_dry_run_review_exception(folded: State | None, root: Path | None, 
     return False, None
 
 
+def _resolved(root: Path | None, commit: str | None) -> str | None:
+    try:
+        return gitio.commit(root, commit or "HEAD") if root is not None else None
+    except PodError:
+        return None
+
+
 def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
                       route: str | None = None, reason: str | None = None, exclude_agents: list[str] | None = None,
                       commit: str | None = None, words: str | None = None, after: str | None = None,
                       why: str | None = None) -> dict:
     """Pure read-only route resolution: never writes to the log and never calls Orca."""
     authors: set[str] = set()
+    counts: dict[str, int] = {}
+    frozen: str | None = None
     notes: list[str] = []
     folded: State | None = None
     root: Path | None = None
@@ -354,6 +367,8 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
         folded = fold(entries)
         authors = folded.author_families()
+        frozen = _resolved(root, commit)
+        counts = folded.author_counts(root, frozen)
         notes = _reviewer_note_lines(folded)
     else:
         try:
@@ -362,6 +377,8 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             if entries:
                 folded = fold(entries)
                 authors = folded.author_families()
+                frozen = _resolved(root, commit)
+                counts = folded.author_counts(root, frozen)
                 notes = _reviewer_note_lines(folded)
         except PodError:
             pass
@@ -370,7 +387,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
     has_exception_flags = not (words is after is why is None)
     res = routefile.resolve_dispatch(
         preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-        author_families=authors, reviewer_notes=notes, allow_review_exception=False)
+        author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=False)
     refused_override: dict | None = None
     preview_note: str | None = None
     if has_exception_flags:
@@ -386,7 +403,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
                                or any(step.code in ("reviewer_agent_not_allowed", "author_family") for step in res.trace))
             if disallowed_seen:
                 valid_exc, preview_note = _validate_dry_run_review_exception(
-                    folded, root, preferences.review_agents, commit=commit, words=words, after=after, why=why)
+                    folded, root, preferences.review_agents, commit=frozen, words=words, after=after, why=why)
                 if not valid_exc:
                     refused_override = {
                         "code": "review_exception_invalid",
@@ -397,7 +414,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
                 else:
                     res = routefile.resolve_dispatch(
                         preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-                        author_families=authors, reviewer_notes=notes, allow_review_exception=True)
+                        author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=True)
     ok = res.ok and refused_override is None
     active_paused = routefile.active_holds(preferences.paused_meta, agents=preferences.paused_agents)
     active_drained = routefile.active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents)
@@ -450,16 +467,17 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
         authors = state.author_families()
+        base = gitio.commit(root, commit or "HEAD")
+        counts = state.author_counts(root, base)
         notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
         res = routefile.resolve_dispatch(
             preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-            author_families=authors, reviewer_notes=notes, allow_review_exception=False)
+            author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=False)
         exception = None
         paths_ = gitio.declared(paths_)
         context = gitio.declared(context, keep_root=True)
-        base = gitio.commit(root, commit or "HEAD")
         if has_exception_flags:
             if res.ok and not res.review_fallback_reason:
                 raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",
@@ -472,7 +490,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                                fix=res.error_fix)
             res = routefile.resolve_dispatch(
                 preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-                author_families=authors, reviewer_notes=notes, allow_review_exception=True)
+                author_families=authors, author_counts=counts, reviewer_notes=notes, allow_review_exception=True)
             if not res.ok:
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
                                fix=res.error_fix)
@@ -565,7 +583,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title), task_title=task_title)
+                started.get("effective")) or route, title, route), task_title=task_title, marker=f"[{state.id}:{ident}]")
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
@@ -595,7 +613,8 @@ def _effective_review_proof(
             actual_route == requested_route and not routefile._is_claude_route(actual_route)
         )
         if authorized_fallback:
-            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=True), fallback_reason
+            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=True,
+                                        mixed=fallback_reason.startswith(routefile.MIXED_PREFIX)), fallback_reason
         return "same_provider", None
     return routefile.review_tag(actual_route, normalized, primary_agent, fallback=False), None
 
@@ -686,8 +705,8 @@ def _settle_start(writer, state: State, ident: str) -> dict:
                 try:
                     failed = orca.rename(
                         run, started_info,
-                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"]),
-                        task_title=task_title,
+                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"], row["route"]),
+                        task_title=task_title, marker=f"[{state.id}:{ident}]",
                     )
                 except Exception as exc:
                     failed = type(exc).__name__

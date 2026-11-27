@@ -563,6 +563,34 @@ class RouteFileTests(PodCase):
                 invalid = routefile.load(self.write_routes(cfg + bad))
                 self.assertEqual(invalid.status, "invalid")
 
+    def test_review_mixed_author_fallback_picks_the_least_authored_family(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.2-sol/high: enabled\n  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: null\npinned: null\nreview_agents: [codex, antigravity]\n"
+            "profiles:\n  review-deep: review codex/gpt-6.2-sol/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+            "  review-codex: review codex/gpt-6.2-sol/high\n")
+        prefs = routefile.load(self.write_routes(cfg))
+        both = {"OpenAI", "Google"}
+        res = routefile.resolve_dispatch(prefs, role="review", profile="review-deep", author_families=both,
+                                         author_counts={"OpenAI": 3, "Google": 1})
+        self.assertEqual((res.ok, res.route, res.review_independence), (True, "antigravity/gemini-4-neon/high", "mixed_author_fallback"))
+        self.assertTrue(res.review_fallback_reason.startswith("mixed authors: "))
+        tie = routefile.resolve_dispatch(prefs, role="review", profile="review-deep", author_families=both,
+                                         author_counts={"OpenAI": 2, "Google": 2})
+        self.assertEqual((tie.route, tie.review_independence), ("codex/gpt-6.2-sol/high", "mixed_author_fallback"))
+        # Without counts scoped to the reviewed commit there is no mixed fallback: the refusal stands.
+        unscoped = routefile.resolve_dispatch(prefs, role="review", profile="review-deep", author_families=both)
+        self.assertEqual((unscoped.ok, unscoped.error_code), (False, "reviewer_same_family"))
+        one = routefile.resolve_dispatch(prefs, role="review", profile="review-deep", author_families={"OpenAI"},
+                                         author_counts={"OpenAI": 2})
+        self.assertEqual((one.ok, one.route, one.review_independence), (True, "antigravity/gemini-4-neon/high", "cross_provider_fallback"))
+        # An enabled non-Claude family that did not author the diff blocks the mixed claim.
+        narrow = routefile.resolve_dispatch(prefs, role="review", profile="review-codex",
+                                            author_families={"OpenAI", "Anthropic"},
+                                            author_counts={"OpenAI": 2, "Anthropic": 1})
+        self.assertEqual((narrow.ok, narrow.error_code), (False, "reviewer_same_family"))
+
     def test_review_same_family_quota_fallback_and_boundaries(self):
         from datetime import datetime, timezone
         base = (

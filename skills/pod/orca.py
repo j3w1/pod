@@ -5,6 +5,7 @@ request id the caller derives, so a repeated start replays Orca's recorded outco
 starting a second worker, and a coordinator that no longer holds the Run is refused by Orca.
 """
 
+import re
 import json
 import subprocess
 import uuid
@@ -95,18 +96,31 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
             "effective": launch.get("effective"), "requested": launch.get("requested")}
 
 
-def _is_default_tab_title(current: str, task_id: str | None = None, task_title: str | None = None) -> bool:
-    """True only for empty, exact `worker-<taskId>`, or exact `task_title` passed to worker-start."""
+def _is_default_tab_title(current: str, task_id: str | None = None, task_title: str | None = None,
+                          marker: str | None = None) -> bool:
+    """True for an empty title, exact `worker-<taskId>`, the exact `task_title` Pod passed, or a daemon's
+    `<Role> · <task title…>` rename that starts the task title with this assignment's own marker."""
     if not current.strip():
         return True
     if task_id and current == f"worker-{task_id}":
         return True
     if task_title and current == task_title:
         return True
+    if marker and task_title and task_title.startswith(marker + " "):
+        head, sep, rest = current.partition(" · ")
+        if sep and re.fullmatch(r"[A-Za-z][A-Za-z ()]{0,23}", head):
+            if rest == task_title:
+                return True
+            rest = re.sub(r" · [A-Za-z0-9.\-]+/[a-z]+$", "", rest)       # a daemon's trailing model/effort
+            if rest == task_title:
+                return True
+            # Orca's readback truncation: the task title's own leading words, then an ellipsis
+            return rest.endswith("…") and len(rest) > len(marker) + 2 and task_title.startswith(rest[:-1])
     return False
 
 
-def rename(run: str, started: dict, title: str, *, task_title: str | None = None) -> str | None:
+def rename(run: str, started: dict, title: str, *, task_title: str | None = None,
+           marker: str | None = None) -> str | None:
     """Give a default-titled worker tab a readable title. Returns why it could not, or None; never raises."""
     try:
         worker = next((row for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
@@ -125,7 +139,7 @@ def rename(run: str, started: dict, title: str, *, task_title: str | None = None
         if not isinstance(current, str):
             return "terminal title could not be read"
         task_id = started.get("task") or (worker.get("task") if isinstance(worker, dict) else None)
-        if not _is_default_tab_title(current, task_id=task_id, task_title=task_title):
+        if not _is_default_tab_title(current, task_id=task_id, task_title=task_title, marker=marker):
             return None
         try:
             call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)

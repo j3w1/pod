@@ -78,6 +78,31 @@ class State:
                 routes.add(route)
         return routes
 
+    def author_counts(self, root=None, commit: str | None = None) -> dict[str, int]:
+        """Integrated implement assignments per model family whose work is in `commit`'s history.
+
+        Used to rank a mixed-author review fallback; without a root and commit nothing is counted."""
+        from . import gitio, routefile
+        counts: dict[str, int] = {}
+        if root is None or not commit:
+            return counts
+        for row in self.assignments.values():
+            if row.get("role") != "implement" or row.get("void"):
+                continue
+            done = self.result(row["id"])
+            route = row.get("effective") or row.get("route") or ""
+            at = (done or {}).get("integrated_at")
+            if not (route and done and done.get("decision") == "integrated" and done.get("contained") is True and at):
+                continue
+            try:
+                inside = at == commit or gitio.is_ancestor(root, at, commit)
+            except Exception:
+                inside = False
+            if inside:
+                family = routefile.route_family(route)
+                counts[family] = counts.get(family, 0) + 1
+        return counts
+
     def author_families(self) -> set[str]:
         """Model families (providers) with an accepted implement assignment on this objective."""
         from . import routefile

@@ -97,6 +97,9 @@ class Resolution:
     review_fallback_reason: str | None = None
 
 
+MIXED_PREFIX = "mixed authors: "
+
+
 @dataclass
 class Preferences:
     path: Path
@@ -458,6 +461,7 @@ def review_tag(
     primary_agent: str | None,
     *,
     fallback: bool = False,
+    mixed: bool = False,
 ) -> str:
     """Compute an honest factual proof tag for a review by comparing model families (providers)."""
     reviewer_agent = _route_parts(reviewer)[0]
@@ -468,6 +472,8 @@ def review_tag(
         return "unknown_author" if on_primary else "fallback_unknown_author"
     if reviewer_family not in normalized_authors:
         return "cross_provider" if on_primary else "cross_provider_fallback"
+    if mixed and fallback:
+        return "mixed_author_fallback"
     return "same_provider" if on_primary else "same_provider_fallback"
 
 
@@ -648,6 +654,7 @@ def resolve_dispatch(
     author_families: set[str] | frozenset[str] = frozenset(),
     reviewer_notes: list[str] | tuple[str, ...] = (),
     allow_review_exception: bool = False,
+    author_counts: dict[str, int] | None = None,
     now: datetime | None = None,
 ) -> Resolution:
     """Single pure dispatch resolver used by `pod dispatch`, `--dry-run`, and `pod models` What-If."""
@@ -898,7 +905,18 @@ def resolve_dispatch(
             "other-family review routes unavailable: " + "; ".join(quota_blocked_other.values())
         )
 
-    if role == "review" and len(eligible) > 1:
+    counts = {route_family_: n for route_family_, n in (author_counts or {}).items() if n > 0}
+    enabled_families = {route_family(item) for item, state_ in preferences.routes.items()
+                        if state_ == "enabled" and not _is_claude_route(item)}
+    if (not eligible and auto_review_family_check and same_family_eligible
+            and len(counts) > 1 and enabled_families <= set(counts)
+            and not quota_blocked_other and not other_family_non_quota_blocked):
+        order_ = {agent: index for index, agent in enumerate(preferences.review_agents)}
+        eligible = sorted(same_family_eligible, key=lambda item: (
+            counts.get(route_family(item), 0), order_.get(split(item)[0], len(order_))))
+        review_fallback_reason = (MIXED_PREFIX + ", ".join(f"{family} {n}" for family, n in sorted(counts.items()))
+                                  + "; every enabled non-Claude family authored part of this diff")
+    elif role == "review" and len(eligible) > 1:
         order = {agent: index for index, agent in enumerate(preferences.review_agents)}
         fallback_rank = len(order)
         eligible = sorted(eligible, key=lambda item: (route_family(item) in normalized_authors,
@@ -912,7 +930,9 @@ def resolve_dispatch(
             trace = [step for step in trace if not (step.route == chosen and step.code == "author_family")]
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
         tag = review_tag(chosen, normalized_authors, primary_agent,
-                         fallback=bool(review_fallback_reason)) if role == "review" else None
+                         fallback=bool(review_fallback_reason),
+                         mixed=bool(review_fallback_reason and review_fallback_reason.startswith(MIXED_PREFIX))
+                         ) if role == "review" else None
         extra = ""
         if tag:
             details = [tag]
