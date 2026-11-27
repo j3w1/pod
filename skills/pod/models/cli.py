@@ -39,6 +39,8 @@ def _parser() -> argparse.ArgumentParser:
                         help="set or update a profile: NAME='<role>[+mcp] <route> ...' (repeatable)")
     parser.add_argument("--delete-profile", action="append", default=[], metavar="NAME",
                         help="remove a profile from config.yaml (repeatable)")
+    parser.add_argument("--default-profile", action="append", default=[], metavar="ROLE=NAME|none",
+                        help="set or clear default_profiles for a role: implement|review|investigate (repeatable)")
     parser.add_argument("--review-agents", metavar="A,B|none",
                         help="set review_agents priority list (comma-separated, or none)")
     return parser
@@ -97,6 +99,7 @@ def _status(args) -> int:
                         "soft_drained_agents": list(preferences.soft_drained_agents),
                         "soft_drained_meta": {k: routefile.hold_as_dict(v) for k, v in preferences.soft_drained_meta.items()},
                         "review_agents": list(preferences.review_agents),
+                        "default_profiles": routefile.effective_default_profiles(preferences),
                         "profiles": len(preferences.profiles)},
         "rows_by_state": counts,
         "cache": str(snapshot.home())}
@@ -185,6 +188,18 @@ def _edit(args) -> None:
         for name in args.delete_profile:
             parsed_profiles[name] = None
         changes["profiles"] = parsed_profiles
+    if args.default_profile:
+        parsed_defaults: dict[str, str | None] = {}
+        for item in args.default_profile:
+            if "=" not in item:
+                raise PodError("profile_invalid", f"{item!r} must use ROLE=NAME|none format.",
+                               fix="pass --default-profile implement=build-fast")
+            role_key, pname = (part.strip() for part in item.split("=", 1))
+            if not role_key or not pname:
+                raise PodError("profile_invalid", f"{item!r} must name both a role and a profile or none.",
+                               fix="pass --default-profile implement=build-fast")
+            parsed_defaults[role_key] = None if pname.lower() in ("none", "null") else pname
+        changes["default_profiles"] = parsed_defaults
     if args.review_agents is not None:
         raw = args.review_agents.strip()
         changes["review_agents"] = ([] if raw.lower() in ("", "none", "null")
@@ -207,7 +222,7 @@ def main(argv: list[str]) -> int:
         has_edit = bool(args.enable or args.disable or args.preferred is not None or args.pin is not None
                         or args.pause or args.drain or args.unpause
                         or args.reason is not None or args.ttl is not None
-                        or args.profile or args.delete_profile or args.review_agents is not None)
+                        or args.profile or args.delete_profile or args.default_profile or args.review_agents is not None)
         if has_edit:
             _edit(args)
             if not args.json:
@@ -218,7 +233,11 @@ def main(argv: list[str]) -> int:
         model = view.build()
         rows = view.select(model, provider="all" if args.all else "routed")
         if args.json:
+            routing = routefile.routing_policy(model.preferences)
             _emit({"header": model.header(), "rows": [view.as_json(row) for row in rows],
+                   "routing": routing,
+                   "default_profiles": routing["default_profiles"],
+                   "review_agents": routing["review_agents"],
                    "paused_agents": list(model.preferences.paused_agents),
                    "paused_meta": {k: routefile.hold_as_dict(v) for k, v in model.preferences.paused_meta.items()},
                    "soft_drained_agents": list(model.preferences.soft_drained_agents),

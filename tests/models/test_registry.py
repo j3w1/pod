@@ -48,6 +48,8 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(defaults["schema"], "pod/v2")
         self.assertEqual(defaults["merge_authorization"], "person")
         self.assertEqual(defaults["review_agents"], ["codex", "antigravity", "claude"])
+        self.assertEqual(defaults["default_profiles"],
+                         {"implement": "build-fast", "review": "review-fast", "investigate": "scout"})
         self.assertEqual(set(defaults["profiles"]),
                          {"scout-fast", "scout", "scout-deep", "build-fast", "build-deep",
                           "ui-light", "ui-design", "review-fast", "review-deep"})

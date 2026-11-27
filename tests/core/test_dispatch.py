@@ -52,20 +52,20 @@ class DispatchTests(CoreCase):
             (None, "implement", "Builder"),
             (None, "review", "Reviewer"),
             (None, "investigate", "Scout"),
+            ("build-fast", "implement", "Builder"),
+            ("build-deep", "implement", "Builder (deep)"),
+            ("ui-design", "implement", "Builder (UI)"),
+            ("ui-light", "implement", "Builder (UI)"),
+            ("review-fast", "review", "Reviewer (fast)"),
+            ("review-deep", "review", "Reviewer (deep)"),
+            ("scout", "investigate", "Scout"),
+            ("scout-fast", "investigate", "Scout"),
+            ("scout-deep", "investigate", "Scout (deep)"),
             ("analyst", "investigate", "Analyst"),
             ("analyst-deep", "investigate", "Analyst"),
             ("repo-analyst", "investigate", "Analyst"),
             ("challenger", "review", "Challenger"),
             ("challenger-deep", "investigate", "Challenger"),
-            ("ui-design", "implement", "Builder (UI)"),
-            ("ui-light", "implement", "Builder (UI)"),
-            ("review-fast", "review", "Reviewer"),
-            ("review-deep", "review", "Reviewer"),
-            ("build-fast", "implement", "Builder"),
-            ("build-deep", "implement", "Builder"),
-            ("scout", "investigate", "Scout"),
-            ("scout-fast", "investigate", "Scout"),
-            ("scout-deep", "investigate", "Scout"),
             ("custom-worker", "implement", "Builder"),
             ("custom-worker", "review", "Reviewer"),
             ("custom-worker", "investigate", "Scout"),
@@ -78,6 +78,11 @@ class DispatchTests(CoreCase):
                 self.assertNotIn(first_word, ("implement", "investigate", "review"))
                 if profile:
                     self.assertNotIn(profile, rendered)
+        # Long topics shorten the topic while keeping the full role word and model/effort within 60 chars.
+        long_rev = commands._tab_title("review-deep", "review", "codex/gpt-6.2-astra/xhigh", "very " * 20)
+        self.assertTrue(long_rev.startswith("Reviewer (deep) · "))
+        self.assertTrue(long_rev.endswith(" · astra/xhigh"))
+        self.assertLessEqual(len(long_rev), 60)
         model_cases = (
             ("claude/claude-opus-5-5/high", "opus/high"),
             ("claude/claude-sonnet-5-5/medium", "sonnet/medium"),
@@ -96,7 +101,7 @@ class DispatchTests(CoreCase):
         )
         for route, expected_tail in model_cases:
             with self.subTest(route=route):
-                self.assertEqual(commands._tab_title("build-deep", "implement", route, "topic"),
+                self.assertEqual(commands._tab_title("build-fast", "implement", route, "topic"),
                                  f"Builder · topic · {expected_tail}")
         cfg = (
             "schema: pod/v2\nroutes:\n"
@@ -107,25 +112,29 @@ class DispatchTests(CoreCase):
             "  codex/gpt-6.1-terra/low: enabled\n"
             "preferred: null\npinned: null\n"
             "profiles:\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high\n"
             "  ui-design: implement claude/claude-opus-5-5/high\n"
             "  analyst-deep: investigate antigravity/gemini-4-neon/high\n"
             "  challenger: review codex/gpt-6.2-sol/medium\n"
             "  review-fast: review codex/gpt-6.1-terra/high\n"
-            "  scout-fast: investigate codex/gpt-6.1-terra/low\n"
+            "  scout-deep: investigate antigravity/gemini-4-neon/high\n"
         )
         self.write_routes(cfg)
         self.commit({"src/a.py": "a\n"})
-        ui = commands.dispatch(self.repo, None, profile="ui-design", title="card layout", spec="Style.", paths_=["ui/"])
+        deep = commands.dispatch(self.repo, None, profile="build-deep", title="core refactor", spec="Build.", paths_=["src/"])
+        ui = commands.dispatch(self.repo, None, profile="ui-design", title="card layout", spec="Style.", paths_=["ui/"],
+                               worktree="new-child")
         analyst = commands.dispatch(self.repo, None, profile="analyst-deep", title="latency study", spec="Study.")
         challenger = commands.dispatch(self.repo, None, profile="challenger", title="stress check", spec="Challenge.")
         reviewer = commands.dispatch(self.repo, None, profile="review-fast", title="check diff", spec="Review.")
-        scout = commands.dispatch(self.repo, None, profile="scout-fast", title="find callers", spec="Search.")
+        scout = commands.dispatch(self.repo, None, profile="scout-deep", title="find callers", spec="Search.")
         titles = self.orca()["titles"]
+        self.assertEqual(titles[f"term_{deep['dispatch']}"], "Builder (deep) · core refactor · neon/high")
         self.assertEqual(titles[f"term_{ui['dispatch']}"], "Builder (UI) · card layout · opus/high")
         self.assertEqual(titles[f"term_{analyst['dispatch']}"], "Analyst · latency study · neon/high")
         self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger · stress check · sol/medium")
-        self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer · check diff · terra/high")
-        self.assertEqual(titles[f"term_{scout['dispatch']}"], "Scout · find callers · terra/low")
+        self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) · check diff · terra/high")
+        self.assertEqual(titles[f"term_{scout['dispatch']}"], "Scout (deep) · find callers · neon/high")
 
     def test_pre_named_tab_is_not_overwritten_and_empty_or_default_tab_is_renamed(self):
         self.set_orca(titles={"term_ctx_1": "Coordinator · pod · sol/med", "term_ctx_2": ""})
@@ -665,3 +674,73 @@ class DispatchTests(CoreCase):
         accepted = commands.accept(self.repo, None, rev["assignment"])
         self.assertEqual((accepted["verdict"], accepted["review_independence"], accepted["author_families"]),
                          ("pass", "cross_provider_fallback", ["Google"]))
+
+    def test_role_only_dispatch_uses_default_profiles_and_skips_author_family_for_review(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "profiles:\n"
+            "  build-fast: implement codex/gpt-6.2-sol/medium antigravity/gemini-4-neon/medium\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high codex/gpt-6.2-sol/medium\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+            "  scout: investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium\n"
+        )
+        self.write_routes(cfg)
+        # No --profile and no --route -> implement->build-fast, investigate->scout, review->review-fast.
+        built = commands.dispatch(self.repo, None, role="implement", title="ship feature", spec="Build.", paths_=["src/"])
+        self.assertEqual((built["profile"], built["route"]), ("build-fast", "codex/gpt-6.2-sol/medium"))
+        scout = commands.dispatch(self.repo, None, role="investigate", title="check callers", spec="Read.")
+        self.assertEqual((scout["profile"], scout["mcp"], scout["route"]),
+                         ("scout", True, "antigravity/gemini-4-neon/low"))
+        commit = self.commit({"src/a.py": "openai\n"})
+        self.finish(built["task"], {"outcome": "succeeded", "commit": commit})
+        commands.accept(self.repo, None, built["assignment"], integrated=commit)
+        # Role-only review uses review-fast + review_agents and skips OpenAI (author family) -> antigravity!
+        rev = commands.dispatch(self.repo, None, role="review", title="audit change", spec="Review.")
+        self.assertEqual((rev["profile"], rev["route"], rev["review_independence"]),
+                         ("review-fast", "antigravity/gemini-4-neon/high", "cross_provider_fallback"))
+        self.assertTrue(any("authored this diff" in line for line in rev["trace"]))
+        # Configurable default_profiles in config.yaml overrides the role default.
+        self.write_routes(cfg + "default_profiles:\n  implement: build-deep\n")
+        dry = commands.dispatch(self.repo, None, role="implement", dry_run=True)
+        self.assertEqual((dry["ok"], dry["profile"], dry["route"]), (True, "build-deep", "antigravity/gemini-4-neon/high"))
+
+    def test_route_outside_every_profile_requires_reason_and_records_it_on_assignment(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  codex/gpt-6.2-sol/ultra: enabled\n"
+            "preferred: null\npinned: null\n"
+            "profiles:\n"
+            "  build-fast: implement antigravity/gemini-4-neon/medium\n"
+        )
+        self.write_routes(cfg)
+        entries_before = self.entries("widget")
+        self.refused("route_outside_profiles", commands.dispatch, self.repo, None,
+                     role="implement", route="codex/gpt-6.2-sol/ultra", title="deep dive", spec="Do it.", paths_=["src/"])
+        self.assertEqual(self.entries("widget"), entries_before)
+        self.assertFalse(self.orca_file.exists())
+        # Supplying --reason through CLI succeeds and persists reason on the assignment row.
+        args = cli.parser().parse_args([
+            "dispatch", "--role", "implement", "--route", "codex/gpt-6.2-sol/ultra",
+            "--reason", "benchmark verification requires ultra",
+            "--title", "deep dive", "--spec", "Do it.", "--paths", "src/",
+        ])
+        started = cli.execute(args, self.repo)
+        self.assertEqual((started["route"], started["reason"]),
+                         ("codex/gpt-6.2-sol/ultra", "benchmark verification requires ultra"))
+        initial = self.entries("widget")[-2]
+        self.assertEqual(initial["id"], started["assignment"])
+        self.assertEqual(initial["reason"], "benchmark verification requires ultra")
+        # Route inside a configured profile needs no --reason.
+        in_profile = commands.dispatch(self.repo, None, role="implement", route="antigravity/gemini-4-neon/medium",
+                                       title="normal", spec="Do it.", paths_=["docs/"], worktree="new-child")
+        self.assertNotIn("reason", in_profile)
+        self.assertNotIn("reason", self.entries("widget")[-2])

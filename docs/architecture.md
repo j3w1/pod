@@ -77,10 +77,10 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   assignment before calling Orca, and after a lost reply `--retry` reads Orca instead of
   starting again. After a successful start it reads the worker's current tab title and, only
   when it is empty or still Orca's `worker-task_` default, renames it to
-  `<Role> · <topic> · <model>/<effort>` (about 60 characters, using role words such as
-  `Builder`, `Builder (UI)`, `Reviewer`, `Scout`, `Analyst` or `Challenger` and short model
-  names); an unreadable title or failed rename is a `note`. A start recovered by `--retry`
-  keeps Orca's title.
+  `<Role> · <topic> · <model>/<effort>` (about 60 characters, using profile role labels such as
+  `Builder`, `Builder (deep)`, `Builder (UI)`, `Reviewer (fast)`, `Reviewer (deep)`, `Scout`,
+  `Scout (deep)`, `Analyst` or `Challenger` and short model names); an unreadable title or failed
+  rename is a `note`. A start recovered by `--retry` keeps Orca's title.
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 
@@ -161,6 +161,27 @@ in which a closed or dropped objective holds nothing.
   objective with its repository, worktree, branch, Run, pull request and the assignments whose
   results are not yet accepted. It reads only Pod's own files.
 - **The check-only verdict**, above.
+- **The routing authority export.** `pod models --json` includes a stable `routing` block
+  (`schema: "pod-routing/v1"`) that downstream tools such as CE Dev can render directly into
+  documentation without parsing `config.yaml`:
+
+  ```json
+  {
+    "schema": "pod-routing/v1",
+    "status": "ok",
+    "preferred": null,
+    "pinned": null,
+    "default_profiles": {"implement": "build-fast", "review": "review-fast", "investigate": "scout"},
+    "review_agents": ["codex", "antigravity", "claude"],
+    "profiles": {
+      "build-fast": {"role": "implement", "mcp": false, "routes": ["..."], "spec": "implement ..."}
+    },
+    "pauses": {
+      "paused_agents": [{"agent": "agy-gemini", "reason": "...", "until": null, "ttl": null, "active": true}],
+      "soft_drained_agents": [{"agent": "agy-claude", "reason": "...", "until": null, "ttl": null, "active": true}]
+    }
+  }
+  ```
 - **The verifier hook.** When the preference file names an `authorization_verifier` command,
   Pod sends it one JSON request on standard input,
   `{"schema": "pod-authorization/v1", "action": "merge", "objective", "repository", "target",
@@ -186,18 +207,23 @@ No file means no rule. A file this version cannot read requires review and says 
 ## Preferences
 
 `<config home>/config.yaml` (`schema: pod/v2`) is the only authority for enabled routes,
-Preferred, Pin, `profiles`, `review_agents`, `paused_agents`, `soft_drained_agents`,
+Preferred, Pin, `profiles`, `default_profiles`, `review_agents`, `paused_agents`, `soft_drained_agents`,
 `merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only the
 person changes it, through `pod models` or an editor. Coordination reads it with
 `skills/pod/routefile.py` and loads nothing else about models.
 
-- **Profiles.** An optional flat `profiles:` map defines one line per profile:
+- **Profiles and role defaults.** An optional flat `profiles:` map defines one line per profile:
   `<role>[+mcp] <route1> [<route2> ...]`. The first route is the default and the rest are the
-  ordered fallback chain; `+mcp` declares MCP access (default: no MCP). `pod dispatch --profile`,
-  `pod dispatch --dry-run` and `pod models` What-If share the same pure `resolve_dispatch()`
-  function, respecting active `paused_agents` and `soft_drained_agents` holds (by quota pool id
-  such as `agy-gemini`, `agy-claude`, `codex`, `claude-max`, or by agent name, with optional
-  reason and TTL/`until` expiry), `--exclude-agent` and fail-closed `Pin`.
+  ordered fallback chain; `+mcp` declares MCP access (default: no MCP). An optional
+  `default_profiles:` map sets the default profile per role (`implement: build-fast`,
+  `review: review-fast`, `investigate: scout` by default when those profiles exist). A dispatch
+  with neither `--profile` nor `--route` resolves by role to that default profile and never picks
+  the highest-ranked route; an explicit `--route` outside every configured profile is refused
+  (`route_outside_profiles`) unless `--reason TEXT` is given, and the reason is recorded on the
+  assignment row. `pod dispatch`, `pod dispatch --dry-run` and `pod models` What-If share the same
+  pure `resolve_dispatch()` function, respecting active `paused_agents` and `soft_drained_agents`
+  holds (by quota pool id such as `agy-gemini`, `agy-claude`, `codex`, `claude-max`, or by agent
+  name, with optional reason and TTL/`until` expiry), `--exclude-agent` and fail-closed `Pin`.
 - **Review agents & reviewer notes.** An optional `review_agents` list such as
   `[codex, antigravity, claude]` limits new review dispatches to those agents in preference order.
   Review independence compares model families (`provider`: `Anthropic`, `OpenAI`, `Google`) rather
@@ -224,9 +250,10 @@ person changes it, through `pod models` or an editor. Coordination reads it with
 
 `pod models` lives in `skills/pod/models/` (interactive TUI in `skills/pod/models/tui.py`), which
 only that command imports. The view, adapters and TUI are scoped strictly to Anthropic, Google and
-OpenAI. Every route, profile, `paused_agents` and `soft_drained_agents` edit has a CLI flag twin
-(`--enable`, `--disable`, `--preferred`, `--pin`, `--pause`, `--drain`, `--unpause`, `--reason`,
-`--ttl`, `--profile`, `--delete-profile`, `--review-agents`).
+OpenAI. Every route, profile, `default_profiles`, `paused_agents` and `soft_drained_agents` edit
+has a CLI flag twin (`--enable`, `--disable`, `--preferred`, `--pin`, `--pause`, `--drain`,
+`--unpause`, `--reason`, `--ttl`, `--profile`, `--delete-profile`, `--default-profile`,
+`--review-agents`).
 
 | State | Source |
 | --- | --- |

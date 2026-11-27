@@ -494,6 +494,7 @@ def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> 
     routes: list[str] = []
     review_agents: list[str] | None = None
     profiles: dict[str, str] = {}
+    default_profiles: dict[str, str] = {}
     try:
         registry = json.loads((source_bundle / REGISTRY).read_text(encoding="utf-8"))
         if include_routes:
@@ -513,12 +514,21 @@ def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> 
                 for k, v in raw_profiles.items()
             ):
                 profiles = dict(raw_profiles)
+            raw_defaults = defaults.get("default_profiles")
+            if isinstance(raw_defaults, dict) and all(
+                k in ("implement", "review", "investigate") and isinstance(v, str) and v in profiles
+                for k, v in raw_defaults.items()
+            ):
+                default_profiles = dict(raw_defaults)
     except (OSError, UnicodeError, ValueError, KeyError, TypeError):
-        routes, review_agents, profiles = [], None, {}
+        routes, review_agents, profiles, default_profiles = [], None, {}, {}
     lines = ["schema: pod/v2", "routes:" if routes else "routes: {}", *(f"  {route}: enabled" for route in routes),
              "preferred: null", "pinned: null", "merge_authorization: person"]
     if review_agents is not None:
         lines.append("review_agents: [" + ", ".join(review_agents) + "]")
+    if default_profiles:
+        lines.append("default_profiles:")
+        lines += [f"  {role}: {name}" for role, name in default_profiles.items()]
     if profiles:
         lines.append("profiles:")
         lines += [f"  {name}: {spec}" for name, spec in profiles.items()]

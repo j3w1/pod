@@ -158,6 +158,25 @@ class EditTests(ModelCase):
         self.assertEqual(target.stat().st_mtime, 1)
         self.assertEqual(sorted(os.listdir(target.parent)), [".config.lock", "config.yaml"])
 
+    def test_default_profiles_edit_and_refuse_deleting_in_use_profile(self):
+        self.write_routes(ROUTES)
+        res = edit.apply(
+            profiles={
+                "build-fast": "implement codex/gpt-6.1-sol/high",
+                "build-deep": "implement claude/claude-opus-5-5/high",
+            },
+            default_profiles={"implement": "build-fast"},
+        )
+        self.assertEqual(res.default_profiles, {"implement": "build-fast"})
+        with self.assertRaises(PodError) as caught:
+            edit.apply(profiles={"build-fast": None})
+        self.assertEqual(caught.exception.code, "profile_in_use")
+        moved = edit.apply(profiles={"build-fast": None}, default_profiles={"implement": "build-deep"})
+        self.assertEqual(moved.default_profiles, {"implement": "build-deep"})
+        self.assertNotIn("build-fast", moved.profiles)
+        cleared = edit.apply(default_profiles={"implement": None})
+        self.assertEqual(cleared.default_profiles, {})
+
 
 if __name__ == "__main__":
     import unittest

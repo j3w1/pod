@@ -383,6 +383,8 @@ class PreferenceTests(InstallerCase):
         self.assertIn("antigravity/claude-opus-5-5/high", loaded.enabled())
         self.assertIn("antigravity/claude-sonnet-5-5/high", loaded.enabled())
         self.assertEqual(loaded.review_agents, ["codex", "antigravity", "claude"])
+        self.assertEqual(loaded.default_profiles,
+                         {"implement": "build-fast", "review": "review-fast", "investigate": "scout"})
         self.assertEqual(set(loaded.profiles),
                          {"scout-fast", "scout", "scout-deep", "build-fast", "build-deep",
                           "ui-light", "ui-design", "review-fast", "review-deep"})

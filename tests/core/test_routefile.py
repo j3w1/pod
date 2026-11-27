@@ -389,3 +389,82 @@ class RouteFileTests(PodCase):
         ):
             with self.subTest(bad=bad):
                 self.assertEqual(routefile.load(self.write_routes(FULL + bad)).status, "invalid")
+
+    def test_default_profiles_resolution_route_outside_profiles_and_routing_policy(self):
+        from datetime import datetime, timezone
+        cfg = (
+            "schema: pod/v2\n"
+            "routes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: enabled\n"
+            "  codex/gpt-6.2-sol/ultra: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: claude/claude-opus-5-5/high\n"
+            "pinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "paused_agents:\n"
+            "  claude: manual until=2026-11-26T04:00:00Z\n"
+            "soft_drained_agents:\n"
+            "  agy-claude: keep_bonus_pool\n"
+            "profiles:\n"
+            "  build-fast: implement antigravity/gemini-4-neon/medium codex/gpt-6.2-sol/medium\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high codex/gpt-6.2-sol/medium\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+            "  scout: investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium\n"
+        )
+        prefs = routefile.load(self.write_routes(cfg))
+        self.assertEqual((prefs.status, prefs.default_profiles), ("ok", {}))
+        self.assertEqual(routefile.effective_default_profiles(prefs),
+                         {"implement": "build-fast", "review": "review-fast", "investigate": "scout"})
+        # Role-only dispatch uses default profile (never preferred / highest-ranked route).
+        imp = routefile.resolve_dispatch(prefs, role="implement")
+        self.assertEqual((imp.ok, imp.profile, imp.route), (True, "build-fast", "antigravity/gemini-4-neon/medium"))
+        inv = routefile.resolve_dispatch(prefs, role="investigate")
+        self.assertEqual((inv.ok, inv.profile, inv.mcp, inv.route), (True, "scout", True, "antigravity/gemini-4-neon/low"))
+        # Role-only review filters by review_agents (skips claude) and skips author's model family.
+        rev_after_codex = routefile.resolve_dispatch(prefs, role="review", author_families={"OpenAI"})
+        self.assertEqual((rev_after_codex.ok, rev_after_codex.profile, rev_after_codex.route, rev_after_codex.review_independence),
+                         (True, "review-fast", "antigravity/gemini-4-neon/high", "cross_provider_fallback"))
+        self.assertTrue(any(step.code == "author_family" for step in rev_after_codex.trace))
+        rev_after_neon = routefile.resolve_dispatch(prefs, role="review", author_families={"Google"})
+        self.assertEqual((rev_after_neon.ok, rev_after_neon.profile, rev_after_neon.route, rev_after_neon.review_independence),
+                         (True, "review-fast", "codex/gpt-6.1-terra/high", "cross_provider"))
+        # Explicit default_profiles overrides the built-in mapping.
+        custom = routefile.load(self.write_routes(cfg + "default_profiles:\n  implement: build-deep\n"))
+        self.assertEqual(custom.status, "ok", custom.problem)
+        imp_custom = routefile.resolve_dispatch(custom, role="implement")
+        self.assertEqual((imp_custom.ok, imp_custom.profile, imp_custom.route),
+                         (True, "build-deep", "antigravity/gemini-4-neon/high"))
+        # --route outside every profile is refused unless --reason is given.
+        refused = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/ultra")
+        self.assertEqual((refused.ok, refused.error_code), (False, "route_outside_profiles"))
+        blank = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/ultra", reason="   ")
+        self.assertEqual((blank.ok, blank.error_code), (False, "route_outside_profiles"))
+        allowed = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/ultra", reason="full trace")
+        self.assertEqual((allowed.ok, allowed.route, allowed.reason), (True, "codex/gpt-6.2-sol/ultra", "full trace"))
+        # --route listed in any profile needs no --reason.
+        in_profile = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/medium")
+        self.assertEqual((in_profile.ok, in_profile.route, in_profile.reason), (True, "codex/gpt-6.2-sol/medium", None))
+        # routing_policy() returns one stable pod-routing/v1 block with active pause expiry.
+        early = routefile.routing_policy(prefs, now=datetime(2026, 11, 26, 3, 0, tzinfo=timezone.utc))
+        late = routefile.routing_policy(prefs, now=datetime(2026, 11, 26, 5, 0, tzinfo=timezone.utc))
+        self.assertEqual(early["schema"], "pod-routing/v1")
+        self.assertEqual(early["default_profiles"],
+                         {"implement": "build-fast", "review": "review-fast", "investigate": "scout"})
+        self.assertEqual(early["review_agents"], ["codex", "antigravity"])
+        self.assertEqual(early["profiles"]["scout"]["mcp"], True)
+        self.assertEqual(early["pauses"]["paused_agents"][0]["active"], True)
+        self.assertEqual(late["pauses"]["paused_agents"][0]["active"], False)
+        self.assertEqual(early["pauses"]["soft_drained_agents"][0]["agent"], "agy-claude")
+        # Invalid default_profiles entries invalidate preferences.
+        for bad in (
+            "default_profiles:\n  unknown: build-fast\n",
+            "default_profiles:\n  implement: missing-profile\n",
+            "default_profiles:\n  implement: review-fast\n",
+        ):
+            with self.subTest(bad=bad):
+                invalid = routefile.load(self.write_routes(cfg + bad))
+                self.assertEqual(invalid.status, "invalid")

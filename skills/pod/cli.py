@@ -47,7 +47,8 @@ def parser() -> argparse.ArgumentParser:
     one.add_argument("--title", help="short task title")
     one.add_argument("--spec", help="the task text")
     one.add_argument("--spec-file", metavar="PATH", help="read the task text from a file, or - for standard input")
-    one.add_argument("--route", metavar="AGENT/MODEL/EFFORT", help="default: the Pin, else the profile or Preferred route")
+    one.add_argument("--route", metavar="AGENT/MODEL/EFFORT", help="default: the Pin, else the profile or default profile")
+    one.add_argument("--reason", metavar="TEXT", help="required when --route is outside every configured profile")
     one.add_argument("--exclude-agent", action="append", default=[], metavar="AGENT",
                      help="exclude an agent from route selection (repeatable)")
     one.add_argument("--dry-run", action="store_true",
@@ -129,6 +130,7 @@ def _config(edit: bool) -> dict:
             "soft_drained_agents": found.soft_drained_agents,
             **({"soft_drained_meta": {k: routefile.hold_as_dict(v) for k, v in found.soft_drained_meta.items() if v.has_metadata}}
                if any(v.has_metadata for v in found.soft_drained_meta.values()) else {}),
+            "default_profiles": routefile.effective_default_profiles(found),
             "profiles": {name: routefile.format_profile(prof) for name, prof in found.profiles.items()},
             "authorization_verifier": "configured" if found.authorization_verifier else None}
 
@@ -152,7 +154,7 @@ def execute(args: argparse.Namespace, cwd: Path) -> dict:
         if args.spec_file:
             spec = sys.stdin.read() if args.spec_file == "-" else Path(args.spec_file).read_text(encoding="utf-8")
         return commands.dispatch(cwd, args.objective, role=args.role, profile=args.profile, title=args.title, spec=spec,
-                                 route=args.route, exclude_agents=args.exclude_agent, dry_run=args.dry_run,
+                                 route=args.route, reason=args.reason, exclude_agents=args.exclude_agent, dry_run=args.dry_run,
                                  paths_=args.paths, commit=args.commit, context=args.context, worktree=args.worktree,
                                  retry=args.retry, name=args.name, words=args.words, after=args.after, why=args.why)
     if name == "accept":

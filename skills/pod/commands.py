@@ -202,6 +202,18 @@ def _validate_review_exception(state: State, agents: list[str], base: str,
 
 
 ROLE_WORDS = {"implement": "Builder", "review": "Reviewer", "investigate": "Scout"}
+PROFILE_ROLES = {
+    "build-fast": "Builder",
+    "build-deep": "Builder (deep)",
+    "ui-light": "Builder (UI)",
+    "ui-design": "Builder (UI)",
+    "review-fast": "Reviewer (fast)",
+    "review-deep": "Reviewer (deep)",
+    "scout": "Scout",
+    "scout-fast": "Scout",
+    "scout-deep": "Scout (deep)",
+    "challenger": "Challenger",
+}
 SHORT_MODELS = {
     "claude-opus-5-5": "opus",
     "claude-sonnet-5-5": "sonnet",
@@ -222,12 +234,12 @@ _VERSION_TOKEN = re.compile(r"^v?\d+(?:\.\d+)*$", re.IGNORECASE)
 def _tab_role(profile: str | None, role: str) -> str:
     """CE Dev role word for a worker tab, never the raw profile name or kind."""
     name = (profile or "").strip().lower()
+    if name in PROFILE_ROLES:
+        return PROFILE_ROLES[name]
     if "analyst" in name:
         return "Analyst"
     if "challenger" in name:
         return "Challenger"
-    if name in ("ui-design", "ui-light"):
-        return "Builder (UI)"
     if name == "review" or name.startswith("review-"):
         return "Reviewer"
     if name == "build" or name.startswith("build-"):
@@ -255,7 +267,7 @@ def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
     model_parts = ([_short_model(raw_model)] if raw_model else []) + ([effort] if effort else [])
     tail = " · " + "/".join(model_parts) if model_parts else ""
-    head = f"{_tab_role(profile, role)[:20]} · "
+    head = f"{_tab_role(profile, role)} · "
     room = max(8, 60 - len(head) - len(tail))
     short = " ".join(title.split())
     short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
@@ -269,7 +281,7 @@ def _task_title(profile: str | None, role: str, route: str, objective: str, iden
 
 
 def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
-                      route: str | None = None, exclude_agents: list[str] | None = None,
+                      route: str | None = None, reason: str | None = None, exclude_agents: list[str] | None = None,
                       words: str | None = None, after: str | None = None) -> dict:
     """Pure read-only route resolution: never writes to the log and never calls Orca."""
     authors: set[str] = set()
@@ -295,7 +307,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
     preferences = routefile.load()
     excluded = list(exclude_agents or ())
     res = routefile.resolve_dispatch(
-        preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
+        preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
         author_families=authors, reviewer_notes=notes, allow_review_exception=bool(words or after))
     active_paused = routefile.active_holds(preferences.paused_meta, agents=preferences.paused_agents)
     active_drained = routefile.active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents)
@@ -313,6 +325,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         "paused_agents": list(active_paused),
         "soft_drained_agents": list(active_drained),
         "excluded_agents": sorted({item.strip() for item in excluded if item and item.strip()}),
+        **({"reason": res.reason} if res.reason else {}),
         **({"reviewer_notes": list(res.reviewer_notes)} if res.reviewer_notes else {}),
         "trace": [{"route": step.route, "status": step.status, "code": step.code, "reason": step.reason}
                   for step in res.trace],
@@ -324,12 +337,12 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
 
 def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
              title: str | None = None, spec: str | None = None, route: str | None = None,
-             exclude_agents: list[str] | None = None, dry_run: bool = False,
+             reason: str | None = None, exclude_agents: list[str] | None = None, dry_run: bool = False,
              paths_: list[str] | None = None, commit: str | None = None,
              context: list[str] | None = None, worktree: str = "current", retry: str | None = None,
              name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None) -> dict:
     if dry_run:
-        return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route,
+        return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route, reason=reason,
                                  exclude_agents=exclude_agents, words=words, after=after)
     target, root, _ = locate(cwd, objective)
     with log.writer(target) as writer:
@@ -347,7 +360,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
         res = routefile.resolve_dispatch(
-            preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
+            preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
             author_families=authors, reviewer_notes=notes, allow_review_exception=False)
         exception = None
         paths_ = gitio.declared(paths_)
@@ -363,7 +376,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
                                fix=res.error_fix)
             res = routefile.resolve_dispatch(
-                preferences, role=role, profile=profile, route=route, exclude_agents=excluded,
+                preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
                 author_families=authors, reviewer_notes=notes, allow_review_exception=True)
             if not res.ok:
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
@@ -415,6 +428,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
                       "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
                       **({"profile": res.profile, "mcp": res.mcp} if res.profile else {}),
+                      **({"reason": res.reason} if res.reason else {}),
                       **({"context": context} if context else {}),
                       **({"review_exception": exception} if exception else {})}
         text = packet(state, assignment, spec)
@@ -466,6 +480,8 @@ def _started(writer, ident: str, started: dict, route: str, *, resolution: route
     if resolution and resolution.profile:
         result["profile"] = resolution.profile
         result["mcp"] = resolution.mcp
+    if resolution and resolution.reason:
+        result["reason"] = resolution.reason
     if resolution and resolution.role == "review":
         actual_route = effective or route
         result["review_independence"] = routefile.review_tag(actual_route, authors or set(), primary_agent)

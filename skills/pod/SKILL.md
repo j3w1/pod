@@ -32,7 +32,7 @@ flood your context. Do the rest yourself.
 | Command | What it does | What you state |
 | --- | --- | --- |
 | `pod open` | Reads the issue or sentence, returns criteria | The source; an existing `--branch`, `--pr`, `--run` when continuing earlier work |
-| `pod dispatch` | Starts one worker through Orca | `--role`, `--title`, the task text, `--paths`, optionally `--route` |
+| `pod dispatch` | Starts one worker through Orca | `--role` (uses default profile) or `--profile`, `--title`, the task text, `--paths`, optionally `--route` (`--reason` if outside profiles) |
 | `pod accept A` | Reads the worker's result and the diff, records the facts | Only the decision: `--integrated COMMIT` or `--discarded` |
 | `pod record` | Adds what only you know | A criterion met with its facts, the person's words, a scope change, the note |
 | `pod status` | The derived picture and what delivery still needs | Nothing |
