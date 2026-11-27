@@ -5,6 +5,7 @@ coordinator only for what software cannot know: the plan, a decision, a person's
 Everything else is read from Orca, Git and GitHub at the moment it is needed.
 """
 
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -1016,6 +1017,56 @@ def _run_check(root: Path, command: str) -> dict:
 
 # --- status, resume, drop --------------------------------------------------------------------------
 
+def _epoch(stamp: str | None) -> int | None:
+    try:
+        return int(datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def _route_record(route: str | None, tag: str | None = None, reason: str | None = None) -> dict | None:
+    if not route:
+        return None
+    parts = (route.split("/") + [None, None, None])[:3]
+    return {"agent": parts[0], "model": parts[1], "effort": None if parts[2] in (None, "None") else parts[2],
+            "fallback_tag": tag, **({"fallback_reason": reason} if reason else {})}
+
+
+def _assignment_records(state: State) -> tuple[list[dict], list[dict]]:
+    """Typed per-assignment routes and events from one pass over the log (`pod status --json` only).
+
+    Events keep log order. `dispatched` needs a confirmed launch (a recorded Orca dispatch), and an
+    effective route is reported only where Orca's launch was observed; otherwise it is null."""
+    rows: dict[str, dict] = {}
+    merged = []
+    for entry in state.entries:
+        kind = entry.get("kind")
+        if kind == "assignment":
+            row = rows.setdefault(entry["id"], {"events": [], "first": entry.get("at")})
+            if entry.get("dispatch") and not any(item["kind"] == "dispatched" for item in row["events"]):
+                row["events"].append({"kind": "dispatched", "at": _epoch(entry.get("at")),
+                                      "detail": str(state.assignments[entry["id"]].get("title", ""))[:80]})
+        elif kind == "fact" and entry.get("fact") == "result" and entry.get("assignment") in rows:
+            rows[entry["assignment"]]["events"].append(
+                {"kind": "accepted", "at": _epoch(entry.get("at")), "detail": f"{entry.get('decision')}, {entry.get('outcome')}"})
+        elif kind == "fact" and entry.get("fact") == "review" and entry.get("reviewer") in rows:
+            rows[entry["reviewer"]]["events"].append(
+                {"kind": "review_verdict", "at": _epoch(entry.get("at")), "detail": str(entry.get("verdict"))})
+        elif kind == "effect" and entry.get("effect") == "merge" and entry.get("phase") == "outcome" and entry.get("merged") is True:
+            merged.append({"kind": "merged", "at": _epoch(entry.get("at")), "detail": str(entry.get("observed") or "")[:120]})
+    records = []
+    for row in state.assignments.values():
+        confirmed = bool(row.get("dispatch")) and not row.get("void")
+        effective = None if (not confirmed or row.get("effective_unknown")) else (row.get("effective") or row.get("route"))
+        records.append({"assignment": row["id"], "role": row.get("role"), "profile": row.get("profile"),
+                        "title": row.get("title"), "void": bool(row.get("void")),
+                        "requested_route": _route_record(row.get("route")),
+                        "effective_route": _route_record(effective, row.get("review_independence"),
+                                                         row.get("review_fallback_reason")),
+                        "events": rows.get(row["id"], {}).get("events", [])})
+    return records, merged
+
+
 def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) -> dict:
     """The derived picture of one objective. `open` shows it without the gate, which has nothing to say yet."""
     from . import gate as gates
@@ -1064,7 +1115,14 @@ def status(cwd: Path, objective: str | None, *, remote: bool = True) -> dict:
     entries = log.read(target)
     if not entries:
         raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
-    return view(root, fold(entries), remote=remote)
+    folded = fold(entries)
+    result = view(root, folded, remote=remote)
+    records, merges = _assignment_records(folded)
+    if records:
+        result["assignment_records"] = records
+    if merges:
+        result["events"] = merges
+    return result
 
 
 def listing() -> dict:

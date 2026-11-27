@@ -29,6 +29,58 @@ def _locked(path: Path):
         yield
 
 
+def _regular(path: Path) -> bool:
+    return path.is_file() and not path.is_symlink()
+
+
+def edit_in_editor(path: Path, editor: list[str]) -> None:
+    """Open the file in an editor on a copy, then save it under the config lock.
+
+    The editor runs outside the lock so `pod models` is not held up. Saving takes the same lock
+    as `apply`, re-reads the file and refuses to overwrite one that changed, was replaced or removed
+    meanwhile; an edited copy that is not saved is kept and its path reported. A failed editor, or a
+    result Pod cannot read when the original was readable, is never installed."""
+    import subprocess
+    if not _regular(path):
+        raise PodError("preferences_invalid", f"{path} is not a regular preference file.",
+                       fix="replace it with a regular file; Pod never follows a symlink here")
+    original = path.read_bytes()
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".config-edit-", suffix=".yaml", delete=False) as handle:
+        handle.write(original)
+    copy = Path(handle.name)
+    copy.chmod(0o600)
+
+    def keep(code: str, message: str, fix: str) -> PodError:
+        return PodError(code, f"{message} Your edit is kept at {copy}.", fix=fix)
+
+    try:
+        done = subprocess.run([*editor, str(copy)], check=False)
+    except OSError as exc:
+        copy.unlink(missing_ok=True)
+        raise PodError("editor_failed", f"The editor could not run: {exc.strerror or type(exc).__name__}.",
+                       fix="set VISUAL or EDITOR to an editor that exists") from exc
+    edited = copy.read_bytes()
+    if done.returncode != 0:
+        if edited == original:
+            copy.unlink(missing_ok=True)
+            raise PodError("editor_failed", f"The editor exited with status {done.returncode}; nothing was saved.",
+                           fix="run `pod config edit` again")
+        raise keep("editor_failed", f"The editor exited with status {done.returncode}; nothing was saved.",
+                   f"check {copy}, then copy it over {path} if it is right")
+    if edited == original:
+        copy.unlink(missing_ok=True)
+        return
+    if routefile.load(path).status == "ok" and routefile.load(copy).status != "ok":
+        raise keep("preferences_invalid", f"The edited file cannot be read: {routefile.load(copy).problem}.",
+                   f"correct {copy}, then copy it over {path}")
+    with _locked(path):
+        if not _regular(path) or path.read_bytes() != original:
+            raise keep("preferences_changed", "The preference file changed, was replaced or removed while you edited.",
+                       f"merge {copy} into {path} by hand, then delete the copy")
+        copy.chmod(os.stat(path).st_mode & 0o7777)
+        os.replace(copy, path)
+
+
 def _refuse_invalid(preferences: routefile.Preferences) -> None:
     if preferences.status == "invalid":
         raise PodError("preferences_invalid", f"The preference file cannot be read: {preferences.problem}.",

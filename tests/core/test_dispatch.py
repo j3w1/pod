@@ -26,6 +26,45 @@ class DispatchTests(CoreCase):
         self.assertEqual(row["packet"], hashlib.sha256(task["spec"].encode()).hexdigest())
         self.assertNotIn("spec", row)                # the task text is Orca's; Pod keeps its digest
 
+    def test_status_lists_typed_routes_and_events_next_to_the_strings(self):
+        self.start(paths_=["src/"], route="codex/sol/high", reason="test route", title="typed status")
+        view = commands.status(self.repo, None, remote=False)
+        self.assertTrue(view["assignments"][0].startswith("a1 implement"))      # the string list stays
+        record = view["assignment_records"][0]
+        self.assertEqual(record["requested_route"],
+                         {"agent": "codex", "model": "sol", "effort": "high", "fallback_tag": None})
+        self.assertEqual(record["effective_route"]["model"], "sol")
+        self.assertEqual([item["kind"] for item in record["events"]], ["dispatched"])
+        self.assertIsInstance(record["events"][0]["at"], int)
+        self.assertEqual(record["events"][0]["detail"], "typed status")
+        self.assertNotIn("assignment_records", commands.resume(self.repo, None))     # only the status surface
+
+    def test_typed_status_handles_two_part_routes_unconfirmed_starts_and_event_order(self):
+        base = [{"kind": "objective", "id": "o", "at": "2026-01-01T00:00:00Z"},
+                {"kind": "assignment", "id": "a1", "role": "review", "route": "antigravity/gemini-4-neon/high",
+                 "effective": "antigravity/gemini-4-neon", "dispatch": "d1", "title": "two part"},
+                {"kind": "fact", "fact": "review", "reviewer": "a1", "verdict": "pass"},
+                {"kind": "fact", "fact": "result", "assignment": "a1", "decision": "read", "outcome": "done"},
+                {"kind": "assignment", "id": "a2", "role": "implement", "route": "codex/sol/high", "title": "lost reply"},
+                {"kind": "assignment", "id": "a3", "role": "implement", "route": "codex/sol/high", "dispatch": "d3",
+                 "effective_unknown": True, "title": "unknown effective"},
+                {"kind": "assignment", "id": "a4", "role": "implement", "route": "codex/sol/high", "void": True,
+                 "dispatch": "d4", "title": "failed start"},
+                {"kind": "effect", "effect": "merge", "phase": "outcome", "id": "m", "merged": True, "observed": "merged"}]
+        stamps = ["2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z", "bad", "2026-01-01T00:00:03Z"] + ["2026-01-01T00:01:00Z"] * 4
+        folded = state.fold([{**entry, "n": i, "at": stamps[i]} for i, entry in enumerate(base)])
+        records, merges = commands._assignment_records(folded)
+        by = {row["assignment"]: row for row in records}
+        self.assertEqual(by["a1"]["effective_route"]["effort"], None)
+        self.assertEqual([e["kind"] for e in by["a1"]["events"]], ["dispatched", "review_verdict", "accepted"])
+        self.assertIsNone(by["a1"]["events"][1]["at"])                      # unknown time keeps log order
+        self.assertEqual((by["a2"]["events"], by["a2"]["effective_route"]), ([], None))
+        self.assertIsNone(by["a3"]["effective_route"])
+        self.assertIsNone(by["a4"]["effective_route"])
+        self.assertEqual([m["kind"] for m in merges], ["merged"])           # with or without assignments
+        self.assertEqual(commands._assignment_records(state.fold(
+            [{**base[0], "n": 0, "at": stamps[0]}, {**base[-1], "n": 1, "at": stamps[1]}]))[1][0]["kind"], "merged")
+
     def test_the_worker_tab_is_renamed_and_a_failed_rename_only_adds_a_note(self):
         started = self.start(title="roles cards", route="codex/sol/high", reason="test route", paths_=["first/"])
         self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "Builder │ sol/high │ roles cards"})
