@@ -131,6 +131,7 @@ class CoreCase(PodCase):
 
     def review(self, verdict: str = "pass", findings: list | None = None, **options) -> dict:
         from pod import commands
+        options.setdefault("reason", "test review")
         started = commands.dispatch(self.repo, None, role="review", title="review", spec="Review it.", route="codex/sol/high",
                                     **options)
         self.finish(started["task"], {"outcome": "succeeded", "verdict": verdict, "findings": findings or [], "summary": "read"})

@@ -383,12 +383,53 @@ class PreferenceTests(InstallerCase):
         self.assertIn("antigravity/claude-opus-5-5/high", loaded.enabled())
         self.assertIn("antigravity/claude-sonnet-5-5/high", loaded.enabled())
         self.assertEqual(loaded.review_agents, ["codex", "antigravity", "claude"])
+        self.assertEqual(loaded.default_profiles,
+                         {"implement": "build-fast", "review": "review-fast", "investigate": "scout"})
         self.assertEqual(set(loaded.profiles),
                          {"scout-fast", "scout", "scout-deep", "build-fast", "build-deep",
                           "ui-light", "ui-design", "review-fast", "review-deep"})
         self.assertTrue(loaded.profiles["scout"].mcp)
         self.assertTrue(loaded.profiles["scout-deep"].mcp)
         self.assertFalse(loaded.profiles["scout-fast"].mcp)
+
+    def test_installer_skips_mismatched_default_profiles_in_registry_defaults(self):
+        from pod import routefile
+        bad_registry = {
+            "schema": "pod-registry/v1",
+            "models": [{"id": "model-a", "name": "Model A", "agent": "codex",
+                        "provider": "OpenAI", "pool": "codex", "efforts": ["high"]}],
+            "defaults": {
+                "schema": "pod/v2",
+                "profiles": {"rev": "review codex/model-a/high"},
+                "default_profiles": {"implement": "rev"},
+            },
+        }
+        source = archive_tree(self.root / "bad-defaults.tar.gz", changes={REGISTRY: json.dumps(bad_registry).encode()})
+        self.assertIn("(created)", self.installed({**self.env, "POD_INSTALL_SOURCE": source.as_uri()}).stdout)
+        loaded = routefile.load(self.config)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        self.assertEqual(loaded.enabled(), ["codex/model-a/high"])
+        self.assertEqual(loaded.default_profiles, {})
+
+    def test_installer_quotes_yaml_literal_default_profile_names(self):
+        from pod import routefile
+        literal_registry = {
+            "schema": "pod-registry/v1",
+            "models": [{"id": "model-a", "name": "Model A", "agent": "codex",
+                        "provider": "OpenAI", "pool": "codex", "efforts": ["high"]}],
+            "defaults": {
+                "schema": "pod/v2",
+                "profiles": {"true": "implement codex/model-a/high"},
+                "default_profiles": {"implement": "true"},
+            },
+        }
+        source = archive_tree(self.root / "literal-true.tar.gz", changes={REGISTRY: json.dumps(literal_registry).encode()})
+        self.assertIn("(created)", self.installed({**self.env, "POD_INSTALL_SOURCE": source.as_uri()}).stdout)
+        self.assertIn("  implement: 'true'\n", self.config.read_text())
+        loaded = routefile.load(self.config)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        self.assertEqual(loaded.enabled(), ["codex/model-a/high"])
+        self.assertEqual(loaded.default_profiles, {"implement": "true"})
 
 
 class PathTests(InstallerCase):

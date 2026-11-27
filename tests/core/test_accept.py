@@ -82,11 +82,13 @@ class AcceptTests(CoreCase):
 
     def test_a_review_without_a_verdict_or_by_a_reviewer_who_changed_files_proves_nothing(self):
         self.implement({"src/a.py": "a\n"})
-        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.",
+                                    route="codex/sol/high", reason="test review")
         self.finish(started["task"], {"outcome": "succeeded", "summary": "looks good"})
         self.assertIn("no review is recorded", commands.accept(self.repo, None, "a2")["note"])
         self.assertEqual(self.facts("review"), [])
-        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.",
+                                    route="codex/sol/high", reason="test review")
         fixed = self.commit({"src/a.py": "fixed by the reviewer\n"})
         self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "commit": fixed})
         self.assertIn("covers nothing", commands.accept(self.repo, None, "a3")["note"])
@@ -105,7 +107,8 @@ class AcceptTests(CoreCase):
 
     def test_a_worker_orca_shows_stopped_before_it_reported_can_be_discarded_and_its_output_never_used(self):
         self.implement({"src/a.py": "a\n"})
-        review = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.", route="codex/sol/high")
+        review = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.",
+                                   route="codex/sol/high", reason="test review")
         writer = commands.dispatch(self.repo, None, role="implement", title="w", spec="Do.", paths_=["src"])
         head = self.commit({"src/a.py": "half done\n"})
         for started in (review, writer):

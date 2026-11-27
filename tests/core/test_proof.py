@@ -73,7 +73,8 @@ class ProofTests(CoreCase):
 
     def test_a_reviewer_who_wrote_and_a_review_of_a_commit_that_is_gone_cover_nothing(self):
         self.implement({"src/a.py": "a\n"})
-        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.",
+                                    route="codex/sol/high", reason="test review")
         edited = self.commit({"src/b.py": "added by the reviewer\n"})      # the reviewed file itself is untouched
         self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "commit": edited})
         commands.accept(self.repo, None, "a2")

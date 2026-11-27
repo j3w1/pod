@@ -158,6 +158,47 @@ class EditTests(ModelCase):
         self.assertEqual(target.stat().st_mtime, 1)
         self.assertEqual(sorted(os.listdir(target.parent)), [".config.lock", "config.yaml"])
 
+    def test_default_profiles_edit_and_refuse_deleting_in_use_profile(self):
+        self.write_routes(ROUTES)
+        res = edit.apply(
+            profiles={
+                "build-fast": "implement codex/gpt-6.1-sol/high",
+                "build-deep": "implement claude/claude-opus-5-5/high",
+            },
+            default_profiles={"implement": "build-fast"},
+        )
+        self.assertEqual(res.default_profiles, {"implement": "build-fast"})
+        with self.assertRaises(PodError) as caught:
+            edit.apply(profiles={"build-fast": None})
+        self.assertEqual(caught.exception.code, "profile_in_use")
+        moved = edit.apply(profiles={"build-fast": None}, default_profiles={"implement": "build-deep"})
+        self.assertEqual(moved.default_profiles, {"implement": "build-deep"})
+        self.assertNotIn("build-fast", moved.profiles)
+        cleared = edit.apply(default_profiles={"implement": None})
+        self.assertEqual(cleared.default_profiles, {})
+
+    def test_default_profiles_quotes_yaml_literals_supports_none_null_and_preserves_comments(self):
+        target = self.write_routes(ROUTES + "default_profiles: {} # owner comment\n")
+        # YAML literal profile names 'true', 'none' and 'null' round-trip cleanly as strings.
+        res = edit.apply(
+            profiles={
+                "true": "implement codex/gpt-6.1-sol/high",
+                "null": "review codex/gpt-6.1-sol/high",
+                "none": "investigate codex/gpt-6.1-sol/high",
+            },
+            default_profiles={"implement": "true", "review": "null", "investigate": "none"},
+        )
+        self.assertEqual(res.default_profiles, {"implement": "true", "review": "null", "investigate": "none"})
+        text = target.read_text()
+        self.assertIn("default_profiles: # owner comment\n", text)
+        self.assertIn("  implement: 'true'\n", text)
+        self.assertIn("  review: 'null'\n", text)
+        self.assertIn("  investigate: none\n", text)
+        # Clearing the last default preserves the header comment when converting back to inline `{}`.
+        cleared = edit.apply(default_profiles={"implement": None, "review": None, "investigate": None})
+        self.assertEqual(cleared.default_profiles, {})
+        self.assertIn("default_profiles: {} # owner comment\n", target.read_text())
+
 
 if __name__ == "__main__":
     import unittest

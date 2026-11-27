@@ -94,11 +94,25 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
 
 
 def rename(run: str, started: dict, title: str) -> str | None:
-    """Give the worker's tab a readable title. Returns why it could not, or None; never raises."""
+    """Give a default-titled worker tab a readable title. Returns why it could not, or None; never raises."""
     try:
-        handle = next((row["handle"] for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
+        worker = next((row for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
+        handle = worker.get("handle") if isinstance(worker, dict) else None
         if not handle:
             return "Orca named no terminal for the worker"
+        worktree = worker.get("worktree")
+        # Orca has no atomic conditional rename; reading the title first accepts a narrow concurrent-rename window.
+        args = ("terminal", "list", "--worktree", f"path:{worktree}") if worktree else ("terminal", "list")
+        reply = call(*args, timeout=15)
+        listed = reply.get("terminals") if isinstance(reply, dict) else None
+        if not isinstance(listed, list):
+            return "terminal title could not be read"
+        terminal = next((item for item in listed if isinstance(item, dict) and item.get("handle") == handle), None)
+        current = terminal.get("title") if isinstance(terminal, dict) else None
+        if not isinstance(current, str):
+            return "terminal title could not be read"
+        if current.strip() and not current.startswith("worker-task_"):
+            return None
         try:
             call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)
         except PodError as exc:

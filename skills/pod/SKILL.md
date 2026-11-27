@@ -32,7 +32,7 @@ flood your context. Do the rest yourself.
 | Command | What it does | What you state |
 | --- | --- | --- |
 | `pod open` | Reads the issue or sentence, returns criteria | The source; an existing `--branch`, `--pr`, `--run` when continuing earlier work |
-| `pod dispatch` | Starts one worker through Orca | `--role`, `--title`, the task text, `--paths`, optionally `--route` |
+| `pod dispatch` | Starts one worker through Orca | `--role` (uses default profile) or `--profile`, `--title`, the task text, `--paths`, optionally `--route` (`--reason` if outside profiles) |
 | `pod accept A` | Reads the worker's result and the diff, records the facts | Only the decision: `--integrated COMMIT` or `--discarded` |
 | `pod record` | Adds what only you know | A criterion met with its facts, the person's words, a scope change, the note |
 | `pod status` | The derived picture and what delivery still needs | Nothing |
@@ -127,13 +127,15 @@ review by a worker that changed nothing.
 
 Workers run only on routes the person enabled; the Pin, when set, is the only route used.
 `pod dispatch` accepts `--profile NAME` (which sets role, ordered fallback routes and optional
-`+mcp`), `--route`, `--exclude-agent AGENT`, and `--dry-run` (pure read-only route preview with
-a plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, else the
-Preferred route. Host-wide `paused_agents` and `soft_drained_agents` (by quota pool or agent, with optional reason and
-TTL) skip unavailable or draining pools automatically. Choose by the task: its difficulty,
-risk and size. `pod models` is the person's TUI (and CLI flag twins `--pause`, `--drain`,
-`--unpause`, `--profile`) for comparing and configuring routes, profiles and pool holds; do
-not change their preferences without their direction.
+`+mcp`), `--route` (which requires `--reason TEXT` whenever the route is outside every configured
+profile), `--exclude-agent AGENT`, and `--dry-run` (pure read-only route preview with a
+plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, else the role's
+default profile (`default_profiles`, defaulting to `build-fast`, `review-fast` and `scout` when
+present), else `preferred` on pre-profile configs. Host-wide `paused_agents` and
+`soft_drained_agents` (by quota pool or agent, with optional reason and TTL) skip unavailable or
+draining pools automatically. Choose by the task: its difficulty, risk and size. `pod models` is the person's TUI (and CLI flag twins `--pause`, `--drain`, `--unpause`,
+`--profile`, `--default-profile`, `--clear-default`) for comparing and configuring routes,
+profiles and pool holds; do not change their preferences without their direction.
 
 ## Document types
 

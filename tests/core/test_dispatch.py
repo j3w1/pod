@@ -13,7 +13,7 @@ class DispatchTests(CoreCase):
         return commands.dispatch(self.repo, None, **{"role": "implement", "title": "write", "spec": "Do it.", **options})
 
     def test_it_starts_one_worker_on_the_requested_route_with_a_frozen_packet(self):
-        started = self.start(paths_=["src/"], route="codex/sol/high")
+        started = self.start(paths_=["src/"], route="codex/sol/high", reason="test route")
         task = self.orca()["tasks"][started["task"]]
         self.assertEqual(task["task_title"], "implement · sol/high · widget:a1 write")
         self.assertIn("Change only: src", task["spec"])
@@ -26,24 +26,160 @@ class DispatchTests(CoreCase):
         self.assertNotIn("spec", row)                # the task text is Orca's; Pod keeps its digest
 
     def test_the_worker_tab_is_renamed_and_a_failed_rename_only_adds_a_note(self):
-        started = self.start(title="roles cards", route="codex/sol/high", paths_=["first/"])
-        self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "implement · roles cards · sol/high"})
+        started = self.start(title="roles cards", route="codex/sol/high", reason="test route", paths_=["first/"])
+        self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "Builder · roles cards · sol/high"})
         self.assertNotIn("note", started)
         self.set_orca(rename_fails=True)
         later = self.start(title="x" * 80, paths_=["other/"], worktree="new-child")
         self.assertIn("terminal_not_found", later["note"])
         self.assertTrue(self.entries("widget")[-1]["dispatch"])
         self.assertNotIn("void", self.entries("widget")[-1])
-        self.assertEqual(len(self.orca()["titles"]), 1)
+        self.assertEqual(self.orca()["titles"][f"term_{later['dispatch']}"], f"worker-{later['task']}")
         self.assertEqual(self.orca()["starts"], 2)
         self.set_orca(rename_fails=False)
         long = self.start(title="y" * 80, paths_=["third/"], worktree="new-child")
-        self.assertLessEqual(len(self.orca()["titles"][f"term_{long['dispatch']}"]), 60)
+        long_title = self.orca()["titles"][f"term_{long['dispatch']}"]
+        self.assertTrue(long_title.startswith("Builder · "))
+        self.assertLessEqual(len(long_title), 60)
 
     def test_the_tab_title_shows_the_route_orca_started(self):
         self.set_orca(effective={"agent": "codex", "model": "sol", "effort": "low"})
-        started = self.start(title="t", route="codex/sol/high", paths_=["e/"])
-        self.assertTrue(self.orca()["titles"][f"term_{started['dispatch']}"].endswith("sol/low"))
+        started = self.start(title="t", route="codex/sol/high", reason="test route", paths_=["e/"])
+        self.assertEqual(self.orca()["titles"][f"term_{started['dispatch']}"], "Builder · t · sol/low")
+
+    def test_tab_title_uses_ce_dev_role_words_and_short_models(self):
+        role_cases = (
+            (None, "implement", "Builder"),
+            (None, "review", "Reviewer"),
+            (None, "investigate", "Scout"),
+            ("build-fast", "implement", "Builder"),
+            ("build-deep", "implement", "Builder (deep)"),
+            ("ui-design", "implement", "Builder (UI)"),
+            ("ui-light", "implement", "Builder (UI)"),
+            ("ui-accessibility", "implement", "Builder (UI)"),
+            ("ui-analyst", "implement", "Builder (UI)"),
+            ("ui-challenger", "implement", "Builder (UI)"),
+            ("review-fast", "review", "Reviewer (fast)"),
+            ("review-deep", "review", "Reviewer (deep)"),
+            ("scout", "investigate", "Scout"),
+            ("scout-fast", "investigate", "Scout"),
+            ("scout-deep", "investigate", "Scout (deep)"),
+            ("analyst", "investigate", "Analyst"),
+            ("analyst-deep", "investigate", "Analyst"),
+            ("repo-analyst", "investigate", "Analyst"),
+            ("challenger", "review", "Challenger"),
+            ("challenger-deep", "investigate", "Challenger"),
+            ("custom-worker", "implement", "Builder"),
+            ("custom-worker", "review", "Reviewer"),
+            ("custom-worker", "investigate", "Scout"),
+        )
+        for profile, role, expected in role_cases:
+            with self.subTest(profile=profile, role=role):
+                rendered = commands._tab_title(profile, role, "codex/gpt-6.2-sol/high", "check tabs")
+                self.assertEqual(rendered, f"{expected} · check tabs · sol/high")
+                first_word = rendered.split(" · ", 1)[0].lower()
+                self.assertNotIn(first_word, ("implement", "investigate", "review"))
+                if profile:
+                    self.assertNotIn(profile, rendered)
+        # Long topics and 96-character model tokens stay <= 60 chars while keeping role, topic and effort.
+        long_rev = commands._tab_title("review-deep", "review", "codex/gpt-6.2-astra/xhigh", "very " * 20)
+        self.assertTrue(long_rev.startswith("Reviewer (deep) · "))
+        self.assertTrue(long_rev.endswith(" · astra/xhigh"))
+        self.assertLessEqual(len(long_rev), 60)
+        long_model = commands._tab_title("review-deep", "review", "codex/" + "m" * 96 + "/high", "audit tab title length")
+        self.assertTrue(long_model.startswith("Reviewer (deep) · "))
+        self.assertTrue(long_model.endswith("/high"))
+        self.assertIn("…/high", long_model)
+        self.assertLessEqual(len(long_model), 60)
+        model_cases = (
+            ("claude/claude-opus-5-5/high", "opus/high"),
+            ("claude/claude-sonnet-5-5/medium", "sonnet/medium"),
+            ("claude/claude-haiku-5-5/low", "haiku/low"),
+            ("claude/claude-fable-5-2/high", "fable/high"),
+            ("antigravity/gemini-4-neon/xhigh", "neon/xhigh"),
+            ("antigravity/gemini-4-neon", "neon"),
+            ("codex/gpt-6.2-sol/medium", "sol/medium"),
+            ("codex/gpt-6.1-terra/low", "terra/low"),
+            ("codex/gpt-6.2-astra/high", "astra/high"),
+            ("codex/gpt-6-luna/low", "luna/low"),
+            ("codex/acme-7-nova-2.1/high", "nova/high"),
+            ("codex/vendor-zephyr-v3/medium", "zephyr/medium"),
+            ("codex/1-2-3/low", "1-2-3/low"),
+            ("codex/4.0-5.1/high", "4.0-5.1/high"),
+        )
+        for route, expected_tail in model_cases:
+            with self.subTest(route=route):
+                self.assertEqual(commands._tab_title("build-fast", "implement", route, "topic"),
+                                 f"Builder · topic · {expected_tail}")
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.1-terra/low: enabled\n"
+            "preferred: null\npinned: null\n"
+            "profiles:\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high\n"
+            "  ui-analyst: implement claude/claude-opus-5-5/high\n"
+            "  analyst-deep: investigate antigravity/gemini-4-neon/high\n"
+            "  challenger: review codex/gpt-6.2-sol/medium\n"
+            "  review-fast: review codex/gpt-6.1-terra/high\n"
+            "  scout-deep: investigate antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg)
+        self.commit({"src/a.py": "a\n"})
+        deep = commands.dispatch(self.repo, None, profile="build-deep", title="core refactor", spec="Build.", paths_=["src/"])
+        ui = commands.dispatch(self.repo, None, profile="ui-analyst", title="card contrast", spec="Style.", paths_=["ui/"],
+                               worktree="new-child")
+        analyst = commands.dispatch(self.repo, None, profile="analyst-deep", title="latency study", spec="Study.")
+        challenger = commands.dispatch(self.repo, None, profile="challenger", title="stress check", spec="Challenge.")
+        reviewer = commands.dispatch(self.repo, None, profile="review-fast", title="check diff", spec="Review.")
+        scout = commands.dispatch(self.repo, None, profile="scout-deep", title="find callers", spec="Search.")
+        titles = self.orca()["titles"]
+        self.assertEqual(titles[f"term_{deep['dispatch']}"], "Builder (deep) · core refactor · neon/high")
+        self.assertEqual(titles[f"term_{ui['dispatch']}"], "Builder (UI) · card contrast · opus/high")
+        self.assertEqual(titles[f"term_{analyst['dispatch']}"], "Analyst · latency study · neon/high")
+        self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger · stress check · sol/medium")
+        self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) · check diff · terra/high")
+        self.assertEqual(titles[f"term_{scout['dispatch']}"], "Scout (deep) · find callers · neon/high")
+
+    def test_pre_named_tab_is_not_overwritten_and_empty_or_default_tab_is_renamed(self):
+        self.set_orca(titles={"term_ctx_1": "Coordinator · pod · sol/med", "term_ctx_2": ""})
+        preserved = self.start(title="keep coordinator", route="codex/sol/high", reason="test route", paths_=["a/"])
+        self.assertNotIn("note", preserved)
+        self.assertEqual(self.orca()["titles"]["term_ctx_1"], "Coordinator · pod · sol/med")
+        self.assertEqual(self.orca().get("rename_calls", []), [])
+        empty = self.start(title="empty title", route="codex/sol/high", reason="test route", paths_=["b/"], worktree="new-child")
+        self.assertNotIn("note", empty)
+        self.assertEqual(self.orca()["titles"]["term_ctx_2"], "Builder · empty title · sol/high")
+        self.assertEqual(len(self.orca()["rename_calls"]), 1)
+        default = self.start(title="default title", route="codex/sol/high", reason="test route", paths_=["c/"], worktree="new-child")
+        self.assertNotIn("note", default)
+        self.assertEqual(self.orca()["titles"]["term_ctx_3"], "Builder · default title · sol/high")
+        self.assertEqual(len(self.orca()["rename_calls"]), 2)
+
+    def test_unreadable_tab_title_returns_a_note_and_does_not_rename(self):
+        self.set_orca(list_fails=True)
+        failed_list = self.start(title="first", paths_=["a/"])
+        self.assertIn("terminal_list_failed", failed_list["note"])
+        self.assertEqual(self.orca()["titles"][f"term_{failed_list['dispatch']}"], f"worker-{failed_list['task']}")
+        self.assertEqual(self.orca().get("rename_calls", []), [])
+        self.set_orca(list_fails=False, omit_title=True)
+        missing_title = self.start(title="second", paths_=["b/"], worktree="new-child")
+        self.assertIn("could not be read", missing_title["note"])
+        self.assertEqual(self.orca()["titles"][f"term_{missing_title['dispatch']}"], f"worker-{missing_title['task']}")
+        self.assertEqual(self.orca().get("rename_calls", []), [])
+        calls = []
+        original_workers, original_call = orca.workers, orca.call
+        try:
+            orca.workers = lambda run, *rest: [{"dispatch": "ctx_9", "handle": "term_ctx_9", "worktree": None}]
+            orca.call = lambda *args, **kw: (calls.append(args), {"terminals": []})[1]
+            self.assertEqual(orca.rename("run_1", {"dispatch": "ctx_9"}, "Builder · x · sol/high"),
+                             "terminal title could not be read")
+            self.assertEqual(calls, [("terminal", "list")])
+        finally:
+            orca.workers, orca.call = original_workers, original_call
 
     def test_the_worker_lookup_stops_at_the_matching_page(self):
         pages = {None: ([{"dispatchId": "d1", "agentTerminalHandle": "t1"}], "c2"),
@@ -150,7 +286,7 @@ class DispatchTests(CoreCase):
 
     def test_a_route_orca_did_not_honour_is_recorded_and_shown(self):
         self.set_orca(effective={"agent": "codex", "model": "sol", "effort": "low"})
-        started = self.start(route="codex/sol/high")
+        started = self.start(route="codex/sol/high", reason="test route")
         self.assertEqual(started["route_mismatch"], "asked for codex/sol/high, Orca started codex/sol/low")
         self.assertEqual(self.entries("widget")[-1]["effective"], "codex/sol/low")
 
@@ -248,7 +384,7 @@ class DispatchTests(CoreCase):
     def test_after_exception_is_written_for_a_failed_allowed_review(self):
         self.commit({"src/a.py": "a\n"})
         self.write_routes(ROUTES + "review_agents: [codex]\n")
-        prior = self.start_review(route="codex/sol/high")
+        prior = self.start_review(route="codex/sol/high", reason="test review")
         self.finish(prior["task"], None, outcome="failed")
         started = self.start_review(after=prior["assignment"], why="The first worker failed.")
         initial = self.entries("widget")[-2]
@@ -260,7 +396,7 @@ class DispatchTests(CoreCase):
         self.commit({"src/a.py": "a\n"})
         self.write_routes(ROUTES + "review_agents: [codex]\n")
         self.set_orca(start_fails="Could not launch")
-        self.refused("start_failed", self.start_review, route="codex/sol/high")
+        self.refused("start_failed", self.start_review, route="codex/sol/high", reason="test review")
         self.set_orca(start_fails=None)
         args = cli.parser().parse_args(["dispatch", "--role", "review", "--title", "review", "--spec", "Review.",
                                        "--after", "a1", "--why", "The first worker could not launch."])
@@ -269,7 +405,7 @@ class DispatchTests(CoreCase):
     def test_after_exception_cannot_use_a_later_dispatch_failure_on_the_same_task(self):
         self.commit({"src/a.py": "a\n"})
         self.write_routes(ROUTES + "review_agents: [codex]\n")
-        prior = self.start_review(route="codex/sol/high")
+        prior = self.start_review(route="codex/sol/high", reason="test review")
         native = self.orca()
         native["tasks"][prior["task"]]["status"] = "failed"
         first = native["workers"][prior["dispatch"]]
@@ -284,18 +420,18 @@ class DispatchTests(CoreCase):
     def test_after_exception_refuses_ineligible_prior_assignments_without_effects(self):
         self.commit({"src/a.py": "a\n"})
         self.write_routes(ROUTES + "review_agents: [codex]\n")
-        different = self.start_review(route="codex/sol/high")
+        different = self.start_review(route="codex/sol/high", reason="test review")
         self.finish(different["task"], None, outcome="failed")
         self.commit({"src/a.py": "b\n"})
-        completed = self.start_review(route="codex/sol/high")
+        completed = self.start_review(route="codex/sol/high", reason="test review")
         self.finish(completed["task"], {"outcome": "succeeded", "verdict": "pass"})
-        failed_with_review = self.start_review(route="codex/sol/high")
+        failed_with_review = self.start_review(route="codex/sol/high", reason="test review")
         self.finish(failed_with_review["task"], {"outcome": "failed", "verdict": "fail"}, outcome="failed")
         commands.accept(self.repo, None, failed_with_review["assignment"])
-        running = self.start_review(route="codex/sol/high")
+        running = self.start_review(route="codex/sol/high", reason="test review")
         disallowed = self.start_review(words="Please use Claude for this review.")
         self.finish(disallowed["task"], None, outcome="failed")
-        nonreview = self.start(role="investigate", route="codex/sol/high")
+        nonreview = self.start(role="investigate", route="codex/sol/high", reason="test route")
         self.finish(nonreview["task"], None, outcome="failed")
         entries, starts = self.entries("widget"), self.orca()["starts"]
         for ident in (different["assignment"], completed["assignment"], failed_with_review["assignment"],
@@ -334,14 +470,14 @@ class DispatchTests(CoreCase):
         self.write_routes(
             ROUTES.replace("routes:\n", "routes:\n  antigravity/gemini-4-neon/high: enabled\n")
         )
-        started = self.start(paths_=["src"], route="antigravity/gemini-4-neon/high")
+        started = self.start(paths_=["src"], route="antigravity/gemini-4-neon/high", reason="test route")
         self.assertEqual(started["route"], "antigravity/gemini-4-neon/high")
         self.assertNotIn("route_mismatch", started)
         req = next(iter(self.orca()["requests"].values()))["receipt"]["launch"]["requested"]
         self.assertEqual(req, {"agent": "antigravity", "model": "gemini-4-neon-high", "effort": None})
         # Genuine mismatch on AGY (low instead of high) is still flagged.
         self.set_orca(effective={"agent": "antigravity", "model": "gemini-4-neon-low", "effort": None})
-        mismatch = self.start(paths_=["docs"], route="antigravity/gemini-4-neon/high", worktree="new-child")
+        mismatch = self.start(paths_=["docs"], route="antigravity/gemini-4-neon/high", reason="test route", worktree="new-child")
         self.assertEqual(mismatch["route_mismatch"],
                          "asked for antigravity/gemini-4-neon/high, Orca started antigravity/gemini-4-neon/low")
 
@@ -387,7 +523,8 @@ class DispatchTests(CoreCase):
     def test_same_session_review_covers_nothing_and_never_persists_handles(self):
         from pod import proof
         commit, _ = self.implement({"src/a.py": "a\n"})
-        rev = commands.dispatch(self.repo, None, role="review", title="rev", spec="Review.", route="codex/sol/high")
+        rev = commands.dispatch(self.repo, None, role="review", title="rev", spec="Review.",
+                                route="codex/sol/high", reason="test review")
         # Simulate Orca reporting the same terminal handle as the implementer (a1 -> ctx_1).
         native = self.orca()
         native["workers"][rev["dispatch"]]["agentTerminalHandle"] = native["workers"]["ctx_1"]["agentTerminalHandle"]
@@ -546,3 +683,103 @@ class DispatchTests(CoreCase):
         accepted = commands.accept(self.repo, None, rev["assignment"])
         self.assertEqual((accepted["verdict"], accepted["review_independence"], accepted["author_families"]),
                          ("pass", "cross_provider_fallback", ["Google"]))
+
+    def test_role_only_dispatch_uses_default_profiles_and_skips_author_family_for_review(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "profiles:\n"
+            "  build-fast: implement codex/gpt-6.2-sol/medium antigravity/gemini-4-neon/medium\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high codex/gpt-6.2-sol/medium\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+            "  scout: investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium\n"
+        )
+        self.write_routes(cfg)
+        # No --profile and no --route -> implement->build-fast, investigate->scout, review->review-fast.
+        built = commands.dispatch(self.repo, None, role="implement", title="ship feature", spec="Build.", paths_=["src/"])
+        self.assertEqual((built["profile"], built["route"]), ("build-fast", "codex/gpt-6.2-sol/medium"))
+        scout = commands.dispatch(self.repo, None, role="investigate", title="check callers", spec="Read.")
+        self.assertEqual((scout["profile"], scout["mcp"], scout["route"]),
+                         ("scout", True, "antigravity/gemini-4-neon/low"))
+        commit = self.commit({"src/a.py": "openai\n"})
+        self.finish(built["task"], {"outcome": "succeeded", "commit": commit})
+        commands.accept(self.repo, None, built["assignment"], integrated=commit)
+        # Role-only review uses review-fast + review_agents and skips OpenAI (author family) -> antigravity!
+        rev = commands.dispatch(self.repo, None, role="review", title="audit change", spec="Review.")
+        self.assertEqual((rev["profile"], rev["route"], rev["review_independence"]),
+                         ("review-fast", "antigravity/gemini-4-neon/high", "cross_provider_fallback"))
+        self.assertTrue(any("authored this diff" in line for line in rev["trace"]))
+        # When no independent reviewer remains (antigravity and claude paused), role-only review refuses unless given --words/--after.
+        self.write_routes(cfg + "paused_agents: [antigravity, claude]\n")
+        self.refused("reviewer_same_family", commands.dispatch, self.repo, None,
+                     role="review", title="same family blocked", spec="Review.")
+        # Dry-run rejects malformed review exception flags and notes unchecked prior failure for --after/--why.
+        for bad_flags in ({"words": "   "}, {"after": "a999", "why": "missing"}, {"after": rev["assignment"]},
+                          {"why": "orphan"}, {"words": "ok", "after": rev["assignment"], "why": "both"}):
+            with self.subTest(bad_flags=bad_flags):
+                bad_dry = commands.dispatch(self.repo, None, role="review", dry_run=True, **bad_flags)
+                self.assertFalse(bad_dry["ok"])
+                self.assertEqual(bad_dry["refused"]["code"], "review_exception_invalid")
+        ok_after_dry = commands.dispatch(self.repo, None, role="review", dry_run=True,
+                                         after=rev["assignment"], why="first review failed")
+        self.assertTrue(ok_after_dry["ok"])
+        self.assertIn("not verified against Orca", ok_after_dry["note"])
+        exc_rev = commands.dispatch(self.repo, None, role="review", title="same family override", spec="Review.",
+                                    words="Only Codex is available; run the review on Codex.")
+        self.assertEqual((exc_rev["route"], exc_rev["review_independence"]),
+                         ("codex/gpt-6.1-terra/high", "same_provider"))
+        self.assertEqual(self.entries("widget")[-2]["review_exception"],
+                         {"kind": "words", "words": "Only Codex is available; run the review on Codex."})
+        # Configurable default_profiles in config.yaml overrides the role default.
+        self.write_routes(cfg + "default_profiles:\n  implement: build-deep\n")
+        dry = commands.dispatch(self.repo, None, role="implement", dry_run=True)
+        self.assertEqual((dry["ok"], dry["profile"], dry["route"]), (True, "build-deep", "antigravity/gemini-4-neon/high"))
+
+    def test_route_outside_every_profile_requires_reason_and_records_it_on_assignment(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  codex/gpt-6.2-sol/ultra: enabled\n"
+            "preferred: null\npinned: null\n"
+            "profiles:\n"
+            "  build-fast: implement antigravity/gemini-4-neon/medium\n"
+        )
+        self.write_routes(cfg)
+        entries_before = self.entries("widget")
+        self.refused("route_outside_profiles", commands.dispatch, self.repo, None,
+                     role="implement", route="codex/gpt-6.2-sol/ultra", title="deep dive", spec="Do it.", paths_=["src/"])
+        self.assertEqual(self.entries("widget"), entries_before)
+        self.assertFalse(self.orca_file.exists())
+        # Empty/absent profiles AND route == Pin still require --reason for explicit --route.
+        self.write_routes(ROUTES.replace("pinned: null", "pinned: codex/sol/high"))
+        self.refused("route_outside_profiles", commands.dispatch, self.repo, None,
+                     role="implement", route="codex/sol/high", title="pinned", spec="Do it.", paths_=["src/"])
+        pinned_ok = commands.dispatch(self.repo, None, role="implement", route="codex/sol/high",
+                                      reason="explicit pinned route", title="pinned", spec="Do it.", paths_=["pin/"])
+        self.assertEqual(pinned_ok["reason"], "explicit pinned route")
+        self.assertEqual(self.entries("widget")[-2]["reason"], "explicit pinned route")
+        # Supplying --reason through CLI succeeds and persists reason on the assignment row.
+        self.write_routes(cfg)
+        args = cli.parser().parse_args([
+            "dispatch", "--role", "implement", "--route", "codex/gpt-6.2-sol/ultra",
+            "--reason", "benchmark verification requires ultra",
+            "--title", "deep dive", "--spec", "Do it.", "--paths", "src/", "--worktree", "new-child",
+        ])
+        started = cli.execute(args, self.repo)
+        self.assertEqual((started["route"], started["reason"]),
+                         ("codex/gpt-6.2-sol/ultra", "benchmark verification requires ultra"))
+        initial = self.entries("widget")[-2]
+        self.assertEqual(initial["id"], started["assignment"])
+        self.assertEqual(initial["reason"], "benchmark verification requires ultra")
+        # Route inside a configured profile needs no --reason.
+        in_profile = commands.dispatch(self.repo, None, role="implement", route="antigravity/gemini-4-neon/medium",
+                                       title="normal", spec="Do it.", paths_=["docs/"], worktree="new-child")
+        self.assertNotIn("reason", in_profile)
+        self.assertNotIn("reason", self.entries("widget")[-2])

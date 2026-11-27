@@ -36,6 +36,15 @@ BUNDLE_SUFFIXES = (".py", ".md", ".json", ".yaml")
 REGISTRY = "models/registry.json"
 NEVER_DEFAULT = ("ultra",)
 ROUTE = re.compile(r"[a-z][a-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]*")
+_YAML_SCALAR_NON_STRING = frozenset({"", "null", "~", "Null", "NULL", "true", "True", "false", "False"})
+
+
+def yaml_string(value: str) -> str:
+    """Encode a plain string so yamlsubset.scalar() always reads it back as a str."""
+    if (value in _YAML_SCALAR_NON_STRING or re.fullmatch(r"-?\d+", value)
+            or value != value.strip() or value[0] in "[{&*!|>%@`'\"" or "#" in value):
+        return f"'{value}'"
+    return value
 BANNER = ("         /\\                       /\\           /\\",
           "  ______/  \\___          ______/  \\_      __/ \\_",
           "_/#### (o)    \\__      _/### (o)    \\_    /# (o) \\",
@@ -494,6 +503,7 @@ def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> 
     routes: list[str] = []
     review_agents: list[str] | None = None
     profiles: dict[str, str] = {}
+    default_profiles: dict[str, str] = {}
     try:
         registry = json.loads((source_bundle / REGISTRY).read_text(encoding="utf-8"))
         if include_routes:
@@ -509,16 +519,28 @@ def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> 
                 review_agents = raw_review
             raw_profiles = defaults.get("profiles")
             if isinstance(raw_profiles, dict) and all(
-                isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", k) and isinstance(v, str) and v.strip()
+                isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", k)
+                and isinstance(v, str) and len(v.split()) >= 2
+                and v.split()[0].removesuffix("+mcp") in ("implement", "review", "investigate")
                 for k, v in raw_profiles.items()
             ):
                 profiles = dict(raw_profiles)
+            raw_defaults = defaults.get("default_profiles")
+            if isinstance(raw_defaults, dict) and all(
+                k in ("implement", "review", "investigate") and isinstance(v, str) and v in profiles
+                and profiles[v].split()[0].removesuffix("+mcp") == k
+                for k, v in raw_defaults.items()
+            ):
+                default_profiles = dict(raw_defaults)
     except (OSError, UnicodeError, ValueError, KeyError, TypeError):
-        routes, review_agents, profiles = [], None, {}
+        routes, review_agents, profiles, default_profiles = [], None, {}, {}
     lines = ["schema: pod/v2", "routes:" if routes else "routes: {}", *(f"  {route}: enabled" for route in routes),
              "preferred: null", "pinned: null", "merge_authorization: person"]
     if review_agents is not None:
         lines.append("review_agents: [" + ", ".join(review_agents) + "]")
+    if default_profiles:
+        lines.append("default_profiles:")
+        lines += [f"  {role}: {yaml_string(name)}" for role, name in default_profiles.items()]
     if profiles:
         lines.append("profiles:")
         lines += [f"  {name}: {spec}" for name, spec in profiles.items()]

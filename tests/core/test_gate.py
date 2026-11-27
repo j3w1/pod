@@ -101,7 +101,7 @@ class GateTests(GateCase):
         self.assertTrue(any("finding a2.1" in need for need in self.needs()))  # omitted deletion
 
         started = commands.dispatch(self.repo, None, role="review", title="deletion", spec="Review the removal.",
-                                    paths_=["keep.py", path])
+                                    route="codex/sol/high", reason="test review", paths_=["keep.py", path])
         assignment = self.entries("issue-5")[-2]
         self.assertEqual(assignment["paths"], ["keep.py", path])
         self.assertIn(path, self.orca()["tasks"][started["task"]]["spec"])

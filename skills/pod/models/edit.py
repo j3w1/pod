@@ -42,6 +42,23 @@ def _set_line(line: str, value: str) -> str:
     return f"{match['head']} {value}{match['tail']}{ending}"
 
 
+def _header_line(line: str, value: str | None) -> str:
+    """Rewrite a mapping header `key: [value]`, preserving indentation, any `# comment` and line ending."""
+    ending = "\r" if line.endswith("\r") else ""
+    raw = line[:len(line) - len(ending)]
+    match = _VALUE.match(raw)
+    tail = match["tail"].strip()
+    comment = ""
+    if tail:
+        idx = raw.rfind(tail)
+        before = raw[:idx]
+        ws = before[len(before.rstrip(" \t")):] or " "
+        comment = f"{ws}{tail}"
+    if value is None:
+        return f"{match['head']}{comment}{ending}"
+    return f"{match['head']} {value}{comment}{ending}"
+
+
 def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None], ending: str) -> list[str]:
     if not updates:
         return lines
@@ -74,7 +91,7 @@ def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None],
             added.append(f"{indent}{name}: {value}{ending}")
     if block.value is not None:            # `<key>: {}` written inline
         if added:
-            lines[block.start] = f"{key}:{ending}"
+            lines[block.start] = _header_line(lines[block.start], None)
             lines[block.start + 1:block.start + 1] = added
         return lines
     if added:
@@ -84,7 +101,7 @@ def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None],
         re_blocks = yamlsubset.parse("\n".join(lines))
         re_block = re_blocks.get(key)
         if re_block is not None and re_block.value is None and not re_block.lines:
-            lines[re_block.start] = f"{key}: {{}}{ending}"
+            lines[re_block.start] = _header_line(lines[re_block.start], "{}")
     return lines
 
 
@@ -113,10 +130,12 @@ def _rewrite_holds(lines: list[str], key: str, holds: dict[str, routefile.AgentH
 
 
 def _rewrite(text: str, routes: dict, scalars: dict, profiles: dict | None = None,
-             holds: dict[str, dict[str, routefile.AgentHold]] | None = None) -> str:
+             holds: dict[str, dict[str, routefile.AgentHold]] | None = None,
+             default_profiles: dict[str, str | None] | None = None) -> str:
     lines = text.split("\n")
     ending = "\r" if lines and lines[0].endswith("\r") else ""
     lines = _rewrite_mapping(lines, "routes", routes, ending)
+    lines = _rewrite_mapping(lines, "default_profiles", default_profiles or {}, ending)
     lines = _rewrite_mapping(lines, "profiles", profiles or {}, ending)
     for key, mapping in (holds or {}).items():
         lines = _rewrite_holds(lines, key, mapping, ending)
@@ -182,6 +201,7 @@ def _initial_text() -> str:
 
 def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
           profiles: dict[str, str | None] | None = None,
+          default_profiles: dict[str, str | None] | None = None,
           paused_agents=KEEP, soft_drained_agents=KEEP, review_agents=KEEP,
           expected: bytes | None = None, path: Path | None = None, models=None) -> routefile.Preferences:
     """Apply one explicit change. `expected` is the file content the person was looking at.
@@ -192,6 +212,7 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
     path = paths.route_file() if path is None else path
     routes = dict(routes or {})
     profile_updates = dict(profiles or {})
+    default_updates = dict(default_profiles or {})
     known = registry.routes(registry.load() if models is None else models)
     with _locked(path):
         current = routefile.load(path)
@@ -209,7 +230,7 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                                fix="choose a route `pod models` shows as routable")
         parsed_profiles: dict[str, routefile.Profile | None] = {}
         for name, spec in profile_updates.items():
-            if not routefile.PROFILE.fullmatch(name or ""):
+            if not routefile.valid_profile_name(name):
                 raise PodError("profile_invalid", f"{name!r} is not a valid profile name.",
                                fix="use a lowercase profile name such as scout-fast or build-deep")
             if spec is None:
@@ -220,6 +241,46 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                 except ValueError as exc:
                     raise PodError("profile_invalid", str(exc),
                                    fix="use '<role>[+mcp] <agent/model/effort> [...]'") from exc
+        if current.status == "ok":
+            base_profiles = dict(current.profiles)
+            base_defaults = dict(current.default_profiles)
+        else:
+            shipped = registry.defaults()
+            base_profiles = {name: routefile.parse_profile(name, spec)
+                             for name, spec in (shipped.get("profiles") or {}).items()}
+            base_defaults = dict(shipped.get("default_profiles") or {})
+        after_profiles = dict(base_profiles)
+        for name, parsed in parsed_profiles.items():
+            if parsed is None:
+                after_profiles.pop(name, None)
+            else:
+                after_profiles[name] = parsed
+        after_defaults = dict(base_defaults)
+        for role_key, pname in default_updates.items():
+            if role_key not in routefile.ROLES:
+                raise PodError("profile_invalid", f"{role_key!r} is not a valid role for default_profiles.",
+                               fix="use one of: " + ", ".join(routefile.ROLES))
+            if pname is None:
+                after_defaults.pop(role_key, None)
+            else:
+                if not routefile.valid_profile_name(pname):
+                    raise PodError("profile_invalid", f"{pname!r} is not a valid profile name.",
+                                   fix="use a configured profile name")
+                prof = after_profiles.get(pname)
+                if prof is None:
+                    raise PodError("profile_unknown", f"There is no profile {pname!r}.",
+                                   fix="choose one of: " + (", ".join(after_profiles) or "define a profile first"))
+                if prof.role != role_key:
+                    raise PodError("profile_role_mismatch",
+                                   f"Profile {pname!r} has role {prof.role}, not {role_key}.",
+                                   fix=f"choose a profile with role {role_key}")
+                after_defaults[role_key] = pname
+        for role_key, pname in after_defaults.items():
+            prof = after_profiles.get(pname)
+            if prof is None or prof.role != role_key:
+                raise PodError("profile_in_use",
+                               f"Profile {pname!r} is the default profile for {role_key} and cannot be removed or changed to another role.",
+                               fix=f"update or clear default_profiles.{role_key} first")
         after = {**current.routes, **routes}
         scalars = {}
         for name, value in (("preferred", preferred), ("pinned", pinned)):
@@ -258,16 +319,26 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
         formatted_profiles: dict[str, str | None] = {}
         for name, parsed in parsed_profiles.items():
             if parsed is None:
-                if name in current.profiles:
+                if name in base_profiles:
                     formatted_profiles[name] = None
-            elif current.profiles.get(name) != parsed:
+            elif base_profiles.get(name) != parsed:
                 formatted_profiles[name] = routefile.format_profile(parsed)
+        formatted_defaults: dict[str, str | None] = {}
+        for role_key, pname in default_updates.items():
+            if pname is None:
+                if role_key in base_defaults:
+                    formatted_defaults[role_key] = None
+            elif base_defaults.get(role_key) != pname:
+                formatted_defaults[role_key] = installer.yaml_string(pname)
 
-        if not routes and not scalars and not formatted_profiles and not hold_updates:
+        creating = current.status == "absent" and bool(
+            routes or scalars or parsed_profiles or default_updates or hold_updates
+        )
+        if not creating and not routes and not scalars and not formatted_profiles and not formatted_defaults and not hold_updates:
             return current
         base_text = raw.decode("utf-8") if current.status == "ok" else _initial_text()
         base_prefs = current if current.status == "ok" else None
-        text = _rewrite(base_text, routes, scalars, formatted_profiles, hold_updates)
+        text = _rewrite(base_text, routes, scalars, formatted_profiles, hold_updates, formatted_defaults)
         handle, temporary = tempfile.mkstemp(prefix=".config.", dir=path.parent)
         try:
             with os.fdopen(handle, "wb") as stream:
@@ -283,6 +354,12 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                     expected_profiles.pop(name, None)
                 else:
                     expected_profiles[name] = parsed
+            expected_defaults = dict(base_prefs.default_profiles) if base_prefs is not None else dict(result.default_profiles)
+            for role_key, pname in default_updates.items():
+                if pname is None:
+                    expected_defaults.pop(role_key, None)
+                else:
+                    expected_defaults[role_key] = pname
             expected_review = wanted_review if (base_prefs is not None or review_agents is not KEEP) else result.review_agents
             if (result.status != "ok" or result.routes != wanted_routes
                     or result.preferred != scalars.get("preferred", current.preferred)
@@ -292,7 +369,8 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                     or result.soft_drained_agents != list(wanted_drained_meta)
                     or result.soft_drained_meta != wanted_drained_meta
                     or result.review_agents != expected_review
-                    or result.profiles != expected_profiles):
+                    or result.profiles != expected_profiles
+                    or result.default_profiles != expected_defaults):
                 raise PodError("preferences_edit_unsafe", "The change could not be written as a one-line edit.",
                                fix="make the change with `pod config edit`")
             os.replace(temporary, path)

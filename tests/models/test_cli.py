@@ -226,6 +226,72 @@ class CliTests(CliCase):
         self.assertFalse(payload["adapters"]["antigravity"]["ok"])
         self.assertFalse(routefile.load().path.exists())
 
+    def test_models_json_exposes_stable_routing_block_and_default_profile_cli_flag(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/low: enabled\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "paused_agents:\n"
+            "  agy-gemini: quota_low\n"
+            "soft_drained_agents:\n"
+            "  agy-claude: keep_bonus_pool\n"
+            "profiles:\n"
+            "  build-fast: implement antigravity/gemini-4-neon/medium codex/gpt-6.2-sol/medium\n"
+            "  build-deep: implement antigravity/gemini-4-neon/high codex/gpt-6.2-sol/medium\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high\n"
+            "  scout: investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium\n"
+        )
+        self.write_routes(cfg)
+        code, out, err = self.run_cli("--default-profile", "implement=build-deep", "--json")
+        self.assertEqual((code, err), (0, ""), out)
+        document = json.loads(out)
+        routing = document["routing"]
+        self.assertEqual(routing["schema"], "pod-routing/v1")
+        self.assertEqual(routing["status"], "ok")
+        self.assertEqual(routing["default_profiles"],
+                         {"implement": "build-deep", "review": "review-fast", "investigate": "scout"})
+        self.assertEqual(routing["review_agents"], ["codex", "antigravity"])
+        self.assertEqual(routing["profiles"]["scout"], {
+            "role": "investigate",
+            "mcp": True,
+            "routes": ["antigravity/gemini-4-neon/low", "codex/gpt-6.2-sol/medium"],
+            "spec": "investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium",
+        })
+        self.assertEqual(routing["pauses"]["paused_agents"],
+                         [{"agent": "agy-gemini", "reason": "quota_low", "until": None, "ttl": None, "active": True}])
+        self.assertEqual(routing["pauses"]["soft_drained_agents"],
+                         [{"agent": "agy-claude", "reason": "keep_bonus_pool", "until": None, "ttl": None, "active": True}])
+        self.assertEqual(document["default_profiles"], routing["default_profiles"])
+        self.assertEqual(document["review_agents"], ["codex", "antigravity"])
+        self.assertEqual(self.run_cli("--default-profile", "missing_equals")[0], 2)
+        # Profiles named 'none'/'null' can be set via --default-profile and cleared unambiguously via --clear-default.
+        code, out, err = self.run_cli(
+            "--profile", "null=implement codex/gpt-6.2-sol/medium",
+            "--default-profile", "implement=null",
+        )
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(routefile.load().default_profiles["implement"], "null")
+        code, out, err = self.run_cli("--clear-default", "implement")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertNotIn("implement", routefile.load().default_profiles)
+        self.assertEqual(self.run_cli("--default-profile", "implement=build-deep", "--clear-default", "implement")[0], 2)
+
+    def test_default_profile_against_absent_config_creates_file_even_when_matching_seed(self):
+        target = routefile.load().path
+        self.assertFalse(target.exists())
+        code, out, err = self.run_cli("--default-profile", "implement=build-fast")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIn("Saved ", out)
+        self.assertTrue(target.exists())
+        loaded = routefile.load(target)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        self.assertEqual(loaded.default_profiles["implement"], "build-fast")
+
 
 from tests.models.support import HEADERS, ROWS  # noqa: E402
 
