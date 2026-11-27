@@ -258,15 +258,18 @@ class DispatchTests(CoreCase):
     def test_marker_guard_and_tab_format_edge_cases(self):
         task = commands._task_title("build-deep", "implement", "antigravity/gemini-4-neon/high", "widget", "a1", "Daemon named")
         mark = "[widget:a1]"
-        accepted = (f"Reviewer · {task}", f"Builder · {task[:60]}…", f"Builder · {task} · neon/high")
+        accepted = (f"Reviewer · {task}", f"Builder · {task[:40]}…", f"Builder · {task} · neon/high")
         for title in accepted:
             self.assertTrue(orca._is_default_tab_title(title, "t", task, mark), title)
         refused = (f"Human notes {mark}", f"Builder · [widget:a9] compare with {mark} · sol/high",
-                   f"Builder · {mark} totally different words", f"Builder · {task} [widget:a2]", "Builder · other")
+                   f"Builder · {mark} totally different words", f"Builder · {task} [widget:a2]", "Builder · other",
+                   f"Builder · {mark} build-deep · gemini-4-neon/high · my private notes")
         for title in refused:
             self.assertFalse(orca._is_default_tab_title(title, "t", task, mark), title)
         self.assertEqual(commands._tab_title("review-fast", "review", "codex/gpt-6.1-terra/high", "[widget:a1] review notes"),
                          "Reviewer (fast) │ terra/high │ review notes")
+        self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/high", "Fix[widget:a1] regression"),
+                         "Builder │ sol/high │ Fix regression")
         self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/None", "x", "codex/gpt-6.2-sol/high"),
                          "Builder │ sol/high │ x")
 

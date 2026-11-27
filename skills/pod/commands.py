@@ -287,7 +287,7 @@ def _short_model(model: str) -> str:
 
 
 _EFFORT_SHORT = {"medium": "med"}
-_MARKER_TOKEN = re.compile(r"\[[^\[\]\s]+:a\d+\]\s*")
+_MARKER_TOKEN = re.compile(r"\s*\[[^\[\]\s]+:a\d+\]\s*")
 _TAB_DESCRIPTION_MAX = 34
 
 
@@ -302,7 +302,7 @@ def _tab_title(profile: str | None, role: str, route: str, title: str, requested
     effort = _EFFORT_SHORT.get(effort, effort)
     short_model = _short_model(raw_model) if raw_model else ""
     model_part = "/".join(([short_model] if short_model else []) + ([effort] if effort else []))
-    short = _clean_topic(_MARKER_TOKEN.sub("", title)) or " ".join(_MARKER_TOKEN.sub("", title).split())
+    short = _clean_topic(_MARKER_TOKEN.sub(" ", title)) or " ".join(_MARKER_TOKEN.sub(" ", title).split())
     if len(short) > _TAB_DESCRIPTION_MAX:
         short = short[:_TAB_DESCRIPTION_MAX - 1].rstrip() + "…"
     return " │ ".join(part for part in (_tab_role(profile, role), model_part, short) if part)
@@ -344,6 +344,13 @@ def _validate_dry_run_review_exception(folded: State | None, root: Path | None, 
     return False, None
 
 
+def _resolved(root: Path | None, commit: str | None) -> str | None:
+    try:
+        return gitio.commit(root, commit or "HEAD") if root is not None else None
+    except PodError:
+        return None
+
+
 def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
                       route: str | None = None, reason: str | None = None, exclude_agents: list[str] | None = None,
                       commit: str | None = None, words: str | None = None, after: str | None = None,
@@ -361,7 +368,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
         folded = fold(entries)
         authors = folded.author_families()
-        counts = folded.author_counts(root, commit or "HEAD")
+        counts = folded.author_counts(root, _resolved(root, commit))
         notes = _reviewer_note_lines(folded)
     else:
         try:
@@ -370,7 +377,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             if entries:
                 folded = fold(entries)
                 authors = folded.author_families()
-                counts = folded.author_counts(root, commit or "HEAD")
+                counts = folded.author_counts(root, _resolved(root, commit))
                 notes = _reviewer_note_lines(folded)
         except PodError:
             pass
@@ -459,7 +466,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
         authors = state.author_families()
-        counts = state.author_counts(root, commit or "HEAD")
+        base = gitio.commit(root, commit or "HEAD")
+        counts = state.author_counts(root, base)
         notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
@@ -469,7 +477,6 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         exception = None
         paths_ = gitio.declared(paths_)
         context = gitio.declared(context, keep_root=True)
-        base = gitio.commit(root, commit or "HEAD")
         if has_exception_flags:
             if res.ok and not res.review_fallback_reason:
                 raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",

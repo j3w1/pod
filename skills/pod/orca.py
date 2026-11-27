@@ -108,11 +108,12 @@ def _is_default_tab_title(current: str, task_id: str | None = None, task_title: 
         return True
     if marker and task_title and task_title.startswith(marker + " "):
         head, sep, rest = current.partition(" · ")
-        if sep and re.fullmatch(r"[A-Za-z][A-Za-z ()]{0,23}", head) and rest.startswith(marker + " "):
-            after = task_title[len(marker) + 1:]
-            body = rest[len(marker) + 1:]
-            # the daemon keeps the task title's own words; it never carries a second marker
-            return bool(body) and body[:12] == after[:12] and not re.search(r"\[[^\[\]\s]+:a\d+\]", body)
+        if sep and re.fullmatch(r"[A-Za-z][A-Za-z ()]{0,23}", head):
+            rest = re.sub(r" · [A-Za-z0-9.\-]+/[a-z]+$", "", rest)       # a daemon's trailing model/effort
+            if rest == task_title:
+                return True
+            # Orca's readback truncation: the task title's own leading words, then an ellipsis
+            return rest.endswith("…") and len(rest) > len(marker) + 2 and task_title.startswith(rest[:-1])
     return False
 
 

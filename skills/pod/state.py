@@ -92,7 +92,7 @@ class State:
             done = self.result(row["id"])
             route = row.get("effective") or row.get("route") or ""
             at = (done or {}).get("integrated_at")
-            if not (route and done and done.get("decision") == "integrated" and at):
+            if not (route and done and done.get("decision") == "integrated" and done.get("contained") is True and at):
                 continue
             try:
                 inside = at == commit or gitio.is_ancestor(root, at, commit)

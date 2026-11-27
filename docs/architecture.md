@@ -91,7 +91,11 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   assignment (`orca.request_id`). Orca has no atomic conditional rename, so this read-then-rename
   guard accepts a narrow concurrent-rename window. A start recovered by `--retry` also applies the
   guarded rename when its effective route is known.
-  **Known limits:** retry recovery matches Tasks by a marker in the title read back from Orca
+  **Known limits (0.23.4):** author families for reviewer filtering and the recorded
+  `author_families` still come from the whole objective, not the reviewed commit; only the
+  mixed-author fallback decision and its counts are scoped to integrated work (`contained: true`)
+  in the reviewed commit's history (tracked in pod#348).
+  Also: retry recovery matches Tasks by a marker in the title read back from Orca
   (truncated to ~80 chars; supported objective ids up to 80 chars can still lose it), may bind a
   Task whose topic quotes another assignment's marker, and does not settle a completed request
   receipt with an unknown start; hardening is tracked in a follow-up issue.
