@@ -40,12 +40,17 @@ class DispatchTests(CoreCase):
         long = self.start(title="y" * 80, paths_=["third/"], worktree="new-child")
         self.assertLessEqual(len(self.orca()["titles"][f"term_{long['dispatch']}"]), 60)
 
+    def test_the_tab_title_shows_the_route_orca_started(self):
+        self.set_orca(effective={"agent": "codex", "model": "sol", "effort": "low"})
+        started = self.start(title="t", route="codex/sol/high", paths_=["e/"])
+        self.assertTrue(self.orca()["titles"][f"term_{started['dispatch']}"].endswith("sol/low"))
+
     def test_a_rename_that_raises_anything_or_finds_no_terminal_is_only_a_note(self):
         original = orca.workers
         try:
-            orca.workers = lambda run, timeout=90: (_ for _ in ()).throw(TypeError("odd reply"))
-            self.assertEqual(self.start(paths_=["a/"])["note"], "the worker tab keeps Orca's title (rename: TypeError)")
-            orca.workers = lambda run, timeout=90: []
+            orca.workers = lambda run, *rest: (_ for _ in ()).throw(TypeError("odd reply"))
+            self.assertEqual(self.start(paths_=["a/"])["note"], "the worker tab may keep Orca's title (rename: TypeError)")
+            orca.workers = lambda run, *rest: []
             self.assertIn("no terminal", self.start(paths_=["b/"], worktree="new-child")["note"])
         finally:
             orca.workers = original

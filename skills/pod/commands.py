@@ -203,8 +203,7 @@ def _validate_review_exception(state: State, agents: list[str], base: str,
 
 def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
     """`<profile> · <short title> · <model>/<effort>`, about 60 characters."""
-    _, model, effort = routefile.split(route)
-    tail = f" · {model}/{effort}"
+    tail = " · " + "/".join(route.split("/")[1:])       # model/effort; an effective route may have only two parts
     head = f"{(profile or role)[:20]} · "
     room = max(8, 60 - len(head) - len(tail))
     short = " ".join(title.split())
@@ -397,9 +396,13 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix="dispatch the review in a fresh worker session")
         result = _started(writer, ident, started, route, resolution=res, authors=authors,
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
-        failed = orca.rename(run, started, _tab_title(res.profile, role, route, title))
+        try:
+            failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
+                started.get("effective")) or route, title))
+        except Exception as exc:                 # cosmetic: never fail a started worker
+            failed = type(exc).__name__
         if failed:
-            result["note"] = f"the worker tab keeps Orca's title (rename: {failed})"
+            result["note"] = f"the worker tab may keep Orca's title (rename: {failed})"
         return result
 
 
