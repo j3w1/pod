@@ -75,9 +75,12 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
 - `pod resume` rebinds the Run to the current conversation and logs the takeover.
 - `pod dispatch` derives its request id from the objective and the assignment, records the
   assignment before calling Orca, and after a lost reply `--retry` reads Orca instead of
-  starting again. After a successful start it renames the worker's tab to
-  `<profile> · <title> · <model>/<effort>` (about 60 characters); a failed rename is a `note`.
-  A start recovered by `--retry` keeps Orca's title.
+  starting again. After a successful start it reads the worker's current tab title and, only
+  when it is empty or still Orca's `worker-task_` default, renames it to
+  `<Role> · <topic> · <model>/<effort>` (about 60 characters, using role words such as
+  `Builder`, `Builder (UI)`, `Reviewer`, `Scout`, `Analyst` or `Challenger` and short model
+  names); an unreadable title or failed rename is a `note`. A start recovered by `--retry`
+  keeps Orca's title.
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 

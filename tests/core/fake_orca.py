@@ -86,11 +86,15 @@ def main():
             state.setdefault("worktrees", {})[place] = repo
         else:
             place = where[len("path:"):]
+        handle = f"term_{dispatch}"
         state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
                                       "dispatchStatus": "dispatched", "terminalState": "active",
-                                      "agentTerminalHandle": f"term_{dispatch}", "ownWorktree": where.startswith("new-"),
+                                      "agentTerminalHandle": handle, "ownWorktree": where.startswith("new-"),
                                       "resource": {"ownershipState": "owned", "retainedReason": None,
                                                    "worktreeId": f"repo::{place}"}}
+        titles = state.setdefault("titles", {})
+        if handle not in titles:
+            titles[handle] = state["initial_title"] if "initial_title" in state else f"worker-{task}"
         route = {"agent": option(args, "--agent"), "model": option(args, "--model"), "effort": option(args, "--effort")}
         receipt = {"taskId": task, "dispatchId": dispatch, "launch": {"requested": route, "effective": state.get("effective") or route}}
         state["requests"][request] = {"spec": spec, "receipt": receipt}
@@ -123,15 +127,32 @@ def main():
             reply(False, {"code": "worktree_remove_failed", "message": done.stderr if done else "the disk said no"}, state)
         reply(True, {"removed": True}, state)
     if args[:2] == ["terminal", "rename"]:
+        state.setdefault("rename_calls", []).append(
+            {"terminal": option(args, "--terminal"), "title": option(args, "--title")})
         if state.get("rename_fails"):
-            reply(False, {"code": "terminal_not_found", "message": "no such terminal"})
+            reply(False, {"code": "terminal_not_found", "message": "no such terminal"}, state)
         state.setdefault("titles", {})[option(args, "--terminal")] = option(args, "--title")
         reply(True, {"renamed": True}, state)
     if args[:2] == ["terminal", "list"]:
-        place = option(args, "--worktree")[len("path:"):]
-        own = [{"handle": row["agentTerminalHandle"]} for row in state["workers"].values()
-               if row["resource"]["worktreeId"].endswith("::" + place) and row["terminalState"] in ("active", "retained", "reclaimable")]
-        reply(True, {"terminals": own + state.get("open_terminals", {}).get(place, [])})
+        if state.get("list_fails"):
+            reply(False, {"code": "terminal_list_failed", "message": "cannot list terminals"})
+        raw = option(args, "--worktree")
+        place = raw[len("path:"):] if raw else None
+        titles = state.get("titles", {})
+        own = []
+        for row in state["workers"].values():
+            if row["terminalState"] not in ("active", "retained", "reclaimable"):
+                continue
+            if place is not None and not row["resource"]["worktreeId"].endswith("::" + place):
+                continue
+            handle = row["agentTerminalHandle"]
+            item = {"handle": handle}
+            if not state.get("omit_title"):
+                item["title"] = titles.get(handle, f"worker-{row['taskId']}")
+            own.append(item)
+        extra = (state.get("open_terminals", {}).get(place, []) if place is not None
+                 else [item for items in state.get("open_terminals", {}).values() for item in items])
+        reply(True, {"terminals": own + extra})
     if command == "worker-show":
         row = state["workers"].get(option(args, "--dispatch"), {})
         reply(True, {"dispatch": {"id": row.get("dispatchId"), "status": row.get("dispatchStatus"),

@@ -201,10 +201,61 @@ def _validate_review_exception(state: State, agents: list[str], base: str,
                        "by an allowed agent on the same commit without a review result")
 
 
+ROLE_WORDS = {"implement": "Builder", "review": "Reviewer", "investigate": "Scout"}
+SHORT_MODELS = {
+    "claude-opus-5-5": "opus",
+    "claude-sonnet-5-5": "sonnet",
+    "claude-haiku-5-5": "haiku",
+    "claude-fable-5-1": "fable",
+    "claude-fable-5-2": "fable",
+    "gemini-4-neon": "neon",
+    "gpt-6.2-sol": "sol",
+    "gpt-6.1-sol": "sol",
+    "gpt-6.1-terra": "terra",
+    "gpt-6.2-astra": "astra",
+    "gpt-6-astra": "astra",
+    "gpt-6-luna": "luna",
+}
+_VERSION_TOKEN = re.compile(r"^v?\d+(?:\.\d+)*$", re.IGNORECASE)
+
+
+def _tab_role(profile: str | None, role: str) -> str:
+    """CE Dev role word for a worker tab, never the raw profile name or kind."""
+    name = (profile or "").strip().lower()
+    if "analyst" in name:
+        return "Analyst"
+    if "challenger" in name:
+        return "Challenger"
+    if name in ("ui-design", "ui-light"):
+        return "Builder (UI)"
+    if name == "review" or name.startswith("review-"):
+        return "Reviewer"
+    if name == "build" or name.startswith("build-"):
+        return "Builder"
+    if name == "scout" or name.startswith("scout-"):
+        return "Scout"
+    return ROLE_WORDS.get(role.strip().lower(), role)
+
+
+def _short_model(model: str) -> str:
+    """Short model label for a worker tab; falls back to last non-version word or the full id."""
+    key = model.strip().lower()
+    if key in SHORT_MODELS:
+        return SHORT_MODELS[key]
+    for part in reversed(model.strip().split("-")):
+        if part and not _VERSION_TOKEN.fullmatch(part):
+            return part
+    return model
+
+
 def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
-    """`<profile> · <short title> · <model>/<effort>`, about 60 characters."""
-    tail = " · " + "/".join(part for part in route.split("/")[1:] if part and part != "None")   # model/effort, either may be absent
-    head = f"{(profile or role)[:20]} · "
+    """`<Role> · <topic> · <model>/<effort>`, about 60 characters."""
+    segments = route.split("/")
+    raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
+    effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
+    model_parts = ([_short_model(raw_model)] if raw_model else []) + ([effort] if effort else [])
+    tail = " · " + "/".join(model_parts) if model_parts else ""
+    head = f"{_tab_role(profile, role)[:20]} · "
     room = max(8, 60 - len(head) - len(tail))
     short = " ".join(title.split())
     short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
