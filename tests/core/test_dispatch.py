@@ -19,6 +19,8 @@ class DispatchTests(CoreCase):
         self.assertEqual(task["task_title"], "[widget:a1] implement · sol/high · write")
         self.assertIn("Change only: src", task["spec"])
         self.assertIn('"outcome"', task["spec"])
+        self.assertIn("Run tests in the foreground.", task["spec"])     # a builder never ends a turn on a background run
+        self.assertIn("never end a turn while a background run is pending", task["spec"])
         row = {**self.entries("widget")[-2], **self.entries("widget")[-1]}
         self.assertEqual((row["route"], row["paths"], row["task"], row["dispatch"]),
                          ("codex/sol/high", ["src"], started["task"], started["dispatch"]))
