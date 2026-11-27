@@ -905,15 +905,17 @@ def resolve_dispatch(
             "other-family review routes unavailable: " + "; ".join(quota_blocked_other.values())
         )
 
+    counts = {route_family_: n for route_family_, n in (author_counts or {}).items() if n > 0}
+    enabled_families = {route_family(item) for item, state_ in preferences.routes.items()
+                        if state_ == "enabled" and not _is_claude_route(item)}
     if (not eligible and auto_review_family_check and same_family_eligible
-            and len(normalized_authors) > 1 and not quota_blocked_other and not other_family_non_quota_blocked):
-        counts = author_counts or {}
+            and len(counts) > 1 and enabled_families <= set(counts)
+            and not quota_blocked_other and not other_family_non_quota_blocked):
         order_ = {agent: index for index, agent in enumerate(preferences.review_agents)}
         eligible = sorted(same_family_eligible, key=lambda item: (
             counts.get(route_family(item), 0), order_.get(split(item)[0], len(order_))))
-        review_fallback_reason = (MIXED_PREFIX + ", ".join(
-            f"{family} {counts.get(family, 0)}" if counts else family for family in sorted(normalized_authors))
-            + "; every non-Claude family authored part of this diff")
+        review_fallback_reason = (MIXED_PREFIX + ", ".join(f"{family} {n}" for family, n in sorted(counts.items()))
+                                  + "; every enabled non-Claude family authored part of this diff")
     elif role == "review" and len(eligible) > 1:
         order = {agent: index for index, agent in enumerate(preferences.review_agents)}
         fallback_rank = len(order)

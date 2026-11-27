@@ -5,6 +5,7 @@ request id the caller derives, so a repeated start replays Orca's recorded outco
 starting a second worker, and a coordinator that no longer holds the Run is refused by Orca.
 """
 
+import re
 import json
 import subprocess
 import uuid
@@ -97,16 +98,21 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
 
 def _is_default_tab_title(current: str, task_id: str | None = None, task_title: str | None = None,
                           marker: str | None = None) -> bool:
-    """True for an empty title, exact `worker-<taskId>`, the exact `task_title` Pod passed, or a title that
-    carries this assignment's own `[objective:ident]` marker (a daemon's `<Role> · <task title>` rename)."""
-    if marker and marker in current:
-        return True
+    """True for an empty title, exact `worker-<taskId>`, the exact `task_title` Pod passed, or a daemon's
+    `<Role> · <task title…>` rename that starts the task title with this assignment's own marker."""
     if not current.strip():
         return True
     if task_id and current == f"worker-{task_id}":
         return True
     if task_title and current == task_title:
         return True
+    if marker and task_title and task_title.startswith(marker + " "):
+        head, sep, rest = current.partition(" · ")
+        if sep and re.fullmatch(r"[A-Za-z][A-Za-z ()]{0,23}", head) and rest.startswith(marker + " "):
+            after = task_title[len(marker) + 1:]
+            body = rest[len(marker) + 1:]
+            # the daemon keeps the task title's own words; it never carries a second marker
+            return bool(body) and body[:12] == after[:12] and not re.search(r"\[[^\[\]\s]+:a\d+\]", body)
     return False
 
 

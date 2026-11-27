@@ -287,18 +287,22 @@ def _short_model(model: str) -> str:
 
 
 _EFFORT_SHORT = {"medium": "med"}
+_MARKER_TOKEN = re.compile(r"\[[^\[\]\s]+:a\d+\]\s*")
 _TAB_DESCRIPTION_MAX = 34
 
 
-def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
+def _tab_title(profile: str | None, role: str, route: str, title: str, requested: str | None = None) -> str:
     """`<Role> │ <model>/<effort> │ <description>` (U+2502 bar, one space each side); the description is cut to 34 characters."""
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
+    if not effort and requested:
+        asked = requested.split("/")
+        effort = asked[2] if len(asked) > 2 and asked[2] != "None" else ""
     effort = _EFFORT_SHORT.get(effort, effort)
     short_model = _short_model(raw_model) if raw_model else ""
     model_part = "/".join(([short_model] if short_model else []) + ([effort] if effort else []))
-    short = _clean_topic(title) or " ".join(title.split())
+    short = _clean_topic(_MARKER_TOKEN.sub("", title)) or " ".join(_MARKER_TOKEN.sub("", title).split())
     if len(short) > _TAB_DESCRIPTION_MAX:
         short = short[:_TAB_DESCRIPTION_MAX - 1].rstrip() + "…"
     return " │ ".join(part for part in (_tab_role(profile, role), model_part, short) if part)
@@ -357,7 +361,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
         folded = fold(entries)
         authors = folded.author_families()
-        counts = folded.author_counts()
+        counts = folded.author_counts(root, commit or "HEAD")
         notes = _reviewer_note_lines(folded)
     else:
         try:
@@ -366,7 +370,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             if entries:
                 folded = fold(entries)
                 authors = folded.author_families()
-                counts = folded.author_counts()
+                counts = folded.author_counts(root, commit or "HEAD")
                 notes = _reviewer_note_lines(folded)
         except PodError:
             pass
@@ -455,7 +459,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
         authors = state.author_families()
-        counts = state.author_counts()
+        counts = state.author_counts(root, commit or "HEAD")
         notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
@@ -571,7 +575,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title), task_title=task_title, marker=f"[{state.id}:{ident}]")
+                started.get("effective")) or route, title, route), task_title=task_title, marker=f"[{state.id}:{ident}]")
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
@@ -693,7 +697,7 @@ def _settle_start(writer, state: State, ident: str) -> dict:
                 try:
                     failed = orca.rename(
                         run, started_info,
-                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"]),
+                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"], row["route"]),
                         task_title=task_title, marker=f"[{state.id}:{ident}]",
                     )
                 except Exception as exc:

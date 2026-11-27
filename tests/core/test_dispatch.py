@@ -223,11 +223,10 @@ class DispatchTests(CoreCase):
         self.assertNotIn("note", exact_task)
         self.assertEqual(self.orca()["titles"]["term_ctx_4"],
                          "Builder (deep) │ neon/high │ #520 lifecycle implementation")
-        # A truncated task title still carrying this assignment's own marker is Orca's default and is renamed.
-        marked = commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
-                                   spec="Do.", paths_=["e/"], worktree="new-child")
-        self.assertNotIn("note", marked)
-        self.assertEqual(self.orca()["titles"]["term_ctx_5"], "Builder (deep) │ neon/high │ #520 lifecycle implementation")
+        # A bare truncated task title (not Orca's default, not the daemon's role form) is never overwritten.
+        commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
+                          spec="Do.", paths_=["e/"], worktree="new-child")
+        self.assertEqual(self.orca()["titles"]["term_ctx_5"], coincidental_prefix_5)
         # Custom worker-task_notes, and arbitrary wrappers are NEVER overwritten.
         for idx, (path, expected_kept) in enumerate((
             ("f/", "worker-task_notes"),
@@ -242,7 +241,7 @@ class DispatchTests(CoreCase):
                                      spec="Do.", paths_=["i/"], worktree="new-child")
         self.assertNotIn("note", trailing)
         self.assertEqual(self.orca()["titles"]["term_ctx_9"], "Builder (deep) │ neon/high │ trailing spaces")
-        self.assertEqual(len(self.orca()["rename_calls"]), 5)
+        self.assertEqual(len(self.orca()["rename_calls"]), 4)
 
     def test_a_daemon_renamed_tab_carrying_this_assignments_marker_is_renamed(self):
         self.write_routes(
@@ -255,6 +254,21 @@ class DispatchTests(CoreCase):
         self.assertEqual(self.orca()["titles"]["term_ctx_1"], "Builder (deep) │ neon/high │ Daemon named")
         commands.dispatch(self.repo, None, profile="build-deep", title="Daemon named", spec="Do.", paths_=["b/"], worktree="new-child")
         self.assertEqual(self.orca()["titles"]["term_ctx_2"], "Builder · " + other)
+
+    def test_marker_guard_and_tab_format_edge_cases(self):
+        task = commands._task_title("build-deep", "implement", "antigravity/gemini-4-neon/high", "widget", "a1", "Daemon named")
+        mark = "[widget:a1]"
+        accepted = (f"Reviewer · {task}", f"Builder · {task[:60]}…", f"Builder · {task} · neon/high")
+        for title in accepted:
+            self.assertTrue(orca._is_default_tab_title(title, "t", task, mark), title)
+        refused = (f"Human notes {mark}", f"Builder · [widget:a9] compare with {mark} · sol/high",
+                   f"Builder · {mark} totally different words", f"Builder · {task} [widget:a2]", "Builder · other")
+        for title in refused:
+            self.assertFalse(orca._is_default_tab_title(title, "t", task, mark), title)
+        self.assertEqual(commands._tab_title("review-fast", "review", "codex/gpt-6.1-terra/high", "[widget:a1] review notes"),
+                         "Reviewer (fast) │ terra/high │ review notes")
+        self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/None", "x", "codex/gpt-6.2-sol/high"),
+                         "Builder │ sol/high │ x")
 
     def test_unreadable_tab_title_returns_a_note_and_does_not_rename(self):
         self.set_orca(list_fails=True)
