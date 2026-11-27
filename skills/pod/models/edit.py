@@ -10,6 +10,7 @@ import fcntl
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 
 from .. import installer, paths, routefile, yamlsubset
@@ -27,6 +28,128 @@ def _locked(path: Path):
     with open(path.parent / ".config.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield
+
+
+def _regular(path: Path) -> bool:
+    return path.is_file() and not path.is_symlink()
+
+
+def _read_regular(path: Path) -> tuple[bytes, tuple[int, int]]:
+    """Bytes and (device, inode) of one regular file read through the same open handle; never follows a symlink."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(os.dup(fd), "rb") as handle:
+            return handle.read(), (info.st_dev, info.st_ino)
+    finally:
+        os.close(fd)
+
+
+def edit_in_editor(path: Path, editor: list[str]) -> None:
+    """Open the file in an editor on a copy, then save it under the config lock.
+
+    The editor runs outside the lock so `pod models` is not held up. Saving takes the same lock
+    as `apply` and first checks, in this order, that the live file is still the same regular file
+    with the same bytes it was when the editor opened (else `preferences_changed`); only then are the
+    edited bytes (read before the lock and confirmed unchanged under it) checked to be readable if the
+    original was, and written to a fresh file that replaces the live one with the live file's mode. A failed or missing
+    editor installs nothing. An edited copy that is not saved is kept and its path reported."""
+    import subprocess
+    try:
+        original, identity = _read_regular(path)
+    except OSError:
+        raise PodError("preferences_invalid", f"{path} is not a regular preference file.",
+                       fix="replace it with a regular file; Pod never follows a symlink here") from None
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".config-edit-", suffix=".yaml", delete=False) as handle:
+        handle.write(original)
+    copy = Path(handle.name)
+    copy.chmod(0o600)
+
+    def stage(data: bytes) -> Path:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".config-stage-", suffix=".yaml", delete=False) as out:
+            out.write(data)
+        return Path(out.name)
+
+    snapshot = stage(original)
+    try:
+        original_ok = routefile.load(snapshot).status == "ok"
+    finally:
+        snapshot.unlink(missing_ok=True)
+
+    def keep(code: str, message: str, fix: str) -> PodError:
+        return PodError(code, f"{message} Your edit is kept at {copy}." if copy.exists() else message, fix=fix)
+
+    def unusable_output() -> PodError:
+        if copy.is_symlink():                      # our own staging name, never the person's file
+            try:
+                copy.unlink()
+            except OSError:
+                pass
+        return PodError("editor_failed", "The editor left no readable regular file to save; nothing was saved.",
+                        fix=f"run `pod config edit` again" + (f"; any edit is at {copy}" if copy.exists() else ""))
+
+    try:
+        done = subprocess.run([*editor, str(copy)], check=False)
+    except OSError as exc:
+        copy.unlink(missing_ok=True)
+        raise PodError("editor_failed", f"The editor could not run: {exc.strerror or type(exc).__name__}.",
+                       fix="set VISUAL or EDITOR to an editor that exists") from exc
+    try:
+        edited, _ = _read_regular(copy)            # the one snapshot every later decision uses
+    except OSError:
+        raise unusable_output() from None
+    if done.returncode != 0:
+        if edited == original:
+            copy.unlink(missing_ok=True)
+            raise PodError("editor_failed", f"The editor exited with status {done.returncode}; nothing was saved.",
+                           fix="run `pod config edit` again")
+        raise keep("editor_failed", f"The editor exited with status {done.returncode}; nothing was saved.",
+                   f"check {copy}, then copy it over {path} if it is right")
+    if edited == original:
+        copy.unlink(missing_ok=True)
+        return
+    with _locked(path):
+        try:
+            live, live_identity = _read_regular(path)
+        except OSError:
+            live, live_identity = None, None
+        if live is None or live_identity != identity or live != original:
+            raise keep("preferences_changed", "The preference file changed, was replaced or removed while you edited.",
+                       f"merge {copy} into {path} by hand, then delete the copy")
+        try:
+            again, _ = _read_regular(copy)
+        except OSError:
+            again = None
+        if again != edited:                          # the editor saved again while Pod waited for the lock
+            raise keep("preferences_changed", "The editor's output changed while it was being saved; nothing was saved.",
+                       f"run `pod config edit` again or merge {copy} into {path} by hand")
+        staged = stage(edited)
+        try:
+            if original_ok:
+                checked = routefile.load(staged)
+                if checked.status != "ok":
+                    raise keep("preferences_invalid", f"The edited file cannot be read: {checked.problem}.",
+                               f"correct {copy}, then copy it over {path}")
+            staged.chmod(os.stat(path).st_mode & 0o7777)
+            os.replace(staged, path)
+        finally:
+            staged.unlink(missing_ok=True)
+        # Set the copy aside atomically, then look: whatever the editor saved up to this instant is what we see.
+        done = copy.with_name(copy.name + ".done")
+        try:
+            os.replace(copy, done)
+        except OSError:
+            return                                   # nothing left under that name to look at
+        try:
+            later = _read_regular(done)[0]
+        except OSError:
+            later = None                             # moved but unreadable: report it rather than hide it
+        if later != edited:
+            raise PodError("preferences_changed", f"Saved, but the editor wrote again afterwards; that newer copy is kept at {done}.",
+                           fix=f"merge {done} into {path} by hand, then delete it")
+        done.unlink(missing_ok=True)
 
 
 def _refuse_invalid(preferences: routefile.Preferences) -> None:

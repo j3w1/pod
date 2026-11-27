@@ -91,6 +91,19 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   assignment (`orca.request_id`). Orca has no atomic conditional rename, so this read-then-rename
   guard accepts a narrow concurrent-rename window. A start recovered by `--retry` also applies the
   guarded rename when its effective route is known.
+  `pod status --json` keeps the formatted `assignments` strings and adds `assignment_records`:
+  per assignment `requested_route` and `effective_route` (`{agent, model, effort, fallback_tag}`,
+  plus `fallback_reason` when recorded) and `events` (`kind` is `dispatched`, `accepted` or
+  `review_verdict`, `at` is epoch seconds or null, `detail`, in log order; `dispatched` needs a
+  recorded Orca dispatch and `effective_route` is null where no launch was observed; both list
+  keys are always present, possibly empty), plus a
+  top-level `events` list of `merged` events (only on `pod status --json`). All come from the objective log; Pod records no separate "reported" event.
+  `pod config edit` edits a copy and saves under the same `.config.lock` as `pod models`: it
+  refuses a symlinked or non-regular file, a failed or missing editor and an editor output that is
+  not a regular file; under the lock it first checks the live file is the same file with the same
+  bytes (`preferences_changed`, the edited copy is kept and its path reported), then that the
+  result is readable if the original was, and keeps the live file's mode. Known limit: an editor that
+  returns but keeps the copy open and writes again after Pod's last check is not detected.
   **Known limits (0.23.4):** author families for reviewer filtering and the recorded
   `author_families` still come from the whole objective, not the reviewed commit; only the
   mixed-author fallback decision and its counts are scoped to integrated work (`contained: true`)

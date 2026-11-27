@@ -119,7 +119,8 @@ def _config(edit: bool) -> dict:
         editor = shlex.split(os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi")
         if not target.exists():
             raise PodError("config_absent", f"There is no preference file at {target}.", fix="run `pod models` to create one")
-        subprocess.run([*editor, str(target)], check=False)
+        from .models import edit as models_edit
+        models_edit.edit_in_editor(target, editor)
     found = routefile.load(target)
     return {"path": str(target), "status": found.status, **({"problem": found.problem} if found.problem else {}),
             "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
@@ -164,7 +165,7 @@ def execute(args: argparse.Namespace, cwd: Path) -> dict:
         given = {key: value for key, value in vars(args).items() if key not in ("command", "json", "objective")}
         return commands.record(cwd, args.objective, **given)
     if name == "status":
-        return commands.status(cwd, args.objective, remote=not args.local)
+        return commands.status(cwd, args.objective, remote=not args.local, typed=bool(args.json))
     if name == "deliver":
         return gate.deliver(cwd, args.objective, check=args.check, commit=args.commit)
     if name == "resume":
