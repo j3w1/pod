@@ -264,6 +264,34 @@ class DrawTests(WorkspaceCase):
         self.keys("d")
         self.assertEqual(routefile.load().soft_drained_agents, [])
 
+    def test_tui_profiles_tab_renders_review_quota_fallback_and_recovers_when_hold_clears(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "profiles:\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg + "paused_agents:\n  agy-gemini: quota\n")
+        self.space.reload()
+        self.keys("\t", "a", "a")  # Profiles tab, author None -> Google -> OpenAI
+        self.assertEqual(self.space.what_if_author, "OpenAI")
+        held_screen = "\n".join(text(self.space.lines(120, 30)))
+        self.assertIn("What-If exclude:", held_screen)
+        self.assertIn("Review tag: same_provider_fallback", held_screen)
+        self.assertIn("Fallback:", held_screen)
+        self.assertIn("agy-gemini", held_screen)
+        self.assertNotIn("Skipped codex/gpt-6.1-terra/high: model family", held_screen)
+        # Clear the hold -> returns to cross-family display.
+        self.write_routes(cfg)
+        self.space.reload()
+        clear_screen = "\n".join(text(self.space.lines(120, 30)))
+        self.assertIn("Review tag: cross_provider_fallback", clear_screen)
+        self.assertIn("Selected: antigravity/gemini-4-neon/high", clear_screen)
+        self.assertNotIn("Fallback:", clear_screen)
+
     def test_model_navigation_groups_efforts_and_effort_keys_visit_exact_routes(self):
         self.refresh_from(current_page())
         space = tui.Workspace()

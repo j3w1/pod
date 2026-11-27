@@ -19,7 +19,7 @@ HELP = ("Tab / 1 2   Switch Models and Profiles & What-If tabs",
         "space on/off   Toggle this route", "p Preferred   Set or clear preference", "P Pin   Set or clear pin",
         "E/D   Enable or disable all model efforts", "x pause   Toggle pool in paused_agents",
         "d drain   Toggle pool in soft_drained_agents",
-        "w what-if   Cycle simulated down pool/agent (Profiles tab)",
+        "w exclude   Cycle simulated --exclude-agent pool/agent (Profiles tab)",
         "a author   Cycle simulated author family (Profiles tab)",
         "m mcp   Toggle +mcp on selected profile (Profiles tab)",
         "R refresh   Fetch public measurements and Antigravity catalog",
@@ -359,6 +359,8 @@ class Workspace:
             lines.extend((part, "dim") for part in textwrap.wrap("Wire: " + wire_cmd, width))
             if res.review_independence:
                 lines.append((f"Review tag: {res.review_independence}", "accent"))
+            if res.review_fallback_reason:
+                lines.extend((part, "warn") for part in textwrap.wrap("Fallback: " + res.review_fallback_reason, width))
         else:
             lines.append((f"PAUSED ({res.error_code})", "warn"))
             if res.error_message:
@@ -385,9 +387,9 @@ class Workspace:
 
         excl = ",".join(self.what_if_exclude) if self.what_if_exclude else "none"
         auth = self.what_if_author or "none"
-        status = f"Profiles  {len(self.profile_names())}  ·  What-If down: {excl}  ·  author: {auth}"
+        status = f"Profiles  {len(self.profile_names())}  ·  What-If exclude: {excl}  ·  author: {auth}"
         top.append(line(status, "head"))
-        keys = "Tab models · ↑↓ profile · w what-if · a author · x pause · d drain · m +mcp · R refresh · ? keys · q quit"
+        keys = "Tab models · ↑↓ profile · w exclude · a author · x pause · d drain · m +mcp · R refresh · ? keys · q quit"
         bottom = [line(part, "head") for part in textwrap.wrap(keys, width)]
         if self.message:
             bottom.insert(0, line(self.message, "warn"))

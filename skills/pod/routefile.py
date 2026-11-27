@@ -30,6 +30,22 @@ ROUTE = re.compile(rf"{AGENT.pattern}/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]
 AGENT_LIST = re.compile(rf"\[ *(?:{AGENT.pattern}(?: *, *{AGENT.pattern})* *)?\]", re.ASCII)
 _TTL = re.compile(r"^([1-9][0-9]*)([smhd]?)$")
 _TTL_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+_QUOTA_NON_QUOTA_TERMS = re.compile(
+    r"\b(?:no|not|non|without|never|maintenance|migration|migrate|offline|outage|incident|broken|debug|testing|test)\b",
+    re.IGNORECASE,
+)
+_QUOTA_POSITIVE_REASON = re.compile(
+    r"^(?:"
+    r"quota(?:[ _-]+(?:exhausted|out|low|empty|hit|reached|exceeded|limit|depleted|cap|capped|full|drain(?:ed)?|hold|pause(?:d)?))?"
+    r"|out[ _-]+of[ _-]+quota"
+    r"|rate[ _-]?limit(?:ed|s)?"
+    r"|429(?:[ _-]+(?:too[ _-]+many[ _-]+requests|rate[ _-]?limit(?:ed)?))?"
+    r"|(?:weekly|daily|monthly|hourly|manual)[ _-]+(?:\d+(?:\.\d+)?(?:pct|%)|limit(?:ed)?|cap(?:ped)?|quota)"
+    r"|keep[ _-]+bonus[ _-]+pool"
+    r"|exhausted"
+    r")$",
+    re.IGNORECASE,
+)
 MAX_BYTES = 256 * 1024
 EDIT = "run `pod models` to choose routes, or `pod config edit` to correct the file"
 
@@ -78,6 +94,7 @@ class Resolution:
     author_families: tuple[str, ...] = ()
     reviewer_notes: tuple[str, ...] = ()
     reason: str | None = None
+    review_fallback_reason: str | None = None
 
 
 @dataclass
@@ -435,12 +452,18 @@ def format_profile(profile: Profile) -> str:
     return " ".join((head, *profile.routes))
 
 
-def review_tag(reviewer: str, author_families: set[str] | frozenset[str], primary_agent: str | None) -> str:
+def review_tag(
+    reviewer: str,
+    author_families: set[str] | frozenset[str],
+    primary_agent: str | None,
+    *,
+    fallback: bool = False,
+) -> str:
     """Compute an honest factual proof tag for a review by comparing model families (providers)."""
     reviewer_agent = _route_parts(reviewer)[0]
     reviewer_family = route_family(reviewer)
     normalized_authors = {route_family(item) for item in author_families if item}
-    on_primary = primary_agent is None or reviewer_agent == primary_agent
+    on_primary = not fallback and (primary_agent is None or reviewer_agent == primary_agent)
     if not normalized_authors:
         return "unknown_author" if on_primary else "fallback_unknown_author"
     if reviewer_family not in normalized_authors:
@@ -513,15 +536,37 @@ def _hold_clause(hold: AgentHold) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
-def _matched_hold(route: str, holds: dict[str, AgentHold]) -> tuple[str, str, AgentHold] | None:
-    """Match a route against holds keyed by agent name or quota pool id."""
+def _is_claude_route(route: str) -> bool:
+    agent, model = _route_parts(route)
+    return agent == "claude" or route_family(route) == "Anthropic" or (model is not None and model.startswith("claude-"))
+
+
+def _is_quota_hold(hold: AgentHold) -> bool:
+    """True only for unreasoned holds or holds that positively state quota/rate-limit exhaustion."""
+    if not hold.reason or not hold.reason.strip():
+        return True
+    cleaned = " ".join(hold.reason.strip().split())
+    if _QUOTA_NON_QUOTA_TERMS.search(cleaned):
+        return False
+    return bool(_QUOTA_POSITIVE_REASON.fullmatch(cleaned))
+
+
+def _matched_holds(route: str, holds: dict[str, AgentHold]) -> list[tuple[str, str, AgentHold]]:
+    """Return every hold covering a route (by agent name and/or quota pool id)."""
+    matches: list[tuple[str, str, AgentHold]] = []
     agent = split(route)[0]
     if agent in holds:
-        return "agent", agent, holds[agent]
+        matches.append(("agent", agent, holds[agent]))
     pool = route_pool(route)
-    if pool in holds:
-        return "pool", pool, holds[pool]
-    return None
+    if pool != agent and pool in holds:
+        matches.append(("pool", pool, holds[pool]))
+    return matches
+
+
+def _matched_hold(route: str, holds: dict[str, AgentHold]) -> tuple[str, str, AgentHold] | None:
+    """Match a route against holds keyed by agent name or quota pool id."""
+    matches = _matched_holds(route, holds)
+    return matches[0] if matches else None
 
 
 def _matched_exclude(route: str, excluded: set[str]) -> tuple[str, str] | None:
@@ -761,26 +806,61 @@ def resolve_dispatch(
     eligible: list[str] = []
     held_keys: set[str] = set()
     effort_errors: dict[str, PodError] = {}
+    auto_review_family_check = (role == "review" and route is None and bool(normalized_authors)
+                                and not allow_review_exception)
+    same_family_eligible: list[str] = []
+    quota_blocked_other: dict[tuple[str, str, str], str] = {}
+    other_family_non_quota_blocked = False
+
+    def _is_other_family_allowed_enabled(cand: str, agent: str) -> bool:
+        if not auto_review_family_check or route_family(cand) in normalized_authors:
+            return False
+        if preferences.review_agents and agent not in preferences.review_agents:
+            return False
+        return preferences.routes.get(cand) == "enabled"
+
+    def _wire_valid(cand: str) -> bool:
+        try:
+            wire_route(cand)
+            return True
+        except PodError:
+            return False
+
     for cand in candidates:
         agent = split(cand)[0]
-        paused_hit = _matched_hold(cand, paused)
-        if paused_hit:
-            kind, key, hold = paused_hit
-            held_keys.add(key)
-            trace.append(TraceStep(cand, "skipped", "paused_agent",
-                                   f"Skipped {cand}: {kind} {key} is paused in paused_agents{_hold_clause(hold)}."))
-            continue
-        drained_hit = _matched_hold(cand, drained)
-        if drained_hit:
-            kind, key, hold = drained_hit
-            held_keys.add(key)
-            trace.append(TraceStep(cand, "skipped", "soft_drained_agent",
-                                   f"Skipped {cand}: {kind} {key} is soft-drained in soft_drained_agents"
-                                   f"{_hold_clause(hold)}."))
+        paused_hits = _matched_holds(cand, paused)
+        drained_hits = _matched_holds(cand, drained)
+        if paused_hits or drained_hits:
+            all_hits = (
+                [("paused", kind, key, hold) for kind, key, hold in paused_hits]
+                + [("soft_drained", kind, key, hold) for kind, key, hold in drained_hits]
+            )
+            for _, _, key, _ in all_hits:
+                held_keys.add(key)
+            if _is_other_family_allowed_enabled(cand, agent):
+                if (not _wire_valid(cand) or _matched_exclude(cand, excluded)
+                        or any(not _is_quota_hold(hold) for _, _, _, hold in all_hits)):
+                    other_family_non_quota_blocked = True
+                else:
+                    for state_kind, kind, key, hold in all_hits:
+                        label = "paused" if state_kind == "paused" else "soft-drained"
+                        quota_blocked_other.setdefault(
+                            (kind, key, state_kind), f"{kind} {key} {label}{_hold_clause(hold)}")
+            if paused_hits:
+                kind, key, hold = paused_hits[0]
+                trace.append(TraceStep(cand, "skipped", "paused_agent",
+                                       f"Skipped {cand}: {kind} {key} is paused in paused_agents{_hold_clause(hold)}."))
+            else:
+                kind, key, hold = drained_hits[0]
+                trace.append(TraceStep(cand, "skipped", "soft_drained_agent",
+                                       f"Skipped {cand}: {kind} {key} is soft-drained in soft_drained_agents"
+                                       f"{_hold_clause(hold)}."))
             continue
         excluded_hit = _matched_exclude(cand, excluded)
         if excluded_hit:
             kind, key = excluded_hit
+            if _is_other_family_allowed_enabled(cand, agent):
+                other_family_non_quota_blocked = True
             trace.append(TraceStep(cand, "skipped", "excluded_agent",
                                    f"Skipped {cand}: {kind} {key} is excluded by --exclude-agent."))
             continue
@@ -792,6 +872,8 @@ def resolve_dispatch(
             wire_route(cand)
         except PodError as exc:
             effort_errors[cand] = exc
+            if _is_other_family_allowed_enabled(cand, agent):
+                other_family_non_quota_blocked = True
             trace.append(TraceStep(cand, "skipped", exc.code, f"Skipped {cand}: {exc}"))
             continue
         if (role == "review" and preferences.review_agents and agent not in preferences.review_agents
@@ -800,12 +882,21 @@ def resolve_dispatch(
                                    f"Skipped {cand}: agent {agent} is outside review_agents "
                                    f"({', '.join(preferences.review_agents)})."))
             continue
-        if (role == "review" and route is None and normalized_authors
-                and route_family(cand) in normalized_authors and not allow_review_exception):
+        if auto_review_family_check and route_family(cand) in normalized_authors:
+            if not _is_claude_route(cand):
+                same_family_eligible.append(cand)
             trace.append(TraceStep(cand, "skipped", "author_family",
                                    f"Skipped {cand}: model family {route_family(cand)} authored this diff."))
             continue
         eligible.append(cand)
+
+    review_fallback_reason: str | None = None
+    if (not eligible and auto_review_family_check and same_family_eligible
+            and quota_blocked_other and not other_family_non_quota_blocked):
+        eligible = list(same_family_eligible)
+        review_fallback_reason = (
+            "other-family review routes unavailable: " + "; ".join(quota_blocked_other.values())
+        )
 
     if role == "review" and len(eligible) > 1:
         order = {agent: index for index, agent in enumerate(preferences.review_agents)}
@@ -817,14 +908,23 @@ def resolve_dispatch(
         chosen = eligible[0]
         if route is not None and chosen not in profile_routes and not cleaned_reason:
             return _refuse_outside_profiles(chosen)
+        if review_fallback_reason:
+            trace = [step for step in trace if not (step.route == chosen and step.code == "author_family")]
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
-        tag = review_tag(chosen, normalized_authors, primary_agent) if role == "review" else None
+        tag = review_tag(chosen, normalized_authors, primary_agent,
+                         fallback=bool(review_fallback_reason)) if role == "review" else None
         extra = ""
         if tag:
-            extra = f" ({tag}" + (f"; authors: {', '.join(sorted_authors)}" if sorted_authors else "") + ")"
+            details = [tag]
+            if review_fallback_reason:
+                details.append(review_fallback_reason)
+            if sorted_authors:
+                details.append(f"authors: {', '.join(sorted_authors)}")
+            extra = f" ({'; '.join(details)})"
         trace.append(TraceStep(chosen, "selected", "selected", f"Selected {chosen}{extra}."))
         return Resolution(True, role, chosen, wire_route(chosen), profile, mcp, tag, trace,
-                          author_families=sorted_authors, reviewer_notes=kept_notes, reason=cleaned_reason)
+                          author_families=sorted_authors, reviewer_notes=kept_notes, reason=cleaned_reason,
+                          review_fallback_reason=review_fallback_reason)
 
     # Zero candidates remain: preserve exact refusal codes for single-route mode and review-family blocks.
     if prof is None and len(trace) == 1:

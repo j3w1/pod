@@ -230,6 +230,24 @@ SHORT_MODELS = {
     "gpt-6-luna": "luna",
 }
 _VERSION_TOKEN = re.compile(r"^v?\d+(?:\.\d+)*$", re.IGNORECASE)
+_TOPIC_PREFIX = re.compile(r"^[A-Za-z0-9._-]+:a\d+\s+")
+_SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def _clean_topic(title: str) -> str:
+    return _TOPIC_PREFIX.sub("", " ".join(title.split())).strip()
+
+
+def _worktree_display_name(title: str, ident: str) -> str:
+    topic = _clean_topic(title)
+    if not topic:
+        return ident
+    return topic if len(topic) <= 60 else topic[:59].rstrip() + "…"
+
+
+def _worktree_slug(display: str, ident: str) -> str:
+    slug = _SLUG_NON_ALNUM.sub("-", display.lower()).strip("-")[:40].rstrip("-")
+    return slug or ident
 
 
 def _tab_role(profile: str | None, role: str) -> str:
@@ -252,37 +270,34 @@ def _tab_role(profile: str | None, role: str) -> str:
     return ROLE_WORDS.get(role.strip().lower(), role)
 
 
+_SHORT_MODEL_MAX = 16
+
+
 def _short_model(model: str) -> str:
-    """Short model label for a worker tab; falls back to last non-version word or the full id."""
+    """Bounded short model label (<= 16 chars) for a worker tab; never ellipsized."""
     key = model.strip().lower()
     if key in SHORT_MODELS:
         return SHORT_MODELS[key]
-    for part in reversed(model.strip().split("-")):
+    chosen = model.strip()
+    for part in reversed(chosen.split("-")):
         if part and not _VERSION_TOKEN.fullmatch(part):
-            return part
-    return model
+            chosen = part
+            break
+    return chosen[:_SHORT_MODEL_MAX]
 
 
 def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
-    """`<Role> · <topic> · <model>/<effort>`, capped at 60 characters."""
-    limit, min_topic = 60, 8
+    """`<Role> · <topic> · <model>/<effort>`, capped at 60 characters; ellipsizes only the topic."""
+    limit = 60
     head = f"{_tab_role(profile, role)} · "
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
     short_model = _short_model(raw_model) if raw_model else ""
-    tail_budget = max(0, limit - len(head) - min_topic)
-    if short_model:
-        effort_suffix = f"/{effort}" if effort else ""
-        model_budget = max(4, tail_budget - 3 - len(effort_suffix))
-        if len(short_model) > model_budget:
-            short_model = short_model[:model_budget - 1].rstrip("-_.") + "…"
     model_parts = ([short_model] if short_model else []) + ([effort] if effort else [])
     tail = " · " + "/".join(model_parts) if model_parts else ""
-    if len(tail) > tail_budget:
-        tail = tail[:max(1, tail_budget - 1)].rstrip() + "…" if tail_budget >= 4 else ""
     room = max(1, limit - len(head) - len(tail))
-    short = " ".join(title.split())
+    short = _clean_topic(title) or " ".join(title.split())
     short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
     return head + short + tail
 
@@ -290,7 +305,7 @@ def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
 def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
     _, model, effort = routefile.split(route)
     label = profile or role
-    return f"{label} · {model}/{effort} · {objective}:{ident} {title}"
+    return f"[{objective}:{ident}] {label} · {model}/{effort} · {title}"
 
 
 def _validate_dry_run_review_exception(folded: State | None, root: Path | None, agents: list[str],
@@ -359,14 +374,15 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
     refused_override: dict | None = None
     preview_note: str | None = None
     if has_exception_flags:
-        if res.ok:
+        if res.ok and not res.review_fallback_reason:
             refused_override = {
                 "code": "review_exception_invalid",
                 "message": "This dispatch needs no reviewer exception.",
                 "fix": "omit --words, --after and --why",
             }
         else:
-            disallowed_seen = (res.error_code in ("reviewer_agent_not_allowed", "reviewer_same_family")
+            disallowed_seen = (bool(res.review_fallback_reason)
+                               or res.error_code in ("reviewer_agent_not_allowed", "reviewer_same_family")
                                or any(step.code in ("reviewer_agent_not_allowed", "author_family") for step in res.trace))
             if disallowed_seen:
                 valid_exc, preview_note = _validate_dry_run_review_exception(
@@ -396,6 +412,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         "wire": {"agent": res.wire[0], "model": res.wire[1], "effort": res.wire[2]} if (ok and res.wire) else None,
         "author_families": list(res.author_families),
         "review_independence": res.review_independence if ok else None,
+        **({"review_fallback_reason": res.review_fallback_reason} if ok and res.review_fallback_reason else {}),
         "paused_agents": list(active_paused),
         "soft_drained_agents": list(active_drained),
         "excluded_agents": sorted({item.strip() for item in excluded if item and item.strip()}),
@@ -444,10 +461,11 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         context = gitio.declared(context, keep_root=True)
         base = gitio.commit(root, commit or "HEAD")
         if has_exception_flags:
-            if res.ok:
+            if res.ok and not res.review_fallback_reason:
                 raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",
                                fix="omit --words, --after and --why")
-            disallowed_seen = (res.error_code in ("reviewer_agent_not_allowed", "reviewer_same_family")
+            disallowed_seen = (bool(res.review_fallback_reason)
+                               or res.error_code in ("reviewer_agent_not_allowed", "reviewer_same_family")
                                or any(step.code in ("reviewer_agent_not_allowed", "author_family") for step in res.trace))
             if not disallowed_seen:
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
@@ -507,17 +525,24 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                       **({"profile": res.profile, "mcp": res.mcp} if res.profile else {}),
                       **({"reason": res.reason} if res.reason else {}),
                       **({"context": context} if context else {}),
-                      **({"review_exception": exception} if exception else {})}
+                      **({"review_exception": exception} if exception else {}),
+                      **({"requested_review_fallback_reason": res.review_fallback_reason}
+                         if res.review_fallback_reason else {})}
         text = packet(state, assignment, spec)
         assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
         writer.append(assignment)
         selector = f"path:{root}" if worktree == "current" else worktree
+        task_title = _task_title(res.profile, role, route, state.id, ident, title)
+        new_from = (str(root), gitio.branch(root) or base) if worktree.startswith("new-") else None
+        display_name = ((name or "").strip() or _worktree_display_name(title, ident)) if new_from else name
+        wt_name = _worktree_slug(display_name, ident) if new_from and display_name else None
         try:
             started = orca.start(run=run, spec=text,
-                                 title=_task_title(res.profile, role, route, state.id, ident, title),
+                                 title=task_title,
                                  worktree=selector,
-                                 route=res.wire, request=assignment["request"], name=name,
-                                 new_from=(str(root), gitio.branch(root) or base) if worktree.startswith("new-") else None)
+                                 route=res.wire, request=assignment["request"],
+                                 name=display_name, worktree_name=wt_name,
+                                 new_from=new_from)
         except PodError as exc:
             if exc.code == "orca_unknown":
                 exc.fix = f"run `pod dispatch --retry {ident}`; it reads what Orca did and never starts a second worker"
@@ -540,7 +565,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title))
+                started.get("effective")) or route, title), task_title=task_title)
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
@@ -548,22 +573,64 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         return result
 
 
+def _effective_review_proof(
+    requested_route: str,
+    actual_route: str | None,
+    authors: set[str],
+    primary_agent: str | None,
+    fallback_reason: str | None,
+    *,
+    observed_effective: bool = True,
+) -> tuple[str | None, str | None]:
+    if not observed_effective or not actual_route:
+        if fallback_reason:
+            return None, None
+        actual_route = requested_route
+    normalized = {routefile.route_family(item) for item in authors if item}
+    actual_family = routefile.route_family(actual_route)
+    if fallback_reason:
+        if actual_family not in normalized:
+            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=False), None
+        authorized_fallback = (
+            actual_route == requested_route and not routefile._is_claude_route(actual_route)
+        )
+        if authorized_fallback:
+            return routefile.review_tag(actual_route, normalized, primary_agent, fallback=True), fallback_reason
+        return "same_provider", None
+    return routefile.review_tag(actual_route, normalized, primary_agent, fallback=False), None
+
+
 def _started(writer, ident: str, started: dict, route: str, *, resolution: routefile.Resolution | None = None,
-             authors: set[str] | None = None, primary_agent: str | None = None) -> dict:
+             role: str | None = None, authors: set[str] | None = None, primary_agent: str | None = None,
+             fallback_reason: str | None = None) -> dict:
     effective = routefile.canonical_effective(started.get("effective"))
-    writer.append({"kind": "assignment", "id": ident, "task": started["task"], "dispatch": started["dispatch"],
-                   **({"effective": effective} if effective and effective != route else {})})
+    actual_role = resolution.role if resolution else role
+    req_fallback = resolution.review_fallback_reason if resolution else fallback_reason
+    update = {"kind": "assignment", "id": ident, "task": started["task"], "dispatch": started["dispatch"],
+              **({"effective": effective} if effective and effective != route else {})}
     result = {"assignment": ident, "task": started["task"], "dispatch": started["dispatch"], "route": route}
     if resolution and resolution.profile:
         result["profile"] = resolution.profile
         result["mcp"] = resolution.mcp
     if resolution and resolution.reason:
         result["reason"] = resolution.reason
-    if resolution and resolution.role == "review":
-        actual_route = effective or route
-        result["review_independence"] = routefile.review_tag(actual_route, authors or set(), primary_agent)
+    if actual_role == "review":
+        observed_effective = bool(effective)
+        if not observed_effective and req_fallback:
+            update["effective_unknown"] = True
+        tag, applied_reason = _effective_review_proof(
+            route, effective or route, authors or set(), primary_agent, req_fallback,
+            observed_effective=observed_effective,
+        )
+        if tag is not None:
+            update["review_independence"] = tag
+            result["review_independence"] = tag
+        if applied_reason is not None:
+            update["review_fallback_reason"] = applied_reason
+            result["review_fallback_reason"] = applied_reason
         if authors:
             result["author_families"] = sorted(authors)
+    writer.append(update)
     if resolution and any(step.status == "skipped" for step in resolution.trace):
         result["trace"] = [step.reason for step in resolution.trace]
     if effective and effective != route:
@@ -600,7 +667,33 @@ def _settle_start(writer, state: State, ident: str) -> dict:
         worker = next((item for item in orca.workers(run) if item["task"] == found), {})
         dispatch_ = receipt.get("dispatchId") or worker.get("dispatch")
         if dispatch_ and receipt.get("state") != "failed":
-            return _started(writer, ident, {"task": found, "dispatch": dispatch_}, row["route"])
+            launch = receipt.get("launch") if isinstance(receipt.get("launch"), dict) else {}
+            prefs = routefile.load()
+            primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
+            effective_raw = launch.get("effective")
+            started_info = {"task": found, "dispatch": dispatch_,
+                            **({"effective": effective_raw} if effective_raw else {})}
+            result = _started(
+                writer, ident, started_info, row["route"],
+                role=row.get("role"),
+                authors=state.author_families() if row.get("role") == "review" else None,
+                primary_agent=primary_agent,
+                fallback_reason=row.get("requested_review_fallback_reason"),
+            )
+            effective_canon = routefile.canonical_effective(effective_raw)
+            if effective_canon and row.get("title"):
+                task_title = _task_title(row.get("profile"), row["role"], row["route"], state.id, ident, row["title"])
+                try:
+                    failed = orca.rename(
+                        run, started_info,
+                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"]),
+                        task_title=task_title,
+                    )
+                except Exception as exc:
+                    failed = type(exc).__name__
+                if failed:
+                    result["note"] = f"the worker tab may keep Orca's title (rename: {failed})"
+            return result
         if answer.get("state") != "completed" and not dispatch_:
             raise PodError("start_pending", f"Orca has a task for {ident} and no worker yet.",
                            fix=f"run `pod dispatch --retry {ident}` again shortly")
@@ -717,16 +810,23 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 prefs = routefile.load()
                 primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
                 authors = sorted(state.author_families())
-                tag = routefile.review_tag(reviewer_route, set(authors), primary_agent)
+                tag, fallback_reason = _effective_review_proof(
+                    row["route"], reviewer_route, set(authors), primary_agent,
+                    row.get("requested_review_fallback_reason") or row.get("review_fallback_reason"),
+                    observed_effective=not row.get("effective_unknown"),
+                )
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
-                              "review_independence": tag,
+                              **({"review_independence": tag} if tag is not None else {}),
+                              **({"review_fallback_reason": fallback_reason} if fallback_reason else {}),
                               **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),
                               **({"same_session": True} if same_session else {}),
                               "findings": found})
-                output.update(verdict=verdict, review_independence=tag,
+                output.update(verdict=verdict,
+                              **({"review_independence": tag} if tag is not None else {}),
+                              **({"review_fallback_reason": fallback_reason} if fallback_reason else {}),
                               **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),
                               findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "
