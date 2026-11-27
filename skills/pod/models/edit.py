@@ -53,8 +53,8 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
     The editor runs outside the lock so `pod models` is not held up. Saving takes the same lock
     as `apply` and first checks, in this order, that the live file is still the same regular file
     with the same bytes it was when the editor opened (else `preferences_changed`); only then are the
-    edited bytes, read once from the regular copy, checked to be readable if the original was, and
-    written to a fresh file that replaces the live one with the live file's mode. A failed or missing
+    edited bytes (read before the lock and confirmed unchanged under it) checked to be readable if the
+    original was, and written to a fresh file that replaces the live one with the live file's mode. A failed or missing
     editor installs nothing. An edited copy that is not saved is kept and its path reported."""
     import subprocess
     try:
@@ -136,11 +136,17 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
             os.replace(staged, path)
         finally:
             staged.unlink(missing_ok=True)
+        # Set the copy aside atomically, then look: whatever the editor saved up to this instant is what we see.
+        done = copy.with_name(copy.name + ".done")
         try:
-            if _read_regular(copy)[0] == edited:      # never delete a copy the editor saved again
-                copy.unlink()
+            os.replace(copy, done)
+            later, _ = _read_regular(done)
         except OSError:
-            pass
+            return
+        if later != edited:
+            raise PodError("preferences_changed", f"Saved, but the editor wrote again afterwards; that newer copy is kept at {done}.",
+                           fix=f"merge {done} into {path} by hand, then delete it")
+        done.unlink(missing_ok=True)
 
 
 def _refuse_invalid(preferences: routefile.Preferences) -> None:

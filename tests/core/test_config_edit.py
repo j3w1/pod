@@ -189,11 +189,31 @@ class ConfigEditLockTests(CoreCase):
                 with self.editor(), patch.object(edit, "_locked", side_effect=hook):
                     with self.assertRaises(PodError) as caught:
                         edit.edit_in_editor(target, ["ed"])
-                self.assertIn(caught.exception.code, ("preferences_changed", "editor_failed"))
+                self.assertEqual(caught.exception.code, "preferences_changed")
                 self.assertEqual(target.read_bytes(), before)
-                for leftover in self.kept():
-                    if leftover.is_dir():
-                        leftover.rmdir()
-                    else:
-                        self.assertTrue(leftover.read_text().endswith("# later\n"))     # the newer save survives
-                        leftover.unlink()
+                kept = self.kept()
+                self.assertEqual(len(kept), 1)
+                if variant == "regular":
+                    self.assertTrue(kept[0].read_text().endswith("# later\n"))        # the newer save survives
+                    kept[0].unlink()
+                else:
+                    kept[0].rmdir()
+
+    def test_a_save_that_lands_after_install_is_kept_and_reported(self):
+        target = paths.route_file()
+        real = os.replace
+        calls = []
+
+        def replace(src, dst):
+            calls.append(Path(src).name)
+            if str(src).endswith(".yaml") and Path(dst) != target and Path(src).name.startswith(".config-edit-"):
+                Path(src).write_text(Path(src).read_text() + "# after\n")      # the editor saves again just now
+            return real(src, dst)
+        with self.editor(), patch("os.replace", side_effect=replace):
+            with self.assertRaises(PodError) as caught:
+                edit.edit_in_editor(target, ["ed"])
+        self.assertEqual(caught.exception.code, "preferences_changed")
+        self.assertTrue(target.read_text().endswith("# edited\n"))            # the validated snapshot was installed
+        kept = list(target.parent.glob(".config-edit-*.done"))
+        self.assertEqual(len(kept), 1)
+        self.assertTrue(kept[0].read_text().endswith("# after\n"))
