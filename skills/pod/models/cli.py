@@ -39,8 +39,10 @@ def _parser() -> argparse.ArgumentParser:
                         help="set or update a profile: NAME='<role>[+mcp] <route> ...' (repeatable)")
     parser.add_argument("--delete-profile", action="append", default=[], metavar="NAME",
                         help="remove a profile from config.yaml (repeatable)")
-    parser.add_argument("--default-profile", action="append", default=[], metavar="ROLE=NAME|none",
-                        help="set or clear default_profiles for a role: implement|review|investigate (repeatable)")
+    parser.add_argument("--default-profile", action="append", default=[], metavar="ROLE=NAME",
+                        help="set default_profiles for a role: implement|review|investigate (repeatable)")
+    parser.add_argument("--clear-default", action="append", default=[], metavar="ROLE",
+                        help="clear default_profiles for a role: implement|review|investigate (repeatable)")
     parser.add_argument("--review-agents", metavar="A,B|none",
                         help="set review_agents priority list (comma-separated, or none)")
     return parser
@@ -188,17 +190,23 @@ def _edit(args) -> None:
         for name in args.delete_profile:
             parsed_profiles[name] = None
         changes["profiles"] = parsed_profiles
-    if args.default_profile:
+    if args.default_profile or args.clear_default:
         parsed_defaults: dict[str, str | None] = {}
         for item in args.default_profile:
             if "=" not in item:
-                raise PodError("profile_invalid", f"{item!r} must use ROLE=NAME|none format.",
-                               fix="pass --default-profile implement=build-fast")
+                raise PodError("profile_invalid", f"{item!r} must use ROLE=NAME format.",
+                               fix="pass --default-profile implement=build-fast, or --clear-default implement to clear")
             role_key, pname = (part.strip() for part in item.split("=", 1))
             if not role_key or not pname:
-                raise PodError("profile_invalid", f"{item!r} must name both a role and a profile or none.",
-                               fix="pass --default-profile implement=build-fast")
-            parsed_defaults[role_key] = None if pname.lower() in ("none", "null") else pname
+                raise PodError("profile_invalid", f"{item!r} must name both a role and a profile.",
+                               fix="pass --default-profile implement=build-fast, or --clear-default implement to clear")
+            parsed_defaults[role_key] = pname
+        cleared_roles = [role_key.strip() for role_key in args.clear_default]
+        if set(parsed_defaults) & set(cleared_roles):
+            raise PodError("profile_invalid", "A role is named by both --default-profile and --clear-default.",
+                           fix="name each role under one flag")
+        for role_key in cleared_roles:
+            parsed_defaults[role_key] = None
         changes["default_profiles"] = parsed_defaults
     if args.review_agents is not None:
         raw = args.review_agents.strip()
@@ -222,7 +230,8 @@ def main(argv: list[str]) -> int:
         has_edit = bool(args.enable or args.disable or args.preferred is not None or args.pin is not None
                         or args.pause or args.drain or args.unpause
                         or args.reason is not None or args.ttl is not None
-                        or args.profile or args.delete_profile or args.default_profile or args.review_agents is not None)
+                        or args.profile or args.delete_profile or args.default_profile
+                        or args.clear_default or args.review_agents is not None)
         if has_edit:
             _edit(args)
             if not args.json:

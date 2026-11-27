@@ -133,10 +133,9 @@ plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, el
 default profile (`default_profiles`, defaulting to `build-fast`, `review-fast` and `scout` when
 present), else `preferred` on pre-profile configs. Host-wide `paused_agents` and
 `soft_drained_agents` (by quota pool or agent, with optional reason and TTL) skip unavailable or
-draining pools automatically. Choose by the task: its difficulty, risk and size. `pod models` is
-the person's TUI (and CLI flag twins `--pause`, `--drain`, `--unpause`, `--profile`,
-`--default-profile`) for comparing and configuring routes, profiles and pool holds; do not change
-their preferences without their direction.
+draining pools automatically. Choose by the task: its difficulty, risk and size. `pod models` is the person's TUI (and CLI flag twins `--pause`, `--drain`, `--unpause`,
+`--profile`, `--default-profile`, `--clear-default`) for comparing and configuring routes,
+profiles and pool holds; do not change their preferences without their direction.
 
 ## Document types
 

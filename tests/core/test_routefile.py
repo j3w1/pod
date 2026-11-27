@@ -470,19 +470,78 @@ class RouteFileTests(PodCase):
         # --route listed in any profile needs no --reason.
         in_profile = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/medium")
         self.assertEqual((in_profile.ok, in_profile.route, in_profile.reason), (True, "codex/gpt-6.2-sol/medium", None))
-        # Single authoring source: older config without default_profiles picks up models/registry.json without rewriting.
+        # Single authoring source: older config without default_profiles picks up a modified disposable registry.json
+        # via the real reader without rewriting config.yaml.
+        import json as _json
         from unittest.mock import patch
         older_path = self.write_routes(cfg)
         before_bytes, before_mtime = older_path.read_bytes(), older_path.stat().st_mtime_ns
         older_prefs = routefile.load(older_path)
-        with patch.object(routefile, "_shipped_default_profiles",
-                          return_value={"implement": "build-deep", "review": "review-fast", "investigate": "scout"}):
+        disposable_reg = self.tmp / "registry.json"
+        disposable_reg.write_text(_json.dumps({
+            "schema": "pod-registry/v1",
+            "models": [],
+            "defaults": {
+                "profiles": {
+                    "build-deep": "implement antigravity/gemini-4-neon/high codex/gpt-6.2-sol/medium",
+                    "review-fast": "review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high",
+                    "scout": "investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium",
+                },
+                "default_profiles": {
+                    "implement": "build-deep",
+                    "review": "review-fast",
+                    "investigate": "scout",
+                },
+            },
+        }), encoding="utf-8")
+        with patch.object(routefile, "REGISTRY_PATH", disposable_reg):
+            routefile._read_shipped_default_profiles.cache_clear()
             self.assertEqual(routefile.effective_default_profiles(older_prefs),
                              {"implement": "build-deep", "review": "review-fast", "investigate": "scout"})
             picked = routefile.resolve_dispatch(older_prefs, role="implement")
             self.assertEqual((picked.ok, picked.profile, picked.route),
                              (True, "build-deep", "antigravity/gemini-4-neon/high"))
+            # Non-dict JSON root and dangling shipped defaults never crash and are ignored safely.
+            bad_root = self.tmp / "bad-root.json"
+            bad_root.write_text("[]", encoding="utf-8")
+            self.assertEqual(routefile._shipped_default_profiles(bad_root), {})
+            dangling = self.tmp / "dangling.json"
+            dangling.write_text(_json.dumps({"defaults": {"profiles": {}, "default_profiles": {"implement": "build-deep"}}}),
+                                encoding="utf-8")
+            self.assertEqual(routefile._shipped_default_profiles(dangling), {})
+        routefile._read_shipped_default_profiles.cache_clear()
         self.assertEqual((older_path.read_bytes(), older_path.stat().st_mtime_ns), (before_bytes, before_mtime))
+        # Profiles literally named 'none' and 'null' stay valid and usable as in 0.23.1.
+        literal_cfg = (
+            "schema: pod/v2\nroutes:\n  codex/gpt-6.2-sol/medium: enabled\n"
+            "preferred: null\npinned: null\n"
+            "profiles:\n"
+            "  none: implement codex/gpt-6.2-sol/medium\n"
+            "  null: review codex/gpt-6.2-sol/medium\n"
+        )
+        literal_prefs = routefile.load(self.write_routes(literal_cfg))
+        self.assertEqual(literal_prefs.status, "ok", literal_prefs.problem)
+        self.assertEqual(routefile.resolve_dispatch(literal_prefs, profile="none").route, "codex/gpt-6.2-sol/medium")
+        self.assertEqual(routefile.resolve_dispatch(literal_prefs, profile="null").route, "codex/gpt-6.2-sol/medium")
+        # Wire validation runs before family filtering so unusable efforts report effort_not_supported, not reviewer_same_family.
+        bad_effort_prefs = routefile.load(self.write_routes(
+            "schema: pod/v2\nroutes:\n  antigravity/gemini-4-neon/ultra: enabled\n"
+            "preferred: antigravity/gemini-4-neon/ultra\npinned: null\n"
+        ))
+        wire_first = routefile.resolve_dispatch(bad_effort_prefs, role="review", author_families={"Google"})
+        self.assertEqual((wire_first.ok, wire_first.error_code), (False, "effort_not_supported"))
+        # Remediation hints include --reason when the suggested explicit --route is outside configured profiles.
+        no_prof_review = routefile.load(self.write_routes(
+            "schema: pod/v2\nroutes:\n  claude/claude-opus-5-5/high: enabled\n  codex/gpt-6.2-sol/high: enabled\n"
+            "preferred: claude/claude-opus-5-5/high\npinned: null\nreview_agents: [codex]\n"
+        ))
+        disallowed = routefile.resolve_dispatch(no_prof_review, role="review")
+        self.assertEqual(disallowed.error_code, "reviewer_agent_not_allowed")
+        self.assertIn("--reason", disallowed.error_fix)
+        mismatched_pin = routefile.resolve_dispatch(pinned_outside, role="implement", route="codex/gpt-6.2-sol/medium")
+        self.assertEqual(mismatched_pin.error_code, "route_not_pinned")
+        self.assertIn("--reason", mismatched_pin.error_fix)
+        self.assertIn("omit --route", mismatched_pin.error_fix)
         # routing_policy() returns one stable pod-routing/v1 block with active pause expiry.
         early = routefile.routing_policy(prefs, now=datetime(2026, 11, 26, 3, 0, tzinfo=timezone.utc))
         late = routefile.routing_policy(prefs, now=datetime(2026, 11, 26, 5, 0, tzinfo=timezone.utc))
@@ -494,13 +553,11 @@ class RouteFileTests(PodCase):
         self.assertEqual(early["pauses"]["paused_agents"][0]["active"], True)
         self.assertEqual(late["pauses"]["paused_agents"][0]["active"], False)
         self.assertEqual(early["pauses"]["soft_drained_agents"][0]["agent"], "agy-claude")
-        # Invalid default_profiles entries and reserved profile names invalidate preferences.
+        # Invalid default_profiles entries invalidate preferences.
         for bad in (
             "default_profiles:\n  unknown: build-fast\n",
             "default_profiles:\n  implement: missing-profile\n",
             "default_profiles:\n  implement: review-fast\n",
-            "profiles:\n  none: implement codex/gpt-6.2-sol/medium\n",
-            "profiles:\n  null: implement codex/gpt-6.2-sol/medium\n",
         ):
             with self.subTest(bad=bad):
                 invalid = routefile.load(self.write_routes(cfg + bad))

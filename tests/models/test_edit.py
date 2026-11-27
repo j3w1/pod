@@ -177,25 +177,27 @@ class EditTests(ModelCase):
         cleared = edit.apply(default_profiles={"implement": None})
         self.assertEqual(cleared.default_profiles, {})
 
-    def test_default_profiles_quotes_yaml_literals_reserves_none_null_and_preserves_comments(self):
+    def test_default_profiles_quotes_yaml_literals_supports_none_null_and_preserves_comments(self):
         target = self.write_routes(ROUTES + "default_profiles: {} # owner comment\n")
-        # YAML literal profile name 'true' round-trips quoted cleanly; 'none'/'null' are reserved.
+        # YAML literal profile names 'true', 'none' and 'null' round-trip cleanly as strings.
         res = edit.apply(
-            profiles={"true": "implement codex/gpt-6.1-sol/high"},
-            default_profiles={"implement": "true"},
+            profiles={
+                "true": "implement codex/gpt-6.1-sol/high",
+                "null": "review codex/gpt-6.1-sol/high",
+                "none": "investigate codex/gpt-6.1-sol/high",
+            },
+            default_profiles={"implement": "true", "review": "null", "investigate": "none"},
         )
-        self.assertEqual(res.default_profiles, {"implement": "true"})
+        self.assertEqual(res.default_profiles, {"implement": "true", "review": "null", "investigate": "none"})
         text = target.read_text()
         self.assertIn("default_profiles: # owner comment\n", text)
         self.assertIn("  implement: 'true'\n", text)
+        self.assertIn("  review: 'null'\n", text)
+        self.assertIn("  investigate: none\n", text)
         # Clearing the last default preserves the header comment when converting back to inline `{}`.
-        cleared = edit.apply(default_profiles={"implement": None})
+        cleared = edit.apply(default_profiles={"implement": None, "review": None, "investigate": None})
         self.assertEqual(cleared.default_profiles, {})
         self.assertIn("default_profiles: {} # owner comment\n", target.read_text())
-        for reserved in ("none", "null"):
-            with self.subTest(reserved=reserved), self.assertRaises(PodError) as caught:
-                edit.apply(profiles={reserved: "implement codex/gpt-6.1-sol/high"})
-            self.assertEqual(caught.exception.code, "profile_invalid")
 
 
 if __name__ == "__main__":

@@ -59,15 +59,6 @@ def _header_line(line: str, value: str | None) -> str:
     return f"{match['head']} {value}{comment}{ending}"
 
 
-def _format_yaml_string(value: str) -> str:
-    """Quote a string scalar when yamlsubset would otherwise parse it as a non-string literal."""
-    try:
-        parsed = yamlsubset.scalar(value)
-    except ValueError:
-        parsed = None
-    return value if parsed == value and isinstance(parsed, str) else f"'{value}'"
-
-
 def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None], ending: str) -> list[str]:
     if not updates:
         return lines
@@ -241,7 +232,7 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
         for name, spec in profile_updates.items():
             if not routefile.valid_profile_name(name):
                 raise PodError("profile_invalid", f"{name!r} is not a valid profile name.",
-                               fix="use a lowercase profile name such as scout-fast or build-deep (not none or null)")
+                               fix="use a lowercase profile name such as scout-fast or build-deep")
             if spec is None:
                 parsed_profiles[name] = None
             else:
@@ -338,7 +329,7 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                 if role_key in base_defaults:
                     formatted_defaults[role_key] = None
             elif base_defaults.get(role_key) != pname:
-                formatted_defaults[role_key] = _format_yaml_string(pname)
+                formatted_defaults[role_key] = installer.yaml_string(pname)
 
         creating = current.status == "absent" and bool(
             routes or scalars or parsed_profiles or default_updates or hold_updates

@@ -237,12 +237,12 @@ def _tab_role(profile: str | None, role: str) -> str:
     name = (profile or "").strip().lower()
     if name in PROFILE_ROLES:
         return PROFILE_ROLES[name]
+    if name == "ui" or name.startswith("ui-"):
+        return "Builder (UI)"
     if "analyst" in name:
         return "Analyst"
     if "challenger" in name:
         return "Challenger"
-    if name == "ui" or name.startswith("ui-"):
-        return "Builder (UI)"
     if name == "review" or name.startswith("review-"):
         return "Reviewer"
     if name == "build" or name.startswith("build-"):
@@ -293,14 +293,47 @@ def _task_title(profile: str | None, role: str, route: str, objective: str, iden
     return f"{label} · {model}/{effort} · {objective}:{ident} {title}"
 
 
+def _validate_dry_run_review_exception(folded: State | None, root: Path | None, agents: list[str],
+                                       *, commit: str | None, words: str | None, after: str | None,
+                                       why: str | None) -> tuple[bool, str | None]:
+    """Validate review exception flags offline for --dry-run without calling Orca."""
+    if words and words.strip() and after is why is None:
+        return True, None
+    if words is None and after and why and why.strip() and folded is not None:
+        prior = folded.assignments.get(after)
+        if not prior or prior["role"] != "review":
+            return False, None
+        if root is not None:
+            try:
+                base = gitio.commit(root, commit or "HEAD")
+            except PodError:
+                base = None
+            if base and prior["base"] != base:
+                return False, None
+        if agents and (prior["route"].partition("/")[0] not in agents
+                       or prior.get("effective", prior["route"]).partition("/")[0] not in agents):
+            return False, None
+        if any(review["reviewer"] == after for review in folded.of("review")):
+            return False, None
+        if prior.get("void"):
+            return True, None
+        if not prior.get("dispatch") or not prior.get("task"):
+            return False, None
+        return True, f"dry-run does not call Orca: prior failure of {after} was not verified against Orca"
+    return False, None
+
+
 def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
                       route: str | None = None, reason: str | None = None, exclude_agents: list[str] | None = None,
-                      words: str | None = None, after: str | None = None) -> dict:
+                      commit: str | None = None, words: str | None = None, after: str | None = None,
+                      why: str | None = None) -> dict:
     """Pure read-only route resolution: never writes to the log and never calls Orca."""
     authors: set[str] = set()
     notes: list[str] = []
+    folded: State | None = None
+    root: Path | None = None
     if objective:
-        target, _root, _ = locate(cwd, objective)
+        target, root, _ = locate(cwd, objective)
         entries = log.read(target)
         if not entries:
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
@@ -309,7 +342,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         notes = _reviewer_note_lines(folded)
     else:
         try:
-            target, _root, _ = locate(cwd, None)
+            target, root, _ = locate(cwd, None)
             entries = log.read(target)
             if entries:
                 folded = fold(entries)
@@ -319,31 +352,62 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             pass
     preferences = routefile.load()
     excluded = list(exclude_agents or ())
+    has_exception_flags = not (words is after is why is None)
     res = routefile.resolve_dispatch(
         preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
-        author_families=authors, reviewer_notes=notes, allow_review_exception=bool(words or after))
+        author_families=authors, reviewer_notes=notes, allow_review_exception=False)
+    refused_override: dict | None = None
+    preview_note: str | None = None
+    if has_exception_flags:
+        if res.ok:
+            refused_override = {
+                "code": "review_exception_invalid",
+                "message": "This dispatch needs no reviewer exception.",
+                "fix": "omit --words, --after and --why",
+            }
+        else:
+            disallowed_seen = (res.error_code in ("reviewer_agent_not_allowed", "reviewer_same_family")
+                               or any(step.code in ("reviewer_agent_not_allowed", "author_family") for step in res.trace))
+            if disallowed_seen:
+                valid_exc, preview_note = _validate_dry_run_review_exception(
+                    folded, root, preferences.review_agents, commit=commit, words=words, after=after, why=why)
+                if not valid_exc:
+                    refused_override = {
+                        "code": "review_exception_invalid",
+                        "message": "The review exception is incomplete or the prior review is ineligible.",
+                        "fix": ("pass the person's own --words, or use --after with --why for a failed or void review "
+                                "by an allowed agent on the same commit without a review result"),
+                    }
+                else:
+                    res = routefile.resolve_dispatch(
+                        preferences, role=role, profile=profile, route=route, reason=reason, exclude_agents=excluded,
+                        author_families=authors, reviewer_notes=notes, allow_review_exception=True)
+    ok = res.ok and refused_override is None
     active_paused = routefile.active_holds(preferences.paused_meta, agents=preferences.paused_agents)
     active_drained = routefile.active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents)
     output = {
         "dry_run": True,
-        "pass": res.ok,
-        "ok": res.ok,
+        "pass": ok,
+        "ok": ok,
         "role": res.role,
         "profile": res.profile,
         "mcp": res.mcp,
-        "route": res.route,
-        "wire": {"agent": res.wire[0], "model": res.wire[1], "effort": res.wire[2]} if res.wire else None,
+        "route": res.route if ok else None,
+        "wire": {"agent": res.wire[0], "model": res.wire[1], "effort": res.wire[2]} if (ok and res.wire) else None,
         "author_families": list(res.author_families),
-        "review_independence": res.review_independence,
+        "review_independence": res.review_independence if ok else None,
         "paused_agents": list(active_paused),
         "soft_drained_agents": list(active_drained),
         "excluded_agents": sorted({item.strip() for item in excluded if item and item.strip()}),
-        **({"reason": res.reason} if res.reason else {}),
+        **({"reason": res.reason} if ok and res.reason else {}),
+        **({"note": preview_note} if ok and preview_note else {}),
         **({"reviewer_notes": list(res.reviewer_notes)} if res.reviewer_notes else {}),
         "trace": [{"route": step.route, "status": step.status, "code": step.code, "reason": step.reason}
                   for step in res.trace],
     }
-    if not res.ok:
+    if refused_override is not None:
+        output["refused"] = refused_override
+    elif not res.ok:
         output["refused"] = {"code": res.error_code, "message": res.error_message, "fix": res.error_fix}
     return output
 
@@ -356,7 +420,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
              name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None) -> dict:
     if dry_run:
         return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route, reason=reason,
-                                 exclude_agents=exclude_agents, words=words, after=after)
+                                 exclude_agents=exclude_agents, commit=commit, words=words, after=after, why=why)
     target, root, _ = locate(cwd, objective)
     with log.writer(target) as writer:
         state = fold(writer.entries)

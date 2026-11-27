@@ -269,6 +269,17 @@ class CliTests(CliCase):
         self.assertEqual(document["default_profiles"], routing["default_profiles"])
         self.assertEqual(document["review_agents"], ["codex", "antigravity"])
         self.assertEqual(self.run_cli("--default-profile", "missing_equals")[0], 2)
+        # Profiles named 'none'/'null' can be set via --default-profile and cleared unambiguously via --clear-default.
+        code, out, err = self.run_cli(
+            "--profile", "null=implement codex/gpt-6.2-sol/medium",
+            "--default-profile", "implement=null",
+        )
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(routefile.load().default_profiles["implement"], "null")
+        code, out, err = self.run_cli("--clear-default", "implement")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertNotIn("implement", routefile.load().default_profiles)
+        self.assertEqual(self.run_cli("--default-profile", "implement=build-deep", "--clear-default", "implement")[0], 2)
 
     def test_default_profile_against_absent_config_creates_file_even_when_matching_seed(self):
         target = routefile.load().path

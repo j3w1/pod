@@ -241,16 +241,21 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   `--profile review-*` without an explicit `--route`), candidates whose model family authored the
   diff (any accepted `implement` dispatch, including mixed authorship after a handoff) are
   filtered out rather than merely deprioritized, and the remaining candidates are ordered by
-  `review_agents`; if no independent candidate remains, Pod refuses with `reviewer_same_family`
-  unless a review exception (`--words` or `--after aN --why "…"`) is given. Each review records a
+  `review_agents`. If no independent candidate remains and at least one otherwise-eligible
+  candidate was filtered for matching an author family, Pod refuses with `reviewer_same_family`
+  unless a review exception (`--words` or `--after aN --why "…"`) is given; if every candidate
+  was unavailable because it was disabled, paused, soft-drained or excluded, Pod refuses with
+  `no_eligible_route`. Each review records a
   factual `review_independence` tag (`cross_provider`, `cross_provider_fallback`, `same_provider`,
   `same_provider_fallback`, `unknown_author`, or `fallback_unknown_author`).
   Reviews must run in a separate session from any implementer, and optional reviewer `notes` (or
   partial findings on an interrupted review) are persisted in the objective log and passed into
   successor dispatches. Omit `review_agents` or use `[]` to allow any enabled agent. To use an
-  agent outside `review_agents` or the author's own model family, give the person's own `--words`
-  or use `--after aN --why "…"` after an allowed review of the same commit failed or was voided
-  without a review result.
+  agent outside `review_agents`, or to override a `reviewer_same_family` refusal on automatic or
+  role-only review selection, give the person's own `--words` or use `--after aN --why "…"` after
+  an allowed review of the same commit failed or was voided without a review result. An explicit
+  `--route` on an allowed agent (with `--reason` when outside configured profiles) is not
+  filtered by author family and records its factual `review_independence` tag.
 - **Antigravity wire format.** `routefile.wire_route()` translates model-suffix routes such as
   `antigravity/gemini-4-neon/<effort>` and `antigravity/claude-opus-5-5/<effort>` to
   `--agent antigravity --model <id>-<effort>` (omitting `--effort`), refusing efforts not listed
@@ -267,7 +272,7 @@ only that command imports. The view, adapters and TUI are scoped strictly to Ant
 OpenAI. Every route, profile, `default_profiles`, `paused_agents` and `soft_drained_agents` edit
 has a CLI flag twin (`--enable`, `--disable`, `--preferred`, `--pin`, `--pause`, `--drain`,
 `--unpause`, `--reason`, `--ttl`, `--profile`, `--delete-profile`, `--default-profile`,
-`--review-agents`).
+`--clear-default`, `--review-agents`).
 
 | State | Source |
 | --- | --- |

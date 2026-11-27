@@ -411,6 +411,26 @@ class PreferenceTests(InstallerCase):
         self.assertEqual(loaded.enabled(), ["codex/model-a/high"])
         self.assertEqual(loaded.default_profiles, {})
 
+    def test_installer_quotes_yaml_literal_default_profile_names(self):
+        from pod import routefile
+        literal_registry = {
+            "schema": "pod-registry/v1",
+            "models": [{"id": "model-a", "name": "Model A", "agent": "codex",
+                        "provider": "OpenAI", "pool": "codex", "efforts": ["high"]}],
+            "defaults": {
+                "schema": "pod/v2",
+                "profiles": {"true": "implement codex/model-a/high"},
+                "default_profiles": {"implement": "true"},
+            },
+        }
+        source = archive_tree(self.root / "literal-true.tar.gz", changes={REGISTRY: json.dumps(literal_registry).encode()})
+        self.assertIn("(created)", self.installed({**self.env, "POD_INSTALL_SOURCE": source.as_uri()}).stdout)
+        self.assertIn("  implement: 'true'\n", self.config.read_text())
+        loaded = routefile.load(self.config)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        self.assertEqual(loaded.enabled(), ["codex/model-a/high"])
+        self.assertEqual(loaded.default_profiles, {"implement": "true"})
+
 
 class PathTests(InstallerCase):
     def test_guarded_block_real_shell_resolution_and_untouched_linked_files(self):

@@ -36,6 +36,15 @@ BUNDLE_SUFFIXES = (".py", ".md", ".json", ".yaml")
 REGISTRY = "models/registry.json"
 NEVER_DEFAULT = ("ultra",)
 ROUTE = re.compile(r"[a-z][a-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9._-]*/[a-z][a-z0-9_-]*")
+_YAML_SCALAR_NON_STRING = frozenset({"", "null", "~", "Null", "NULL", "true", "True", "false", "False"})
+
+
+def yaml_string(value: str) -> str:
+    """Encode a plain string so yamlsubset.scalar() always reads it back as a str."""
+    if (value in _YAML_SCALAR_NON_STRING or re.fullmatch(r"-?\d+", value)
+            or value != value.strip() or value[0] in "[{&*!|>%@`'\"" or "#" in value):
+        return f"'{value}'"
+    return value
 BANNER = ("         /\\                       /\\           /\\",
           "  ______/  \\___          ______/  \\_      __/ \\_",
           "_/#### (o)    \\__      _/### (o)    \\_    /# (o) \\",
@@ -510,7 +519,7 @@ def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> 
                 review_agents = raw_review
             raw_profiles = defaults.get("profiles")
             if isinstance(raw_profiles, dict) and all(
-                isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", k) and k not in ("none", "null")
+                isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", k)
                 and isinstance(v, str) and len(v.split()) >= 2
                 and v.split()[0].removesuffix("+mcp") in ("implement", "review", "investigate")
                 for k, v in raw_profiles.items()
@@ -531,7 +540,7 @@ def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> 
         lines.append("review_agents: [" + ", ".join(review_agents) + "]")
     if default_profiles:
         lines.append("default_profiles:")
-        lines += [f"  {role}: {name}" for role, name in default_profiles.items()]
+        lines += [f"  {role}: {yaml_string(name)}" for role, name in default_profiles.items()]
     if profiles:
         lines.append("profiles:")
         lines += [f"  {name}: {spec}" for name, spec in profiles.items()]

@@ -57,6 +57,8 @@ class DispatchTests(CoreCase):
             ("ui-design", "implement", "Builder (UI)"),
             ("ui-light", "implement", "Builder (UI)"),
             ("ui-accessibility", "implement", "Builder (UI)"),
+            ("ui-analyst", "implement", "Builder (UI)"),
+            ("ui-challenger", "implement", "Builder (UI)"),
             ("review-fast", "review", "Reviewer (fast)"),
             ("review-deep", "review", "Reviewer (deep)"),
             ("scout", "investigate", "Scout"),
@@ -119,7 +121,7 @@ class DispatchTests(CoreCase):
             "preferred: null\npinned: null\n"
             "profiles:\n"
             "  build-deep: implement antigravity/gemini-4-neon/high\n"
-            "  ui-accessibility: implement claude/claude-opus-5-5/high\n"
+            "  ui-analyst: implement claude/claude-opus-5-5/high\n"
             "  analyst-deep: investigate antigravity/gemini-4-neon/high\n"
             "  challenger: review codex/gpt-6.2-sol/medium\n"
             "  review-fast: review codex/gpt-6.1-terra/high\n"
@@ -128,7 +130,7 @@ class DispatchTests(CoreCase):
         self.write_routes(cfg)
         self.commit({"src/a.py": "a\n"})
         deep = commands.dispatch(self.repo, None, profile="build-deep", title="core refactor", spec="Build.", paths_=["src/"])
-        ui = commands.dispatch(self.repo, None, profile="ui-accessibility", title="card contrast", spec="Style.", paths_=["ui/"],
+        ui = commands.dispatch(self.repo, None, profile="ui-analyst", title="card contrast", spec="Style.", paths_=["ui/"],
                                worktree="new-child")
         analyst = commands.dispatch(self.repo, None, profile="analyst-deep", title="latency study", spec="Study.")
         challenger = commands.dispatch(self.repo, None, profile="challenger", title="stress check", spec="Challenge.")
@@ -718,6 +720,17 @@ class DispatchTests(CoreCase):
         self.write_routes(cfg + "paused_agents: [antigravity, claude]\n")
         self.refused("reviewer_same_family", commands.dispatch, self.repo, None,
                      role="review", title="same family blocked", spec="Review.")
+        # Dry-run rejects malformed review exception flags and notes unchecked prior failure for --after/--why.
+        for bad_flags in ({"words": "   "}, {"after": "a999", "why": "missing"}, {"after": rev["assignment"]},
+                          {"why": "orphan"}, {"words": "ok", "after": rev["assignment"], "why": "both"}):
+            with self.subTest(bad_flags=bad_flags):
+                bad_dry = commands.dispatch(self.repo, None, role="review", dry_run=True, **bad_flags)
+                self.assertFalse(bad_dry["ok"])
+                self.assertEqual(bad_dry["refused"]["code"], "review_exception_invalid")
+        ok_after_dry = commands.dispatch(self.repo, None, role="review", dry_run=True,
+                                         after=rev["assignment"], why="first review failed")
+        self.assertTrue(ok_after_dry["ok"])
+        self.assertIn("not verified against Orca", ok_after_dry["note"])
         exc_rev = commands.dispatch(self.repo, None, role="review", title="same family override", spec="Review.",
                                     words="Only Codex is available; run the review on Codex.")
         self.assertEqual((exc_rev["route"], exc_rev["review_independence"]),
