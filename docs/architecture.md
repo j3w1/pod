@@ -77,16 +77,18 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   assignment before calling Orca, and after a lost reply `--retry` reads Orca instead of
   starting again. For `new-*` worktrees it derives a human `--display-name` and `--name` slug from
   the assignment title (unless `--name` is given). After a successful start it reads the worker's
-  current tab title and, only when it is empty, still Orca's `worker-task_` default, or matches
-  the `--task-title` Pod passed (including Orca's prefixed or truncated form), renames it to
+  current tab title and, only when it is empty, matches `worker-<taskId>` for the observed task,
+  or matches the exact `--task-title` Pod passed, renames it to
   `<Role> · <topic> · <model>/<effort>` (capped at 60 characters, using profile role labels such
   as `Builder`, `Builder (deep)`, `Builder (UI)` for `ui-*`, `Reviewer (fast)`, `Reviewer (deep)`,
   `Scout`, `Scout (deep)`, `Analyst` or `Challenger` and short model names); an unreadable title
   or failed rename is a `note`. Single-owner rule: Pod names only the workers it dispatches, once,
   and only from a default title; it never touches role or coordinator tabs. Downstream daemons can
-  identify Pod dispatches by two stable markers: the `worker-start` `--task-title` keeps
-  ` · <objective>:<ident> ` (objective id and assignment id, e.g. `pod-…:a3`, also used by
-  `--retry` recovery), and request ids are derived from the objective and assignment
+  identify Pod dispatches by two stable markers: the `worker-start` `--task-title` begins with
+  `[<objective>:<ident>]` (objective id and assignment id, e.g. `[pod-…:a3]`, placed first so
+  80-character readback truncation never drops it; `--retry` recovery also recognizes the earlier
+  `· <objective>:<ident> ` form and holds rather than voiding if untracked truncated tasks prevent
+  proving no worker started), and request ids are derived from the objective and assignment
   (`orca.request_id`). Orca has no atomic conditional rename, so this read-then-rename
   guard accepts a narrow concurrent-rename window. A start recovered by `--retry` also applies the
   guarded rename when its effective route is known.

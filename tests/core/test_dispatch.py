@@ -15,7 +15,7 @@ class DispatchTests(CoreCase):
     def test_it_starts_one_worker_on_the_requested_route_with_a_frozen_packet(self):
         started = self.start(paths_=["src/"], route="codex/sol/high", reason="test route")
         task = self.orca()["tasks"][started["task"]]
-        self.assertEqual(task["task_title"], "implement · sol/high · widget:a1 write")
+        self.assertEqual(task["task_title"], "[widget:a1] implement · sol/high · write")
         self.assertIn("Change only: src", task["spec"])
         self.assertIn('"outcome"', task["spec"])
         row = {**self.entries("widget")[-2], **self.entries("widget")[-1]}
@@ -143,8 +143,10 @@ class DispatchTests(CoreCase):
         self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger · stress check · sol/medium")
         self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) · check diff · terra/high")
         self.assertEqual(titles[f"term_{scout['dispatch']}"], "Scout (deep) · find callers · neon/high")
-        # worker-start --task-title keeps the stable ' · <objective>:<ident> ' marker for recovery and daemons.
-        self.assertIn(f" · widget:{deep['assignment']} ", self.orca()["tasks"][deep["task"]]["task_title"])
+        # worker-start --task-title starts with the stable '[<objective>:<ident>]' marker so 80-char truncation keeps it.
+        self.assertTrue(
+            self.orca()["tasks"][deep["task"]]["task_title"].startswith(f"[widget:{deep['assignment']}] ")
+        )
         # Exact example string, stripping accidental objective:aN prefix from topic.
         self.assertEqual(
             commands._tab_title("build-deep", "implement", "antigravity/gemini-4-neon/high",
@@ -176,7 +178,7 @@ class DispatchTests(CoreCase):
             "build-deep", "implement", "antigravity/gemini-4-neon/high",
             "widget", "a5", "#520 lifecycle implementation",
         )
-        orca_prefixed_5 = "Builder · " + task_title_5[:52] + "…"
+        coincidental_prefix_5 = task_title_5[:32] + "…"
         task_title_9 = commands._task_title(
             "build-deep", "implement", "antigravity/gemini-4-neon/high",
             "widget", "a9", "trailing spaces  ",
@@ -185,10 +187,10 @@ class DispatchTests(CoreCase):
             "term_ctx_1": "Coordinator · pod · sol/med",
             "term_ctx_2": "",
             "term_ctx_4": task_title_4,
-            "term_ctx_5": orca_prefixed_5,
-            "term_ctx_6": "b…",
+            "term_ctx_5": coincidental_prefix_5,
+            "term_ctx_6": "worker-task_notes",
             "term_ctx_7": "Custom · build-deep…",
-            "term_ctx_8": "build-deep · gemini-4-neon",
+            "term_ctx_8": "Builder · " + task_title_4,
             "term_ctx_9": task_title_9,
         })
         preserved = commands.dispatch(self.repo, None, profile="build-fast", title="keep coordinator", spec="Do.", paths_=["a/"])
@@ -203,23 +205,19 @@ class DispatchTests(CoreCase):
         self.assertNotIn("note", default)
         self.assertEqual(self.orca()["titles"]["term_ctx_3"], "Builder · default title · sol/high")
         self.assertEqual(len(self.orca()["rename_calls"]), 2)
-        # Real 0.23.2 failure: live tab title equals --task-title OR Orca's '<Role> · <task_title>…' -> renamed!
+        # Exact --task-title passed to worker-start IS treated as default and renamed.
         exact_task = commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
                                        spec="Do.", paths_=["d/"], worktree="new-child")
         self.assertNotIn("note", exact_task)
         self.assertEqual(self.orca()["titles"]["term_ctx_4"],
                          "Builder (deep) · #520 lifecycle implementation · neon/high")
-        prefixed_task = commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
-                                          spec="Do.", paths_=["e/"], worktree="new-child")
-        self.assertNotIn("note", prefixed_task)
-        self.assertEqual(self.orca()["titles"]["term_ctx_5"],
-                         "Builder (deep) · #520 lifecycle implementation · neon/high")
-        # Short/custom/prefix-sharing titles are NEVER treated as defaults and survive intact.
+        # Coincidental prefix+ellipsis, custom worker-task_notes, and arbitrary wrappers are NEVER overwritten.
         for idx, (path, expected_kept) in enumerate((
-            ("f/", "b…"),
+            ("e/", coincidental_prefix_5),
+            ("f/", "worker-task_notes"),
             ("g/", "Custom · build-deep…"),
-            ("h/", "build-deep · gemini-4-neon"),
-        ), start=6):
+            ("h/", "Builder · " + task_title_4),
+        ), start=5):
             commands.dispatch(self.repo, None, profile="build-deep", title="#520 lifecycle implementation",
                               spec="Do.", paths_=[path], worktree="new-child")
             self.assertEqual(self.orca()["titles"][f"term_ctx_{idx}"], expected_kept)
@@ -228,7 +226,7 @@ class DispatchTests(CoreCase):
                                      spec="Do.", paths_=["i/"], worktree="new-child")
         self.assertNotIn("note", trailing)
         self.assertEqual(self.orca()["titles"]["term_ctx_9"], "Builder (deep) · trailing spaces · neon/high")
-        self.assertEqual(len(self.orca()["rename_calls"]), 5)
+        self.assertEqual(len(self.orca()["rename_calls"]), 4)
 
     def test_unreadable_tab_title_returns_a_note_and_does_not_rename(self):
         self.set_orca(list_fails=True)
@@ -332,6 +330,20 @@ class DispatchTests(CoreCase):
         self.refused("orca_unknown", self.start, paths_=["src"])
         self.assertEqual(commands.dispatch(self.repo, None, retry="a1")["void"], True)
         self.assertEqual(self.start(paths_=["src"])["assignment"], "a2")
+        self.assertEqual(self.orca()["starts"], 1)
+
+    def test_retry_holds_assignment_when_receipt_missing_and_task_title_truncated(self):
+        self.set_orca(lose_reply=True)
+        self.refused("orca_unknown", self.start, paths_=["src"])
+        # Simulate missing receipt + Orca 80-char task-list truncation dropping the marker.
+        tasks = self.orca()["tasks"]
+        tasks["task_1"]["task_title"] = "build-fast · gpt-6.2-sol/medium · very-long-objective-slug:a..."
+        self.set_orca(requests={}, tasks=tasks)
+        problem = self.refused("start_unsettled", commands.dispatch, self.repo, None, retry="a1")
+        self.assertIn("task-list", problem.fix)
+        # Assignment is HELD (never voided) and blocks a second implementer on the same paths.
+        self.assertFalse(state.fold(self.entries("widget")).assignments["a1"].get("void"))
+        self.refused("paths_overlap", self.start, paths_=["src"])
         self.assertEqual(self.orca()["starts"], 1)
 
     def test_the_same_assignment_always_carries_the_same_request(self):
@@ -658,7 +670,7 @@ class DispatchTests(CoreCase):
         self.assertEqual((rev1["route"], rev1["review_independence"], rev1["author_families"]),
                          ("claude/claude-sonnet-5-5/high", "cross_provider_fallback", ["Google", "OpenAI"]))
         self.assertEqual(self.orca()["tasks"][rev1["task"]]["task_title"],
-                         "review-fast · claude-sonnet-5-5/high · widget:a3 rev1")
+                         "[widget:a3] review-fast · claude-sonnet-5-5/high · rev1")
         # Starved/interrupted Reviewer emits notes + partial finding without verdict -> persisted on result fact.
         self.finish(rev1["task"], {
             "outcome": "failed",
@@ -715,7 +727,7 @@ class DispatchTests(CoreCase):
         self.assertEqual((rev["route"], rev["review_independence"], rev["author_families"]),
                          ("antigravity/claude-opus-5-5/high", "cross_provider_fallback", ["Google"]))
         self.assertEqual(self.orca()["tasks"][rev["task"]]["task_title"],
-                         "review-deep · claude-opus-5-5/high · widget:a2 opus review")
+                         "[widget:a2] review-deep · claude-opus-5-5/high · opus review")
         self.finish(rev["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
         acc = commands.accept(self.repo, None, rev["assignment"])
         self.assertEqual((acc["review_independence"], acc["author_families"]),
@@ -1070,3 +1082,33 @@ class DispatchTests(CoreCase):
         fact4 = [e for e in self.entries("widget") if e.get("fact") == "review"][-1]
         self.assertEqual(fact4["review_independence"], "same_provider")
         self.assertNotIn("review_fallback_reason", fact4)
+
+        # Same-family mismatch to a disabled route outside review-fast (codex/gpt-6.2-sol/medium) drops same_provider_fallback.
+        cfg_disabled_sol = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: disabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "paused_agents:\n"
+            "  agy-gemini: quota\n"
+            "profiles:\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high\n"
+        )
+        self.write_routes(cfg_disabled_sol)
+        self.set_orca(effective={"agent": "codex", "model": "gpt-6.2-sol", "effort": "medium"})
+        disabled_mismatch = commands.dispatch(self.repo, None, role="review", title="disabled sol mismatch", spec="Review.")
+        self.assertEqual(disabled_mismatch["review_independence"], "same_provider")
+        self.assertNotIn("review_fallback_reason", disabled_mismatch)
+        self.assertIn("route_mismatch", disabled_mismatch)
+        row5 = state.fold(self.entries("widget")).assignments[disabled_mismatch["assignment"]]
+        self.assertEqual(row5["review_independence"], "same_provider")
+        self.assertNotIn("review_fallback_reason", row5)
+        self.finish(disabled_mismatch["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        acc5 = commands.accept(self.repo, None, disabled_mismatch["assignment"])
+        self.assertEqual(acc5["review_independence"], "same_provider")
+        self.assertNotIn("review_fallback_reason", acc5)
+        fact5 = [e for e in self.entries("widget") if e.get("fact") == "review"][-1]
+        self.assertEqual(fact5["review_independence"], "same_provider")
+        self.assertNotIn("review_fallback_reason", fact5)

@@ -95,30 +95,18 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
             "effective": launch.get("effective"), "requested": launch.get("requested")}
 
 
-_MIN_TRUNCATED_PREFIX = 24
-
-
-def _is_default_tab_title(current: str, task_title: str | None = None, *, role_label: str | None = None) -> bool:
-    """True only for empty, worker-task_*, exact task_title, or known Orca role-wrapped/truncated forms."""
-    if not current.strip() or current.strip().startswith("worker-task_"):
+def _is_default_tab_title(current: str, task_id: str | None = None, task_title: str | None = None) -> bool:
+    """True only for empty, exact `worker-<taskId>`, or exact `task_title` passed to worker-start."""
+    if not current.strip():
         return True
-    if not task_title:
-        return False
-    candidates = [task_title]
-    if role_label:
-        candidates.append(f"{role_label} · {task_title}")
-    for expected in candidates:
-        if current == expected:
-            return True
-        if current.endswith("…"):
-            prefix = current[:-1]
-            if len(prefix) >= _MIN_TRUNCATED_PREFIX and len(prefix) < len(expected) and expected.startswith(prefix):
-                return True
+    if task_id and current == f"worker-{task_id}":
+        return True
+    if task_title and current == task_title:
+        return True
     return False
 
 
-def rename(run: str, started: dict, title: str, *, task_title: str | None = None,
-           role_label: str | None = None) -> str | None:
+def rename(run: str, started: dict, title: str, *, task_title: str | None = None) -> str | None:
     """Give a default-titled worker tab a readable title. Returns why it could not, or None; never raises."""
     try:
         worker = next((row for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
@@ -136,7 +124,8 @@ def rename(run: str, started: dict, title: str, *, task_title: str | None = None
         current = terminal.get("title") if isinstance(terminal, dict) else None
         if not isinstance(current, str):
             return "terminal title could not be read"
-        if not _is_default_tab_title(current, task_title, role_label=role_label):
+        task_id = started.get("task") or (worker.get("task") if isinstance(worker, dict) else None)
+        if not _is_default_tab_title(current, task_id=task_id, task_title=task_title):
             return None
         try:
             call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)
