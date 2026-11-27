@@ -158,7 +158,7 @@ def packet(state: State, assignment: dict, spec: str) -> str:
         if prior_notes:
             lines += ["", "## Prior reviewer notes", "", *prior_notes]
     lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.",
-              "- Leave this terminal's name as it is; Pod already gave it a readable title.", "",
+              "- Leave this terminal's name as it is.", "",
               "## Result", "",
               "Finish through Orca as its instructions say. The body of your final worker_done message must end with",
               "this JSON object, filled in, on its own line. It is the only part of your report that is read by software;",
@@ -206,7 +206,6 @@ def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
     _, model, effort = routefile.split(route)
     tail = f" · {model}/{effort}"
     head = f"{(profile or role)[:20]} · "
-    tail = tail[:14]
     room = max(8, 60 - len(head) - len(tail))
     short = " ".join(title.split())
     short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
@@ -289,7 +288,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             raise PodError("objective_closed", f"Objective {state.id} is closed or dropped.", fix="open a new objective")
         if retry:
             return _settle_start(writer, state, retry)
-        if (role is None and profile is None) or (role is not None and role not in ROLES) or not title.strip() or not spec:
+        if (role is None and profile is None) or (role is not None and role not in ROLES) or not (title or "").strip() or not spec:
             raise PodError("dispatch_incomplete", "A dispatch needs a role (or profile), a title and the task text.",
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()

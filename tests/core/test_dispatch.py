@@ -43,13 +43,14 @@ class DispatchTests(CoreCase):
     def test_a_rename_that_raises_anything_or_finds_no_terminal_is_only_a_note(self):
         original = orca.workers
         try:
-            orca.workers = lambda run: (_ for _ in ()).throw(TypeError("odd reply"))
+            orca.workers = lambda run, timeout=90: (_ for _ in ()).throw(TypeError("odd reply"))
             self.assertEqual(self.start(paths_=["a/"])["note"], "the worker tab keeps Orca's title (rename: TypeError)")
-            orca.workers = lambda run: []
+            orca.workers = lambda run, timeout=90: []
             self.assertIn("no terminal", self.start(paths_=["b/"], worktree="new-child")["note"])
         finally:
             orca.workers = original
         self.refused("dispatch_incomplete", self.start, title="   ")
+        self.refused("dispatch_incomplete", self.start, title=None)
 
     def test_only_enabled_routes_and_the_pin_are_used(self):
         self.refused("route_not_enabled", self.start, route="codex/sol/low")

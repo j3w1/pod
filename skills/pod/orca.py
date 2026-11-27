@@ -96,7 +96,7 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
 def rename(run: str, started: dict, title: str) -> str | None:
     """Give the worker's tab a readable title. Returns why it could not, or None; never raises."""
     try:
-        handle = next((row["handle"] for row in workers(run) if row["dispatch"] == started.get("dispatch")), None)
+        handle = next((row["handle"] for row in workers(run, 15) if row["dispatch"] == started.get("dispatch")), None)
         if not handle:
             return "Orca named no terminal for the worker"
         call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)
@@ -115,12 +115,12 @@ def failure(dispatch: str) -> str:
         return ""
 
 
-def workers(run: str) -> list[dict]:
+def workers(run: str, timeout: int = 90) -> list[dict]:
     """Every worker Dispatch of the Run with its live state."""
     rows, cursor = [], None
     while True:
         args = ["orchestration", "worker-list", "--run", run, "--limit", "100"] + (["--cursor", cursor] if cursor else [])
-        result = call(*args)
+        result = call(*args, timeout=timeout)
         for row in result.get("workers", []):
             held = row.get("resource") or {}
             rows.append({"dispatch": row.get("dispatchId"), "task": row.get("taskId"), "state": row.get("workerState"),
