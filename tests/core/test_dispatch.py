@@ -31,12 +31,25 @@ class DispatchTests(CoreCase):
         self.assertNotIn("note", started)
         self.set_orca(rename_fails=True)
         later = self.start(title="x" * 80, paths_=["other/"], worktree="new-child")
-        self.assertIn("note", later)
+        self.assertIn("terminal_not_found", later["note"])
+        self.assertTrue(self.entries("widget")[-1]["dispatch"])
+        self.assertNotIn("void", self.entries("widget")[-1])
         self.assertEqual(len(self.orca()["titles"]), 1)
         self.assertEqual(self.orca()["starts"], 2)
         self.set_orca(rename_fails=False)
         long = self.start(title="y" * 80, paths_=["third/"], worktree="new-child")
         self.assertLessEqual(len(self.orca()["titles"][f"term_{long['dispatch']}"]), 60)
+
+    def test_a_rename_that_raises_anything_or_finds_no_terminal_is_only_a_note(self):
+        original = orca.workers
+        try:
+            orca.workers = lambda run: (_ for _ in ()).throw(TypeError("odd reply"))
+            self.assertEqual(self.start(paths_=["a/"])["note"], "the worker tab keeps Orca's title (rename: TypeError)")
+            orca.workers = lambda run: []
+            self.assertIn("no terminal", self.start(paths_=["b/"], worktree="new-child")["note"])
+        finally:
+            orca.workers = original
+        self.refused("dispatch_incomplete", self.start, title="   ")
 
     def test_only_enabled_routes_and_the_pin_are_used(self):
         self.refused("route_not_enabled", self.start, route="codex/sol/low")

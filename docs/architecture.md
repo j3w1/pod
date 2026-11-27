@@ -77,6 +77,7 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   assignment before calling Orca, and after a lost reply `--retry` reads Orca instead of
   starting again. After a successful start it renames the worker's tab to
   `<profile> · <title> · <model>/<effort>` (about 60 characters); a failed rename is a `note`.
+  A start recovered by `--retry` keeps Orca's title.
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 
