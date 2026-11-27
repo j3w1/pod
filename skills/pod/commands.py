@@ -158,8 +158,7 @@ def packet(state: State, assignment: dict, spec: str) -> str:
         if prior_notes:
             lines += ["", "## Prior reviewer notes", "", *prior_notes]
     lines += ["- Report what you observed. If something could not be run or read, say so; never report it as passed.",
-              "- Leave this terminal's name as it is. Orca treats a renamed worker terminal as kept by a person and",
-              "  will not release it when the work is done.", "",
+              "- Leave this terminal's name as it is.", "",
               "## Result", "",
               "Finish through Orca as its instructions say. The body of your final worker_done message must end with",
               "this JSON object, filled in, on its own line. It is the only part of your report that is read by software;",
@@ -200,6 +199,16 @@ def _validate_review_exception(state: State, agents: list[str], base: str,
     raise PodError("review_exception_invalid", "The review exception is incomplete or the prior review is ineligible.",
                    fix="pass the person's own --words, or use --after with --why for a failed or void review "
                        "by an allowed agent on the same commit without a review result")
+
+
+def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
+    """`<profile> · <short title> · <model>/<effort>`, about 60 characters."""
+    tail = " · " + "/".join(part for part in route.split("/")[1:] if part and part != "None")   # model/effort, either may be absent
+    head = f"{(profile or role)[:20]} · "
+    room = max(8, 60 - len(head) - len(tail))
+    short = " ".join(title.split())
+    short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
+    return head + short + tail
 
 
 def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
@@ -278,7 +287,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             raise PodError("objective_closed", f"Objective {state.id} is closed or dropped.", fix="open a new objective")
         if retry:
             return _settle_start(writer, state, retry)
-        if (role is None and profile is None) or (role is not None and role not in ROLES) or not title or not spec:
+        if (role is None and profile is None) or (role is not None and role not in ROLES) or not (title or "").strip() or not spec:
             raise PodError("dispatch_incomplete", "A dispatch needs a role (or profile), a title and the task text.",
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
@@ -385,8 +394,16 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             raise PodError("same_session_review",
                            "A review must run in a separate fresh session from the implementer.",
                            fix="dispatch the review in a fresh worker session")
-        return _started(writer, ident, started, route, resolution=res, authors=authors,
-                        primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
+        result = _started(writer, ident, started, route, resolution=res, authors=authors,
+                          primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
+        try:
+            failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
+                started.get("effective")) or route, title))
+        except Exception as exc:                 # cosmetic: never fail a started worker
+            failed = type(exc).__name__
+        if failed:
+            result["note"] = f"the worker tab may keep Orca's title (rename: {failed})"
+        return result
 
 
 def _started(writer, ident: str, started: dict, route: str, *, resolution: routefile.Resolution | None = None,

@@ -93,6 +93,23 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
             "effective": launch.get("effective"), "requested": launch.get("requested")}
 
 
+def rename(run: str, started: dict, title: str) -> str | None:
+    """Give the worker's tab a readable title. Returns why it could not, or None; never raises."""
+    try:
+        handle = next((row["handle"] for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
+        if not handle:
+            return "Orca named no terminal for the worker"
+        try:
+            call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)
+        except PodError as exc:
+            return "outcome unknown, the title may have changed" if exc.code == "orca_unknown" else exc.code
+    except PodError as exc:
+        return exc.code
+    except Exception as exc:      # cosmetic: nothing here may fail a dispatch that already started a worker
+        return type(exc).__name__
+    return None
+
+
 def failure(dispatch: str) -> str:
     """Why Orca says a Dispatch failed, in its own words; empty when it does not say."""
     try:
@@ -101,12 +118,12 @@ def failure(dispatch: str) -> str:
         return ""
 
 
-def workers(run: str) -> list[dict]:
+def workers(run: str, timeout: int = 90, until: str | None = None) -> list[dict]:
     """Every worker Dispatch of the Run with its live state."""
     rows, cursor = [], None
     while True:
         args = ["orchestration", "worker-list", "--run", run, "--limit", "100"] + (["--cursor", cursor] if cursor else [])
-        result = call(*args)
+        result = call(*args, timeout=timeout)
         for row in result.get("workers", []):
             held = row.get("resource") or {}
             rows.append({"dispatch": row.get("dispatchId"), "task": row.get("taskId"), "state": row.get("workerState"),
@@ -114,6 +131,8 @@ def workers(run: str) -> list[dict]:
                          "handle": row.get("agentTerminalHandle"),
                          "owned": held.get("ownershipState") == "owned", "retained": held.get("retainedReason"),
                          "worktree": str(held.get("worktreeId") or "").partition("::")[2] or None})
+        if until and any(row["dispatch"] == until for row in rows):
+            return rows
         page = result.get("page") or {}
         cursor = page.get("nextCursor")
         if not page.get("hasMore") or not cursor:

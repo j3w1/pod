@@ -25,6 +25,56 @@ class DispatchTests(CoreCase):
         self.assertEqual(row["packet"], hashlib.sha256(task["spec"].encode()).hexdigest())
         self.assertNotIn("spec", row)                # the task text is Orca's; Pod keeps its digest
 
+    def test_the_worker_tab_is_renamed_and_a_failed_rename_only_adds_a_note(self):
+        started = self.start(title="roles cards", route="codex/sol/high", paths_=["first/"])
+        self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "implement · roles cards · sol/high"})
+        self.assertNotIn("note", started)
+        self.set_orca(rename_fails=True)
+        later = self.start(title="x" * 80, paths_=["other/"], worktree="new-child")
+        self.assertIn("terminal_not_found", later["note"])
+        self.assertTrue(self.entries("widget")[-1]["dispatch"])
+        self.assertNotIn("void", self.entries("widget")[-1])
+        self.assertEqual(len(self.orca()["titles"]), 1)
+        self.assertEqual(self.orca()["starts"], 2)
+        self.set_orca(rename_fails=False)
+        long = self.start(title="y" * 80, paths_=["third/"], worktree="new-child")
+        self.assertLessEqual(len(self.orca()["titles"][f"term_{long['dispatch']}"]), 60)
+
+    def test_the_tab_title_shows_the_route_orca_started(self):
+        self.set_orca(effective={"agent": "codex", "model": "sol", "effort": "low"})
+        started = self.start(title="t", route="codex/sol/high", paths_=["e/"])
+        self.assertTrue(self.orca()["titles"][f"term_{started['dispatch']}"].endswith("sol/low"))
+
+    def test_the_worker_lookup_stops_at_the_matching_page(self):
+        pages = {None: ([{"dispatchId": "d1", "agentTerminalHandle": "t1"}], "c2"),
+                 "c2": ([{"dispatchId": "d2", "agentTerminalHandle": "t2"}], None)}
+        asked = []
+        def fake_call(*args, **kw):
+            cursor = args[args.index("--cursor") + 1] if "--cursor" in args else None
+            asked.append(cursor)
+            rows, nxt = pages[cursor]
+            return {"workers": rows, "page": {"hasMore": bool(nxt), "nextCursor": nxt}}
+        original = orca.call
+        try:
+            orca.call = fake_call
+            self.assertEqual(len(orca.workers("r", 15, "d1")), 1)
+            self.assertEqual(asked, [None])
+            self.assertEqual(len(orca.workers("r")), 2)
+        finally:
+            orca.call = original
+
+    def test_a_rename_that_raises_anything_or_finds_no_terminal_is_only_a_note(self):
+        original = orca.workers
+        try:
+            orca.workers = lambda run, *rest: (_ for _ in ()).throw(TypeError("odd reply"))
+            self.assertEqual(self.start(paths_=["a/"])["note"], "the worker tab may keep Orca's title (rename: TypeError)")
+            orca.workers = lambda run, *rest: []
+            self.assertIn("no terminal", self.start(paths_=["b/"], worktree="new-child")["note"])
+        finally:
+            orca.workers = original
+        self.refused("dispatch_incomplete", self.start, title="   ")
+        self.refused("dispatch_incomplete", self.start, title=None)
+
     def test_only_enabled_routes_and_the_pin_are_used(self):
         self.refused("route_not_enabled", self.start, route="codex/sol/low")
         self.refused("route_not_enabled", self.start, route="codex/unlisted/high")
