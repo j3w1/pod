@@ -165,7 +165,7 @@ def execute(args: argparse.Namespace, cwd: Path) -> dict:
         given = {key: value for key, value in vars(args).items() if key not in ("command", "json", "objective")}
         return commands.record(cwd, args.objective, **given)
     if name == "status":
-        return commands.status(cwd, args.objective, remote=not args.local)
+        return commands.status(cwd, args.objective, remote=not args.local, typed=bool(args.json))
     if name == "deliver":
         return gate.deliver(cwd, args.objective, check=args.check, commit=args.commit)
     if name == "resume":

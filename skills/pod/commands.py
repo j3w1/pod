@@ -627,7 +627,8 @@ def _started(writer, ident: str, started: dict, route: str, *, resolution: route
     actual_role = resolution.role if resolution else role
     req_fallback = resolution.review_fallback_reason if resolution else fallback_reason
     update = {"kind": "assignment", "id": ident, "task": started["task"], "dispatch": started["dispatch"],
-              **({"effective": effective} if effective and effective != route else {})}
+              **({"effective": effective} if effective and effective != route else {}),
+              **({"effective_seen": True} if effective else {})}
     result = {"assignment": ident, "task": started["task"], "dispatch": started["dispatch"], "route": route}
     if resolution and resolution.profile:
         result["profile"] = resolution.profile
@@ -1057,10 +1058,11 @@ def _assignment_records(state: State) -> tuple[list[dict], list[dict]]:
     records = []
     for row in state.assignments.values():
         confirmed = bool(row.get("dispatch")) and not row.get("void")
-        effective = None if (not confirmed or row.get("effective_unknown")) else (row.get("effective") or row.get("route"))
+        seen = row.get("effective") or (row.get("route") if row.get("effective_seen") else None)
+        effective = None if (not confirmed or row.get("effective_unknown")) else seen
         records.append({"assignment": row["id"], "role": row.get("role"), "profile": row.get("profile"),
                         "title": row.get("title"), "void": bool(row.get("void")),
-                        "requested_route": _route_record(row.get("route")),
+                        "requested_route": _route_record(row.get("route"), None, row.get("requested_review_fallback_reason")),
                         "effective_route": _route_record(effective, row.get("review_independence"),
                                                          row.get("review_fallback_reason")),
                         "events": rows.get(row["id"], {}).get("events", [])})
@@ -1110,18 +1112,15 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
     return result
 
 
-def status(cwd: Path, objective: str | None, *, remote: bool = True) -> dict:
+def status(cwd: Path, objective: str | None, *, remote: bool = True, typed: bool = False) -> dict:
     target, root, _ = locate(cwd, objective)
     entries = log.read(target)
     if not entries:
         raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
     folded = fold(entries)
     result = view(root, folded, remote=remote)
-    records, merges = _assignment_records(folded)
-    if records:
-        result["assignment_records"] = records
-    if merges:
-        result["events"] = merges
+    if typed:                                  # the typed projection is for `--json` readers only
+        result["assignment_records"], result["events"] = _assignment_records(folded)
     return result
 
 

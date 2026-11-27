@@ -28,7 +28,7 @@ class DispatchTests(CoreCase):
 
     def test_status_lists_typed_routes_and_events_next_to_the_strings(self):
         self.start(paths_=["src/"], route="codex/sol/high", reason="test route", title="typed status")
-        view = commands.status(self.repo, None, remote=False)
+        view = commands.status(self.repo, None, remote=False, typed=True)
         self.assertTrue(view["assignments"][0].startswith("a1 implement"))      # the string list stays
         record = view["assignment_records"][0]
         self.assertEqual(record["requested_route"],
@@ -38,6 +38,10 @@ class DispatchTests(CoreCase):
         self.assertIsInstance(record["events"][0]["at"], int)
         self.assertEqual(record["events"][0]["detail"], "typed status")
         self.assertNotIn("assignment_records", commands.resume(self.repo, None))     # only the status surface
+        plain = commands.status(self.repo, None, remote=False)
+        self.assertNotIn("assignment_records", plain)                               # plain status is unchanged
+        self.assertEqual(commands.status(self.repo, None, remote=False, typed=True)["events"], [])
+        self.assertEqual(record["effective_route"], {**record["requested_route"]})
 
     def test_typed_status_handles_two_part_routes_unconfirmed_starts_and_event_order(self):
         base = [{"kind": "objective", "id": "o", "at": "2026-01-01T00:00:00Z"},
@@ -48,10 +52,12 @@ class DispatchTests(CoreCase):
                 {"kind": "assignment", "id": "a2", "role": "implement", "route": "codex/sol/high", "title": "lost reply"},
                 {"kind": "assignment", "id": "a3", "role": "implement", "route": "codex/sol/high", "dispatch": "d3",
                  "effective_unknown": True, "title": "unknown effective"},
+                {"kind": "assignment", "id": "a5", "role": "implement", "route": "codex/sol/high", "dispatch": "d5",
+                 "title": "no launch observed"},
                 {"kind": "assignment", "id": "a4", "role": "implement", "route": "codex/sol/high", "void": True,
                  "dispatch": "d4", "title": "failed start"},
                 {"kind": "effect", "effect": "merge", "phase": "outcome", "id": "m", "merged": True, "observed": "merged"}]
-        stamps = ["2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z", "bad", "2026-01-01T00:00:03Z"] + ["2026-01-01T00:01:00Z"] * 4
+        stamps = ["2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z", "bad", "2026-01-01T00:00:03Z"] + ["2026-01-01T00:01:00Z"] * 6
         folded = state.fold([{**entry, "n": i, "at": stamps[i]} for i, entry in enumerate(base)])
         records, merges = commands._assignment_records(folded)
         by = {row["assignment"]: row for row in records}
@@ -61,6 +67,7 @@ class DispatchTests(CoreCase):
         self.assertEqual((by["a2"]["events"], by["a2"]["effective_route"]), ([], None))
         self.assertIsNone(by["a3"]["effective_route"])
         self.assertIsNone(by["a4"]["effective_route"])
+        self.assertIsNone(by["a5"]["effective_route"])                      # no observed launch: ambiguous stays null
         self.assertEqual([m["kind"] for m in merges], ["merged"])           # with or without assignments
         self.assertEqual(commands._assignment_records(state.fold(
             [{**base[0], "n": 0, "at": stamps[0]}, {**base[-1], "n": 1, "at": stamps[1]}]))[1][0]["kind"], "merged")

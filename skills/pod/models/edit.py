@@ -33,25 +33,39 @@ def _regular(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
 
 
+def _identity(path: Path) -> tuple[int, int]:
+    info = os.stat(path)
+    return info.st_dev, info.st_ino
+
+
 def edit_in_editor(path: Path, editor: list[str]) -> None:
     """Open the file in an editor on a copy, then save it under the config lock.
 
     The editor runs outside the lock so `pod models` is not held up. Saving takes the same lock
-    as `apply`, re-reads the file and refuses to overwrite one that changed, was replaced or removed
-    meanwhile; an edited copy that is not saved is kept and its path reported. A failed editor, or a
-    result Pod cannot read when the original was readable, is never installed."""
+    as `apply` and first checks, in this order, that the live file is still the same regular file
+    with the same bytes it was when the editor opened (else `preferences_changed`); only then is the
+    edited copy, which must be a regular file, checked to be readable if the original was, and
+    installed with the live file's mode. A failed or missing editor installs nothing. An edited copy
+    that is not saved is kept and its path reported."""
     import subprocess
     if not _regular(path):
         raise PodError("preferences_invalid", f"{path} is not a regular preference file.",
                        fix="replace it with a regular file; Pod never follows a symlink here")
-    original = path.read_bytes()
+    original, identity = path.read_bytes(), _identity(path)
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".config-edit-", suffix=".yaml", delete=False) as handle:
         handle.write(original)
     copy = Path(handle.name)
     copy.chmod(0o600)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".config-snap-", suffix=".yaml", delete=False) as snap:
+        snap.write(original)
+    snapshot = Path(snap.name)
+    try:
+        original_ok = routefile.load(snapshot).status == "ok"
+    finally:
+        snapshot.unlink(missing_ok=True)
 
     def keep(code: str, message: str, fix: str) -> PodError:
-        return PodError(code, f"{message} Your edit is kept at {copy}.", fix=fix)
+        return PodError(code, f"{message} Your edit is kept at {copy}." if copy.exists() or copy.is_symlink() else message, fix=fix)
 
     try:
         done = subprocess.run([*editor, str(copy)], check=False)
@@ -59,6 +73,12 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
         copy.unlink(missing_ok=True)
         raise PodError("editor_failed", f"The editor could not run: {exc.strerror or type(exc).__name__}.",
                        fix="set VISUAL or EDITOR to an editor that exists") from exc
+    if not _regular(copy):
+        had = copy.is_symlink()
+        if had:
+            copy.unlink(missing_ok=True)
+        raise PodError("editor_failed", "The editor left no regular file to save; nothing was saved.",
+                       fix="run `pod config edit` again")
     edited = copy.read_bytes()
     if done.returncode != 0:
         if edited == original:
@@ -70,13 +90,15 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
     if edited == original:
         copy.unlink(missing_ok=True)
         return
-    if routefile.load(path).status == "ok" and routefile.load(copy).status != "ok":
-        raise keep("preferences_invalid", f"The edited file cannot be read: {routefile.load(copy).problem}.",
-                   f"correct {copy}, then copy it over {path}")
     with _locked(path):
-        if not _regular(path) or path.read_bytes() != original:
+        if not _regular(path) or _identity(path) != identity or path.read_bytes() != original:
             raise keep("preferences_changed", "The preference file changed, was replaced or removed while you edited.",
                        f"merge {copy} into {path} by hand, then delete the copy")
+        if original_ok:
+            checked = routefile.load(copy)
+            if checked.status != "ok":
+                raise keep("preferences_invalid", f"The edited file cannot be read: {checked.problem}.",
+                           f"correct {copy}, then copy it over {path}")
         copy.chmod(os.stat(path).st_mode & 0o7777)
         os.replace(copy, path)
 
