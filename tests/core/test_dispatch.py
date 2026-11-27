@@ -25,6 +25,21 @@ class DispatchTests(CoreCase):
         self.assertEqual(row["packet"], hashlib.sha256(task["spec"].encode()).hexdigest())
         self.assertNotIn("spec", row)                # the task text is Orca's; Pod keeps its digest
 
+    def test_status_lists_typed_routes_and_events_next_to_the_strings(self):
+        started = self.start(paths_=["src/"], route="codex/sol/high", reason="test route", title="typed status")
+        view = commands.status(self.repo, None, remote=False)
+        self.assertTrue(view["assignments"][0].startswith("a1 implement"))      # the string list stays
+        record = view["assignment_records"][0]
+        self.assertEqual(record["assignment"], "a1")
+        self.assertEqual(record["requested_route"],
+                         {"agent": "codex", "model": "sol", "effort": "high", "fallback_tag": None})
+        self.assertEqual(record["effective_route"]["model"], "sol")
+        self.assertEqual([item["kind"] for item in record["events"]], ["dispatched"])
+        self.assertIsInstance(record["events"][0]["at"], int)
+        self.assertEqual(record["events"][0]["detail"], "typed status")
+        self.assertEqual(record["title"], "typed status")
+        self.assertTrue(started["dispatch"])
+
     def test_the_worker_tab_is_renamed_and_a_failed_rename_only_adds_a_note(self):
         started = self.start(title="roles cards", route="codex/sol/high", reason="test route", paths_=["first/"])
         self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "Builder │ sol/high │ roles cards"})
@@ -255,12 +270,31 @@ class DispatchTests(CoreCase):
         commands.dispatch(self.repo, None, profile="build-deep", title="Daemon named", spec="Do.", paths_=["b/"], worktree="new-child")
         self.assertEqual(self.orca()["titles"]["term_ctx_2"], "Builder · " + other)
 
+    def test_mixed_author_counts_use_only_contained_work_in_the_frozen_commit(self):
+        first = self.commit({"a.txt": "1\n"}, "first")
+        second = self.commit({"a.txt": "2\n"}, "second")
+        def row(ident, route, at, contained):
+            return [{"kind": "assignment", "id": ident, "role": "implement", "route": route, "title": ident},
+                    {"kind": "fact", "fact": "result", "assignment": ident, "decision": "integrated",
+                     "outcome": "done", "integrated_at": at, "contained": contained}]
+        entries = [{"kind": "objective", "id": "o", "at": "2026-01-01T00:00:00Z"}]
+        for item in (row("a1", "codex/gpt-6.2-sol/high", first, True),
+                     row("a2", "antigravity/gemini-4-neon/high", first, False),
+                     row("a3", "antigravity/gemini-4-neon/high", second, True)):
+            entries += item
+        folded = state.fold([{**entry, "n": index, "at": "2026-01-01T00:00:00Z"} for index, entry in enumerate(entries)])
+        self.assertEqual(folded.author_counts(self.repo, first), {"OpenAI": 1})
+        self.assertEqual(folded.author_counts(self.repo, second), {"OpenAI": 1, "Google": 1})
+        self.assertEqual(folded.author_counts(None, first), {})
+
     def test_marker_guard_and_tab_format_edge_cases(self):
         task = commands._task_title("build-deep", "implement", "antigravity/gemini-4-neon/high", "widget", "a1", "Daemon named")
         mark = "[widget:a1]"
         accepted = (f"Reviewer · {task}", f"Builder · {task[:40]}…", f"Builder · {task} · neon/high")
         for title in accepted:
             self.assertTrue(orca._is_default_tab_title(title, "t", task, mark), title)
+        suffix_task = commands._task_title("build-deep", "implement", "antigravity/gemini-4-neon/high", "widget", "a1", "Compatibility · sol/high")
+        self.assertTrue(orca._is_default_tab_title(f"Builder · {suffix_task}", "t", suffix_task, mark))
         refused = (f"Human notes {mark}", f"Builder · [widget:a9] compare with {mark} · sol/high",
                    f"Builder · {mark} totally different words", f"Builder · {task} [widget:a2]", "Builder · other",
                    f"Builder · {mark} build-deep · gemini-4-neon/high · my private notes")
@@ -270,6 +304,8 @@ class DispatchTests(CoreCase):
                          "Reviewer (fast) │ terra/high │ review notes")
         self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/high", "Fix[widget:a1] regression"),
                          "Builder │ sol/high │ Fix regression")
+        self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/high", "Fix[widget:a1], then test"),
+                         "Builder │ sol/high │ Fix, then test")
         self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/None", "x", "codex/gpt-6.2-sol/high"),
                          "Builder │ sol/high │ x")
 

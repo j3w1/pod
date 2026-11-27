@@ -5,6 +5,7 @@ coordinator only for what software cannot know: the plan, a decision, a person's
 Everything else is read from Orca, Git and GitHub at the moment it is needed.
 """
 
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -302,7 +303,8 @@ def _tab_title(profile: str | None, role: str, route: str, title: str, requested
     effort = _EFFORT_SHORT.get(effort, effort)
     short_model = _short_model(raw_model) if raw_model else ""
     model_part = "/".join(([short_model] if short_model else []) + ([effort] if effort else []))
-    short = _clean_topic(_MARKER_TOKEN.sub(" ", title)) or " ".join(_MARKER_TOKEN.sub(" ", title).split())
+    bare = re.sub(r"\s+([,.;:!?])", r"\1", _MARKER_TOKEN.sub(" ", title))
+    short = _clean_topic(bare) or " ".join(bare.split())
     if len(short) > _TAB_DESCRIPTION_MAX:
         short = short[:_TAB_DESCRIPTION_MAX - 1].rstrip() + "…"
     return " │ ".join(part for part in (_tab_role(profile, role), model_part, short) if part)
@@ -402,7 +404,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
                                or any(step.code in ("reviewer_agent_not_allowed", "author_family") for step in res.trace))
             if disallowed_seen:
                 valid_exc, preview_note = _validate_dry_run_review_exception(
-                    folded, root, preferences.review_agents, commit=commit, words=words, after=after, why=why)
+                    folded, root, preferences.review_agents, commit=_resolved(root, commit), words=words, after=after, why=why)
                 if not valid_exc:
                     refused_override = {
                         "code": "review_exception_invalid",
@@ -1015,6 +1017,46 @@ def _run_check(root: Path, command: str) -> dict:
 
 # --- status, resume, drop --------------------------------------------------------------------------
 
+def _epoch(stamp: str | None) -> int | None:
+    try:
+        return int(datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def _route_record(route: str | None, tag: str | None = None, reason: str | None = None) -> dict | None:
+    if not route:
+        return None
+    agent, model, effort = routefile.split(route)
+    return {"agent": agent, "model": model, "effort": effort, "fallback_tag": tag,
+            **({"fallback_reason": reason} if reason else {})}
+
+
+def _assignment_records(state: State) -> list[dict]:
+    """Typed per-assignment routes and events, built only from the objective log (`pod-assignments/v1`)."""
+    records = []
+    for row in state.assignments.values():
+        first = next((entry for entry in state.entries if entry.get("kind") == "assignment" and entry.get("id") == row["id"]), None)
+        events = []
+        if first and not row.get("void"):
+            events.append({"kind": "dispatched", "at": _epoch(first.get("at")), "detail": row.get("title", "")[:80]})
+        for fact in state.facts:
+            if fact.get("fact") == "result" and fact.get("assignment") == row["id"]:
+                events.append({"kind": "accepted", "at": _epoch(fact.get("at")),
+                               "detail": f"{fact.get('decision')}, {fact.get('outcome')}"})
+            elif fact.get("fact") == "review" and fact.get("reviewer") == row["id"]:
+                events.append({"kind": "review_verdict", "at": _epoch(fact.get("at")),
+                               "detail": str(fact.get("verdict"))})
+        effective = row.get("effective") or row.get("route")
+        tag = row.get("review_independence")
+        records.append({"assignment": row["id"], "role": row.get("role"), "profile": row.get("profile"),
+                        "title": row.get("title"), "void": bool(row.get("void")),
+                        "requested_route": _route_record(row.get("route")),
+                        "effective_route": _route_record(effective, tag, row.get("review_fallback_reason")),
+                        "events": sorted(events, key=lambda item: item["at"] or 0)})
+    return records
+
+
 def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) -> dict:
     """The derived picture of one objective. `open` shows it without the gate, which has nothing to say yet."""
     from . import gate as gates
@@ -1028,6 +1070,12 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         result["note"] = info["note"]
     result["criteria"] = [f"{row['id']} {row['state']}{' (after merge)' if row.get('after_merge') else ''}: {row['text'][:160]}"
                           for row in state.criteria.values()]
+    if state.assignments:
+        result["assignment_records"] = _assignment_records(state)
+        merges = [{"kind": "merged", "at": _epoch(effect["outcome"].get("at")), "detail": str(effect["outcome"].get("observed") or "")[:120]}
+                  for effect in state.effects.values() if effect["outcome"] and state.merged(effect)]
+        if merges:
+            result["events"] = merges
     if state.closed:
         return result
     live = _live(state) if remote else {}

@@ -29,6 +29,31 @@ def _locked(path: Path):
         yield
 
 
+def edit_in_editor(path: Path, editor: list[str]) -> None:
+    """Open the file in an editor on a copy, then save it under the config lock.
+
+    The editor runs outside the lock so `pod models` is not held up. Saving takes the same lock
+    as `apply`, re-reads the file and refuses to overwrite one that changed meanwhile; the edited
+    copy is then kept, never lost."""
+    import shutil
+    import subprocess
+    original = path.read_bytes()
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".config-edit-", suffix=".yaml", delete=False) as handle:
+        handle.write(original)
+    copy = Path(handle.name)
+    shutil.copymode(path, copy)
+    subprocess.run([*editor, str(copy)], check=False)
+    edited = copy.read_bytes()
+    if edited == original:
+        copy.unlink(missing_ok=True)
+        return
+    with _locked(path):
+        if path.read_bytes() != original:
+            raise PodError("preferences_changed", f"The preference file changed while you edited; your edit is kept at {copy}.",
+                           fix=f"merge {copy} into {path} by hand, then delete it")
+        os.replace(copy, path)
+
+
 def _refuse_invalid(preferences: routefile.Preferences) -> None:
     if preferences.status == "invalid":
         raise PodError("preferences_invalid", f"The preference file cannot be read: {preferences.problem}.",

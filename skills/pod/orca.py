@@ -109,6 +109,8 @@ def _is_default_tab_title(current: str, task_id: str | None = None, task_title: 
     if marker and task_title and task_title.startswith(marker + " "):
         head, sep, rest = current.partition(" · ")
         if sep and re.fullmatch(r"[A-Za-z][A-Za-z ()]{0,23}", head):
+            if rest == task_title:
+                return True
             rest = re.sub(r" · [A-Za-z0-9.\-]+/[a-z]+$", "", rest)       # a daemon's trailing model/effort
             if rest == task_title:
                 return True
