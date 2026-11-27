@@ -43,6 +43,14 @@ class CliTests(CoreCase):
         code, out, _ = self.run_pod("status")
         self.assertIn("state: closed", out)
 
+    def test_only_status_json_carries_the_typed_records_and_both_list_keys(self):
+        self.opened()
+        code, out, _ = self.run_pod("status", "--local", "--json")
+        data = json.loads(out)
+        self.assertEqual((code, data["assignment_records"], data["events"]), (0, [], []))
+        code, out, _ = self.run_pod("status", "--local")
+        self.assertNotIn("assignment_records", out)
+
     def test_a_refusal_says_what_to_change_and_json_carries_the_same(self):
         code, out, _ = self.run_pod("status", "--json")
         refused = json.loads(out)["refused"]

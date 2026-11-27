@@ -49,7 +49,8 @@ class DispatchTests(CoreCase):
                  "effective": "antigravity/gemini-4-neon", "dispatch": "d1", "title": "two part"},
                 {"kind": "fact", "fact": "review", "reviewer": "a1", "verdict": "pass"},
                 {"kind": "fact", "fact": "result", "assignment": "a1", "decision": "read", "outcome": "done"},
-                {"kind": "assignment", "id": "a2", "role": "implement", "route": "codex/sol/high", "title": "lost reply"},
+                {"kind": "assignment", "id": "a2", "role": "implement", "route": "codex/sol/high", "title": "lost reply",
+                 "requested_review_fallback_reason": "mixed authors: x"},
                 {"kind": "assignment", "id": "a3", "role": "implement", "route": "codex/sol/high", "dispatch": "d3",
                  "effective_unknown": True, "title": "unknown effective"},
                 {"kind": "assignment", "id": "a5", "role": "implement", "route": "codex/sol/high", "dispatch": "d5",
@@ -62,12 +63,14 @@ class DispatchTests(CoreCase):
         records, merges = commands._assignment_records(folded)
         by = {row["assignment"]: row for row in records}
         self.assertEqual(by["a1"]["effective_route"]["effort"], None)
+        self.assertEqual(by["a2"]["requested_route"]["fallback_reason"], "mixed authors: x")
         self.assertEqual([e["kind"] for e in by["a1"]["events"]], ["dispatched", "review_verdict", "accepted"])
         self.assertIsNone(by["a1"]["events"][1]["at"])                      # unknown time keeps log order
         self.assertEqual((by["a2"]["events"], by["a2"]["effective_route"]), ([], None))
         self.assertIsNone(by["a3"]["effective_route"])
         self.assertIsNone(by["a4"]["effective_route"])
         self.assertIsNone(by["a5"]["effective_route"])                      # no observed launch: ambiguous stays null
+        self.assertEqual(commands._assignment_records(state.fold([{**base[0], "n": 0, "at": stamps[0]}])), ([], []))
         self.assertEqual([m["kind"] for m in merges], ["merged"])           # with or without assignments
         self.assertEqual(commands._assignment_records(state.fold(
             [{**base[0], "n": 0, "at": stamps[0]}, {**base[-1], "n": 1, "at": stamps[1]}]))[1][0]["kind"], "merged")
