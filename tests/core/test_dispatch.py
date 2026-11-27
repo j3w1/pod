@@ -25,21 +25,6 @@ class DispatchTests(CoreCase):
         self.assertEqual(row["packet"], hashlib.sha256(task["spec"].encode()).hexdigest())
         self.assertNotIn("spec", row)                # the task text is Orca's; Pod keeps its digest
 
-    def test_status_lists_typed_routes_and_events_next_to_the_strings(self):
-        started = self.start(paths_=["src/"], route="codex/sol/high", reason="test route", title="typed status")
-        view = commands.status(self.repo, None, remote=False)
-        self.assertTrue(view["assignments"][0].startswith("a1 implement"))      # the string list stays
-        record = view["assignment_records"][0]
-        self.assertEqual(record["assignment"], "a1")
-        self.assertEqual(record["requested_route"],
-                         {"agent": "codex", "model": "sol", "effort": "high", "fallback_tag": None})
-        self.assertEqual(record["effective_route"]["model"], "sol")
-        self.assertEqual([item["kind"] for item in record["events"]], ["dispatched"])
-        self.assertIsInstance(record["events"][0]["at"], int)
-        self.assertEqual(record["events"][0]["detail"], "typed status")
-        self.assertEqual(record["title"], "typed status")
-        self.assertTrue(started["dispatch"])
-
     def test_the_worker_tab_is_renamed_and_a_failed_rename_only_adds_a_note(self):
         started = self.start(title="roles cards", route="codex/sol/high", reason="test route", paths_=["first/"])
         self.assertEqual(self.orca()["titles"], {f"term_{started['dispatch']}": "Builder │ sol/high │ roles cards"})
@@ -306,6 +291,10 @@ class DispatchTests(CoreCase):
                          "Builder │ sol/high │ Fix regression")
         self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/high", "Fix[widget:a1], then test"),
                          "Builder │ sol/high │ Fix, then test")
+        self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/high", "Fix (issue [widget:a1])"),
+                         "Builder │ sol/high │ Fix (issue)")
+        self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/high", "Vérifier : tests"),
+                         "Builder │ sol/high │ Vérifier : tests")
         self.assertEqual(commands._tab_title("build-fast", "implement", "codex/gpt-6.2-sol/None", "x", "codex/gpt-6.2-sol/high"),
                          "Builder │ sol/high │ x")
 

@@ -119,8 +119,7 @@ def _config(edit: bool) -> dict:
         editor = shlex.split(os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi")
         if not target.exists():
             raise PodError("config_absent", f"There is no preference file at {target}.", fix="run `pod models` to create one")
-        from .models import edit as models_edit
-        models_edit.edit_in_editor(target, editor)
+        subprocess.run([*editor, str(target)], check=False)
     found = routefile.load(target)
     return {"path": str(target), "status": found.status, **({"problem": found.problem} if found.problem else {}),
             "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
