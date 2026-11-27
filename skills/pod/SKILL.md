@@ -82,7 +82,7 @@ review by a worker that changed nothing.
   authored part of the reviewed commit's history (at least two counted families covering every
   enabled non-Claude family), and no independent or quota fallback applies, review proceeds with the
   least-authored enabled, unheld route's family as `mixed_author_fallback` (refused if every such
-  route is held; an independent route blocked for a non-quota reason also prevents it). To use another agent outside
+  route is held; an enabled, allowed independent route blocked for a non-quota reason, such as `--exclude-agent`, also prevents it). To use another agent outside
   `review_agents` or override a non-quota same-family refusal, pass their own `--words` for this
   review or use `--after aN --why "…"` for a failed or void allowed assignment on the same commit
   without a review result.

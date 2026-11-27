@@ -1,4 +1,5 @@
 import os
+import unittest.mock
 
 from pod import cli, commands, orca, state
 from tests.core.support import CoreCase, ROUTES
@@ -883,6 +884,16 @@ class DispatchTests(CoreCase):
                                          after=rev["assignment"], why="first review failed")
         self.assertTrue(ok_after_dry["ok"])
         self.assertIn("not verified against Orca", ok_after_dry["note"])
+        # An unresolvable candidate cannot establish --after eligibility (it is not silently HEAD).
+        missing = commands.dispatch(self.repo, None, role="review", dry_run=True, commit="no-such-ref",
+                                    after=rev["assignment"], why="first review failed")
+        self.assertFalse(missing["ok"])
+        self.assertEqual(missing["refused"]["code"], "review_exception_invalid")
+        # Eligibility uses the one SHA the dry run froze, even if the ref then moves.
+        with unittest.mock.patch.object(commands, "_resolved", return_value="0" * 40):
+            moved = commands.dispatch(self.repo, None, role="review", dry_run=True,
+                                      after=rev["assignment"], why="first review failed")
+        self.assertFalse(moved["ok"])
         exc_rev = commands.dispatch(self.repo, None, role="review", title="same family override", spec="Review.",
                                     words="Only Codex is available; run the review on Codex.")
         self.assertEqual((exc_rev["route"], exc_rev["review_independence"]),
