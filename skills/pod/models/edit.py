@@ -140,9 +140,12 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
         done = copy.with_name(copy.name + ".done")
         try:
             os.replace(copy, done)
-            later, _ = _read_regular(done)
         except OSError:
-            return
+            return                                   # nothing left under that name to look at
+        try:
+            later = _read_regular(done)[0]
+        except OSError:
+            later = None                             # moved but unreadable: report it rather than hide it
         if later != edited:
             raise PodError("preferences_changed", f"Saved, but the editor wrote again afterwards; that newer copy is kept at {done}.",
                            fix=f"merge {done} into {path} by hand, then delete it")

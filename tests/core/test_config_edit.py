@@ -217,3 +217,21 @@ class ConfigEditLockTests(CoreCase):
         kept = list(target.parent.glob(".config-edit-*.done"))
         self.assertEqual(len(kept), 1)
         self.assertTrue(kept[0].read_text().endswith("# after\n"))
+
+    def test_a_late_save_that_cannot_be_read_is_still_reported_with_its_path(self):
+        target = paths.route_file()
+        real = os.replace
+
+        def replace(src, dst):
+            if Path(src).name.startswith(".config-edit-") and Path(dst) != target:
+                Path(src).write_text("# unreadable later\n")
+                os.chmod(src, 0)
+            return real(src, dst)
+        with self.editor(), patch("os.replace", side_effect=replace):
+            with self.assertRaises(PodError) as caught:
+                edit.edit_in_editor(target, ["ed"])
+        self.assertEqual(caught.exception.code, "preferences_changed")
+        kept = list(target.parent.glob(".config-edit-*.done"))
+        self.assertEqual(len(kept), 1)
+        self.assertIn(str(kept[0]), str(caught.exception))
+        os.chmod(kept[0], 0o600)

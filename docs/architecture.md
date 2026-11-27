@@ -102,7 +102,8 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   refuses a symlinked or non-regular file, a failed or missing editor and an editor output that is
   not a regular file; under the lock it first checks the live file is the same file with the same
   bytes (`preferences_changed`, the edited copy is kept and its path reported), then that the
-  result is readable if the original was, and keeps the live file's mode.
+  result is readable if the original was, and keeps the live file's mode. Known limit: an editor that
+  returns but keeps the copy open and writes again after Pod's last check is not detected.
   **Known limits (0.23.4):** author families for reviewer filtering and the recorded
   `author_families` still come from the whole objective, not the reviewed commit; only the
   mixed-author fallback decision and its counts are scoped to integrated work (`contained: true`)
