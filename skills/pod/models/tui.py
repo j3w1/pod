@@ -359,6 +359,8 @@ class Workspace:
             lines.extend((part, "dim") for part in textwrap.wrap("Wire: " + wire_cmd, width))
             if res.review_independence:
                 lines.append((f"Review tag: {res.review_independence}", "accent"))
+            if res.review_fallback_reason:
+                lines.extend((part, "warn") for part in textwrap.wrap("Fallback: " + res.review_fallback_reason, width))
         else:
             lines.append((f"PAUSED ({res.error_code})", "warn"))
             if res.error_message:

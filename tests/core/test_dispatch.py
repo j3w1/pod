@@ -716,8 +716,11 @@ class DispatchTests(CoreCase):
         self.assertEqual((rev["profile"], rev["route"], rev["review_independence"]),
                          ("review-fast", "antigravity/gemini-4-neon/high", "cross_provider_fallback"))
         self.assertTrue(any("authored this diff" in line for line in rev["trace"]))
-        # When no independent reviewer remains (antigravity and claude paused), role-only review refuses unless given --words/--after.
-        self.write_routes(cfg + "paused_agents: [antigravity, claude]\n")
+        # When no independent reviewer remains for a non-quota reason (other-family routes disabled), role-only review refuses unless given --words/--after.
+        self.write_routes(
+            cfg.replace("antigravity/gemini-4-neon/high: enabled", "antigravity/gemini-4-neon/high: disabled")
+               .replace("claude/claude-opus-5-5/high: enabled", "claude/claude-opus-5-5/high: disabled")
+        )
         self.refused("reviewer_same_family", commands.dispatch, self.repo, None,
                      role="review", title="same family blocked", spec="Review.")
         # Dry-run rejects malformed review exception flags and notes unchecked prior failure for --after/--why.
@@ -783,3 +786,60 @@ class DispatchTests(CoreCase):
                                        title="normal", spec="Do it.", paths_=["docs/"], worktree="new-child")
         self.assertNotIn("reason", in_profile)
         self.assertNotIn("reason", self.entries("widget")[-2])
+
+    def test_review_same_family_quota_fallback_end_to_end(self):
+        cfg = (
+            "schema: pod/v2\nroutes:\n"
+            "  antigravity/gemini-4-neon/medium: enabled\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  codex/gpt-6.2-sol/medium: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: null\npinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "profiles:\n"
+            "  build-fast: implement codex/gpt-6.2-sol/medium antigravity/gemini-4-neon/medium\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+        )
+        self.write_routes(cfg)
+        built = commands.dispatch(self.repo, None, role="implement", title="ship feature", spec="Build.", paths_=["src/"])
+        commit = self.commit({"src/a.py": "openai\n"})
+        self.finish(built["task"], {"outcome": "succeeded", "commit": commit})
+        commands.accept(self.repo, None, built["assignment"], integrated=commit)
+
+        # Pause antigravity for quota -> dry-run and real dispatch fall back to Codex tagged same_provider_fallback.
+        self.write_routes(cfg + "paused_agents:\n  antigravity: quota\n")
+        dry = commands.dispatch(self.repo, None, role="review", dry_run=True)
+        self.assertEqual((dry["ok"], dry["route"], dry["review_independence"]),
+                         (True, "codex/gpt-6.1-terra/high", "same_provider_fallback"))
+        self.assertIn("antigravity", dry["review_fallback_reason"])
+
+        rev = commands.dispatch(self.repo, None, role="review", title="quota fallback review", spec="Review.")
+        self.assertEqual((rev["route"], rev["review_independence"]),
+                         ("codex/gpt-6.1-terra/high", "same_provider_fallback"))
+        self.assertIn("antigravity", rev["review_fallback_reason"])
+        assignment_row = self.entries("widget")[-2]
+        self.assertEqual(assignment_row["id"], rev["assignment"])
+        self.assertEqual(assignment_row["review_independence"], "same_provider_fallback")
+        self.assertIn("antigravity", assignment_row["review_fallback_reason"])
+
+        # Even if antigravity is unpaused before accept, the accepted review fact keeps same_provider_fallback + reason.
+        self.write_routes(cfg)
+        self.finish(rev["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        accepted = commands.accept(self.repo, None, rev["assignment"])
+        self.assertEqual((accepted["verdict"], accepted["review_independence"]), ("pass", "same_provider_fallback"))
+        self.assertIn("antigravity", accepted["review_fallback_reason"])
+        review_fact = [e for e in self.entries("widget") if e.get("fact") == "review"][-1]
+        self.assertEqual(review_fact["review_independence"], "same_provider_fallback")
+        self.assertIn("antigravity", review_fact["review_fallback_reason"])
+
+        # Once antigravity is back, new reviews return to cross-family.
+        cross = commands.dispatch(self.repo, None, role="review", title="cross family again", spec="Review.")
+        self.assertEqual((cross["route"], cross["review_independence"]),
+                         ("antigravity/gemini-4-neon/high", "cross_provider_fallback"))
+        self.assertNotIn("review_fallback_reason", cross)
+
+        # If both codex and antigravity are paused, only Claude remains -> refused (Claude is never chosen).
+        self.write_routes(cfg + "paused_agents: [codex, antigravity]\n")
+        self.refused("no_eligible_route", commands.dispatch, self.repo, None,
+                     role="review", title="all paused", spec="Review.")

@@ -396,6 +396,7 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         "wire": {"agent": res.wire[0], "model": res.wire[1], "effort": res.wire[2]} if (ok and res.wire) else None,
         "author_families": list(res.author_families),
         "review_independence": res.review_independence if ok else None,
+        **({"review_fallback_reason": res.review_fallback_reason} if ok and res.review_fallback_reason else {}),
         "paused_agents": list(active_paused),
         "soft_drained_agents": list(active_drained),
         "excluded_agents": sorted({item.strip() for item in excluded if item and item.strip()}),
@@ -507,7 +508,10 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                       **({"profile": res.profile, "mcp": res.mcp} if res.profile else {}),
                       **({"reason": res.reason} if res.reason else {}),
                       **({"context": context} if context else {}),
-                      **({"review_exception": exception} if exception else {})}
+                      **({"review_exception": exception} if exception else {}),
+                      **({"review_independence": res.review_independence,
+                          "review_fallback_reason": res.review_fallback_reason}
+                         if res.review_fallback_reason else {})}
         text = packet(state, assignment, spec)
         assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
         writer.append(assignment)
@@ -561,7 +565,11 @@ def _started(writer, ident: str, started: dict, route: str, *, resolution: route
         result["reason"] = resolution.reason
     if resolution and resolution.role == "review":
         actual_route = effective or route
-        result["review_independence"] = routefile.review_tag(actual_route, authors or set(), primary_agent)
+        result["review_independence"] = routefile.review_tag(
+            actual_route, authors or set(), primary_agent,
+            fallback=bool(resolution.review_fallback_reason))
+        if resolution.review_fallback_reason:
+            result["review_fallback_reason"] = resolution.review_fallback_reason
         if authors:
             result["author_families"] = sorted(authors)
     if resolution and any(step.status == "skipped" for step in resolution.trace):
@@ -717,16 +725,20 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 prefs = routefile.load()
                 primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
                 authors = sorted(state.author_families())
-                tag = routefile.review_tag(reviewer_route, set(authors), primary_agent)
+                fallback_reason = row.get("review_fallback_reason")
+                tag = routefile.review_tag(reviewer_route, set(authors), primary_agent,
+                                           fallback=bool(fallback_reason))
                 facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
                               "review_independence": tag,
+                              **({"review_fallback_reason": fallback_reason} if fallback_reason else {}),
                               **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),
                               **({"same_session": True} if same_session else {}),
                               "findings": found})
                 output.update(verdict=verdict, review_independence=tag,
+                              **({"review_fallback_reason": fallback_reason} if fallback_reason else {}),
                               **({"author_families": authors} if authors else {}),
                               **({"notes": reviewer_notes} if reviewer_notes else {}),
                               findings=[f"{item['id']} {'required' if item['required'] else 'advisory'} "

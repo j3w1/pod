@@ -562,3 +562,91 @@ class RouteFileTests(PodCase):
             with self.subTest(bad=bad):
                 invalid = routefile.load(self.write_routes(cfg + bad))
                 self.assertEqual(invalid.status, "invalid")
+
+    def test_review_same_family_quota_fallback_and_boundaries(self):
+        from datetime import datetime, timezone
+        base = (
+            "schema: pod/v2\n"
+            "routes:\n"
+            "  antigravity/gemini-4-neon/high: enabled\n"
+            "  codex/gpt-6.1-terra/high: enabled\n"
+            "  claude/claude-opus-5-5/high: enabled\n"
+            "preferred: null\n"
+            "pinned: null\n"
+            "review_agents: [codex, antigravity]\n"
+            "profiles:\n"
+            "  review-fast: review codex/gpt-6.1-terra/high antigravity/gemini-4-neon/high claude/claude-opus-5-5/high\n"
+        )
+        # 1. Both families available -> cross-family, no fallback reason.
+        both = routefile.load(self.write_routes(base))
+        codex_cross = routefile.resolve_dispatch(both, role="review", author_families={"OpenAI"})
+        self.assertEqual((codex_cross.ok, codex_cross.route, codex_cross.review_independence,
+                          codex_cross.review_fallback_reason),
+                         (True, "antigravity/gemini-4-neon/high", "cross_provider_fallback", None))
+        neon_cross = routefile.resolve_dispatch(both, role="review", author_families={"Google"})
+        self.assertEqual((neon_cross.ok, neon_cross.route, neon_cross.review_independence,
+                          neon_cross.review_fallback_reason),
+                         (True, "codex/gpt-6.1-terra/high", "cross_provider", None))
+
+        # 2. Codex author with antigravity paused -> Codex reviewer tagged same_provider_fallback.
+        agy_paused = routefile.load(self.write_routes(
+            base + "paused_agents:\n  antigravity: quota_exhausted until=2026-11-27T08:00:00Z\n"
+        ))
+        t_during = datetime(2026, 11, 27, 4, 0, tzinfo=timezone.utc)
+        t_after = datetime(2026, 11, 27, 9, 0, tzinfo=timezone.utc)
+        fb_codex = routefile.resolve_dispatch(agy_paused, role="review", author_families={"OpenAI"}, now=t_during)
+        self.assertEqual((fb_codex.ok, fb_codex.route, fb_codex.review_independence),
+                         (True, "codex/gpt-6.1-terra/high", "same_provider_fallback"))
+        self.assertIsNotNone(fb_codex.review_fallback_reason)
+        self.assertIn("antigravity", fb_codex.review_fallback_reason)
+        self.assertIn("paused", fb_codex.review_fallback_reason)
+        # Once the pause expires, new reviews return to cross-family.
+        returned = routefile.resolve_dispatch(agy_paused, role="review", author_families={"OpenAI"}, now=t_after)
+        self.assertEqual((returned.ok, returned.route, returned.review_independence, returned.review_fallback_reason),
+                         (True, "antigravity/gemini-4-neon/high", "cross_provider_fallback", None))
+
+        # 3. Pool-level soft-drain also qualifies for quota fallback.
+        pool_drained = routefile.load(self.write_routes(
+            base + "soft_drained_agents:\n  agy-gemini: quota_low\n"
+        ))
+        fb_pool = routefile.resolve_dispatch(pool_drained, role="review", author_families={"OpenAI"})
+        self.assertEqual((fb_pool.ok, fb_pool.route, fb_pool.review_independence),
+                         (True, "codex/gpt-6.1-terra/high", "same_provider_fallback"))
+        self.assertIn("agy-gemini", fb_pool.review_fallback_reason)
+        self.assertIn("soft-drained", fb_pool.review_fallback_reason)
+
+        # 4. Neon (antigravity) author with codex paused -> antigravity reviewer tagged same_provider_fallback.
+        codex_paused = routefile.load(self.write_routes(base + "paused_agents: [codex]\n"))
+        fb_neon = routefile.resolve_dispatch(codex_paused, role="review", author_families={"Google"})
+        self.assertEqual((fb_neon.ok, fb_neon.route, fb_neon.review_independence),
+                         (True, "antigravity/gemini-4-neon/high", "same_provider_fallback"))
+        self.assertIn("codex", fb_neon.review_fallback_reason)
+
+        # 5. Author-family route paused too -> refusal; Claude is never chosen even when only Claude remains.
+        both_paused = routefile.load(self.write_routes(base + "paused_agents: [codex, antigravity]\n"))
+        for authors in ({"OpenAI"}, {"Google"}):
+            with self.subTest(authors=authors):
+                refused = routefile.resolve_dispatch(both_paused, role="review", author_families=authors)
+                self.assertEqual((refused.ok, refused.error_code, refused.route),
+                                 (False, "no_eligible_route", None))
+
+        # 6. Non-quota causes (disabled, --exclude-agent, pinned) do NOT trigger quota fallback.
+        agy_disabled = routefile.load(self.write_routes(
+            base.replace("antigravity/gemini-4-neon/high: enabled", "antigravity/gemini-4-neon/high: disabled")
+        ))
+        self.assertEqual(
+            routefile.resolve_dispatch(agy_disabled, role="review", author_families={"OpenAI"}).error_code,
+            "reviewer_same_family",
+        )
+        self.assertEqual(
+            routefile.resolve_dispatch(both, role="review", author_families={"OpenAI"},
+                                       exclude_agents=["antigravity"]).error_code,
+            "reviewer_same_family",
+        )
+        pinned_codex = routefile.load(self.write_routes(
+            base.replace("pinned: null", "pinned: codex/gpt-6.1-terra/high") + "paused_agents: [antigravity]\n"
+        ))
+        self.assertEqual(
+            routefile.resolve_dispatch(pinned_codex, role="review", author_families={"OpenAI"}).error_code,
+            "reviewer_same_family",
+        )

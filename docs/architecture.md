@@ -241,11 +241,19 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   `--profile review-*` without an explicit `--route`), candidates whose model family authored the
   diff (any accepted `implement` dispatch, including mixed authorship after a handoff) are
   filtered out rather than merely deprioritized, and the remaining candidates are ordered by
-  `review_agents`. If no independent candidate remains and at least one otherwise-eligible
-  candidate was filtered for matching an author family, Pod refuses with `reviewer_same_family`
-  unless a review exception (`--words` or `--after aN --why "…"`) is given; if every candidate
-  was unavailable because it was disabled, paused, soft-drained or excluded, Pod refuses with
-  `no_eligible_route`. Each review records a
+  `review_agents`. When every enabled other-family reviewer route in the candidate list is
+  unavailable because its agent or quota pool is actively paused (`paused_agents`) or soft-drained
+  (`soft_drained_agents`), Pod falls back to an eligible author-family route within `review_agents`
+  (never bypassing `review_agents` or manual `Pin`, and never selecting a paused or soft-drained
+  route), records `review_independence: same_provider_fallback` and `review_fallback_reason`
+  (naming the unavailable agent or pool) on the assignment and review fact, and still requires a
+  fresh session; once an other-family reviewer returns, new reviews go back to cross-family. If no
+  independent candidate remains for any other reason (disabled routes, `--exclude-agent`, no
+  other-family route in the profile, or a pinned author-family route) and at least one
+  otherwise-eligible candidate was filtered for matching an author family, Pod refuses with
+  `reviewer_same_family` unless a review exception (`--words` or `--after aN --why "…"`) is given;
+  if every candidate was unavailable because it was disabled, paused, soft-drained or excluded, Pod
+  refuses with `no_eligible_route`. Each review records a
   factual `review_independence` tag (`cross_provider`, `cross_provider_fallback`, `same_provider`,
   `same_provider_fallback`, `unknown_author`, or `fallback_unknown_author`).
   Reviews must run in a separate session from any implementer, and optional reviewer `notes` (or

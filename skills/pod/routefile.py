@@ -78,6 +78,7 @@ class Resolution:
     author_families: tuple[str, ...] = ()
     reviewer_notes: tuple[str, ...] = ()
     reason: str | None = None
+    review_fallback_reason: str | None = None
 
 
 @dataclass
@@ -435,12 +436,18 @@ def format_profile(profile: Profile) -> str:
     return " ".join((head, *profile.routes))
 
 
-def review_tag(reviewer: str, author_families: set[str] | frozenset[str], primary_agent: str | None) -> str:
+def review_tag(
+    reviewer: str,
+    author_families: set[str] | frozenset[str],
+    primary_agent: str | None,
+    *,
+    fallback: bool = False,
+) -> str:
     """Compute an honest factual proof tag for a review by comparing model families (providers)."""
     reviewer_agent = _route_parts(reviewer)[0]
     reviewer_family = route_family(reviewer)
     normalized_authors = {route_family(item) for item in author_families if item}
-    on_primary = primary_agent is None or reviewer_agent == primary_agent
+    on_primary = not fallback and (primary_agent is None or reviewer_agent == primary_agent)
     if not normalized_authors:
         return "unknown_author" if on_primary else "fallback_unknown_author"
     if reviewer_family not in normalized_authors:
@@ -761,12 +768,34 @@ def resolve_dispatch(
     eligible: list[str] = []
     held_keys: set[str] = set()
     effort_errors: dict[str, PodError] = {}
+    auto_review_family_check = (role == "review" and route is None and bool(normalized_authors)
+                                and not allow_review_exception)
+    same_family_eligible: list[str] = []
+    quota_blocked_other: dict[tuple[str, str, str], str] = {}
+    other_family_non_quota_blocked = False
+
+    def _is_enabled_other_family_reviewer(cand: str, agent: str) -> bool:
+        if not auto_review_family_check or route_family(cand) in normalized_authors:
+            return False
+        if preferences.review_agents and agent not in preferences.review_agents:
+            return False
+        if preferences.routes.get(cand) != "enabled":
+            return False
+        try:
+            wire_route(cand)
+        except PodError:
+            return False
+        return True
+
     for cand in candidates:
         agent = split(cand)[0]
         paused_hit = _matched_hold(cand, paused)
         if paused_hit:
             kind, key, hold = paused_hit
             held_keys.add(key)
+            if _is_enabled_other_family_reviewer(cand, agent):
+                quota_blocked_other.setdefault(
+                    (kind, key, "paused"), f"{kind} {key} paused{_hold_clause(hold)}")
             trace.append(TraceStep(cand, "skipped", "paused_agent",
                                    f"Skipped {cand}: {kind} {key} is paused in paused_agents{_hold_clause(hold)}."))
             continue
@@ -774,6 +803,9 @@ def resolve_dispatch(
         if drained_hit:
             kind, key, hold = drained_hit
             held_keys.add(key)
+            if _is_enabled_other_family_reviewer(cand, agent):
+                quota_blocked_other.setdefault(
+                    (kind, key, "soft_drained"), f"{kind} {key} soft-drained{_hold_clause(hold)}")
             trace.append(TraceStep(cand, "skipped", "soft_drained_agent",
                                    f"Skipped {cand}: {kind} {key} is soft-drained in soft_drained_agents"
                                    f"{_hold_clause(hold)}."))
@@ -781,6 +813,8 @@ def resolve_dispatch(
         excluded_hit = _matched_exclude(cand, excluded)
         if excluded_hit:
             kind, key = excluded_hit
+            if _is_enabled_other_family_reviewer(cand, agent):
+                other_family_non_quota_blocked = True
             trace.append(TraceStep(cand, "skipped", "excluded_agent",
                                    f"Skipped {cand}: {kind} {key} is excluded by --exclude-agent."))
             continue
@@ -800,12 +834,20 @@ def resolve_dispatch(
                                    f"Skipped {cand}: agent {agent} is outside review_agents "
                                    f"({', '.join(preferences.review_agents)})."))
             continue
-        if (role == "review" and route is None and normalized_authors
-                and route_family(cand) in normalized_authors and not allow_review_exception):
+        if auto_review_family_check and route_family(cand) in normalized_authors:
+            same_family_eligible.append(cand)
             trace.append(TraceStep(cand, "skipped", "author_family",
                                    f"Skipped {cand}: model family {route_family(cand)} authored this diff."))
             continue
         eligible.append(cand)
+
+    review_fallback_reason: str | None = None
+    if (not eligible and auto_review_family_check and same_family_eligible
+            and quota_blocked_other and not other_family_non_quota_blocked):
+        eligible = list(same_family_eligible)
+        review_fallback_reason = (
+            "other-family review routes unavailable: " + "; ".join(quota_blocked_other.values())
+        )
 
     if role == "review" and len(eligible) > 1:
         order = {agent: index for index, agent in enumerate(preferences.review_agents)}
@@ -818,13 +860,20 @@ def resolve_dispatch(
         if route is not None and chosen not in profile_routes and not cleaned_reason:
             return _refuse_outside_profiles(chosen)
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
-        tag = review_tag(chosen, normalized_authors, primary_agent) if role == "review" else None
+        tag = review_tag(chosen, normalized_authors, primary_agent,
+                         fallback=bool(review_fallback_reason)) if role == "review" else None
         extra = ""
         if tag:
-            extra = f" ({tag}" + (f"; authors: {', '.join(sorted_authors)}" if sorted_authors else "") + ")"
+            details = [tag]
+            if review_fallback_reason:
+                details.append(review_fallback_reason)
+            if sorted_authors:
+                details.append(f"authors: {', '.join(sorted_authors)}")
+            extra = f" ({'; '.join(details)})"
         trace.append(TraceStep(chosen, "selected", "selected", f"Selected {chosen}{extra}."))
         return Resolution(True, role, chosen, wire_route(chosen), profile, mcp, tag, trace,
-                          author_families=sorted_authors, reviewer_notes=kept_notes, reason=cleaned_reason)
+                          author_families=sorted_authors, reviewer_notes=kept_notes, reason=cleaned_reason,
+                          review_fallback_reason=review_fallback_reason)
 
     # Zero candidates remain: preserve exact refusal codes for single-route mode and review-family blocks.
     if prof is None and len(trace) == 1:
