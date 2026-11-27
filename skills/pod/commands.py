@@ -660,12 +660,9 @@ def _settle_start(writer, state: State, ident: str) -> dict:
         raise PodError("start_pending", f"Orca is still starting {ident}.", fix=f"run `pod dispatch --retry {ident}` again shortly")
     receipt = answer.get("receipt") or {}
     found = receipt.get("taskId") if answer.get("state") == "completed" else None
-    markers = (f"[{state.id}:{ident}]", f"· {state.id}:{ident} ")
-    all_tasks = None
-    if not found:
-        all_tasks = orca.tasks(run)
-        found = next((key for key, task in all_tasks.items()
-                      if any(marker in (task["title"] or "") for marker in markers)), None)
+    markers = (f"· {state.id}:{ident} ", f"[{state.id}:{ident}]")
+    found = found or next((key for key, task in orca.tasks(run).items()
+                           if any(marker in (task["title"] or "") for marker in markers)), None)
     if found:
         worker = next((item for item in orca.workers(run) if item["task"] == found), {})
         dispatch_ = receipt.get("dispatchId") or worker.get("dispatch")
@@ -700,23 +697,6 @@ def _settle_start(writer, state: State, ident: str) -> dict:
         if answer.get("state") != "completed" and not dispatch_:
             raise PodError("start_pending", f"Orca has a task for {ident} and no worker yet.",
                            fix=f"run `pod dispatch --retry {ident}` again shortly")
-    if not found and all_tasks is not None:
-        known_tasks = {a.get("task") for a in state.assignments.values() if a.get("task")}
-        ambiguous = [
-            tid for tid, task in all_tasks.items()
-            if tid not in known_tasks and (
-                (task.get("title") or "").rstrip().endswith(("...", "…"))
-                or not (task.get("title") or "").strip()
-            )
-        ]
-        if ambiguous:
-            raise PodError(
-                "start_unsettled",
-                f"Orca has no receipt for {ident}, and untracked task(s) with truncated titles "
-                f"({', '.join(sorted(ambiguous))}) prevent proving no worker started.",
-                fix=f"inspect `orca orchestration task-list --run {run}` and `orca orchestration worker-list --run {run}`, "
-                    f"verify whether {ident} started, and retry once Orca reports its state",
-            )
     writer.append({"kind": "assignment", "id": ident, "void": True, "task": found,
                    "refused": "start failed" if found else "start_not_recorded"})
     return {"assignment": ident, "void": True,

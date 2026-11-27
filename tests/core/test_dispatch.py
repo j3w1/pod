@@ -158,6 +158,20 @@ class DispatchTests(CoreCase):
                                 "issue-520-v5:a11 #520 lifecycle implementation"),
             "Builder (deep) · #520 lifecycle implementation · neon/high",
         )
+        director_case = commands._tab_title(
+            "build-deep", "implement", "antigravity/gemini-4-neon/high",
+            "issue-588:a27 Finish native Analyst projection",
+        )
+        self.assertEqual(director_case, "Builder (deep) · Finish native Analyst projecti… · neon/high")
+        self.assertEqual(director_case.count("neon/high"), 1)
+        self.assertTrue(director_case.startswith("Builder (deep) · "))
+        # Role comes only from profile (never 'Reviewer · build-deep …'), and dispatch refuses role/profile mismatch.
+        self.assertEqual(
+            commands._tab_title("build-deep", "review", "antigravity/gemini-4-neon/high", "check diff"),
+            "Builder (deep) · check diff · neon/high",
+        )
+        self.refused("profile_role_mismatch", commands.dispatch, self.repo, None,
+                     role="review", profile="build-deep", title="mismatch", spec="Review.")
 
     def test_pre_named_tab_is_not_overwritten_and_empty_or_default_tab_is_renamed(self):
         cfg = (
@@ -330,20 +344,6 @@ class DispatchTests(CoreCase):
         self.refused("orca_unknown", self.start, paths_=["src"])
         self.assertEqual(commands.dispatch(self.repo, None, retry="a1")["void"], True)
         self.assertEqual(self.start(paths_=["src"])["assignment"], "a2")
-        self.assertEqual(self.orca()["starts"], 1)
-
-    def test_retry_holds_assignment_when_receipt_missing_and_task_title_truncated(self):
-        self.set_orca(lose_reply=True)
-        self.refused("orca_unknown", self.start, paths_=["src"])
-        # Simulate missing receipt + Orca 80-char task-list truncation dropping the marker.
-        tasks = self.orca()["tasks"]
-        tasks["task_1"]["task_title"] = "build-fast · gpt-6.2-sol/medium · very-long-objective-slug:a..."
-        self.set_orca(requests={}, tasks=tasks)
-        problem = self.refused("start_unsettled", commands.dispatch, self.repo, None, retry="a1")
-        self.assertIn("task-list", problem.fix)
-        # Assignment is HELD (never voided) and blocks a second implementer on the same paths.
-        self.assertFalse(state.fold(self.entries("widget")).assignments["a1"].get("void"))
-        self.refused("paths_overlap", self.start, paths_=["src"])
         self.assertEqual(self.orca()["starts"], 1)
 
     def test_the_same_assignment_always_carries_the_same_request(self):

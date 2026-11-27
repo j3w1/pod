@@ -86,12 +86,15 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   and only from a default title; it never touches role or coordinator tabs. Downstream daemons can
   identify Pod dispatches by two stable markers: the `worker-start` `--task-title` begins with
   `[<objective>:<ident>]` (objective id and assignment id, e.g. `[pod-…:a3]`, placed first so
-  80-character readback truncation never drops it; `--retry` recovery also recognizes the earlier
-  `· <objective>:<ident> ` form and holds rather than voiding if untracked truncated tasks prevent
-  proving no worker started), and request ids are derived from the objective and assignment
-  (`orca.request_id`). Orca has no atomic conditional rename, so this read-then-rename
+  80-character readback truncation usually preserves it; `--retry` recovery also recognizes the
+  earlier `· <objective>:<ident> ` form), and request ids are derived from the objective and
+  assignment (`orca.request_id`). Orca has no atomic conditional rename, so this read-then-rename
   guard accepts a narrow concurrent-rename window. A start recovered by `--retry` also applies the
   guarded rename when its effective route is known.
+  **Known limits:** retry recovery matches Tasks by a marker in the title read back from Orca
+  (truncated to ~80 chars; supported objective ids up to 80 chars can still lose it), may bind a
+  Task whose topic quotes another assignment's marker, and does not settle a completed request
+  receipt with an unknown start; hardening is tracked in a follow-up issue.
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 
