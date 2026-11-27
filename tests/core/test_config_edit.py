@@ -141,3 +141,42 @@ class ConfigEditLockTests(CoreCase):
             with self.assertRaises(PodError) as caught:
                 edit.edit_in_editor(target, ["ed"])
         self.assertEqual(caught.exception.code, "preferences_changed")
+
+    def test_a_directory_or_unreadable_output_is_refused_without_deleting_a_regular_copy(self):
+        target = paths.route_file()
+        before = target.read_bytes()
+
+        def directory_output(copy):
+            os.unlink(copy)
+            os.mkdir(copy)
+        with self.editor(mutate=directory_output):
+            with self.assertRaises(PodError) as caught:
+                edit.edit_in_editor(target, ["ed"])
+        self.assertEqual(caught.exception.code, "editor_failed")
+        self.kept()[0].rmdir()
+
+        def unreadable(copy):
+            Path(copy).write_text("# edited\n")
+            os.chmod(copy, 0)
+        with self.editor(mutate=unreadable):
+            with self.assertRaises(PodError) as unread:
+                edit.edit_in_editor(target, ["ed"])
+        self.assertEqual(unread.exception.code, "editor_failed")
+        self.assertEqual(target.read_bytes(), before)
+        kept = self.kept()
+        self.assertEqual(len(kept), 1)                          # the person's only copy of the edit survives
+        os.chmod(kept[0], 0o600)
+        self.assertEqual(kept[0].read_text(), "# edited\n")
+
+    def test_the_edited_copy_is_read_exactly_once(self):
+        target = paths.route_file()
+        reads = []
+        real = edit._read_regular
+
+        def counting(path):
+            reads.append(Path(path).name)
+            return real(path)
+        with self.editor(), patch.object(edit, "_read_regular", side_effect=counting):
+            edit.edit_in_editor(target, ["ed"])
+        self.assertEqual([name for name in reads if name.startswith(".config-edit-")], reads[1:2])
+        self.assertEqual(sum(name.startswith(".config-edit-") for name in reads), 1)

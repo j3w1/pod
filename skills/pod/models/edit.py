@@ -81,10 +81,14 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
     def keep(code: str, message: str, fix: str) -> PodError:
         return PodError(code, f"{message} Your edit is kept at {copy}." if copy.exists() else message, fix=fix)
 
-    def vanished() -> PodError:
-        copy.unlink(missing_ok=True)
-        return PodError("editor_failed", "The editor left no regular file to save; nothing was saved.",
-                        fix="run `pod config edit` again")
+    def unusable_output() -> PodError:
+        if copy.is_symlink():                      # our own staging name, never the person's file
+            try:
+                copy.unlink()
+            except OSError:
+                pass
+        return PodError("editor_failed", "The editor left no readable regular file to save; nothing was saved.",
+                        fix=f"run `pod config edit` again" + (f"; any edit is at {copy}" if copy.exists() else ""))
 
     try:
         done = subprocess.run([*editor, str(copy)], check=False)
@@ -93,9 +97,9 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
         raise PodError("editor_failed", f"The editor could not run: {exc.strerror or type(exc).__name__}.",
                        fix="set VISUAL or EDITOR to an editor that exists") from exc
     try:
-        edited, _ = _read_regular(copy)
+        edited, _ = _read_regular(copy)            # the one snapshot every later decision uses
     except OSError:
-        raise vanished() from None
+        raise unusable_output() from None
     if done.returncode != 0:
         if edited == original:
             copy.unlink(missing_ok=True)
@@ -114,16 +118,13 @@ def edit_in_editor(path: Path, editor: list[str]) -> None:
         if live is None or live_identity != identity or live != original:
             raise keep("preferences_changed", "The preference file changed, was replaced or removed while you edited.",
                        f"merge {copy} into {path} by hand, then delete the copy")
+        staged = stage(edited)
         try:
-            final, _ = _read_regular(copy)               # the bytes that are validated are the bytes installed
-        except OSError:
-            raise vanished() from None
-        staged = stage(final)
-        try:
-            if original_ok and routefile.load(staged).status != "ok":
-                problem = routefile.load(staged).problem
-                raise keep("preferences_invalid", f"The edited file cannot be read: {problem}.",
-                           f"correct {copy}, then copy it over {path}")
+            if original_ok:
+                checked = routefile.load(staged)
+                if checked.status != "ok":
+                    raise keep("preferences_invalid", f"The edited file cannot be read: {checked.problem}.",
+                               f"correct {copy}, then copy it over {path}")
             staged.chmod(os.stat(path).st_mode & 0o7777)
             os.replace(staged, path)
         finally:

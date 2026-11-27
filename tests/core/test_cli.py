@@ -48,8 +48,11 @@ class CliTests(CoreCase):
         code, out, _ = self.run_pod("status", "--local", "--json")
         data = json.loads(out)
         self.assertEqual((code, data["assignment_records"], data["events"]), (0, [], []))
+        commands.dispatch(self.repo, None, role="implement", title="typed gate", spec="Do.", paths_=["a/"])
         code, out, _ = self.run_pod("status", "--local")
-        self.assertNotIn("assignment_records", out)
+        self.assertIn("a1 implement", out)
+        self.assertNotIn("assignment_records", out)                 # a logged assignment would render if ungated
+        self.assertEqual(len(json.loads(self.run_pod("status", "--local", "--json")[1])["assignment_records"]), 1)
 
     def test_a_refusal_says_what_to_change_and_json_carries_the_same(self):
         code, out, _ = self.run_pod("status", "--json")
