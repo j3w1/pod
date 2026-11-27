@@ -101,6 +101,7 @@ def rename(run: str, started: dict, title: str) -> str | None:
         if not handle:
             return "Orca named no terminal for the worker"
         worktree = worker.get("worktree")
+        # Orca has no atomic conditional rename; reading the title first accepts a narrow concurrent-rename window.
         args = ("terminal", "list", "--worktree", f"path:{worktree}") if worktree else ("terminal", "list")
         reply = call(*args, timeout=15)
         listed = reply.get("terminals") if isinstance(reply, dict) else None

@@ -227,10 +227,15 @@ class RouteFileTests(PodCase):
         # 5. Mixed authorship {Google, OpenAI} -> Claude Sonnet (cross_provider_fallback)
         r5 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Google", "OpenAI"})
         self.assertEqual((r5.route, r5.review_independence), ("claude/claude-sonnet-5-5/high", "cross_provider_fallback"))
-        # 6. Neon built diff (Google), Codex & Claude down -> AGY Neon (same_provider_fallback)
+        # 6. Neon built diff (Google), Codex & Claude down -> refused unless a review exception is supplied
+        r6_blocked = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Google"},
+                                                exclude_agents=["codex", "claude"])
+        self.assertEqual((r6_blocked.ok, r6_blocked.error_code), (False, "reviewer_same_family"))
+        self.assertTrue(any(step.code == "author_family" for step in r6_blocked.trace))
         r6 = routefile.resolve_dispatch(prefs, profile="review-fast", author_families={"Google"},
-                                        exclude_agents=["codex", "claude"])
-        self.assertEqual((r6.route, r6.review_independence), ("antigravity/gemini-4-neon/high", "same_provider_fallback"))
+                                        exclude_agents=["codex", "claude"], allow_review_exception=True)
+        self.assertEqual((r6.ok, r6.route, r6.review_independence),
+                         (True, "antigravity/gemini-4-neon/high", "same_provider_fallback"))
         # Pin fail-closed when pinned agent is paused or excluded
         pin_prefs = routefile.load(self.write_routes(
             cfg.replace("pinned: null", "pinned: antigravity/gemini-4-neon/low") + "paused_agents: [antigravity]\n"
@@ -438,16 +443,46 @@ class RouteFileTests(PodCase):
         imp_custom = routefile.resolve_dispatch(custom, role="implement")
         self.assertEqual((imp_custom.ok, imp_custom.profile, imp_custom.route),
                          (True, "build-deep", "antigravity/gemini-4-neon/high"))
-        # --route outside every profile is refused unless --reason is given.
+        # --route outside every profile is refused unless --reason is given (including empty/absent profiles and Pin).
         refused = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/ultra")
         self.assertEqual((refused.ok, refused.error_code), (False, "route_outside_profiles"))
         blank = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/ultra", reason="   ")
         self.assertEqual((blank.ok, blank.error_code), (False, "route_outside_profiles"))
         allowed = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/ultra", reason="full trace")
         self.assertEqual((allowed.ok, allowed.route, allowed.reason), (True, "codex/gpt-6.2-sol/ultra", "full trace"))
+        # Empty/absent profiles: explicit --route still requires --reason.
+        no_profiles = routefile.load(self.write_routes(
+            "schema: pod/v2\nroutes:\n  codex/gpt-6.2-sol/high: enabled\npreferred: null\npinned: null\n"
+        ))
+        self.assertEqual(routefile.resolve_dispatch(no_profiles, role="implement",
+                                                    route="codex/gpt-6.2-sol/high").error_code, "route_outside_profiles")
+        self.assertTrue(routefile.resolve_dispatch(no_profiles, role="implement",
+                                                   route="codex/gpt-6.2-sol/high", reason="one-off").ok)
+        # Matching Pin outside configured profiles: explicit --route still requires --reason, while Pin alone does not.
+        pinned_outside = routefile.load(self.write_routes(cfg.replace("pinned: null", "pinned: codex/gpt-6.2-sol/ultra")))
+        self.assertEqual(routefile.resolve_dispatch(pinned_outside, role="implement",
+                                                    route="codex/gpt-6.2-sol/ultra").error_code, "route_outside_profiles")
+        pin_with_reason = routefile.resolve_dispatch(pinned_outside, role="implement",
+                                                     route="codex/gpt-6.2-sol/ultra", reason="pinned override")
+        self.assertEqual((pin_with_reason.ok, pin_with_reason.route, pin_with_reason.reason),
+                         (True, "codex/gpt-6.2-sol/ultra", "pinned override"))
+        self.assertTrue(routefile.resolve_dispatch(pinned_outside, role="implement").ok)
         # --route listed in any profile needs no --reason.
         in_profile = routefile.resolve_dispatch(prefs, role="implement", route="codex/gpt-6.2-sol/medium")
         self.assertEqual((in_profile.ok, in_profile.route, in_profile.reason), (True, "codex/gpt-6.2-sol/medium", None))
+        # Single authoring source: older config without default_profiles picks up models/registry.json without rewriting.
+        from unittest.mock import patch
+        older_path = self.write_routes(cfg)
+        before_bytes, before_mtime = older_path.read_bytes(), older_path.stat().st_mtime_ns
+        older_prefs = routefile.load(older_path)
+        with patch.object(routefile, "_shipped_default_profiles",
+                          return_value={"implement": "build-deep", "review": "review-fast", "investigate": "scout"}):
+            self.assertEqual(routefile.effective_default_profiles(older_prefs),
+                             {"implement": "build-deep", "review": "review-fast", "investigate": "scout"})
+            picked = routefile.resolve_dispatch(older_prefs, role="implement")
+            self.assertEqual((picked.ok, picked.profile, picked.route),
+                             (True, "build-deep", "antigravity/gemini-4-neon/high"))
+        self.assertEqual((older_path.read_bytes(), older_path.stat().st_mtime_ns), (before_bytes, before_mtime))
         # routing_policy() returns one stable pod-routing/v1 block with active pause expiry.
         early = routefile.routing_policy(prefs, now=datetime(2026, 11, 26, 3, 0, tzinfo=timezone.utc))
         late = routefile.routing_policy(prefs, now=datetime(2026, 11, 26, 5, 0, tzinfo=timezone.utc))
@@ -459,11 +494,13 @@ class RouteFileTests(PodCase):
         self.assertEqual(early["pauses"]["paused_agents"][0]["active"], True)
         self.assertEqual(late["pauses"]["paused_agents"][0]["active"], False)
         self.assertEqual(early["pauses"]["soft_drained_agents"][0]["agent"], "agy-claude")
-        # Invalid default_profiles entries invalidate preferences.
+        # Invalid default_profiles entries and reserved profile names invalidate preferences.
         for bad in (
             "default_profiles:\n  unknown: build-fast\n",
             "default_profiles:\n  implement: missing-profile\n",
             "default_profiles:\n  implement: review-fast\n",
+            "profiles:\n  none: implement codex/gpt-6.2-sol/medium\n",
+            "profiles:\n  null: implement codex/gpt-6.2-sol/medium\n",
         ):
             with self.subTest(bad=bad):
                 invalid = routefile.load(self.write_routes(cfg + bad))

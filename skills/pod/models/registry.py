@@ -66,12 +66,11 @@ def _validate_defaults(section: object) -> dict:
     if not isinstance(default_profiles, dict):
         raise ValueError("defaults.default_profiles")
     for role, pname in default_profiles.items():
-        if role not in routefile.ROLES or not isinstance(pname, str) or not routefile.PROFILE.fullmatch(pname):
+        if role not in routefile.ROLES or not routefile.valid_profile_name(pname):
             raise ValueError(f"defaults.default_profiles.{role}")
-        if parsed_profiles:
-            prof = parsed_profiles.get(pname)
-            if prof is None or prof.role != role:
-                raise ValueError(f"defaults.default_profiles.{role}")
+        prof = parsed_profiles.get(pname)
+        if prof is None or prof.role != role:
+            raise ValueError(f"defaults.default_profiles.{role}")
     return section
 
 

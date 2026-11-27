@@ -510,13 +510,16 @@ def default_preferences(source_bundle: Path, *, include_routes: bool = True) -> 
                 review_agents = raw_review
             raw_profiles = defaults.get("profiles")
             if isinstance(raw_profiles, dict) and all(
-                isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", k) and isinstance(v, str) and v.strip()
+                isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]*", k) and k not in ("none", "null")
+                and isinstance(v, str) and len(v.split()) >= 2
+                and v.split()[0].removesuffix("+mcp") in ("implement", "review", "investigate")
                 for k, v in raw_profiles.items()
             ):
                 profiles = dict(raw_profiles)
             raw_defaults = defaults.get("default_profiles")
             if isinstance(raw_defaults, dict) and all(
                 k in ("implement", "review", "investigate") and isinstance(v, str) and v in profiles
+                and profiles[v].split()[0].removesuffix("+mcp") == k
                 for k, v in raw_defaults.items()
             ):
                 default_profiles = dict(raw_defaults)

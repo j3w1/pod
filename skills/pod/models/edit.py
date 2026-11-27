@@ -42,6 +42,32 @@ def _set_line(line: str, value: str) -> str:
     return f"{match['head']} {value}{match['tail']}{ending}"
 
 
+def _header_line(line: str, value: str | None) -> str:
+    """Rewrite a mapping header `key: [value]`, preserving indentation, any `# comment` and line ending."""
+    ending = "\r" if line.endswith("\r") else ""
+    raw = line[:len(line) - len(ending)]
+    match = _VALUE.match(raw)
+    tail = match["tail"].strip()
+    comment = ""
+    if tail:
+        idx = raw.rfind(tail)
+        before = raw[:idx]
+        ws = before[len(before.rstrip(" \t")):] or " "
+        comment = f"{ws}{tail}"
+    if value is None:
+        return f"{match['head']}{comment}{ending}"
+    return f"{match['head']} {value}{comment}{ending}"
+
+
+def _format_yaml_string(value: str) -> str:
+    """Quote a string scalar when yamlsubset would otherwise parse it as a non-string literal."""
+    try:
+        parsed = yamlsubset.scalar(value)
+    except ValueError:
+        parsed = None
+    return value if parsed == value and isinstance(parsed, str) else f"'{value}'"
+
+
 def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None], ending: str) -> list[str]:
     if not updates:
         return lines
@@ -74,7 +100,7 @@ def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None],
             added.append(f"{indent}{name}: {value}{ending}")
     if block.value is not None:            # `<key>: {}` written inline
         if added:
-            lines[block.start] = f"{key}:{ending}"
+            lines[block.start] = _header_line(lines[block.start], None)
             lines[block.start + 1:block.start + 1] = added
         return lines
     if added:
@@ -84,7 +110,7 @@ def _rewrite_mapping(lines: list[str], key: str, updates: dict[str, str | None],
         re_blocks = yamlsubset.parse("\n".join(lines))
         re_block = re_blocks.get(key)
         if re_block is not None and re_block.value is None and not re_block.lines:
-            lines[re_block.start] = f"{key}: {{}}{ending}"
+            lines[re_block.start] = _header_line(lines[re_block.start], "{}")
     return lines
 
 
@@ -213,9 +239,9 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                                fix="choose a route `pod models` shows as routable")
         parsed_profiles: dict[str, routefile.Profile | None] = {}
         for name, spec in profile_updates.items():
-            if not routefile.PROFILE.fullmatch(name or ""):
+            if not routefile.valid_profile_name(name):
                 raise PodError("profile_invalid", f"{name!r} is not a valid profile name.",
-                               fix="use a lowercase profile name such as scout-fast or build-deep")
+                               fix="use a lowercase profile name such as scout-fast or build-deep (not none or null)")
             if spec is None:
                 parsed_profiles[name] = None
             else:
@@ -246,7 +272,7 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
             if pname is None:
                 after_defaults.pop(role_key, None)
             else:
-                if not isinstance(pname, str) or not routefile.PROFILE.fullmatch(pname):
+                if not routefile.valid_profile_name(pname):
                     raise PodError("profile_invalid", f"{pname!r} is not a valid profile name.",
                                    fix="use a configured profile name")
                 prof = after_profiles.get(pname)
@@ -312,9 +338,12 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                 if role_key in base_defaults:
                     formatted_defaults[role_key] = None
             elif base_defaults.get(role_key) != pname:
-                formatted_defaults[role_key] = pname
+                formatted_defaults[role_key] = _format_yaml_string(pname)
 
-        if not routes and not scalars and not formatted_profiles and not formatted_defaults and not hold_updates:
+        creating = current.status == "absent" and bool(
+            routes or scalars or parsed_profiles or default_updates or hold_updates
+        )
+        if not creating and not routes and not scalars and not formatted_profiles and not formatted_defaults and not hold_updates:
             return current
         base_text = raw.decode("utf-8") if current.status == "ok" else _initial_text()
         base_prefs = current if current.status == "ok" else None

@@ -20,7 +20,7 @@ from .state import ROLES
 STATES = ("enabled", "disabled")
 AUTHORIZERS = ("person", "coordinator")
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
-DEFAULT_PROFILES = {"implement": "build-fast", "review": "review-fast", "investigate": "scout"}
+RESERVED_PROFILE_NAMES = frozenset({"none", "null"})
 MODEL_SUFFIX_AGENTS = frozenset({"antigravity"})
 _AGENT_DEFAULT_FAMILY = {"claude": "Anthropic", "codex": "OpenAI", "antigravity": "Google"}
 _AGENT_DEFAULT_POOL = {"claude": "claude-max", "codex": "codex", "antigravity": "agy-gemini"}
@@ -363,10 +363,32 @@ def active_holds(holds: dict[str, AgentHold], *, agents: list[str] | tuple[str, 
     return result
 
 
+def valid_profile_name(name: object) -> bool:
+    return isinstance(name, str) and bool(PROFILE.fullmatch(name)) and name not in RESERVED_PROFILE_NAMES
+
+
+@functools.lru_cache(maxsize=1)
+def _shipped_default_profiles(path: Path | None = None) -> dict[str, str]:
+    """Read shipped role defaults from models/registry.json directly without importing pod.models."""
+    target = Path(__file__).resolve().parent / "models" / "registry.json" if path is None else path
+    try:
+        document = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    defaults = document.get("defaults")
+    if not isinstance(defaults, dict):
+        return {}
+    raw = defaults.get("default_profiles")
+    if not isinstance(raw, dict):
+        return {}
+    return {role: pname for role, pname in raw.items()
+            if role in ROLES and valid_profile_name(pname)}
+
+
 def parse_profile(name: str, spec: object) -> Profile:
     """Parse one flat profile line: `<role>[+mcp] <route1> [<route2> ...]`."""
-    if not PROFILE.fullmatch(name or ""):
-        raise ValueError(f"profiles.{name!r} must be a lowercase profile name")
+    if not valid_profile_name(name):
+        raise ValueError(f"profiles.{name!r} must be a lowercase profile name (not none or null)")
     if not isinstance(spec, str) or not spec.strip():
         raise ValueError(f"profiles.{name} must name a role and at least one route")
     parts = spec.split()
@@ -485,14 +507,15 @@ def _matched_exclude(route: str, excluded: set[str]) -> tuple[str, str] | None:
 
 
 def effective_default_profiles(preferences: Preferences) -> dict[str, str]:
-    """Resolved default profile per role: explicit default_profiles, else built-in default when present."""
+    """Resolved default profile per role: explicit default_profiles, else shipped registry defaults when present."""
+    shipped = _shipped_default_profiles()
     resolved: dict[str, str] = {}
     for role in ROLES:
         pname = preferences.default_profiles.get(role)
         if pname and pname in preferences.profiles and preferences.profiles[pname].role == role:
             resolved[role] = pname
             continue
-        builtin = DEFAULT_PROFILES.get(role)
+        builtin = shipped.get(role)
         if builtin and builtin in preferences.profiles and preferences.profiles[builtin].role == role:
             resolved[role] = builtin
     return resolved
@@ -599,7 +622,19 @@ def resolve_dispatch(
     paused = active_holds(preferences.paused_meta, agents=preferences.paused_agents, now=now)
     drained = active_holds(preferences.soft_drained_meta, agents=preferences.soft_drained_agents, now=now)
     excluded = set(excluded_list)
+    profile_routes = {item for prof_item in preferences.profiles.values() for item in prof_item.routes}
     trace: list[TraceStep] = []
+
+    def _refuse_outside_profiles(chosen_route: str) -> Resolution:
+        trace.append(TraceStep(
+            chosen_route, "blocked", "route_outside_profiles",
+            f"Blocked {chosen_route}: route is outside every configured profile and no --reason was given."))
+        return Resolution(
+            False, role, None, None, profile, mcp, None, trace,
+            "route_outside_profiles",
+            f"{chosen_route} is outside every configured profile; pass --reason TEXT to use it.",
+            "choose a --profile, pick a route listed in a profile, or pass --reason 'why this route is needed'",
+            author_families=sorted_authors, reviewer_notes=kept_notes)
 
     # Manual Pin is fail-closed and never silently overridden.
     if preferences.pinned:
@@ -643,6 +678,16 @@ def resolve_dispatch(
                               f"The review agent {pin_agent} is outside review_agents.",
                               _review_disallowed_fix(preferences),
                               author_families=sorted_authors, reviewer_notes=kept_notes)
+        if (role == "review" and route is None and normalized_authors
+                and route_family(preferences.pinned) in normalized_authors and not allow_review_exception):
+            family = route_family(preferences.pinned)
+            trace.append(TraceStep(preferences.pinned, "blocked", "author_family",
+                                   f"Blocked Pin {preferences.pinned}: model family {family} authored this diff."))
+            return Resolution(False, role, None, None, profile, mcp, None, trace,
+                              "reviewer_same_family",
+                              f"The pinned reviewer {preferences.pinned} uses the author's model family ({family}).",
+                              "clear the Pin in `pod models`, or pass a review exception (--words or --after/--why)",
+                              author_families=sorted_authors, reviewer_notes=kept_notes)
         chosen = preferences.pinned
         try:
             wired = wire_route(chosen)
@@ -651,6 +696,8 @@ def resolve_dispatch(
             return Resolution(False, role, None, None, profile, mcp, None, trace,
                               exc.code, str(exc), exc.fix,
                               author_families=sorted_authors, reviewer_notes=kept_notes)
+        if route is not None and chosen not in profile_routes and not cleaned_reason:
+            return _refuse_outside_profiles(chosen)
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
         tag = review_tag(chosen, normalized_authors, primary_agent) if role == "review" else None
         extra = ""
@@ -714,6 +761,11 @@ def resolve_dispatch(
                                    f"Skipped {cand}: agent {agent} is outside review_agents "
                                    f"({', '.join(preferences.review_agents)})."))
             continue
+        if (role == "review" and route is None and normalized_authors
+                and route_family(cand) in normalized_authors and not allow_review_exception):
+            trace.append(TraceStep(cand, "skipped", "author_family",
+                                   f"Skipped {cand}: model family {route_family(cand)} authored this diff."))
+            continue
         try:
             wire_route(cand)
         except PodError as exc:
@@ -722,36 +774,16 @@ def resolve_dispatch(
             continue
         eligible.append(cand)
 
-    if role == "review" and eligible:
-        if len(eligible) > 1:
-            order = {agent: index for index, agent in enumerate(preferences.review_agents)}
-            fallback_rank = len(order)
-            eligible = sorted(eligible, key=lambda item: (route_family(item) in normalized_authors,
-                                                          order.get(split(item)[0], fallback_rank)))
-        chosen_preview = eligible[0]
-        if route_family(chosen_preview) not in normalized_authors:
-            for cand in candidates:
-                if cand == chosen_preview:
-                    break
-                if cand in eligible and route_family(cand) in normalized_authors:
-                    trace.append(TraceStep(
-                        cand, "skipped", "author_family",
-                        f"Skipped {cand}: model family {route_family(cand)} authored this diff."))
+    if role == "review" and len(eligible) > 1:
+        order = {agent: index for index, agent in enumerate(preferences.review_agents)}
+        fallback_rank = len(order)
+        eligible = sorted(eligible, key=lambda item: (route_family(item) in normalized_authors,
+                                                      order.get(split(item)[0], fallback_rank)))
 
     if eligible:
         chosen = eligible[0]
-        if route is not None and preferences.profiles:
-            profile_routes = {item for prof_item in preferences.profiles.values() for item in prof_item.routes}
-            if chosen not in profile_routes and not cleaned_reason:
-                trace.append(TraceStep(
-                    chosen, "blocked", "route_outside_profiles",
-                    f"Blocked {chosen}: route is outside every configured profile and no --reason was given."))
-                return Resolution(
-                    False, role, None, None, profile, mcp, None, trace,
-                    "route_outside_profiles",
-                    f"{chosen} is outside every configured profile; pass --reason TEXT to use it.",
-                    "choose a --profile, pick a route listed in a profile, or pass --reason 'why this route is needed'",
-                    author_families=sorted_authors, reviewer_notes=kept_notes)
+        if route is not None and chosen not in profile_routes and not cleaned_reason:
+            return _refuse_outside_profiles(chosen)
         primary_agent = preferences.review_agents[0] if preferences.review_agents else None
         tag = review_tag(chosen, normalized_authors, primary_agent) if role == "review" else None
         extra = ""
@@ -761,7 +793,7 @@ def resolve_dispatch(
         return Resolution(True, role, chosen, wire_route(chosen), profile, mcp, tag, trace,
                           author_families=sorted_authors, reviewer_notes=kept_notes, reason=cleaned_reason)
 
-    # Zero candidates remain: preserve exact refusal codes for single-route mode, clean pause for profiles.
+    # Zero candidates remain: preserve exact refusal codes for single-route mode and review-family blocks.
     if prof is None and len(trace) == 1:
         only = trace[0]
         if only.code == "route_not_enabled":
@@ -783,6 +815,15 @@ def resolve_dispatch(
                               author_families=sorted_authors, reviewer_notes=kept_notes)
 
     reasons = " ".join(step.reason for step in trace)
+    if any(step.code == "author_family" for step in trace):
+        subject = f"profile {profile}" if profile else f"route {candidates[0]}"
+        return Resolution(False, role, None, None, profile, mcp, None, trace,
+                          "reviewer_same_family",
+                          f"No independent reviewer remains for {subject} outside author families "
+                          f"({', '.join(sorted_authors)}). {reasons}",
+                          "enable or unpause a reviewer from another model family, or pass a review exception "
+                          "(--words or --after/--why)",
+                          author_families=sorted_authors, reviewer_notes=kept_notes)
     hints = []
     held_names = sorted(held_keys)
     if held_names:
@@ -861,7 +902,7 @@ def load(path: Path | None = None) -> Preferences:
             for role_key, pname in raw_defaults.items():
                 if role_key not in ROLES:
                     raise ValueError(f"default_profiles.{role_key} must be one of {', '.join(ROLES)}")
-                if not isinstance(pname, str) or not PROFILE.fullmatch(pname):
+                if not valid_profile_name(pname):
                     raise ValueError(f"default_profiles.{role_key} must name a valid profile")
                 prof = result.profiles.get(pname)
                 if prof is None:

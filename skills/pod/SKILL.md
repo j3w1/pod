@@ -127,13 +127,16 @@ review by a worker that changed nothing.
 
 Workers run only on routes the person enabled; the Pin, when set, is the only route used.
 `pod dispatch` accepts `--profile NAME` (which sets role, ordered fallback routes and optional
-`+mcp`), `--route`, `--exclude-agent AGENT`, and `--dry-run` (pure read-only route preview with
-a plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, else the
-Preferred route. Host-wide `paused_agents` and `soft_drained_agents` (by quota pool or agent, with optional reason and
-TTL) skip unavailable or draining pools automatically. Choose by the task: its difficulty,
-risk and size. `pod models` is the person's TUI (and CLI flag twins `--pause`, `--drain`,
-`--unpause`, `--profile`) for comparing and configuring routes, profiles and pool holds; do
-not change their preferences without their direction.
+`+mcp`), `--route` (which requires `--reason TEXT` whenever the route is outside every configured
+profile), `--exclude-agent AGENT`, and `--dry-run` (pure read-only route preview with a
+plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, else the role's
+default profile (`default_profiles`, defaulting to `build-fast`, `review-fast` and `scout` when
+present), else `preferred` on pre-profile configs. Host-wide `paused_agents` and
+`soft_drained_agents` (by quota pool or agent, with optional reason and TTL) skip unavailable or
+draining pools automatically. Choose by the task: its difficulty, risk and size. `pod models` is
+the person's TUI (and CLI flag twins `--pause`, `--drain`, `--unpause`, `--profile`,
+`--default-profile`) for comparing and configuring routes, profiles and pool holds; do not change
+their preferences without their direction.
 
 ## Document types
 

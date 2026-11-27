@@ -171,7 +171,8 @@ def _failed_review(state: State, ident: str, base: str, agents: list[str]) -> bo
     prior = state.assignments.get(ident)
     if not prior or prior["role"] != "review" or prior["base"] != base:
         return False
-    if prior["route"].partition("/")[0] not in agents or prior.get("effective", prior["route"]).partition("/")[0] not in agents:
+    if agents and (prior["route"].partition("/")[0] not in agents
+                   or prior.get("effective", prior["route"]).partition("/")[0] not in agents):
         return False
     if any(review["reviewer"] == ident for review in state.of("review")):
         return False
@@ -240,6 +241,8 @@ def _tab_role(profile: str | None, role: str) -> str:
         return "Analyst"
     if "challenger" in name:
         return "Challenger"
+    if name == "ui" or name.startswith("ui-"):
+        return "Builder (UI)"
     if name == "review" or name.startswith("review-"):
         return "Reviewer"
     if name == "build" or name.startswith("build-"):
@@ -261,14 +264,24 @@ def _short_model(model: str) -> str:
 
 
 def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
-    """`<Role> · <topic> · <model>/<effort>`, about 60 characters."""
+    """`<Role> · <topic> · <model>/<effort>`, capped at 60 characters."""
+    limit, min_topic = 60, 8
+    head = f"{_tab_role(profile, role)} · "
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
-    model_parts = ([_short_model(raw_model)] if raw_model else []) + ([effort] if effort else [])
+    short_model = _short_model(raw_model) if raw_model else ""
+    tail_budget = max(0, limit - len(head) - min_topic)
+    if short_model:
+        effort_suffix = f"/{effort}" if effort else ""
+        model_budget = max(4, tail_budget - 3 - len(effort_suffix))
+        if len(short_model) > model_budget:
+            short_model = short_model[:model_budget - 1].rstrip("-_.") + "…"
+    model_parts = ([short_model] if short_model else []) + ([effort] if effort else [])
     tail = " · " + "/".join(model_parts) if model_parts else ""
-    head = f"{_tab_role(profile, role)} · "
-    room = max(8, 60 - len(head) - len(tail))
+    if len(tail) > tail_budget:
+        tail = tail[:max(1, tail_budget - 1)].rstrip() + "…" if tail_budget >= 4 else ""
+    room = max(1, limit - len(head) - len(tail))
     short = " ".join(title.split())
     short = short if len(short) <= room else short[:room - 1].rstrip() + "…"
     return head + short + tail
@@ -370,8 +383,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             if res.ok:
                 raise PodError("review_exception_invalid", "This dispatch needs no reviewer exception.",
                                fix="omit --words, --after and --why")
-            disallowed_seen = (res.error_code == "reviewer_agent_not_allowed"
-                               or any(step.code == "reviewer_agent_not_allowed" for step in res.trace))
+            disallowed_seen = (res.error_code in ("reviewer_agent_not_allowed", "reviewer_same_family")
+                               or any(step.code in ("reviewer_agent_not_allowed", "author_family") for step in res.trace))
             if not disallowed_seen:
                 raise PodError(res.error_code or "no_eligible_route", res.error_message or "No route is eligible.",
                                fix=res.error_fix)

@@ -392,6 +392,25 @@ class PreferenceTests(InstallerCase):
         self.assertTrue(loaded.profiles["scout-deep"].mcp)
         self.assertFalse(loaded.profiles["scout-fast"].mcp)
 
+    def test_installer_skips_mismatched_default_profiles_in_registry_defaults(self):
+        from pod import routefile
+        bad_registry = {
+            "schema": "pod-registry/v1",
+            "models": [{"id": "model-a", "name": "Model A", "agent": "codex",
+                        "provider": "OpenAI", "pool": "codex", "efforts": ["high"]}],
+            "defaults": {
+                "schema": "pod/v2",
+                "profiles": {"rev": "review codex/model-a/high"},
+                "default_profiles": {"implement": "rev"},
+            },
+        }
+        source = archive_tree(self.root / "bad-defaults.tar.gz", changes={REGISTRY: json.dumps(bad_registry).encode()})
+        self.assertIn("(created)", self.installed({**self.env, "POD_INSTALL_SOURCE": source.as_uri()}).stdout)
+        loaded = routefile.load(self.config)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        self.assertEqual(loaded.enabled(), ["codex/model-a/high"])
+        self.assertEqual(loaded.default_profiles, {})
+
 
 class PathTests(InstallerCase):
     def test_guarded_block_real_shell_resolution_and_untouched_linked_files(self):

@@ -174,7 +174,8 @@ class FindingAndAuthorityTests(GateCase):
 
     def test_a_discarded_review_covers_nothing(self):
         self.implement({"src/a.py": "a\n"})
-        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.",
+                                    route="codex/sol/high", reason="test review")
         self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
         self.assertIn("no review is recorded", commands.accept(self.repo, None, "a2", discarded=True)["note"])
         self.assertEqual(fold(self.entries("issue-5")).of("review"), [])
@@ -263,11 +264,13 @@ class FinalReviewTests(GateCase):
 
     def test_a_review_orca_did_not_report_as_completed_covers_nothing_and_keeps_its_findings(self):
         self.implement({"src/a.py": "a\n"})
-        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.",
+                                    route="codex/sol/high", reason="test review")
         self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []}, outcome="failed")
         self.assertIn("covers nothing", commands.accept(self.repo, None, "a2")["note"])
         self.assertEqual(self.uncovered(), ["src/a.py"])
-        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.")
+        started = commands.dispatch(self.repo, None, role="review", title="r", spec="Review.",
+                                    route="codex/sol/high", reason="test review")
         self.finish(started["task"], {"outcome": "failed", "verdict": "fail",
                                       "findings": [{"path": "src/a.py", "required": True, "text": "wrong"}]}, outcome="failed")
         commands.accept(self.repo, None, "a3")

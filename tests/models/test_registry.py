@@ -121,9 +121,19 @@ class RegistryTests(unittest.TestCase):
         from pod.errors import PodError
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "registry.json"
-            for text in ("{}", '{"schema": "pod-registry/v1", "models": [{"id": "x"}]}',
-                         json.dumps({"schema": "pod-registry/v1", "models": [
-                             {"id": "m-1", "name": "M", "agent": "codex", "provider": "P", "efforts": ["none"]}]})):
+            base_models = [{"id": "gpt-6.2-sol", "name": "GPT-6.2 Sol", "agent": "codex",
+                            "provider": "OpenAI", "pool": "codex", "efforts": ["high"]}]
+            for text in (
+                "{}",
+                '{"schema": "pod-registry/v1", "models": [{"id": "x"}]}',
+                json.dumps({"schema": "pod-registry/v1", "models": [
+                    {"id": "m-1", "name": "M", "agent": "codex", "provider": "P", "efforts": ["none"]}]}),
+                json.dumps({"schema": "pod-registry/v1", "models": base_models,
+                            "defaults": {"profiles": {}, "default_profiles": {"implement": "build-fast"}}}),
+                json.dumps({"schema": "pod-registry/v1", "models": base_models,
+                            "defaults": {"profiles": {"rev": "review codex/gpt-6.2-sol/high"},
+                                         "default_profiles": {"implement": "rev"}}}),
+            ):
                 path.write_text(text)
                 with self.assertRaises(PodError) as caught:
                     registry.load(path)

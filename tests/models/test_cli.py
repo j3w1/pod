@@ -270,6 +270,17 @@ class CliTests(CliCase):
         self.assertEqual(document["review_agents"], ["codex", "antigravity"])
         self.assertEqual(self.run_cli("--default-profile", "missing_equals")[0], 2)
 
+    def test_default_profile_against_absent_config_creates_file_even_when_matching_seed(self):
+        target = routefile.load().path
+        self.assertFalse(target.exists())
+        code, out, err = self.run_cli("--default-profile", "implement=build-fast")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIn("Saved ", out)
+        self.assertTrue(target.exists())
+        loaded = routefile.load(target)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        self.assertEqual(loaded.default_profiles["implement"], "build-fast")
+
 
 from tests.models.support import HEADERS, ROWS  # noqa: E402
 
