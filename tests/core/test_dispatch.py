@@ -45,6 +45,24 @@ class DispatchTests(CoreCase):
         started = self.start(title="t", route="codex/sol/high", paths_=["e/"])
         self.assertTrue(self.orca()["titles"][f"term_{started['dispatch']}"].endswith("sol/low"))
 
+    def test_the_worker_lookup_stops_at_the_matching_page(self):
+        pages = {None: ([{"dispatchId": "d1", "agentTerminalHandle": "t1"}], "c2"),
+                 "c2": ([{"dispatchId": "d2", "agentTerminalHandle": "t2"}], None)}
+        asked = []
+        def fake_call(*args, **kw):
+            cursor = args[args.index("--cursor") + 1] if "--cursor" in args else None
+            asked.append(cursor)
+            rows, nxt = pages[cursor]
+            return {"workers": rows, "page": {"hasMore": bool(nxt), "nextCursor": nxt}}
+        original = orca.call
+        try:
+            orca.call = fake_call
+            self.assertEqual(len(orca.workers("r", 15, "d1")), 1)
+            self.assertEqual(asked, [None])
+            self.assertEqual(len(orca.workers("r")), 2)
+        finally:
+            orca.call = original
+
     def test_a_rename_that_raises_anything_or_finds_no_terminal_is_only_a_note(self):
         original = orca.workers
         try:

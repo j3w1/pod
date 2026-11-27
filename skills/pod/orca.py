@@ -99,9 +99,12 @@ def rename(run: str, started: dict, title: str) -> str | None:
         handle = next((row["handle"] for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
         if not handle:
             return "Orca named no terminal for the worker"
-        call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)
+        try:
+            call("terminal", "rename", "--terminal", handle, "--title", title, timeout=15)
+        except PodError as exc:
+            return "outcome unknown, the title may have changed" if exc.code == "orca_unknown" else exc.code
     except PodError as exc:
-        return "outcome unknown, the title may have changed" if exc.code == "orca_unknown" else exc.code
+        return exc.code
     except Exception as exc:      # cosmetic: nothing here may fail a dispatch that already started a worker
         return type(exc).__name__
     return None

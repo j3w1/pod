@@ -203,7 +203,7 @@ def _validate_review_exception(state: State, agents: list[str], base: str,
 
 def _tab_title(profile: str | None, role: str, route: str, title: str) -> str:
     """`<profile> · <short title> · <model>/<effort>`, about 60 characters."""
-    tail = " · " + "/".join(route.split("/")[1:])       # model/effort; an effective route may have only two parts
+    tail = " · " + "/".join(part for part in route.split("/")[1:] if part and part != "None")   # model/effort, either may be absent
     head = f"{(profile or role)[:20]} · "
     room = max(8, 60 - len(head) - len(tail))
     short = " ".join(title.split())
