@@ -201,6 +201,16 @@ class FolderWorkspaceTests(CoreCase):
         self.refused("paths_overlap", commands.dispatch, self.folder, "layout", profile="ui-design", title="more",
                      spec="More.", paths_=["map"])
 
+    def test_a_recovered_designer_start_is_titled_designer(self):
+        self.opened()
+        state = self.orca()
+        state["lose_reply"] = True
+        self.set_orca(**state)
+        self.refused("orca_unknown", commands.dispatch, self.folder, "layout", profile="ui-design", title="draw it",
+                     spec="Draw.")
+        recovered = commands.dispatch(self.folder, "layout", retry="a1")      # read back from Orca's own receipt
+        self.assertEqual(self.orca()["titles"][f"term_{recovered['dispatch']}"], "Designer │ opus/high │ draw it")
+
     def test_delivery_uses_one_placement_for_its_refusal_and_lookup(self):
         self.opened()
         placements = [commands.place(self.repo), commands.place(self.folder)]   # Git first, then a folder, if read twice
