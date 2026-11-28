@@ -106,7 +106,7 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   current tab title and, only when it is empty, matches `worker-<taskId>` for the observed task,
   matches the exact `--task-title` Pod passed, or is a daemon's `<Role> · <task title>` rename that begins the task title with this assignment's own `[<objective>:<ident>]` marker, renames it to
   `<Role> │ <model>/<effort> │ <description>` (U+2502 bar with one space each side, effort `medium` shown as `med`, description cut to 34 characters with `…`, no marker, no assignment id, using profile role labels such
-  as `Builder`, `Builder (deep)`, `Builder (UI)` for `ui-*`, `Reviewer (fast)`, `Reviewer (deep)`,
+  as `Builder`, `Builder (deep)`, `Builder (UI)` for `ui-*` (`Designer` for `ui-design` in a folder workspace objective), `Reviewer (fast)`, `Reviewer (deep)`,
   `Scout`, `Scout (deep)`, `Analyst` or `Challenger` and short model names); an unreadable title
   or failed rename is a `note`. Single-owner rule: Pod names only the workers it dispatches, once,
   and only from a default title; it never touches role or coordinator tabs. Downstream daemons can

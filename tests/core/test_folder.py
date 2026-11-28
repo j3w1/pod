@@ -89,6 +89,7 @@ class FolderWorkspaceTests(CoreCase):
         tasks = self.orca()["tasks"]
         self.assertEqual([tasks[row["task"]]["worktree"] for row in (scout, designer)], [self.address, self.address])
         self.assertEqual([tasks[row["task"]]["repo"] for row in (scout, designer)], [None, None])    # Pod makes no worktree
+        self.assertEqual(self.orca()["titles"][f"term_{designer['dispatch']}"], "Designer │ opus/high │ draw the map")
         packet = tasks[designer["task"]]["spec"]
         self.assertIn(f"Folder: {self.folder}", packet)
         self.assertIn("do not create a repository or a commit", packet)
@@ -199,6 +200,16 @@ class FolderWorkspaceTests(CoreCase):
         self.assertNotIn("task_sibling", [row.get("task") for row in rows])   # the sibling's marked Task is never a2
         self.refused("paths_overlap", commands.dispatch, self.folder, "layout", profile="ui-design", title="more",
                      spec="More.", paths_=["map"])
+
+    def test_a_recovered_designer_start_is_titled_designer(self):
+        self.opened()
+        state = self.orca()
+        state["lose_reply"] = True
+        self.set_orca(**state)
+        self.refused("orca_unknown", commands.dispatch, self.folder, "layout", profile="ui-design", title="draw it",
+                     spec="Draw.")
+        recovered = commands.dispatch(self.folder, "layout", retry="a1")      # read back from Orca's own receipt
+        self.assertEqual(self.orca()["titles"][f"term_{recovered['dispatch']}"], "Designer │ opus/high │ draw it")
 
     def test_delivery_uses_one_placement_for_its_refusal_and_lookup(self):
         self.opened()

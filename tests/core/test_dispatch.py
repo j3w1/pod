@@ -173,6 +173,7 @@ class DispatchTests(CoreCase):
             "profiles:\n"
             "  build-deep: implement antigravity/gemini-4-neon/high\n"
             "  ui-analyst: implement claude/claude-opus-5-5/high\n"
+            "  ui-design: implement claude/claude-opus-5-5/high\n"
             "  analyst-deep: investigate antigravity/gemini-4-neon/high\n"
             "  challenger: review codex/gpt-6.2-sol/medium\n"
             "  review-fast: review codex/gpt-6.1-terra/high\n"
@@ -190,6 +191,10 @@ class DispatchTests(CoreCase):
         titles = self.orca()["titles"]
         self.assertEqual(titles[f"term_{deep['dispatch']}"], "Builder (deep) │ neon/high │ core refactor")
         self.assertEqual(titles[f"term_{ui['dispatch']}"], "Builder (UI) │ opus/high │ card contrast")
+        look = commands.dispatch(self.repo, None, profile="ui-design", title="look b", spec="Style.", paths_=["look/"],
+                                 worktree="new-child")
+        self.assertEqual(self.orca()["titles"][f"term_{look['dispatch']}"],
+                         "Builder (UI) │ opus/high │ look b")          # a ui-design worker in a Git worktree builds UI
         self.assertEqual(titles[f"term_{analyst['dispatch']}"], "Analyst │ neon/high │ latency study")
         self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger │ sol/med │ stress check")
         self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) │ terra/high │ check diff")
