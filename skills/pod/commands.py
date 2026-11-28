@@ -732,10 +732,10 @@ def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *
                commit: str | None) -> dict:
     """Send the next step of the same job to the worker that did the last one, as a new assignment.
 
-    Orca turns mail to a finished worker's Dispatch into a follow-up Task with its own Dispatch, in the
-    same terminal; its receipt names both. The new assignment keeps the parent's role, profile, route,
-    worktree and paths, and `pod accept` reads it like any other. A review never follows up: a second
-    look by the same reviewer is not an independent read.
+    Orca turns mail to a finished worker's Dispatch into a follow-up Task with its own Dispatch; its receipt
+    names both. The new assignment keeps the parent's role, profile, route, worktree and paths, and `pod accept`
+    reads it like any other. A review never follows up: a second look by the same reviewer is not an
+    independent read.
     """
     parent = state.assignments.get(parent_id)
     if not parent or parent.get("void") or not parent.get("dispatch"):
@@ -746,6 +746,11 @@ def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *
                        fix="for a correction, commit the fixes and dispatch a fresh review of the changed paths")
     if not spec:
         raise PodError("dispatch_incomplete", "A follow-up needs the task text.", fix="pass --spec or --spec-file")
+    newer = [row["id"] for row in state.assignments.values() if row.get("follows") == parent_id and not row.get("void")]
+    if newer:
+        # Orca sends mail for an earlier Dispatch of a chain to its newest one, so only the newest step is followed.
+        raise PodError("follow_up_superseded", f"{newer[-1]} already follows {parent_id}.",
+                       fix=f"follow up the newest step of this job: `pod dispatch --follow-up {newer[-1]}`")
     run = state.objective["run"]
     task = orca.tasks(run).get(parent["task"]) or {}
     if task.get("status") not in ("completed", "failed"):
@@ -754,8 +759,17 @@ def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *
                        fix=f"wait for Orca to wake you with {parent_id}'s report, then follow up")
     role, in_folder = parent["role"], folder(state)
     done = state.result(parent_id) or {}
+    if role == "implement" and not in_folder and not commit and not done:
+        raise PodError("follow_up_unaccepted", f"{parent_id}'s result is not accepted, so its commit is not known to Pod.",
+                       fix=f"`pod accept {parent_id} --integrated COMMIT` first, or pass --commit with its result commit")
     base = None if in_folder else gitio.commit(root, commit or done.get("commit") or parent["base"])
     worktree, paths_ = parent.get("worktree") or "current", parent.get("paths") or []
+    if worktree.startswith("new-"):
+        # The parent's selector made a worktree; the follow-up works in that one, so name it for the busy check.
+        held = next((row.get("worktree") for row in orca.workers(run) if row["dispatch"] == parent["dispatch"]), None)
+        if not held:
+            raise PodError("follow_up_worktree_unknown", f"Orca names no worktree for {parent_id}'s worker.", fix=FRESH)
+        worktree = f"path:{held}"
     if role == "implement":
         _implement_free(state, root, worktree, paths_)
     ident = state.next_id("a", state.assignments)
@@ -770,9 +784,9 @@ def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *
     assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
     writer.append(assignment)
     try:
-        started = orca.follow_up(run=run, dispatch=parent["dispatch"], spec=text,
-                                 subject=_task_title(parent.get("profile"), role, route, state.id, ident, title),
-                                 request=assignment["request"])
+        got = orca.follow_up(run=run, dispatch=parent["dispatch"], spec=text,
+                             subject=_task_title(parent.get("profile"), role, route, state.id, ident, title),
+                             request=assignment["request"])
     except PodError as exc:
         if exc.code == "orca_unknown":
             exc.fix = f"run `pod dispatch --retry {ident}`; it reads what Orca did and never sends twice"
@@ -780,16 +794,31 @@ def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *
             writer.append({"kind": "assignment", "id": ident, "void": True, "refused": exc.code})
             exc.fix = f"{exc.fix}; or {FRESH}"
         raise
-    if started.get("state") == "failed" or not started.get("task") or not started.get("dispatch"):
+    return _settle_follow_up(writer, fold(writer.entries), ident, got)
+
+
+def _settle_follow_up(writer, state: State, ident: str, got: dict) -> dict:
+    """Record what Orca's follow-up receipt says, the same way for the first reply and for `--retry`."""
+    row = state.assignments[ident]
+    parent = state.assignments[row["follows"]]
+    if got.get("state") == "failed" or not got.get("task") or not got.get("dispatch"):
         writer.append({"kind": "assignment", "id": ident, "void": True, "refused": "follow_up_not_started",
-                       **({"task": started["task"]} if started.get("task") else {})})
-        why = ("Orca delivered it as mail, not as a follow-up Task" if not started.get("delivery")
-               else f"Orca reports the follow-up {started.get('state') or 'without a Task'}")
+                       **({"task": got["task"]} if got.get("task") else {})})
+        why = ("Orca delivered it as mail, not as a follow-up Task" if not got.get("delivery")
+               else f"Orca reports the follow-up {got.get('state') or 'without a Task'}")
         raise PodError("follow_up_not_started", f"No follow-up Task started for {ident}: {why}.", fix=FRESH)
-    result = _started(writer, ident, started, route, role=role)
-    result.update(follows=parent_id, delivery=started["delivery"])
-    if started["delivery"] == "started_fresh":
-        result["note"] = f"Orca could not resume {parent_id}'s session and started its agent fresh: its earlier context is gone"
+    started = {"task": got["task"], "dispatch": got["dispatch"], "state": got.get("state"),
+               **({"effective": got["effective"]} if got.get("effective") else {})}
+    result = _started(writer, ident, started, row["route"], role=row["role"])
+    result.update(follows=row["follows"], delivery=got["delivery"])
+    notes = []
+    if got.get("follow_up_of") and got["follow_up_of"] != parent["dispatch"]:
+        notes.append(f"Orca followed up Dispatch {got['follow_up_of']}, not {row['follows']}'s {parent['dispatch']}")
+    if got["delivery"] == "started_fresh":
+        notes.append(f"Orca could not resume {row['follows']}'s session and started its agent fresh: its earlier context "
+                     "is gone, and it has only this follow-up's task text; send the whole job, or dispatch fresh")
+    if notes:
+        result["note"] = "; ".join(notes)
     return result
 
 
@@ -880,6 +909,12 @@ def _settle_start(writer, state: State, ident: str) -> dict:
     answer = orca.call("orchestration", "request-show", "--request", row["request"])
     if answer.get("state") == "pending":
         raise PodError("start_pending", f"Orca is still starting {ident}.", fix=f"run `pod dispatch --retry {ident}` again shortly")
+    if row.get("follows"):
+        # Only Orca's own receipt ties a Task to this follow-up; a title proves nothing, and no receipt proves no send.
+        if answer.get("state") == "completed" and isinstance(answer.get("receipt"), dict):
+            return _settle_follow_up(writer, state, ident, orca.follow_up_receipt(answer["receipt"]))
+        raise PodError("start_unknown", f"Orca holds no receipt for {ident}'s request {row['request']}, so whether the "
+                       "follow-up was sent is unknown.", fix=f"run `pod dispatch --retry {ident}` once Orca records it, or {FRESH}")
     receipt = answer.get("receipt") or {}
     found = receipt.get("taskId") if answer.get("state") == "completed" else None
     markers = (f"· {state.id}:{ident} ", f"[{state.id}:{ident}]")
