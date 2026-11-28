@@ -230,6 +230,22 @@ class FolderWorkspaceTests(CoreCase):
                              title="r", spec="Review plan B.", route="claude/opus/high", reason="r", after="a1",
                              why="a1 failed", **call)
 
+    def test_a_plan_is_one_review_round_however_often_it_fails(self):
+        self.write_routes(ROUTES + PROFILES + "review_agents: [codex]\n")
+        self.opened()
+
+        def review(plan):
+            started = commands.dispatch(self.folder, "layout", role="review", title="plan", spec=plan,
+                                        route="codex/sol/high", reason="r")
+            self.finish(started["task"], {"outcome": "succeeded", "verdict": "fail", "findings": []})
+            commands.accept(self.folder, "layout", started["assignment"])
+        review("Review plan A.")
+        review("Review plan A.\n")                                  # the reviewer receives the same text
+        self.assertEqual(commands.status(self.folder, "layout", remote=False)["review_rounds"]["failed"], 1)
+        review("Review plan B.")
+        self.refused("review_cap", commands.dispatch, self.folder, "layout", role="review", title="plan",
+                     spec="Review plan C.", route="codex/sol/high", reason="r")
+
     def test_git_repositories_never_ask_orca_for_a_folder_and_config_states_the_capability(self):
         commands.open_(self.repo, text="Make the widget", objective="widget", criteria=["it works"])
         commands.dispatch(self.repo, None, role="implement", title="write", spec="Do it.", paths_=["src"])

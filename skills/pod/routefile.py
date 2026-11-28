@@ -118,6 +118,7 @@ class Preferences:
     preferred: str | None = None
     pinned: str | None = None
     merge_authorization: str = "person"
+    review_cap: int = 2                    # failed review rounds before a re-scope or the person's decision
     authorization_verifier: list | None = None
     review_agents: list[str] = field(default_factory=list)
     paused_agents: list[str] = field(default_factory=list)
@@ -1044,6 +1045,11 @@ def load(path: Path | None = None) -> Preferences:
             if who not in AUTHORIZERS:
                 raise ValueError("merge_authorization must be person or coordinator")
             result.merge_authorization = who
+        if "review_cap" in blocks:
+            cap = yamlsubset.scalar(blocks["review_cap"].value)
+            if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 20:
+                raise ValueError("review_cap must be a whole number from 1 to 20")
+            result.review_cap = cap
         if "authorization_verifier" in blocks:
             command = yamlsubset.sequence(blocks["authorization_verifier"])
             if command and (len(command) > 16 or any(not isinstance(part, str) or not part for part in command)
@@ -1083,7 +1089,7 @@ def load(path: Path | None = None) -> Preferences:
     except (OSError, UnicodeError, ValueError) as exc:
         result.status, result.problem = "invalid", str(exc)
         result.routes, result.preferred, result.pinned = {}, None, None
-        result.merge_authorization, result.authorization_verifier = "person", None
+        result.merge_authorization, result.authorization_verifier, result.review_cap = "person", None, 2
         result.review_agents, result.paused_agents, result.paused_meta = [], [], {}
         result.soft_drained_agents, result.soft_drained_meta, result.profiles = [], {}, {}
         result.default_profiles = {}

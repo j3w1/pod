@@ -391,8 +391,9 @@ _TAB_DESCRIPTION_MAX = 34
 
 
 def _tab_title(profile: str | None, role: str, route: str, title: str, requested: str | None = None, *,
-               in_folder: bool = False) -> str:
-    """`<Role> │ <model>/<effort> │ <description>` (U+2502 bar, one space each side); the description is cut to 34 characters."""
+               in_folder: bool = False, flagged: bool = False) -> str:
+    """`<Role> │ <model>/<effort> │ <description>` (U+2502 bar, one space each side); the description is cut to 34 characters.
+    A review that runs under a recorded reviewer exception starts with `⚑ `, so the exception shows on its tab."""
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
     effort = segments[2] if len(segments) > 2 and segments[2] != "None" else ""
@@ -406,7 +407,8 @@ def _tab_title(profile: str | None, role: str, route: str, title: str, requested
     short = _clean_topic(bare) or " ".join(bare.split())
     if len(short) > _TAB_DESCRIPTION_MAX:
         short = short[:_TAB_DESCRIPTION_MAX - 1].rstrip() + "…"
-    return " │ ".join(part for part in (_tab_role(profile, role, in_folder=in_folder), model_part, short) if part)
+    role_part = ("⚑ " if flagged else "") + _tab_role(profile, role, in_folder=in_folder)
+    return " │ ".join(part for part in (role_part, model_part, short) if part)
 
 
 def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
@@ -613,6 +615,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix=res.error_fix)
         role = res.role
         route = res.route
+        if role == "review":
+            _refuse_at_cap(state, preferences.review_cap)
         if role == "review" and in_folder:
             pass                    # a plan review reads the task text; there is no commit or change to bind it to
         elif role == "review":
@@ -658,6 +662,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                       "browser_scope": routefile.browser_scope(preferences.profiles.get(res.profile) if res.profile else None),
                       **({"reason": res.reason} if res.reason else {}),
                       **({"context": context} if context else {}),
+                      **({"plan": hashlib.sha256(spec.strip().encode()).hexdigest()} if role == "review" and in_folder else {}),
                       **({"review_exception": exception} if exception else {}),
                       **({"requested_review_fallback_reason": res.review_fallback_reason}
                          if res.review_fallback_reason else {})}
@@ -698,13 +703,73 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title, route, in_folder=in_folder), task_title=task_title, marker=f"[{state.id}:{ident}]",
+                started.get("effective")) or route, title, route, in_folder=in_folder, flagged=bool(exception)),
+                task_title=task_title, marker=f"[{state.id}:{ident}]",
                 workspace=state.objective.get("workspace_id") if in_folder else None)
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
             result["note"] = f"the worker tab may keep Orca's title (rename: {failed})"
         return result
+
+
+def _same_source(state: State) -> list[State]:
+    """Every objective on this host that delivers the same source issue, this one included; a text or folder
+    objective with no issue is only itself. Closing and reopening an issue's objective therefore keeps its count."""
+    source = state.objective["source"]
+    if source.get("kind") != "issue":
+        return [state]
+    found = [state]
+    for target in log.every():
+        try:
+            other = fold(log.read(target))
+        except PodError:
+            continue
+        theirs = other.objective.get("source") or {} if other.entries else {}
+        if (theirs.get("kind") == "issue" and str(theirs.get("repository") or "").lower() == str(
+                source.get("repository") or "").lower() and theirs.get("number") == source.get("number")
+                and other.entries[0] != state.entries[0]):          # GitHub names are case-insensitive
+            found.append(other)
+    return found
+
+
+def review_rounds(state: State, cap: int) -> dict:
+    """j3w1's two-round rule, derived from recorded facts only.
+
+    A round is a distinct reviewed target (a commit, or a folder review's plan) that a review failed; two
+    reviewers failing the same commit are one round. A review that covers nothing (the reviewer wrote, ran in
+    the implementer's session or did not complete) never counts, and neither does one with no verdict, which
+    has no review fact at all. A `scope` recorded at the cap carries `review_reset` and resets the count, once
+    per source issue; after that only a `decision` carrying the person's own words resets it. Facts replay in
+    time order; within one second, an earlier-opened objective's facts come first, each log in its own order.
+    """
+    timeline = sorted(((entry.get("at") or "", one.entries[0].get("at") or "", one.id, entry.get("n", 0), entry, one)
+                       for one in _same_source(state) for entry in one.entries), key=lambda item: item[:4])
+    failed, rescoped = set(), False
+    for *_, entry, one in timeline:
+        if entry.get("kind") != "fact":
+            continue
+        if (entry.get("fact") == "review" and entry.get("verdict") == "fail" and not entry.get("wrote")
+                and not entry.get("same_session") and entry.get("completed", True)):
+            plan = (one.assignments.get(entry.get("reviewer")) or {}).get("plan")
+            failed.add(entry.get("commit") or plan or f"{one.id}:{entry.get('reviewer')}")
+        elif entry.get("fact") == "scope" and entry.get("review_reset") and not rescoped:
+            failed, rescoped = set(), True
+        elif entry.get("fact") == "decision" and str(entry.get("words") or "").strip():
+            failed = set()
+    return {"failed": len(failed), "cap": cap, "rescope_left": 0 if rescoped else 1}
+
+
+def _refuse_at_cap(state: State, cap: int) -> None:
+    rounds = review_rounds(state, cap)
+    if rounds["failed"] < cap:
+        return
+    decide = "send it to j3w1 as a decision with options and record `pod record --decision \"…\" --words \"<j3w1's words>\"`"
+    raise PodError("review_cap", f"Reviews failed {rounds['failed']} rounds on this work (cap {cap}); a further round waits "
+                   "for a re-scope or j3w1's decision.",
+                   fix=(f"cut it to the smallest change that meets j3w1's words and record `pod record --scope \"<what was cut>\"` "
+                        f"(the one re-scope left), or {decide}") if rounds["rescope_left"] else
+                   f"the re-scope was used, so only j3w1 decides: {decide}")
 
 
 def _effective_review_proof(
@@ -830,7 +895,7 @@ def _settle_start(writer, state: State, ident: str) -> dict:
                     failed = orca.rename(
                         run, started_info,
                         _tab_title(row.get("profile"), row["role"], effective_canon, row["title"], row["route"],
-                                   in_folder=folder(state)),
+                                   in_folder=folder(state), flagged=bool(row.get("review_exception"))),
                         task_title=task_title, marker=f"[{state.id}:{ident}]",
                         workspace=state.objective.get("workspace_id") if folder(state) else None,
                     )
@@ -1103,8 +1168,13 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
             done.append(f"review carried from {given['carried']}")
         for kind in ("scope", "decision"):
             if given.get(kind):
-                entries.append({"kind": "fact", "fact": kind, "text": given[kind], **_words(given)})
-                done.append(f"{kind} recorded")
+                reset = {}
+                if kind == "scope":            # a re-scope at the cap is the one self-service reset of the review count
+                    rounds = review_rounds(state, routefile.load().review_cap)
+                    if rounds["failed"] >= rounds["cap"] and rounds["rescope_left"]:
+                        reset = {"review_reset": True}
+                entries.append({"kind": "fact", "fact": kind, "text": given[kind], **_words(given), **reset})
+                done.append(f"{kind} recorded" + (" (review rounds reset)" if reset else ""))
         fields = {key: given[key] for key in ("note", "pr", "branch") if given.get(key) is not None}
         if fields:
             entries.append({"kind": "objective", **fields})
@@ -1225,6 +1295,7 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         result["note"] = info["note"]
     result["criteria"] = [f"{row['id']} {row['state']}{' (after merge)' if row.get('after_merge') else ''}: {row['text'][:160]}"
                           for row in state.criteria.values()]
+    result["review_rounds"] = review_rounds(state, routefile.load().review_cap)
     if state.closed:
         return result
     live = _live(state) if remote else {}

@@ -1,6 +1,6 @@
 from pod import commands, gate, proof
 from pod.state import fold
-from tests.core.support import CoreCase
+from tests.core.support import CoreCase, ROUTES
 
 REQUIRED = "schema: pod-project/v1\nreview: required\n"
 
@@ -122,6 +122,7 @@ class ProofTests(CoreCase):
         self.assertEqual(self.entries("widget"), before)
 
     def test_recorded_locations_resolve_only_after_reviewing_current_corrected_content(self):
+        self.write_routes(ROUTES + "review_cap: 20\n")      # many failed rounds, never capped
         self.implement({"src/a.py": "bad\n", "src/b.py": "b\n"})
         locations = ["src/a.py", "src/a.py:111", "src/a.py:111:2"]
         self.review("fail", [{"path": p, "required": True, "text": "wrong"} for p in locations])
@@ -184,6 +185,7 @@ class ProofTests(CoreCase):
         self.assertEqual(self.uncovered(), [])
 
     def test_a_later_literal_filename_does_not_change_an_earlier_locations_identity(self):
+        self.write_routes(ROUTES + "review_cap: 20\n")      # many failed rounds, never capped
         self.implement({"a": "bad\n"})
         self.review("fail", [{"path": "a:1", "required": True, "text": "wrong a"}])
         self.implement({"a:1": "literal bad\n"})

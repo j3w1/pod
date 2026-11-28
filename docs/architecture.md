@@ -265,9 +265,29 @@ No file means no rule. A file this version cannot read requires review and says 
 
 `<config home>/config.yaml` (`schema: pod/v2`) is the only authority for enabled routes,
 Preferred, Pin, `profiles`, `default_profiles`, `review_agents`, `paused_agents`, `soft_drained_agents`,
-`merge_authorization` (`person` by default, or `coordinator`) and the verifier command. Only the
-person changes it, through `pod models` or an editor. Coordination reads it with
-`skills/pod/routefile.py` and loads nothing else about models.
+`merge_authorization` (`person` by default, or `coordinator`), `review_cap` (1 to 20, default 2)
+and the verifier command. Only the person changes it, through `pod models` or an editor.
+Coordination reads it with `skills/pod/routefile.py` and loads nothing else about models.
+
+- **Review rounds.** `review_cap` is how many failed review rounds a piece of work may have
+  before a further review waits for a re-scope or the person's decision. Pod derives the count
+  from recorded facts and stores none. A round is a distinct reviewed target with a `fail`
+  verdict: a commit, or the hash of a folder review's plan text (`plan` on its assignment). Two
+  reviewers failing the same commit are one round. A review that covers nothing (the reviewer
+  wrote, shared the implementer's session or did not complete) and a result with no verdict
+  never count; a reviewer exception's review counts like any other. The count follows the
+  source issue across its objectives in log time order, so dropping and reopening keeps it; an
+  objective with no issue counts alone; the issue's repository name is compared without case.
+  Facts replay in time order, and within one second an earlier-opened objective's facts come
+  first. A `scope` recorded while the count is at the cap and the re-scope is unused carries
+  `review_reset: true` and resets the count, once per source issue; a `scope` recorded below the
+  cap keeps that meaning even if the cap changes later. After that only a `decision` carrying the
+  person's nonblank `--words` resets it. A folder review's plan hash covers the text the reviewer
+  receives; folder reviews recorded before 0.23.14 have no hash, so each failed one counts as its
+  own round in the bootstrap count. `pod status` (open, closed or dropped) shows `review_rounds: {failed, cap,
+  rescope_left}`; the `pod status --all` listing does not. At the cap a review dispatch is
+  refused with `review_cap`, and its fix says whether a re-scope is still available. A review
+  dispatched under a recorded reviewer exception gets `⚑ ` before the role in its tab title.
 
 - **Profiles and role defaults.** An optional flat `profiles:` map defines one line per profile:
   `<role>[+mcp[:none|readonly|full]] <route1> [<route2> ...]`. The first route is the default and the rest are the
