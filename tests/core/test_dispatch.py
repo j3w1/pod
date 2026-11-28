@@ -1284,14 +1284,22 @@ class BrowserScopeTests(CoreCase):
                           "look-cli": "none"})
         self.assertEqual((scopes[raw], scopes[plain]), ("none", "none"))
         packets = {name: self.orca()["tasks"][result["task"]]["spec"] for name, result in started.items()}
-        self.assertIn("(mcp: on, browser: full)", packets["look-full"])
-        self.assertIn("(mcp: on, browser: none)", packets["look-bare"])
+        self.assertIn("- Browser scope: full", packets["look-full"])
+        self.assertIn("- Browser scope: none", packets["look-bare"])
+        for other in (raw, plain):                                  # no profile: the packet still says none
+            spec = next(task["spec"] for task in self.orca()["tasks"].values() if f" {other} " in task["spec"].split("\n")[0] + " ")
+            self.assertIn("- Browser scope: none", spec)
         entries = log.read(log.path(commands.gitio.repository(self.repo)[0], "look"))
         rows = {entry["id"]: entry for entry in entries if entry.get("kind") == "assignment" and entry.get("role")}
         self.assertEqual(rows[made["look-full"]]["browser_scope"], "full")      # recorded before the start
         self.finish(started["look-full"]["task"], {"outcome": "succeeded", "summary": "seen"})
         commands.accept(self.repo, None, made["look-full"])
         self.assertNotIn(made["look-full"], self.scopes())                         # a settled assignment publishes nothing
+        target = log.path(commands.gitio.repository(self.repo)[0], "look")
+        with log.writer(target) as writer:                          # an old or damaged value is never passed on
+            writer.append({"kind": "assignment", "id": made["look-read"], "browser_scope": "FULL"})
+            writer.append({"kind": "assignment", "id": made["look-none"], "browser_scope": None})
+        self.assertEqual((self.scopes()[made["look-read"]], self.scopes()[made["look-none"]]), ("none", "none"))
 
     def test_a_scope_is_parsed_exactly_and_bare_mcp_is_reported_by_doctor(self):
         for bad in ("investigate+mcp:admin", "investigate+mcp:", "investigate+mcpfull", "investigate+mcp:Full"):

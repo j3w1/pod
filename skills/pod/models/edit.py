@@ -363,7 +363,7 @@ def apply(*, routes: dict | None = None, preferred=KEEP, pinned=KEEP,
                     parsed_profiles[name] = routefile.parse_profile(name, spec)
                 except ValueError as exc:
                     raise PodError("profile_invalid", str(exc),
-                                   fix="use '<role>[+mcp] <agent/model/effort> [...]'") from exc
+                                   fix="use '<role>[+mcp[:none|readonly|full]] <agent/model/effort> [...]'") from exc
         if current.status == "ok":
             base_profiles = dict(current.profiles)
             base_defaults = dict(current.default_profiles)

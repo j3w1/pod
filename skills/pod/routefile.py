@@ -646,7 +646,6 @@ def routing_policy(preferences: Preferences, *, now: datetime | None = None) -> 
             name: {
                 "role": prof.role,
                 "mcp": prof.mcp,
-                "browser_scope": browser_scope(prof),
                 "routes": list(prof.routes),
                 "spec": format_profile(prof),
             }

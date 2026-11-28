@@ -248,6 +248,12 @@ class DrawTests(WorkspaceCase):
         # Toggle +mcp on scout-fast with `m`, and toggle pool pause with `x`
         self.keys("m")
         self.assertTrue(routefile.load().profiles["scout-fast"].mcp)
+        self.target.write_text(self.target.read_text().replace("scout-fast: investigate+mcp ", "scout-fast: investigate+mcp:full "))
+        self.space.reload()
+        self.assertIn("scout-fast  (investigate+mcp:full)", "\n".join(text(self.space.lines(120, 30))))
+        self.keys("m", "m")                                         # off, then on again: no scope is kept or inferred
+        self.assertEqual((routefile.load().profiles["scout-fast"].mcp, routefile.load().profiles["scout-fast"].browser_scope),
+                         (True, None))
         self.keys("x")
         self.assertEqual(routefile.load().paused_agents, ["agy-gemini"])
         screen = "\n".join(text(self.space.lines(120, 30)))

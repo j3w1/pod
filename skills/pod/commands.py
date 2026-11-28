@@ -223,8 +223,8 @@ def packet(state: State, assignment: dict, spec: str) -> str:
              f"- Folder: {state.objective['worktree']} (an Orca folder workspace with no Git checkout)" if in_folder
              else f"- Base commit: {assignment['base']}"]
     if assignment.get("profile"):
-        lines.append(f"- Profile: {assignment['profile']} (mcp: {'on' if assignment.get('mcp') else 'off'}, "
-                     f"browser: {assignment.get('browser_scope') or 'none'})")
+        lines.append(f"- Profile: {assignment['profile']} (mcp: {'on' if assignment.get('mcp') else 'off'})")
+    lines.append(f"- Browser scope: {assignment.get('browser_scope') or 'none'}")
     if role == "implement":
         lines += ["- Change only: " + (", ".join(paths_) if paths_ else "what the task needs"),
                   "- Leave your work in this folder and name what you changed in your summary; there is no Git checkout, "

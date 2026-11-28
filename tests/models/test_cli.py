@@ -259,7 +259,6 @@ class CliTests(CliCase):
         self.assertEqual(routing["profiles"]["scout"], {
             "role": "investigate",
             "mcp": True,
-            "browser_scope": "none",
             "routes": ["antigravity/gemini-4-neon/low", "codex/gpt-6.2-sol/medium"],
             "spec": "investigate+mcp antigravity/gemini-4-neon/low codex/gpt-6.2-sol/medium",
         })

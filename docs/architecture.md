@@ -278,7 +278,10 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   its own scope back through its Orca dispatch. Only a declared scope is forwarded: bare `+mcp`, a
   profile without `+mcp`, a raw `--route` and an unreadable value all give `none`, and `pod doctor`
   lists `+mcp` profiles without a scope (`browser_scope_missing`). Orca's worker start carries no
-  environment, so Pod never sets the scope in the worker's environment. An optional
+  environment, so Pod never sets the scope in the worker's environment. The dispatch id joins the
+  row as soon as Orca's start returns, so a reader at worker start waits a bounded time for it; a
+  start whose reply was lost has no dispatch on its row until `pod dispatch --retry`, and its worker
+  reads none. An optional
   `default_profiles:` map sets the default profile per role; when absent, Pod reads the shipped
   role mapping (`implement: build-fast`, `review: review-fast`, `investigate: scout`) directly
   from `skills/pod/models/registry.json` whenever those profiles exist in `config.yaml`, so
