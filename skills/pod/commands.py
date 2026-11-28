@@ -554,7 +554,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         writer.append(assignment)
         selector = f"path:{root}" if worktree == "current" else worktree
         task_title = _task_title(res.profile, role, route, state.id, ident, title)
-        new_from = (str(root), gitio.branch(root) or base) if worktree.startswith("new-") else None
+        new_from = (str(gitio.main_checkout(root)), gitio.branch(root) or base) if worktree.startswith("new-") else None
         display_name = ((name or "").strip() or _worktree_display_name(title, ident)) if new_from else name
         wt_name = _worktree_slug(display_name, ident) if new_from and display_name else None
         try:

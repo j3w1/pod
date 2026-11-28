@@ -310,8 +310,9 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   for that `(agent, model)` in `registry.json`. `canonical_effective()` normalizes Orca's
   `launch.effective` back to the 3-part canonical route.
 - **Implement concurrency.** At most one live `implement` assignment may run in the same worktree
-  (`worktree_busy`); a second concurrent implementer requires `--worktree new-child`. Scouts and
-  reviewers may run concurrently.
+  (`worktree_busy`); a second concurrent implementer requires `--worktree new-child`, which Orca
+  creates from the objective's branch in the repository's main checkout (the one Orca registers),
+  even when Pod runs in a linked worktree. Scouts and reviewers may run concurrently.
 
 ## Models
 
