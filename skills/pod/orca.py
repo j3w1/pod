@@ -193,7 +193,7 @@ def _is_default_tab_title(current: str, task_id: str | None = None, task_title: 
 
 
 def rename(run: str, started: dict, title: str, *, task_title: str | None = None,
-           marker: str | None = None) -> str | None:
+           marker: str | None = None, workspace: str | None = None) -> str | None:
     """Give a default-titled worker tab a readable title. Returns why it could not, or None; never raises."""
     try:
         worker = next((row for row in workers(run, 15, started.get("dispatch")) if row["dispatch"] == started.get("dispatch")), None)
@@ -202,7 +202,9 @@ def rename(run: str, started: dict, title: str, *, task_title: str | None = None
             return "Orca named no terminal for the worker"
         worktree = worker.get("worktree")
         # Orca has no atomic conditional rename; reading the title first accepts a narrow concurrent-rename window.
-        args = ("terminal", "list", "--worktree", f"path:{worktree}") if worktree else ("terminal", "list")
+        # A folder workspace shares its path with the project's other workspaces, so only its own address names it.
+        selector = workspace or (f"path:{worktree}" if worktree else None)
+        args = ("terminal", "list", "--worktree", selector) if selector else ("terminal", "list")
         reply = call(*args, timeout=15)
         listed = reply.get("terminals") if isinstance(reply, dict) else None
         if not isinstance(listed, list):

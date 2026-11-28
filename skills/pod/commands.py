@@ -698,7 +698,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title, route, in_folder=in_folder), task_title=task_title, marker=f"[{state.id}:{ident}]")
+                started.get("effective")) or route, title, route, in_folder=in_folder), task_title=task_title, marker=f"[{state.id}:{ident}]",
+                workspace=state.objective.get("workspace_id") if in_folder else None)
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
@@ -831,6 +832,7 @@ def _settle_start(writer, state: State, ident: str) -> dict:
                         _tab_title(row.get("profile"), row["role"], effective_canon, row["title"], row["route"],
                                    in_folder=folder(state)),
                         task_title=task_title, marker=f"[{state.id}:{ident}]",
+                        workspace=state.objective.get("workspace_id") if folder(state) else None,
                     )
                 except Exception as exc:
                     failed = type(exc).__name__

@@ -89,12 +89,14 @@ def main():
         else:
             folders = {row["address"]: row["path"] for row in state.get("folders", [])}
             place = folders.get(where) or where[len("path:"):]
+        folders = {row["address"]: row["path"] for row in state.get("folders", [])}
         handle = f"term_{dispatch}"
         state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
                                       "dispatchStatus": "dispatched", "terminalState": "active",
                                       "agentTerminalHandle": handle, "ownWorktree": where.startswith("new-"),
                                       "resource": {"ownershipState": "owned", "retainedReason": None,
-                                                   "worktreeId": f"repo::{place}"}}
+                                                   "worktreeId": f"repo::{place}",
+                                                   **({"workspace": where} if where in folders else {})}}
         titles = state.setdefault("titles", {})
         if handle not in titles:
             titles[handle] = state["initial_title"] if "initial_title" in state else f"worker-{task}"
@@ -140,13 +142,18 @@ def main():
         if state.get("list_fails"):
             reply(False, {"code": "terminal_list_failed", "message": "cannot list terminals"})
         raw = option(args, "--worktree")
-        place = raw[len("path:"):] if raw else None
+        place = raw[len("path:"):] if raw and raw.startswith("path:") else None
+        if place is not None and sum(row["path"] == place for row in state.get("folders", [])) > 1:
+            reply(False, {"code": "selector_ambiguous", "message": "selector_ambiguous"})    # folder workspaces share a path
+        exact = raw if raw and not raw.startswith("path:") else None
         titles = state.get("titles", {})
         own = []
         for row in state["workers"].values():
             if row["terminalState"] not in ("active", "retained", "reclaimable"):
                 continue
             if place is not None and not row["resource"]["worktreeId"].endswith("::" + place):
+                continue
+            if exact is not None and row["resource"].get("workspace") != exact:
                 continue
             handle = row["agentTerminalHandle"]
             item = {"handle": handle}
