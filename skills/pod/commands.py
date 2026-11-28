@@ -477,8 +477,9 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
                 frozen = None if folder(folded) else _resolved(root, commit)
                 counts = {} if folder(folded) else folded.author_counts(root, frozen)
                 notes = _reviewer_note_lines(folded)
-        except PodError:
-            pass
+        except PodError as exc:
+            if exc.code.startswith("folder_") or exc.code == "orca_unknown":
+                raise                    # the preview needs no objective, but never hides a refused folder workspace
         if folded is not None and folder(folded):      # outside the swallow: a folder preview refuses like the start
             _folder_after(folded, after)
             _folder_worktree(folded, worktree, commit)
@@ -788,7 +789,13 @@ def _settle_start(writer, state: State, ident: str) -> dict:
     receipt = answer.get("receipt") or {}
     found = receipt.get("taskId") if answer.get("state") == "completed" else None
     markers = (f"· {state.id}:{ident} ", f"[{state.id}:{ident}]")
-    if not folder(state):         # a folder Run can be shared by sibling workspaces: only Orca's own receipt counts
+    if folder(state) and not found:
+        # A folder Run can be shared by sibling workspaces, so a title marker proves nothing, and without Orca's own
+        # receipt whether this worker started stays unknown: its paths stay held and nothing is started again.
+        raise PodError("start_unknown", f"Orca holds no receipt for {ident}'s request {row['request']}, so whether it "
+                       "started is unknown.", fix=f"run `pod dispatch --retry {ident}` once Orca records it; stop any worker "
+                       "Orca shows for it before dispatching the work again under paths that do not overlap")
+    if not folder(state):
         found = found or next((key for key, task in orca.tasks(run).items()
                                if any(marker in (task["title"] or "") for marker in markers)), None)
     if found:
@@ -1099,7 +1106,7 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
         after = fold(writer.entries)
         if after.closed:           # its last criterion is met: tidy now, and again on any later record or deliver
             result.update(cleanup.tidy(writer, root, after, target_head=_target_head(root, after),
-                                       again=f"pod drop --objective {after.id} --why …" if folder(after) else "pod deliver"))
+                                       again=f"pod record --objective {after.id} --note …" if folder(after) else "pod deliver"))
         return result
 
 

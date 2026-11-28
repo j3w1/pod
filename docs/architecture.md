@@ -46,9 +46,10 @@ workspace, `orca worktree show` gives its address and instance, and the project 
 workspace address (`workspace_id`: `folder:<id>`, or `id:` and the workspace's own Orca id) and
 its native instance (`workspace_instance_id`, required); the path is checked as an attribute and
 never chooses the objective. A selector Orca refuses as naming several workspaces is refused
-(`folder_workspace_ambiguous`). Every command checks the binding on the state it folds under its
-lock, an open of an existing id included, and a lost start is recovered only from Orca's own
-receipt, never from a title marker another workspace in the Run could share. An earlier failed
+(`folder_workspace_ambiguous`). Every command checks the binding on the exact state it folds:
+writers under their lock, an open of an existing id included; `status` and the dispatch preview
+on the snapshot they read. A lost start is recovered only from Orca's own receipt, never from a
+title marker another workspace in the Run could share; without one it stays unknown. An earlier failed
 plan review never stands in for another (`--after` is refused). Such an objective is opened with
 `--no-delivery`, logs under `folder-<project id>`, and has no branch, pull request, target or
 base. Workers start in that same workspace (`--worktree` must name it exactly; Pod makes no

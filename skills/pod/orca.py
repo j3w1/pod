@@ -71,7 +71,7 @@ def folder_workspace(path: str) -> dict | None:
     return found if found and found["path"] == path and terminal.get("worktreePath") in (None, path) else None
 
 
-AMBIGUOUS = re.compile(r"ambiguous|several|more than one|multiple", re.I)
+AMBIGUOUS = re.compile(r"(several|multiple|more than one) (folder )?(workspaces|worktrees)|matches several", re.I)
 
 
 def workspace(selector: str) -> dict | None:
@@ -87,7 +87,7 @@ def workspace(selector: str) -> dict | None:
     except PodError as exc:
         if exc.code == "orca_unknown":
             raise
-        if AMBIGUOUS.search(f"{exc.code} {exc}"):
+        if "ambiguous" in exc.code or AMBIGUOUS.search(str(exc).replace(selector, "")):    # never the echoed selector
             raise PodError("folder_workspace_ambiguous", f"Orca names several folder workspaces for {selector}.",
                            fix="start the coordinator in its own folder workspace, whose terminal names exactly one") from exc
         return None

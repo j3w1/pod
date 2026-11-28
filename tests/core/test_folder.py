@@ -56,6 +56,8 @@ class FolderWorkspaceTests(CoreCase):
                                         delivery=False)["workspace_id"], f"id:{root}")
 
     def test_a_folder_refuses_every_delivery_and_an_unregistered_folder_is_no_repository(self):
+        for check in (False, True):                                 # placement decides, before any objective lookup
+            self.refused("folder_no_delivery", gate.deliver, self.folder, None, check=check)
         self.refused("folder_no_delivery", commands.open_, self.folder, text="Deliver it", objective="d")
         self.refused("folder_no_delivery", commands.open_, self.folder, text="Deliver it", objective="d",
                      delivery=False, branch="work")
@@ -151,6 +153,16 @@ class FolderWorkspaceTests(CoreCase):
         self.set_orca(folders=state["folders"])
         self.refused("folder_workspace_ambiguous", commands.status, self.folder, "layout")
 
+    def test_an_implicit_preview_and_a_missing_selector_report_what_orca_said(self):
+        self.opened()
+        state = self.orca()
+        state["folders"].append(self.row("f-1", "i-3"))
+        self.set_orca(folders=state["folders"])
+        self.refused("folder_workspace_ambiguous", commands.dispatch, self.folder, None, profile="scout", dry_run=True)
+        self.set_orca(terminals={"term_m": "folder:several workspaces"})     # a missing selector is not ambiguous
+        self.terminal("term_m")
+        self.refused("not_a_repository", commands.status, self.folder, None)
+
     def test_a_workspace_needs_a_native_instance_and_a_non_root_id_is_its_own_address(self):
         ident = f"{PROJECT}::{self.folder}::workspace:u-9"
         self.set_orca(folders=[{"id": ident, "repoId": PROJECT, "path": str(self.folder), "address": f"id:{ident}",
@@ -176,12 +188,17 @@ class FolderWorkspaceTests(CoreCase):
         state["requests"] = {key: value for key, value in state["requests"].items()
                              if value["receipt"]["taskId"] == first["task"]}            # Orca kept no receipt for a2
         self.set_orca(**state)
-        settled = commands.dispatch(self.folder, "layout", retry="a2")
-        self.assertTrue(settled["void"])                            # the sibling's marked Task is never taken as a2
-        self.assertNotIn("task_sibling", [row.get("task") for row in self.folder_entries()])
+        self.refused("start_unknown", commands.dispatch, self.folder, "layout", retry="a2")   # unknown stays unknown
+        rows = [row for row in self.folder_entries() if row.get("id") == "a2"]
+        self.assertFalse(any(row.get("void") for row in rows))      # its paths stay held; nothing is started again
+        self.assertNotIn("task_sibling", [row.get("task") for row in rows])   # the sibling's marked Task is never a2
 
     def test_a_failed_plan_review_never_stands_in_for_another_plan(self):
+        self.write_routes(ROUTES + PROFILES + "review_agents: [codex]\n")
         self.opened()
+        failed = commands.dispatch(self.folder, "layout", role="review", title="plan A", spec="Review plan A.",
+                                   route="codex/sol/high", reason="r")
+        self.finish(failed["task"], None, outcome="failed")         # an allowed reviewer failed with no verdict
         for call in (dict(), dict(dry_run=True)):
             with self.subTest(**call):
                 self.refused("review_exception_invalid", commands.dispatch, self.folder, "layout", role="review",
