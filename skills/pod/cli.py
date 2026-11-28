@@ -122,7 +122,7 @@ def _config(edit: bool) -> dict:
         from .models import edit as models_edit
         models_edit.edit_in_editor(target, editor)
     found = routefile.load(target)
-    return {"path": str(target), "status": found.status, **({"problem": found.problem} if found.problem else {}),
+    return {"path": str(target), "capabilities": {"folder_no_delivery": True}, "status": found.status, **({"problem": found.problem} if found.problem else {}),
             "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
             "merge_authorization": found.merge_authorization, "review_agents": found.review_agents,
             "paused_agents": found.paused_agents,

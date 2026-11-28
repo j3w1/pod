@@ -24,12 +24,47 @@ REVIEW_FORMAT = ('{"outcome": "succeeded" or "failed", "verdict": "pass" or "fai
 
 # --- finding the objective -------------------------------------------------------------------------
 
-def locate(cwd: Path, objective: str | None) -> tuple[Path, Path, str | None]:
-    """The log, the worktree root and the GitHub repository for the objective this command means."""
-    root = gitio.root(cwd)
+def place(cwd: Path) -> tuple[Path, str, str | None, dict | None]:
+    """Where Pod runs: the root, the log namespace, the GitHub repository and the Orca folder workspace.
+
+    Git comes first and behaves as always. Only a directory outside every Git worktree may be a
+    registered Orca folder workspace, whose objectives have no checkout and never deliver.
+    """
+    try:
+        root = gitio.root(cwd)
+    except PodError as exc:
+        if exc.code != "not_a_repository":
+            raise
+        workspace = orca.folder_workspace(str(Path(cwd).resolve()))
+        if not workspace:
+            raise PodError("not_a_repository", f"{cwd} is neither inside a Git worktree nor the Orca folder workspace "
+                           "of this terminal.", fix="run Pod from the objective's worktree, or from the Orca terminal "
+                           "of its folder workspace") from exc
+        return Path(workspace["path"]), f"folder-{workspace['project']}", None, workspace
     repository, slug = gitio.repository(root)
+    return root, repository, slug, None
+
+
+def folder(state: State) -> bool:
+    """An objective bound to an Orca folder workspace: no Git, no candidate, no delivery."""
+    return state.objective.get("workspace_kind") == "folder"
+
+
+def _refuse_in_folder(state: State, what: str) -> None:
+    if folder(state):
+        raise PodError("folder_no_delivery", f"Objective {state.id} lives in an Orca folder workspace with no Git checkout, "
+                       f"so it cannot {what}.", fix="record criteria, decisions and notes only; it closes when no criterion is open")
+
+
+def locate(cwd: Path, objective: str | None, *, placed: tuple | None = None) -> tuple[Path, Path, str | None, dict | None]:
+    """The log, the worktree root, the GitHub repository and this terminal's folder workspace, if any.
+
+    A folder objective is checked against the workspace with `guard` on the state each command
+    actually folds, under its lock, never on an earlier read.
+    """
+    root, repository, slug, workspace = placed or place(cwd)       # a caller that already decided on it passes its placement
     if objective:
-        return log.path(repository, objective), root, slug
+        return log.path(repository, objective), root, slug, workspace
     here, finished = [], []
     for candidate in log.every():
         if candidate.parent.name != repository:
@@ -38,10 +73,12 @@ def locate(cwd: Path, objective: str | None) -> tuple[Path, Path, str | None]:
             state = fold(log.read(candidate))
         except PodError:
             continue                    # an unreadable log is named by `pod status --all`; it does not stop other work
-        if state.entries and state.objective.get("worktree") == str(root):
+        if state.entries and (_same_workspace(state.objective, workspace) if workspace
+                              else state.objective.get("worktree") == str(root)):
             (finished if state.closed else here).append((state.entries[-1]["at"], candidate))
     if len(here) == 1 or (not here and finished):
-        return max(here or finished)[1], root, slug         # nothing open: the one most recently closed here
+        found = max(here or finished)[1]                    # nothing open: the one most recently closed here
+        return found, root, slug, workspace
     names = ", ".join(path.stem for _, path in here)
     raise PodError("objective_unclear", "No objective names this worktree." if not here
                    else f"Several open objectives name this worktree: {names}.",
@@ -59,13 +96,52 @@ def _live(state: State) -> dict:
             for row in pending}
 
 
+def _same_workspace(info: dict, workspace: dict) -> bool:
+    """A folder objective is bound to one native workspace and instance; its path is checked as an attribute."""
+    return (info.get("workspace_kind") == "folder" and info.get("workspace_id") == workspace["workspace_id"]
+            and info.get("workspace_instance_id") == workspace["instance_id"] and info.get("worktree") == workspace["path"])
+
+
+def guard(state: State, workspace: dict | None) -> State:
+    """The folded state, refused when this terminal's folder workspace is not the objective's own."""
+    if workspace is not None and state.entries and not _same_workspace(state.objective, workspace):
+        raise PodError("folder_binding_mismatch", f"Objective {state.id} is bound to workspace "
+                       f"{state.objective.get('workspace_id')} ({state.objective.get('workspace_instance_id')}), not to this "
+                       f"terminal's {workspace['workspace_id']} ({workspace['instance_id']}).",
+                       fix="run Pod from the Orca terminal of the objective's own folder workspace")
+    return state
+
+
+def _folder_after(state: State, after: str | None) -> None:
+    """A failed plan review vouches for no other plan: folder reviews carry no content to compare."""
+    if after and folder(state):
+        raise PodError("review_exception_invalid", "A folder plan review has no commit, so an earlier failed review cannot "
+                       "stand in for this one.", fix="pass the person's own --words, or choose an allowed reviewer")
+
+
+def _folder_worktree(state: State, worktree: str, commit: str | None) -> str:
+    """A folder objective's workers start in its own folder workspace; Pod never makes a Git worktree for them."""
+    if commit:
+        raise PodError("folder_no_commit", "A folder workspace objective has no Git commit to name.", fix="omit --commit")
+    if worktree.startswith("new-"):
+        raise PodError("folder_no_worktree", "A folder workspace objective has no Git repository to make a worktree from.",
+                       fix="omit --worktree, or name the objective's own folder workspace")
+    named = orca.workspace(worktree) if worktree != "current" else None
+    if worktree != "current" and not (named and _same_workspace(state.objective, named)):
+        raise PodError("folder_binding_mismatch", f"Orca does not resolve {worktree} to the objective's own folder workspace "
+                       f"{state.objective['workspace_id']}.", fix="omit --worktree, or name the objective's own folder workspace")
+    return "current"
+
+
 # --- open ------------------------------------------------------------------------------------------
 
 def open_(cwd: Path, *, source: str | None = None, text: str | None = None, objective: str | None = None,
           target: str = "main", branch: str | None = None, pr: int | None = None, run: str | None = None,
           continues: str | None = None, criteria: list[str] | None = None, delivery: bool = True) -> dict:
-    root = gitio.root(cwd)
-    repository, slug = gitio.repository(root)
+    root, repository, slug, workspace = place(cwd)
+    if workspace and (delivery or branch or pr or target != "main"):
+        raise PodError("folder_no_delivery", "An Orca folder workspace has no Git checkout, so its objective has no branch, "
+                       "pull request or delivery.", fix="open it with --no-delivery and without --target, --branch or --pr")
     if bool(source) == bool(text):
         raise PodError("source_required", "Name exactly one source.", fix="pass --issue N or --text 'the objective'")
     rows = [{"text": item} for item in criteria or []]
@@ -84,7 +160,10 @@ def open_(cwd: Path, *, source: str | None = None, text: str | None = None, obje
                                   + hashlib.sha256(text.encode()).hexdigest()[:6])
     with log.writer(log.path(repository, objective), create=True) as writer:
         if writer.entries:
-            state = fold(writer.entries)
+            state = guard(fold(writer.entries), workspace)          # a sibling workspace never reuses this objective
+            if workspace is None and folder(state):
+                raise PodError("folder_binding_mismatch", f"Objective {objective} belongs to an Orca folder workspace.",
+                               fix="run Pod from the Orca terminal of its folder workspace")
             if state.objective.get("source") != described:
                 raise PodError("objective_exists", f"Objective {objective} already exists with a different source.",
                                fix="choose another --objective id, or continue it with `pod resume`")
@@ -94,11 +173,17 @@ def open_(cwd: Path, *, source: str | None = None, text: str | None = None, obje
             if busy:
                 raise PodError("run_busy", f"Run {run} has workers this objective did not start: {', '.join(busy)}.",
                                fix="wait for them or stop them through Orca, then open again")
-        head = gitio.commit(root)
+        if workspace:
+            bound = {"repository": repository, "target": None, "worktree": str(root), "branch": None, "pr": None,
+                     "workspace_id": workspace["workspace_id"], "workspace_instance_id": workspace["instance_id"],
+                     "workspace_kind": "folder", "delivery": "none", "base": None}
+        else:
+            head = gitio.commit(root)
+            bound = {"repository": slug, "target": target, "worktree": str(root), "branch": branch or gitio.branch(root),
+                     "pr": pr, **({} if delivery else {"delivery": "none"}),
+                     "base": gitio.merge_base(root, head, f"origin/{target}") or head}
         writer.append(
-            {"kind": "objective", "id": objective, "source": described, "repository": slug, "target": target,
-             "worktree": str(root), "branch": branch or gitio.branch(root), "run": run, "pr": pr, "continues": continues,
-             **({} if delivery else {"delivery": "none"}), "base": gitio.merge_base(root, head, f"origin/{target}") or head},
+            {"kind": "objective", "id": objective, "source": described, **bound, "run": run, "continues": continues},
             *({"kind": "criterion", "id": f"c{index}", "text": row["text"], "state": "open",
                **({"line": row["line"]} if "line" in row else {})} for index, row in enumerate(rows, 1)))
         return view(root, fold(writer.entries), remote=False, gate=False)
@@ -133,17 +218,23 @@ def _normalize_notes(value: object) -> str | None:
 
 def packet(state: State, assignment: dict, spec: str) -> str:
     role, paths_ = assignment["role"], assignment.get("paths") or []
+    in_folder = folder(state)
     lines = [f"# Assignment {state.id} {assignment['id']} ({role})", "", spec.strip(), "", "## Boundaries", "",
-             f"- Base commit: {assignment['base']}"]
+             f"- Folder: {state.objective['worktree']} (an Orca folder workspace with no Git checkout)" if in_folder
+             else f"- Base commit: {assignment['base']}"]
     if assignment.get("profile"):
         lines.append(f"- Profile: {assignment['profile']} (mcp: {'on' if assignment.get('mcp') else 'off'})")
     if role == "implement":
         lines += ["- Change only: " + (", ".join(paths_) if paths_ else "what the task needs"),
+                  "- Leave your work in this folder and name what you changed in your summary; there is no Git checkout, "
+                  "so do not create a repository or a commit, and your result commit is null." if in_folder else
                   "- Commit your work on the branch you are given. Do not push, merge or open a pull request.",
                   "- Run tests in the foreground. Never end a turn while a background run is pending: send",
-                  "  worker_done with the commit and the test result, or, when you cannot finish, with what blocked you."]
+                  ("  worker_done with what you changed, or, when you cannot finish, with what blocked you." if in_folder else
+                   "  worker_done with the commit and the test result, or, when you cannot finish, with what blocked you.")]
     elif role == "review":
-        lines += [f"- Review commit {assignment['base']}, these paths: " + ", ".join(paths_),
+        lines += ["- Review the plan in the task text above" + (", and these paths: " + ", ".join(paths_) if paths_ else "")
+                  + ". There is no commit." if in_folder else f"- Review commit {assignment['base']}, these paths: " + ", ".join(paths_),
                   "- Report every finding in one pass. Do not change any file; the writer makes corrections.",
                   "- Mark a finding required only when the change must not merge without it.",
                   "- `outcome` says whether you completed the review; `verdict` says whether the change passes.",
@@ -355,7 +446,7 @@ def _resolved(root: Path | None, commit: str | None) -> str | None:
 def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profile: str | None = None,
                       route: str | None = None, reason: str | None = None, exclude_agents: list[str] | None = None,
                       commit: str | None = None, words: str | None = None, after: str | None = None,
-                      why: str | None = None) -> dict:
+                      why: str | None = None, worktree: str = "current") -> dict:
     """Pure read-only route resolution: never writes to the log and never calls Orca."""
     authors: set[str] = set()
     counts: dict[str, int] = {}
@@ -364,27 +455,34 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
     folded: State | None = None
     root: Path | None = None
     if objective:
-        target, root, _ = locate(cwd, objective)
+        target, root, _, here = locate(cwd, objective)
         entries = log.read(target)
         if not entries:
             raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
-        folded = fold(entries)
+        folded = guard(fold(entries), here)
+        if folder(folded):
+            _folder_after(folded, after)
+            _folder_worktree(folded, worktree, commit)
         authors = folded.author_families()
-        frozen = _resolved(root, commit)
-        counts = folded.author_counts(root, frozen)
+        frozen = None if folder(folded) else _resolved(root, commit)
+        counts = {} if folder(folded) else folded.author_counts(root, frozen)
         notes = _reviewer_note_lines(folded)
     else:
         try:
-            target, root, _ = locate(cwd, None)
+            target, root, _, here = locate(cwd, None)
             entries = log.read(target)
             if entries:
-                folded = fold(entries)
+                folded = guard(fold(entries), here)
                 authors = folded.author_families()
-                frozen = _resolved(root, commit)
-                counts = folded.author_counts(root, frozen)
+                frozen = None if folder(folded) else _resolved(root, commit)
+                counts = {} if folder(folded) else folded.author_counts(root, frozen)
                 notes = _reviewer_note_lines(folded)
-        except PodError:
-            pass
+        except PodError as exc:
+            if exc.code.startswith("folder_") or exc.code == "orca_unknown":
+                raise                    # the preview needs no objective, but never hides a refused folder workspace
+        if folded is not None and folder(folded):      # outside the swallow: a folder preview refuses like the start
+            _folder_after(folded, after)
+            _folder_worktree(folded, worktree, commit)
     preferences = routefile.load()
     excluded = list(exclude_agents or ())
     has_exception_flags = not (words is after is why is None)
@@ -457,10 +555,11 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
              name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None) -> dict:
     if dry_run:
         return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route, reason=reason,
-                                 exclude_agents=exclude_agents, commit=commit, words=words, after=after, why=why)
-    target, root, _ = locate(cwd, objective)
+                                 exclude_agents=exclude_agents, commit=commit, words=words, after=after, why=why,
+                                 worktree=worktree)
+    target, root, _, here = locate(cwd, objective)
     with log.writer(target) as writer:
-        state = fold(writer.entries)
+        state = guard(fold(writer.entries), here)
         if state.closed:
             raise PodError("objective_closed", f"Objective {state.id} is closed or dropped.", fix="open a new objective")
         if retry:
@@ -470,8 +569,12 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
         authors = state.author_families()
-        base = gitio.commit(root, commit or "HEAD")
-        counts = state.author_counts(root, base)
+        in_folder = folder(state)
+        if in_folder:
+            _folder_after(state, after)
+            worktree = _folder_worktree(state, worktree, commit)
+        base = None if in_folder else gitio.commit(root, commit or "HEAD")
+        counts = {} if in_folder else state.author_counts(root, base)
         notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
         has_exception_flags = not (words is after is why is None)
@@ -504,7 +607,9 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                            fix=res.error_fix)
         role = res.role
         route = res.route
-        if role == "review":
+        if role == "review" and in_folder:
+            pass                    # a plan review reads the task text; there is no commit or change to bind it to
+        elif role == "review":
             against = gitio.merge_base(root, base, f"origin/{state.objective['target']}") or gitio.merge_base(
                 root, base, state.objective["target"])
             if not against:
@@ -552,7 +657,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         text = packet(state, assignment, spec)
         assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
         writer.append(assignment)
-        selector = f"path:{root}" if worktree == "current" else worktree
+        selector = (state.objective["workspace_id"] if in_folder else f"path:{root}") if worktree == "current" else worktree
         task_title = _task_title(res.profile, role, route, state.id, ident, title)
         new_from = (str(gitio.main_checkout(root)), state.objective.get("branch") or gitio.branch(root) or base) if worktree.startswith("new-") else None
         display_name = ((name or "").strip() or _worktree_display_name(title, ident)) if new_from else name
@@ -684,8 +789,15 @@ def _settle_start(writer, state: State, ident: str) -> dict:
     receipt = answer.get("receipt") or {}
     found = receipt.get("taskId") if answer.get("state") == "completed" else None
     markers = (f"· {state.id}:{ident} ", f"[{state.id}:{ident}]")
-    found = found or next((key for key, task in orca.tasks(run).items()
-                           if any(marker in (task["title"] or "") for marker in markers)), None)
+    if folder(state) and not found:
+        # A folder Run can be shared by sibling workspaces, so a title marker proves nothing, and without Orca's own
+        # receipt whether this worker started stays unknown: its paths stay held and nothing is started again.
+        raise PodError("start_unknown", f"Orca holds no receipt for {ident}'s request {row['request']}, so whether it "
+                       "started is unknown.", fix=f"run `pod dispatch --retry {ident}` once Orca records it; until then it holds its "
+                       "paths and this workspace")
+    if not folder(state):
+        found = found or next((key for key, task in orca.tasks(run).items()
+                               if any(marker in (task["title"] or "") for marker in markers)), None)
     if found:
         worker = next((item for item in orca.workers(run) if item["task"] == found), {})
         dispatch_ = receipt.get("dispatchId") or worker.get("dispatch")
@@ -743,9 +855,9 @@ def parse_result(body: str | None) -> dict:
 
 def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | None = None, discarded: bool = False,
            why: str | None = None) -> dict:
-    target, root, _ = locate(cwd, objective)
+    target, root, _, here = locate(cwd, objective)
     with log.writer(target) as writer:
-        state = fold(writer.entries)
+        state = guard(fold(writer.entries), here)
         row = state.assignments.get(ident)
         if not row or row.get("void"):
             raise PodError("assignment_unknown", f"There is no started assignment {ident}.", fix="run `pod status` for the ids")
@@ -773,13 +885,17 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
         report = task["report"] or {}
         stated = parse_result(report.get("body"))
         outcome = report.get("outcome") if report.get("outcome") in ("succeeded", "failed") else "unknown"
-        commit = stated.get("commit") if isinstance(stated.get("commit"), str) else None
+        in_folder = folder(state)
+        commit = stated.get("commit") if isinstance(stated.get("commit"), str) and not in_folder else None
         try:
             commit = gitio.commit(root, commit) if commit else None
         except PodError:
             commit = None
         writes = row["role"] == "implement"
-        if writes and not discarded and not integrated:
+        if in_folder and integrated:
+            raise PodError("folder_no_commit", "A folder workspace objective has no Git commit to integrate into.",
+                           fix=f"accept {ident} without --integrated (its work stays in the folder), or with --discarded")
+        if writes and not discarded and not integrated and not in_folder:
             raise PodError("decision_required", f"State what you did with {ident}'s result.",
                            fix="pass --integrated COMMIT (where its work now is) or --discarded")
         changed = gitio.changed(root, row["base"], commit) if commit and commit != row["base"] else []
@@ -795,7 +911,9 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
             outside = [name for name in changed if row.get("paths") and not gitio.under(name, row["paths"])]
             if outside:
                 fact["outside"] = output["outside_declared_paths"] = outside
-            if not commit:
+            if in_folder:
+                output["note"] = "a folder workspace has no Git: its work stays in the folder and no content is recorded"
+            elif not commit:
                 output["note"] = "the worker named no result commit; nothing about its content is recorded"
             if integrated:
                 at = gitio.commit(root, integrated)
@@ -838,7 +956,8 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                     row.get("requested_review_fallback_reason") or row.get("review_fallback_reason"),
                     observed_effective=not row.get("effective_unknown"),
                 )
-                facts.append({"kind": "fact", "fact": "review", "commit": row["base"], "tree": gitio.tree(root, row["base"]),
+                facts.append({"kind": "fact", "fact": "review", "commit": row["base"],
+                              "tree": None if in_folder else gitio.tree(root, row["base"]),
                               "paths": row["paths"], "context": row.get("context") or [], "verdict": verdict,
                               "reviewer": ident, "wrote": bool(changed), "completed": outcome == "succeeded",
                               **({"review_independence": tag} if tag is not None else {}),
@@ -881,10 +1000,18 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
 
 def record(cwd: Path, objective: str | None, **given) -> dict:
     """Add what only the coordinator knows: a criterion met, a decision, a person's words, the note."""
-    target, root, slug = locate(cwd, objective)
+    target, root, slug, here = locate(cwd, objective)
     with log.writer(target) as writer:
-        state = fold(writer.entries)
+        state = guard(fold(writer.entries), here)
         entries, done = [], []
+        for flag, what in (("check", "bind a check to a commit"), ("waive", "waive a finding before a delivery"),
+                           ("authorize", "authorize a merge"), ("withdraw", "withdraw a merge authorization"),
+                           ("carried", "carry a review of a commit"), ("commit", "name a commit"),
+                           ("pr", "have a pull request"), ("branch", "have a branch"),
+                           ("after_merge", "prove a criterion after a merge")):
+            value = given.get(flag)
+            if value is not None and value is not False and value != []:   # presence: `--pr 0` and `--branch ''` count
+                _refuse_in_folder(state, what)
 
         def criterion(ident: str) -> dict:
             if ident not in state.criteria:
@@ -978,7 +1105,8 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
         result = {"recorded": done, "entries": [row["n"] for row in writer.entries[-len(entries):]]}
         after = fold(writer.entries)
         if after.closed:           # its last criterion is met: tidy now, and again on any later record or deliver
-            result.update(cleanup.tidy(writer, root, after, target_head=_target_head(root, after), again="pod deliver"))
+            result.update(cleanup.tidy(writer, root, after, target_head=_target_head(root, after),
+                                       again=f"pod record --objective {after.id} --note …" if folder(after) else "pod deliver"))
         return result
 
 
@@ -1080,6 +1208,9 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
               "source": (f"{source['repository']}#{source['number']} {source['title']}" if source["kind"] == "issue"
                          else source["text"][:200]),
               "target": info["target"], "branch": info.get("branch"), "run": info.get("run"), "pr": info.get("pr")}
+    if folder(state):
+        result.update(worktree=info["worktree"], workspace_id=info["workspace_id"],
+                      workspace_instance_id=info.get("workspace_instance_id"), workspace_kind="folder", delivery="none")
     if info.get("note"):
         result["note"] = info["note"]
     result["criteria"] = [f"{row['id']} {row['state']}{' (after merge)' if row.get('after_merge') else ''}: {row['text'][:160]}"
@@ -1096,13 +1227,17 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         rows.append(f"{row['id']} {row['role']} {status}: {row['title'][:80]}")
     if rows:
         result["assignments"] = rows
-    found = [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}" for row in proof.open_required(root, state, gitio.commit(root))]
+    found = [] if folder(state) else [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}"
+                                      for row in proof.open_required(root, state, gitio.commit(root))]
     if found:
         result["open_required_findings"] = found
     notes = _reviewer_note_lines(state)
     if notes:
         result["reviewer_notes"] = notes
     if not gate:
+        return result
+    if folder(state):
+        result["gate"] = "nothing to deliver: a folder workspace objective closes when no criterion is open"
         return result
     verdict = gates.evaluate(root, state, remote=remote)
     result["candidate"] = f"{verdict['candidate'][:12]} tree {verdict['tree'][:12]}" + (
@@ -1115,11 +1250,11 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
 
 
 def status(cwd: Path, objective: str | None, *, remote: bool = True, typed: bool = False) -> dict:
-    target, root, _ = locate(cwd, objective)
+    target, root, _, here = locate(cwd, objective)
     entries = log.read(target)
     if not entries:
         raise PodError("objective_unknown", f"There is no objective {target.stem}.", fix="run `pod status --all`")
-    folded = fold(entries)
+    folded = guard(fold(entries), here)
     result = view(root, folded, remote=remote)
     if typed:                                  # the typed projection is for `--json` readers only
         result["assignment_records"], result["events"] = _assignment_records(folded)
@@ -1140,7 +1275,7 @@ def listing() -> dict:
         info = state.objective
         rows.append({"objective": state.id, "repository": info.get("repository") or target.parent.name,
                      "worktree": info.get("worktree"), "branch": info.get("branch"), "run": info.get("run"),
-                     "pr": info.get("pr"), "target": info.get("target"), "opened": info.get("opened"),
+                     "pr": info.get("pr"), "target": "none" if folder(state) else info.get("target"), "opened": info.get("opened"),
                      "unaccepted": [{"assignment": row["id"], "task": row.get("task"), "dispatch": row.get("dispatch")}
                                     for row in state.assignments.values() if not row.get("void") and not state.result(row["id"])]})
     return {"schema": "pod-objectives/v1", "objectives": rows}
@@ -1148,9 +1283,9 @@ def listing() -> dict:
 
 def resume(cwd: Path, objective: str | None) -> dict:
     """Continue an objective from a new conversation. Orca moves the Run to it and fences the earlier one."""
-    target, root, _ = locate(cwd, objective)
+    target, root, _, here = locate(cwd, objective)
     with log.writer(target) as writer:
-        state = fold(writer.entries)
+        state = guard(fold(writer.entries), here)
         run = state.objective.get("run")
         if run and not state.closed:
             bound = orca.run_use(run)
@@ -1160,15 +1295,17 @@ def resume(cwd: Path, objective: str | None) -> dict:
 
 
 def _target_head(root: Path, state: State) -> str | None:
+    if folder(state):
+        return None
     target = state.objective["target"]
     return gitio.fetch(root, "origin", target) or gitio.known(root, f"origin/{target}") or gitio.known(root, target)
 
 
 def drop(cwd: Path, objective: str | None, *, why: str) -> dict:
     """Stop an objective. Its settled workers are released; unfinished or unmerged work is left where it is."""
-    target, root, _ = locate(cwd, objective)
+    target, root, _, here = locate(cwd, objective)
     with log.writer(target) as writer:
-        state = fold(writer.entries)
+        state = guard(fold(writer.entries), here)
         if not state.dropped:
             writer.append({"kind": "objective", "dropped": True, "why": why})
         state = fold(writer.entries)
