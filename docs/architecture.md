@@ -53,7 +53,7 @@ title marker another workspace in the Run could share; without one it stays unkn
 plan review never stands in for another (`--after` is refused). Such an objective is opened with
 `--no-delivery`, logs under `folder-<project id>`, and has no branch, pull request, target or
 base. Workers start in that same workspace (`--worktree` must name it exactly; Pod makes no
-worktree for them), a review reviews the plan in its task text, and an implement result is
+worktree for them, and reads and renames their tabs through the workspace address, never the shared path), a review reviews the plan in its task text, and an implement result is
 accepted without a commit. Every delivery command (`deliver`, `record --authorize`, `--check`,
 `--waive`, `--carried`, `--commit`, `--pr`, `--branch`) refuses with `folder_no_delivery`.
 `pod drop --objective ID` also works outside the objective's own workspace, from any terminal,
