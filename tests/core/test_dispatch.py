@@ -108,7 +108,7 @@ class DispatchTests(CoreCase):
             (None, "investigate", "Scout"),
             ("build-fast", "implement", "Builder"),
             ("build-deep", "implement", "Builder (deep)"),
-            ("ui-design", "implement", "Designer"),
+            ("ui-design", "implement", "Builder (UI)"),
             ("ui-light", "implement", "Builder (UI)"),
             ("ui-accessibility", "implement", "Builder (UI)"),
             ("ui-analyst", "implement", "Builder (UI)"),
@@ -190,6 +190,8 @@ class DispatchTests(CoreCase):
         titles = self.orca()["titles"]
         self.assertEqual(titles[f"term_{deep['dispatch']}"], "Builder (deep) │ neon/high │ core refactor")
         self.assertEqual(titles[f"term_{ui['dispatch']}"], "Builder (UI) │ opus/high │ card contrast")
+        self.assertEqual(commands._tab_title("ui-design", "implement", "claude/claude-opus-5-5/high", "look b"),
+                         "Builder (UI) │ opus/high │ look b")         # a ui-design worker in a Git worktree builds UI
         self.assertEqual(titles[f"term_{analyst['dispatch']}"], "Analyst │ neon/high │ latency study")
         self.assertEqual(titles[f"term_{challenger['dispatch']}"], "Challenger │ sol/med │ stress check")
         self.assertEqual(titles[f"term_{reviewer['dispatch']}"], "Reviewer (fast) │ terra/high │ check diff")

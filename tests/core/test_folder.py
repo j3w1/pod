@@ -89,6 +89,7 @@ class FolderWorkspaceTests(CoreCase):
         tasks = self.orca()["tasks"]
         self.assertEqual([tasks[row["task"]]["worktree"] for row in (scout, designer)], [self.address, self.address])
         self.assertEqual([tasks[row["task"]]["repo"] for row in (scout, designer)], [None, None])    # Pod makes no worktree
+        self.assertEqual(self.orca()["titles"][f"term_{designer['dispatch']}"], "Designer │ opus/high │ draw the map")
         packet = tasks[designer["task"]]["spec"]
         self.assertIn(f"Folder: {self.folder}", packet)
         self.assertIn("do not create a repository or a commit", packet)

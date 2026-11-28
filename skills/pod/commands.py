@@ -302,7 +302,7 @@ PROFILE_ROLES = {
     "build-fast": "Builder",
     "build-deep": "Builder (deep)",
     "ui-light": "Builder (UI)",
-    "ui-design": "Designer",
+    "ui-design": "Builder (UI)",
     "review-fast": "Reviewer (fast)",
     "review-deep": "Reviewer (deep)",
     "scout": "Scout",
@@ -345,9 +345,13 @@ def _worktree_slug(display: str, ident: str) -> str:
     return slug or ident
 
 
-def _tab_role(profile: str | None, role: str) -> str:
-    """CE Dev role word for a worker tab, never the raw profile name or kind."""
+def _tab_role(profile: str | None, role: str, *, in_folder: bool = False) -> str:
+    """CE Dev role word for a worker tab, never the raw profile name or kind.
+
+    A `ui-design` worker in a folder workspace objective is the Analyst's Designer; elsewhere it builds UI."""
     name = (profile or "").strip().lower()
+    if name == "ui-design" and in_folder:
+        return "Designer"
     if name in PROFILE_ROLES:
         return PROFILE_ROLES[name]
     if name == "ui" or name.startswith("ui-"):
@@ -386,7 +390,8 @@ _MARKER_TOKEN = re.compile(r"\s*\[[^\[\]\s]+:a\d+\]\s*")
 _TAB_DESCRIPTION_MAX = 34
 
 
-def _tab_title(profile: str | None, role: str, route: str, title: str, requested: str | None = None) -> str:
+def _tab_title(profile: str | None, role: str, route: str, title: str, requested: str | None = None, *,
+               in_folder: bool = False) -> str:
     """`<Role> │ <model>/<effort> │ <description>` (U+2502 bar, one space each side); the description is cut to 34 characters."""
     segments = route.split("/")
     raw_model = segments[1] if len(segments) > 1 and segments[1] != "None" else ""
@@ -401,7 +406,7 @@ def _tab_title(profile: str | None, role: str, route: str, title: str, requested
     short = _clean_topic(bare) or " ".join(bare.split())
     if len(short) > _TAB_DESCRIPTION_MAX:
         short = short[:_TAB_DESCRIPTION_MAX - 1].rstrip() + "…"
-    return " │ ".join(part for part in (_tab_role(profile, role), model_part, short) if part)
+    return " │ ".join(part for part in (_tab_role(profile, role, in_folder=in_folder), model_part, short) if part)
 
 
 def _task_title(profile: str | None, role: str, route: str, objective: str, ident: str, title: str) -> str:
@@ -693,7 +698,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                           primary_agent=preferences.review_agents[0] if preferences.review_agents else None)
         try:
             failed = orca.rename(run, started, _tab_title(res.profile, role, routefile.canonical_effective(
-                started.get("effective")) or route, title, route), task_title=task_title, marker=f"[{state.id}:{ident}]")
+                started.get("effective")) or route, title, route, in_folder=in_folder), task_title=task_title, marker=f"[{state.id}:{ident}]")
         except Exception as exc:                 # cosmetic: never fail a started worker
             failed = type(exc).__name__
         if failed:
@@ -823,7 +828,8 @@ def _settle_start(writer, state: State, ident: str) -> dict:
                 try:
                     failed = orca.rename(
                         run, started_info,
-                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"], row["route"]),
+                        _tab_title(row.get("profile"), row["role"], effective_canon, row["title"], row["route"],
+                                   in_folder=folder(state)),
                         task_title=task_title, marker=f"[{state.id}:{ident}]",
                     )
                 except Exception as exc:
