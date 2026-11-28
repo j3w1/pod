@@ -300,16 +300,18 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   Review independence compares model families (`provider`: `Anthropic`, `OpenAI`, `Google`) rather
   than raw agent names. For automatic and role-only review selection (`--role review` or
   `--profile review-*` without an explicit `--route`), candidates whose model family authored the
-  reviewed commit are filtered out (an accepted `implement` assignment integrated into that
-  commit's history, including mixed authorship after a handoff; integrated work proven outside
-  that history, `contained: true` at a commit that is not an ancestor, authored none of it, and
-  work whose place is not proven still counts), rather than merely deprioritized, and the remaining candidates are ordered by
+  reviewed commit are filtered out (any accepted `implement` assignment, including mixed authorship
+  after a handoff, unless Pod proves it authored none of that commit's change: Git says
+  conclusively that neither its result commit nor its integration commit is in the commit's
+  history, and no file it changed is in the commit's diff against the target; anything Git cannot
+  settle keeps it), rather than merely deprioritized, and the remaining candidates are ordered by
   `review_agents`. When every enabled other-family reviewer route in the candidate list is
   unavailable because its agent or quota pool has an active quota hold in `paused_agents` or
   `soft_drained_agents` (unreasoned hold or quota/rate-limit reason, not a non-quota hold
   such as maintenance, exclusion or unsupported effort; a longer reason counts when it contains a
-  specific quota phrase such as `quota exhausted`, `out of quota` or `rate limit`, in any case, and
-  names no non-quota cause), Pod falls back to an eligible non-Claude
+  specific quota phrase such as `quota exhausted`, `out of quota`, `rate limit` or `weekly 10%`, in
+  any case, and names no non-quota cause such as maintenance, billing or a lifted limit, with `_`
+  and `-` read as spaces), Pod falls back to an eligible non-Claude
   author-family route within `review_agents` (never selecting Claude-family routes, bypassing
   `review_agents` or manual `Pin`, or using a paused/soft-drained route), records
   `review_independence: same_provider_fallback` and `review_fallback_reason` (naming the
@@ -337,7 +339,9 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   successor dispatches. Omit `review_agents` or use `[]` to allow any enabled agent. To use an
   agent outside `review_agents`, or to override a `reviewer_same_family` refusal on automatic or
   role-only review selection, give the person's own `--words` or use `--after aN --why "…"` after
-  an allowed review of the same commit failed or was voided without a review result. An explicit
+  an allowed review of the same commit failed, was voided, or was accepted as `--discarded` (such
+  as a provider content-gate refusal Orca stopped) without a review result or a verdict in its
+  report. An explicit
   `--route` on an allowed agent (with `--reason` when outside configured profiles) is not
   filtered by author family and records its factual `review_independence` tag.
 - **Antigravity wire format.** `routefile.wire_route()` translates model-suffix routes such as

@@ -31,7 +31,8 @@ AGENT_LIST = re.compile(rf"\[ *(?:{AGENT.pattern}(?: *, *{AGENT.pattern})* *)?\]
 _TTL = re.compile(r"^([1-9][0-9]*)([smhd]?)$")
 _TTL_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 _QUOTA_NON_QUOTA_TERMS = re.compile(
-    r"\b(?:no|not|non|without|never|maintenance|migration|migrate|offline|outage|incident|broken|debug|testing|test)\b",
+    r"\b(?:no|not|non|without|never|maintenance|migration|migrate|offline|outage|incident|broken|debug|testing|test"
+    r"|billing|payment|lifted|resolved|restored|cleared|recovered|ended|over)\b",
     re.IGNORECASE,
 )
 _QUOTA_POSITIVE_REASON = re.compile(
@@ -56,7 +57,7 @@ _QUOTA_PHRASE = re.compile(
     r"|429[ _-]+(?:too[ _-]+many[ _-]+requests|rate[ _-]?limit(?:ed)?)"
     r"|(?:weekly|daily|monthly|hourly|manual)[ _-]+(?:\d+(?:\.\d+)?(?:pct|%)|limit(?:ed)?|cap(?:ped)?|quota)"
     r"|keep[ _-]+bonus[ _-]+pool"
-    r")\b",
+    r")(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 MAX_BYTES = 256 * 1024
@@ -581,7 +582,7 @@ def _is_quota_hold(hold: AgentHold) -> bool:
     if not hold.reason or not hold.reason.strip():
         return True
     cleaned = " ".join(hold.reason.strip().split())
-    if _QUOTA_NON_QUOTA_TERMS.search(cleaned):
+    if _QUOTA_NON_QUOTA_TERMS.search(re.sub(r"[_-]+", " ", cleaned)):     # `scheduled_maintenance` is two words
         return False
     return bool(_QUOTA_POSITIVE_REASON.fullmatch(cleaned) or _QUOTA_PHRASE.search(cleaned))
 
