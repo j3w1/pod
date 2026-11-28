@@ -56,7 +56,7 @@ def parser() -> argparse.ArgumentParser:
     one.add_argument("--paths", type=_list, metavar="A,B", help="implement: the only paths it may change; review: limit the review")
     one.add_argument("--commit", help="review: the commit to review (default: HEAD)")
     one.add_argument("--context", type=_list, metavar="A,B", help="review: paths whose later change lapses this review")
-    one.add_argument("--worktree", default="current", help="Orca worktree selector (default: this worktree)")
+    one.add_argument("--worktree", help="Orca worktree selector (default: this worktree)")
     one.add_argument("--name", help="display name for the worker")
     one.add_argument("--retry", metavar="ASSIGNMENT", help="after a lost reply: read from Orca whether it started")
     one.add_argument("--follow-up", metavar="ASSIGNMENT",

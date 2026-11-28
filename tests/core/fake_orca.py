@@ -124,6 +124,8 @@ def main():
             if first["spec"] != body:
                 reply(False, {"code": "request_mismatch", "message": "already used with different input"})
             reply(True, {**first["receipt"], "mutation": {"requestId": request, "replayed": True}})
+        if state.get("send_empty"):                 # an answer that says nothing about what happened
+            reply(True, {})
         if state.get("send_refuses"):
             reply(False, {"code": state["send_refuses"], "message": "this Dispatch takes no follow-up"})
         old = state["workers"].get(option(args, "--to")[len("dispatch:"):])

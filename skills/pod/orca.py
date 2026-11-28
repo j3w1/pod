@@ -185,7 +185,8 @@ def follow_up_receipt(result: dict) -> dict:
     delivery = result.get("delivery")
     launch = result.get("launch") if isinstance(result.get("launch"), dict) else {}
     return {"task": result.get("taskId") if delivery else None, "dispatch": result.get("dispatchId") if delivery else None,
-            "state": result.get("state"), "delivery": delivery, "follow_up_of": result.get("followUpOf"),
+            "state": result.get("state"), "delivery": delivery, "mail": isinstance(result.get("message"), dict),
+            "follow_up_of": result.get("followUpOf"),
             "effective": launch.get("effective"), "replayed": bool((result.get("mutation") or {}).get("replayed"))}
 
 

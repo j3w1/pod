@@ -557,19 +557,19 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
              title: str | None = None, spec: str | None = None, route: str | None = None,
              reason: str | None = None, exclude_agents: list[str] | None = None, dry_run: bool = False,
              paths_: list[str] | None = None, commit: str | None = None,
-             context: list[str] | None = None, worktree: str = "current", retry: str | None = None,
+             context: list[str] | None = None, worktree: str | None = None, retry: str | None = None,
              name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None,
              follow_up: str | None = None) -> dict:
     if follow_up:
         others = {"--role": role, "--profile": profile, "--route": route, "--reason": reason, "--exclude-agent": exclude_agents,
                   "--dry-run": dry_run, "--paths": paths_, "--context": context, "--retry": retry, "--name": name,
-                  "--words": words, "--after": after, "--why": why,
-                  "--worktree": None if worktree == "current" else worktree}
+                  "--words": words, "--after": after, "--why": why, "--worktree": worktree}
         given = [flag for flag, value in others.items() if value]
         if given:
             raise PodError("follow_up_flags", f"A follow-up keeps {follow_up}'s role, profile, route, worktree and paths; "
                            f"{', '.join(given)} cannot change them.",
                            fix="drop those flags, or dispatch fresh work when the job or profile changes")
+    worktree = worktree or "current"
     if dry_run:
         return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route, reason=reason,
                                  exclude_agents=exclude_agents, commit=commit, words=words, after=after, why=why,
@@ -757,9 +757,10 @@ def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *
                        fix=f"follow up the newest step of this job: `pod dispatch --follow-up {newest}`")
     run = state.objective["run"]
     task = orca.tasks(run).get(parent["task"]) or {}
-    if task.get("status") not in ("completed", "failed"):
+    if task.get("status") not in ("completed", "failed") or not task.get("report"):
         # Mail to a worker that is still working joins its current turn and makes no Task, so nothing could be recorded.
-        raise PodError("follow_up_busy", f"{parent_id} has not reported yet (Orca says {task.get('status')}).",
+        raise PodError("follow_up_busy", f"{parent_id} has not reported yet (Orca says {task.get('status')}"
+                       f"{', with no report' if task.get('status') in ('completed', 'failed') else ''}).",
                        fix=f"wait for Orca to wake you with {parent_id}'s report, then follow up")
     role = parent["role"]
     base = None if folder(state) else gitio.commit(root, commit or "HEAD")
@@ -793,6 +794,10 @@ def _settle_follow_up(writer, state: State, ident: str, got: dict) -> dict:
     """Record what Orca's follow-up receipt says, the same way for the first reply and for `--retry`."""
     row = state.assignments[ident]
     parent = state.assignments[row["follows"]]
+    if not got.get("delivery") and not got.get("mail"):
+        # Neither a follow-up nor mail: Orca's answer proves nothing, so whether a Task started stays unknown.
+        raise PodError("start_unknown", f"Orca's receipt for {ident} names neither a follow-up Task nor mail.",
+                       fix=f"run `pod dispatch --retry {ident}` once Orca records it, or {FRESH}")
     if got.get("state") == "failed" or not got.get("task") or not got.get("dispatch"):
         writer.append({"kind": "assignment", "id": ident, "void": True, "refused": "follow_up_not_started",
                        **({"task": got["task"]} if got.get("task") else {})})
@@ -807,8 +812,8 @@ def _settle_follow_up(writer, state: State, ident: str, got: dict) -> dict:
     if got.get("follow_up_of") and got["follow_up_of"] != parent["dispatch"]:
         notes.append(f"Orca followed up Dispatch {got['follow_up_of']}, not {row['follows']}'s {parent['dispatch']}")
     if got["delivery"] == "started_fresh":
-        notes.append(f"Orca could not resume {row['follows']}'s session and started its agent fresh: its earlier context "
-                     "is gone, and it has only this follow-up's task text; send the whole job, or dispatch fresh")
+        notes.append(f"Orca could not resume {row['follows']}'s session and started its agent fresh: its earlier "
+                     "conversation is gone; state the context this step needs, or dispatch fresh")
     if notes:
         result["note"] = "; ".join(notes)
     return result

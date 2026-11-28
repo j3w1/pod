@@ -176,7 +176,7 @@ class FollowUpTests(CoreCase):
         self.refused("orca_unknown", self.follow, "a1")
         settled = commands.dispatch(self.repo, None, retry="a3")
         self.assertEqual(settled["delivery"], "started_fresh")
-        self.assertIn("context is gone", settled["note"])
+        self.assertIn("conversation is gone", settled["note"])
 
     def test_a_retry_keeps_an_unknown_receipt_unknown_and_a_void_follow_up_void(self):
         from pod import commands
@@ -196,13 +196,47 @@ class FollowUpTests(CoreCase):
         self.refused("start_unknown", commands.dispatch, self.repo, None, retry="a3")
         self.assertFalse(commands.fold(self.entries("widget")).assignments["a3"].get("void"))
 
+    def test_an_answer_that_proves_neither_a_task_nor_mail_keeps_the_follow_up_unknown(self):
+        from pod import commands
+        first = self.started()
+        self.finish(first["task"], {"outcome": "succeeded"})
+        self.set_orca(send_empty=True)
+        self.refused("start_unknown", self.follow, "a1")
+        state = self.orca()
+        request = commands.fold(self.entries("widget")).assignments["a2"]["request"]
+        state["requests"][request] = {"spec": "", "receipt": {}}
+        self.orca_file.write_text(__import__("json").dumps(state))
+        self.refused("start_unknown", commands.dispatch, self.repo, None, retry="a2")
+        self.assertFalse(commands.fold(self.entries("widget")).assignments["a2"].get("void"))
+
+    def test_a_parent_orca_marked_failed_without_a_report_has_not_reported(self):
+        first = self.started()
+        state = self.orca()
+        state["tasks"][first["task"]]["status"] = "failed"
+        self.orca_file.write_text(__import__("json").dumps(state))
+        self.refused("follow_up_busy", self.follow, "a1")
+        self.assertNotIn("sends", self.orca())
+        self.finish(first["task"], {"outcome": "failed"}, outcome="failed")      # a worker_done that reports failure
+        self.assertEqual(self.follow("a1")["follows"], "a1")
+
+    def test_the_cli_follows_up_and_refuses_an_explicit_worktree(self):
+        from pod import cli, commands
+        first = self.started()
+        self.finish(first["task"], {"outcome": "succeeded"})
+        args = cli.parser().parse_args(["dispatch", "--follow-up", "a1", "--worktree", "current", "--spec", "Next."])
+        self.refused("follow_up_flags", cli.execute, args, self.repo)
+        args = cli.parser().parse_args(["dispatch", "--follow-up", "a1", "--spec", "Next."])
+        self.assertEqual(cli.execute(args, self.repo)["follows"], "a1")
+        listed = commands.listing()["objectives"][0]["unaccepted"]
+        self.assertEqual([sorted(row) for row in listed], [["assignment", "browser_scope", "dispatch", "task"]] * 2)
+
     def test_a_fresh_start_is_recorded_and_says_the_context_is_gone(self):
         first = self.started()
         self.finish(first["task"], {"outcome": "succeeded"})
         self.set_orca(delivery="started_fresh")
         then = self.follow(first["assignment"])
         self.assertEqual(then["delivery"], "started_fresh")
-        self.assertIn("context is gone", then["note"])
+        self.assertIn("conversation is gone", then["note"])
 
 
 if __name__ == "__main__":

@@ -145,16 +145,18 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   (`started_fresh`); the receipt names the Task, the Dispatch, the Dispatch it followed
   (`followUpOf`) and the launch. Pod records any receipt that names a Task, with the observed
   launch route, and notes a fresh start (the earlier context is gone) or a followed Dispatch
-  other than aN's. A refusal, or a receipt with no Task (mail), voids the assignment. `--retry`
-  settles the same way from `request-show`, and only from Orca's receipt: no title match, and a
-  missing or `outcome_unknown` receipt keeps the follow-up unknown. The follow-up is a new
+  other than aN's. A refusal, or a receipt that shows mail and no Task, voids the assignment; a
+  receipt that shows neither keeps it unknown. `--retry` settles the same way from
+  `request-show`, and only from Orca's receipt: no title match, and a missing or
+  `outcome_unknown` receipt keeps the follow-up unknown. The follow-up is a new
   assignment with `follows: aN` and aN's role, profile, route, worktree and browser scope.
   Only investigate work follows up: a review's second look by the same reviewer is not an
   independent read (`follow_up_review`), and a writer's next step needs a base, a worktree and
   attribution that a fresh dispatch proves (`follow_up_role`). Pod also refuses a parent a later
   step already follows (`follow_up_superseded`, naming the newest step: Orca sends mail for a
-  chain to its newest Dispatch), a parent whose Task has not reported (`follow_up_busy`) and
-  flags that would change what it inherits (`follow_up_flags`).
+  chain to its newest Dispatch), a parent whose Task has no worker report yet (`follow_up_busy`,
+  also when Orca marked it failed without one) and any flag that would change what it inherits,
+  an explicit `--worktree` included (`follow_up_flags`).
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 
