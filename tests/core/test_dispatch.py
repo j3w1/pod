@@ -644,13 +644,24 @@ class DispatchTests(CoreCase):
                                        "--after", prior["assignment"], "--why", "Codex refused on its content gate."])
         self.assertEqual(cli.execute(args, self.repo)["assignment"], "a2")
 
-    def test_after_exception_refuses_a_discarded_review_whose_report_has_a_verdict(self):
-        self.commit({"src/a.py": "a\n"})
+    def test_after_exception_refuses_a_discarded_review_whose_worker_reported(self):
+        import json
+        reports = {
+            "a verdict": ({"outcome": "succeeded", "verdict": "fail", "findings": []}, ""),
+            "an earlier verdict object": ({"outcome": "succeeded"},
+                                          json.dumps({"outcome": "succeeded", "verdict": "fail", "findings": []})),
+            "a finding without a verdict": ({"outcome": "succeeded",
+                                             "findings": [{"path": "src/a.py", "required": True, "text": "no"}]}, ""),
+        }
         self.write_routes(ROUTES + "review_agents: [codex]\n")
-        prior = self.start_review(route="codex/sol/high", reason="test review")
-        self.finish(prior["task"], {"outcome": "succeeded", "verdict": "fail", "findings": []})
-        commands.accept(self.repo, None, prior["assignment"], discarded=True, why="not wanted")
-        self.refused("review_exception_invalid", self.start_review, after=prior["assignment"], why="Try another agent.")
+        for name, (result, earlier) in reports.items():
+            with self.subTest(name):
+                self.commit({"src/a.py": name + "\n"})
+                prior = self.start_review(route="codex/sol/high", reason="test review")
+                self.finish(prior["task"], result, text="Done.\n" + earlier)
+                commands.accept(self.repo, None, prior["assignment"], discarded=True, why="not wanted")
+                self.refused("review_exception_invalid", self.start_review, after=prior["assignment"],
+                             why="Try another agent.")
 
     def test_after_exception_cannot_use_a_later_dispatch_failure_on_the_same_task(self):
         self.commit({"src/a.py": "a\n"})
@@ -1336,4 +1347,3 @@ class BrowserScopeTests(CoreCase):
                          (True, "full", "investigate+mcp:full codex/sol/high"))
         self.assertEqual(routefile.parse_profile("x", "investigate+mcp codex/sol/high").browser_scope, None)
         self.assertEqual(maintenance.doctor()["preferences"]["browser_scope_missing"]["profiles"], ["look-bare"])
-

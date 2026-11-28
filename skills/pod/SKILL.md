@@ -90,7 +90,7 @@ review by a worker that changed nothing.
   least-authored enabled, unheld route's family as `mixed_author_fallback` (refused if every such
   route is held; an enabled, allowed independent route blocked for a non-quota reason, such as `--exclude-agent`, also prevents it). To use another agent outside
   `review_agents` or override a non-quota same-family refusal, pass their own `--words` for this
-  review or use `--after aN --why "…"` for a failed, void or no-verdict discarded allowed assignment on the same commit
+  review or use `--after aN --why "…"` for a failed, void, or discarded-unreported allowed assignment on the same commit
   without a review result.
 - A review keeps covering a file while that file's content stays the same, and a review that
   fails still covers the files it raised nothing required on. After a correction, review only
