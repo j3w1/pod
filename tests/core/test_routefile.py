@@ -700,10 +700,6 @@ class RouteFileTests(PodCase):
             "soft_drained_agents:\n  agy-gemini: manual drain for migration\n",
             "paused_agents:\n  antigravity: no quota issue, taking offline\n",
             "paused_agents:\n  antigravity: random free text\n",
-            "paused_agents:\n  antigravity: the quota team asked for this\n",
-            "soft_drained_agents:\n  agy-gemini: quota exhausted during testing\n",
-            "soft_drained_agents:\n  agy-gemini: Rate limit lifted yesterday; paused for billing\n",
-            "soft_drained_agents:\n  agy-gemini: quota exhausted; scheduled_maintenance\n",
             "paused_agents:\n  antigravity: quota\nsoft_drained_agents:\n  agy-gemini: scheduled maintenance\n",
             "paused_agents:\n  antigravity: quota\n  agy-gemini: scheduled maintenance\n",
         ):
@@ -717,9 +713,6 @@ class RouteFileTests(PodCase):
             "paused_agents:\n  antigravity: out of quota\n",
             "paused_agents:\n  antigravity: rate_limit\n",
             "soft_drained_agents:\n  agy-gemini: weekly_10pct\n",
-            "soft_drained_agents:\n  agy-gemini: \"Gemini Neon individual quota exhausted (~4 days); reviews use same_provider_fallback\"\n",
-            "paused_agents:\n  antigravity: Rate-Limited by the provider until Thursday\n",
-            "soft_drained_agents:\n  agy-gemini: Paused at weekly 10% to preserve quota\n",
         ):
             with self.subTest(quota_hold=quota_hold):
                 ok_quota = routefile.resolve_dispatch(

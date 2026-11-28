@@ -2,7 +2,6 @@ import os
 import unittest.mock
 
 from pod import cli, commands, log, maintenance, orca, routefile, state
-from pod.errors import PodError
 from tests.core.support import CoreCase, ROUTES
 
 
@@ -1338,94 +1337,3 @@ class BrowserScopeTests(CoreCase):
         self.assertEqual(routefile.parse_profile("x", "investigate+mcp codex/sol/high").browser_scope, None)
         self.assertEqual(maintenance.doctor()["preferences"]["browser_scope_missing"]["profiles"], ["look-bare"])
 
-
-class CandidateAuthorTests(CoreCase):
-    """Review independence is judged against the families that authored the reviewed commit."""
-
-    ROUTES = ("schema: pod/v2\nroutes:\n  codex/sol/high: enabled\n  antigravity/gemini-4-neon/high: enabled\n"
-              "preferred: null\npinned: null\nreview_agents: [codex, antigravity]\n"
-              "profiles:\n  review-deep: review antigravity/gemini-4-neon/high codex/sol/high\n"
-              "default_profiles:\n  review: review-deep\n")
-
-    def setUp(self):
-        super().setUp()
-        self.write_routes(self.ROUTES)
-        self.opened()
-
-    def integrated(self, route, files):
-        started = commands.dispatch(self.repo, None, role="implement", title="write", spec="Do it.", route=route,
-                                    reason="test author")
-        commit = self.commit(files)
-        self.finish(started["task"], {"outcome": "succeeded", "commit": commit})
-        commands.accept(self.repo, None, started["assignment"], integrated=commit)
-        return commit
-
-    def test_a_family_whose_work_is_outside_the_reviewed_history_is_not_its_author(self):
-        # The #590 shape: an umbrella objective with Google and OpenAI authors, Gemini drained for quota.
-        self.git(self.repo, "switch", "-q", "-c", "side")
-        self.integrated("codex/sol/high", {"side.py": "s\n"})           # OpenAI's work, on another line of history
-        self.git(self.repo, "switch", "-q", "work")
-        self.integrated("antigravity/gemini-4-neon/high", {"a.py": "a\n"})
-        self.write_routes(self.ROUTES + "soft_drained_agents:\n  agy-gemini: quota exhausted\n")
-        started = commands.dispatch(self.repo, None, role="review", title="review", spec="Review it.")
-        self.assertEqual((started["route"], started["review_independence"]), ("codex/sol/high", "cross_provider"))
-        self.assertNotIn("review_fallback_reason", started)
-        self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
-        self.assertEqual(commands.accept(self.repo, None, started["assignment"])["author_families"], ["Google"])
-
-    def drained(self):
-        self.write_routes(self.ROUTES + "soft_drained_agents:\n  agy-gemini: quota exhausted\n")
-
-    def review_authors(self, **options):
-        """The families Pod counts as authors, whether it starts the review (a same-family fallback) or refuses."""
-        try:
-            started = commands.dispatch(self.repo, None, role="review", title="review", spec="Review it.", **options)
-        except PodError as exc:
-            self.assertEqual(exc.code, "reviewer_same_family")
-            return str(exc)
-        return started.get("author_families")
-
-    def test_a_worker_commit_reviewed_before_its_integration_point_keeps_its_author(self):
-        started = commands.dispatch(self.repo, None, role="implement", title="write", spec="Do it.",
-                                    route="codex/sol/high", reason="test author")
-        worker = self.commit({"b.py": "b\n"})
-        later = self.commit({"c.py": "c\n"})
-        self.finish(started["task"], {"outcome": "succeeded", "commit": worker})
-        commands.accept(self.repo, None, started["assignment"], integrated=later)
-        self.integrated("antigravity/gemini-4-neon/high", {"a.py": "a\n"})
-        self.drained()
-        self.assertIn("OpenAI", self.review_authors(commit=worker))
-
-    def test_work_carried_into_the_candidate_by_a_rebase_keeps_its_author(self):
-        self.git(self.repo, "switch", "-q", "-c", "side")
-        self.integrated("codex/sol/high", {"side.py": "s\n"})
-        self.git(self.repo, "switch", "-q", "work")
-        self.commit({"base.py": "x\n"})
-        self.git(self.repo, "cherry-pick", "side")                        # the same change, a new commit id
-        self.assertNotEqual(self.git(self.repo, "rev-parse", "HEAD"), self.git(self.repo, "rev-parse", "side"))
-        self.integrated("antigravity/gemini-4-neon/high", {"a.py": "a\n"})
-        self.drained()
-        self.assertIn("OpenAI", self.review_authors())
-
-    def test_an_integration_git_cannot_place_keeps_its_author(self):
-        import json
-        self.git(self.repo, "switch", "-q", "-c", "side")
-        self.integrated("codex/sol/high", {"side.py": "s\n"})
-        self.git(self.repo, "switch", "-q", "work")
-        self.integrated("antigravity/gemini-4-neon/high", {"a.py": "a\n"})
-        from pod import log
-        target = log.path("acme--widgets", "widget")
-        rows = [json.loads(line) for line in target.read_text().splitlines()]
-        for row in rows:                                                  # the recorded commits are gone from Git
-            if row.get("fact") == "result" and row.get("assignment") == "a1":
-                row["integrated_at"] = row["commit"] = "0" * 40
-        target.write_text("".join(json.dumps(row) + "\n" for row in rows))
-        self.drained()
-        self.assertIn("OpenAI", self.review_authors())
-
-    def test_a_family_whose_work_is_in_the_reviewed_history_still_authored_it(self):
-        self.integrated("codex/sol/high", {"b.py": "b\n"})
-        self.integrated("antigravity/gemini-4-neon/high", {"a.py": "a\n"})
-        started = commands.dispatch(self.repo, None, role="review", title="review", spec="Review it.")
-        self.assertEqual(started["author_families"], ["Google", "OpenAI"])
-        self.assertTrue(started["review_fallback_reason"].startswith("mixed authors: "))

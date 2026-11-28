@@ -102,12 +102,6 @@ def is_ancestor(cwd: Path, older: str, newer: str) -> bool:
     return git(cwd, "merge-base", "--is-ancestor", older, newer, check=False).returncode == 0
 
 
-def ancestry(cwd: Path, older: str, newer: str) -> bool | None:
-    """Whether `older` is an ancestor of `newer`: True, False, or None when Git cannot say (e.g. a missing object)."""
-    code = git(cwd, "merge-base", "--is-ancestor", older, newer, check=False).returncode
-    return True if code == 0 else False if code == 1 else None
-
-
 def changed(cwd: Path, base: str, head: str) -> list[str]:
     """Every path whose content differs between two commits; a rename is both of its paths."""
     out = git(cwd, "diff", "--name-only", "--no-renames", "-z", base, head).stdout.decode(errors="surrogateescape")

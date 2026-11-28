@@ -64,19 +64,9 @@ class State:
         numbers = [int(key[len(prefix):]) for key in existing if key.startswith(prefix) and key[len(prefix):].isdigit()]
         return f"{prefix}{1 + max(numbers or [0])}"
 
-    def author_routes(self, root=None, commit: str | None = None) -> set[str]:
-        """Canonical routes with an accepted (integrated) implement assignment on this objective.
-
-        With a root and a commit, an assignment is left out only on proof that it authored none of that
-        commit's change: Git says conclusively that neither its result commit nor the commit it was
-        integrated at is in the commit's history, and no file it changed is in the commit's diff against
-        the target. Anything Git cannot settle keeps it as an author."""
-        from . import gitio
-        routes, against = set(), None
-        if root is not None and commit:
-            target = self.objective.get("target")
-            against = target and (gitio.merge_base(root, commit, f"origin/{target}") or gitio.merge_base(root, commit, target))
-        under_review = set(gitio.changed(root, against, commit)) if against else None
+    def author_routes(self) -> set[str]:
+        """Canonical routes with an accepted (integrated) implement assignment on this objective."""
+        routes = set()
         for row in self.assignments.values():
             if row.get("role") != "implement" or row.get("void"):
                 continue
@@ -84,10 +74,6 @@ class State:
             if not done or done.get("decision") != "integrated":
                 continue
             route = row.get("effective") or row.get("route") or ""
-            if under_review is not None and done.get("contained") is True and done.get("integrated_at") and done.get("commit"):
-                outside = all(gitio.ancestry(root, at, commit) is False for at in (done["integrated_at"], done["commit"]))
-                if outside and not set(done.get("paths") or []) & under_review:
-                    continue
             if route:
                 routes.add(route)
         return routes
@@ -117,11 +103,10 @@ class State:
                 counts[family] = counts.get(family, 0) + 1
         return counts
 
-    def author_families(self, root=None, commit: str | None = None) -> set[str]:
-        """Model families (providers) that authored `commit`: an accepted implement assignment on this
-        objective whose work is in its history, or not proven outside it. Without a commit, all of them."""
+    def author_families(self) -> set[str]:
+        """Model families (providers) with an accepted implement assignment on this objective."""
         from . import routefile
-        return {routefile.route_family(route) for route in self.author_routes(root, commit)}
+        return {routefile.route_family(route) for route in self.author_routes()}
 
     def implement_dispatches(self) -> set[str]:
         """Dispatch ids of non-void implement assignments on this objective."""

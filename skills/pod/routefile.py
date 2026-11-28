@@ -31,8 +31,7 @@ AGENT_LIST = re.compile(rf"\[ *(?:{AGENT.pattern}(?: *, *{AGENT.pattern})* *)?\]
 _TTL = re.compile(r"^([1-9][0-9]*)([smhd]?)$")
 _TTL_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 _QUOTA_NON_QUOTA_TERMS = re.compile(
-    r"\b(?:no|not|non|without|never|maintenance|migration|migrate|offline|outage|incident|broken|debug|testing|test"
-    r"|billing|payment|lifted|resolved|restored|cleared|recovered|ended|over)\b",
+    r"\b(?:no|not|non|without|never|maintenance|migration|migrate|offline|outage|incident|broken|debug|testing|test)\b",
     re.IGNORECASE,
 )
 _QUOTA_POSITIVE_REASON = re.compile(
@@ -45,19 +44,6 @@ _QUOTA_POSITIVE_REASON = re.compile(
     r"|keep[ _-]+bonus[ _-]+pool"
     r"|exhausted"
     r")$",
-    re.IGNORECASE,
-)
-# A longer reason counts when it contains one of the specific phrases; the bare words "quota" and "exhausted"
-# count only on their own, so free text that merely mentions quota stays a non-quota hold.
-_QUOTA_PHRASE = re.compile(
-    r"\b(?:"
-    r"quota[ _-]+(?:exhausted|out|low|empty|hit|reached|exceeded|limit|depleted|cap|capped|full|drain(?:ed)?|hold|pause(?:d)?)"
-    r"|out[ _-]+of[ _-]+quota"
-    r"|rate[ _-]?limit(?:ed|s)?"
-    r"|429[ _-]+(?:too[ _-]+many[ _-]+requests|rate[ _-]?limit(?:ed)?)"
-    r"|(?:weekly|daily|monthly|hourly|manual)[ _-]+(?:\d+(?:\.\d+)?(?:pct|%)|limit(?:ed)?|cap(?:ped)?|quota)"
-    r"|keep[ _-]+bonus[ _-]+pool"
-    r")(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 MAX_BYTES = 256 * 1024
@@ -577,14 +563,13 @@ def _is_claude_route(route: str) -> bool:
 
 
 def _is_quota_hold(hold: AgentHold) -> bool:
-    """True only for unreasoned holds or holds that positively state quota/rate-limit exhaustion, alone or
-    as a phrase inside a longer reason that names no non-quota cause."""
+    """True only for unreasoned holds or holds that positively state quota/rate-limit exhaustion."""
     if not hold.reason or not hold.reason.strip():
         return True
     cleaned = " ".join(hold.reason.strip().split())
-    if _QUOTA_NON_QUOTA_TERMS.search(re.sub(r"[_-]+", " ", cleaned)):     # `scheduled_maintenance` is two words
+    if _QUOTA_NON_QUOTA_TERMS.search(cleaned):
         return False
-    return bool(_QUOTA_POSITIVE_REASON.fullmatch(cleaned) or _QUOTA_PHRASE.search(cleaned))
+    return bool(_QUOTA_POSITIVE_REASON.fullmatch(cleaned))
 
 
 def _matched_holds(route: str, holds: dict[str, AgentHold]) -> list[tuple[str, str, AgentHold]]:
