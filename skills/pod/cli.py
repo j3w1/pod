@@ -60,7 +60,7 @@ def parser() -> argparse.ArgumentParser:
     one.add_argument("--name", help="display name for the worker")
     one.add_argument("--retry", metavar="ASSIGNMENT", help="after a lost reply: read from Orca whether it started")
     one.add_argument("--follow-up", metavar="ASSIGNMENT",
-                     help="send the next step of the same job to that investigate or implement worker (never a review)")
+                     help="send the next step of the same investigation to that investigate worker")
     one.add_argument("--words", help="review exception: the person's own words allowing this agent")
     one.add_argument("--after", metavar="ASSIGNMENT", help="review exception: an earlier failed review of this commit")
     one.add_argument("--why", help="reason for the exception with --after")

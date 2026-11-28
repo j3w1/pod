@@ -138,25 +138,23 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   (truncated to ~80 chars; supported objective ids up to 80 chars can still lose it), may bind a
   Task whose topic quotes another assignment's marker, and does not settle a completed request
   receipt with an unknown start; hardening is tracked in a follow-up issue.
-- `pod dispatch --follow-up aN` sends the next step of an investigate or implement job to aN's
-  Dispatch with `orchestration send --to dispatch:<id>`, under a request id derived like a
-  start's. Orca turns mail to a finished worker into a follow-up Task with its own Dispatch,
-  continuing the same terminal (`follow_up`), reopening a closed one (`reopened`) or starting
-  its agent fresh (`started_fresh`); the receipt names the Task, the Dispatch, the Dispatch it
-  followed (`followUpOf`) and the launch. Pod records any receipt that names a Task, with the
-  observed launch route, and notes a fresh start (the earlier context is gone) or a followed
-  Dispatch other than aN's. A refusal, or a receipt with no Task (mail), voids the assignment.
-  `--retry` settles the same way from `request-show`, and only from Orca's receipt: no title
-  match, and no receipt keeps the follow-up unknown. The follow-up is a new assignment with
-  `follows: aN` and aN's role, profile, route, paths and browser scope; it works in aN's actual
-  worktree (the one Orca made for a `new-*` selector), and the implement busy check applies.
-  An implement follow-up's base is aN's accepted result commit or `--commit`, so `pod accept`
-  diffs only the new step; without either it is refused (`follow_up_unaccepted`). Pod also
-  refuses a review parent (`follow_up_review`), a parent another step already follows
-  (`follow_up_superseded`: Orca sends mail for a chain to its newest Dispatch), a parent whose
-  Task has not reported (`follow_up_busy`) and flags that would change what it inherits
-  (`follow_up_flags`). A follow-up's Dispatch is an implement Dispatch, so the same-session
-  review check covers its terminal too.
+- `pod dispatch --follow-up aN` sends the next step of an investigation to aN's Dispatch with
+  `orchestration send --to dispatch:<id>`, under a request id derived like a start's. Orca turns
+  mail to a finished worker into a follow-up Task with its own Dispatch, continuing the same
+  terminal (`follow_up`), reopening a closed one (`reopened`) or starting its agent fresh
+  (`started_fresh`); the receipt names the Task, the Dispatch, the Dispatch it followed
+  (`followUpOf`) and the launch. Pod records any receipt that names a Task, with the observed
+  launch route, and notes a fresh start (the earlier context is gone) or a followed Dispatch
+  other than aN's. A refusal, or a receipt with no Task (mail), voids the assignment. `--retry`
+  settles the same way from `request-show`, and only from Orca's receipt: no title match, and a
+  missing or `outcome_unknown` receipt keeps the follow-up unknown. The follow-up is a new
+  assignment with `follows: aN` and aN's role, profile, route, worktree and browser scope.
+  Only investigate work follows up: a review's second look by the same reviewer is not an
+  independent read (`follow_up_review`), and a writer's next step needs a base, a worktree and
+  attribution that a fresh dispatch proves (`follow_up_role`). Pod also refuses a parent a later
+  step already follows (`follow_up_superseded`, naming the newest step: Orca sends mail for a
+  chain to its newest Dispatch), a parent whose Task has not reported (`follow_up_busy`) and
+  flags that would change what it inherits (`follow_up_flags`).
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 
