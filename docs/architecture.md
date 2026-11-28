@@ -39,6 +39,21 @@ directory, are never read by the core and are never modified.
 **Closure is derived.** An objective is closed when no criterion is open and every delivery it
 opened is merged (or it was opened with `--no-delivery`, or dropped). No command closes one.
 
+**Folder workspaces.** Outside every Git worktree, Pod runs in the registered Orca folder
+workspace of the calling terminal (`ORCA_TERMINAL_HANDLE`): `orca terminal show` names the
+workspace, `orca worktree show` gives its address and instance, and the project must be of kind
+`folder`. Every workspace of a folder project can share one path, so the binding is the
+workspace address (`workspace_id`) and instance (`workspace_instance_id`); the path is checked
+as an attribute and never chooses the objective, and a terminal whose workspace id names more
+than one workspace is refused (`folder_workspace_ambiguous`). Such an objective is opened with
+`--no-delivery`, logs under `folder-<project id>`, and has no branch, pull request, target or
+base. Workers start in that same workspace (`--worktree` must name it exactly; Pod makes no
+worktree for them), a review reviews the plan in its task text, and an implement result is
+accepted without a commit. Every delivery command (`deliver`, `record --authorize`, `--check`,
+`--waive`, `--carried`, `--commit`, `--pr`, `--branch`) refuses with `folder_no_delivery`.
+`pod config --json` reports `capabilities.folder_no_delivery: true`. Git repositories never
+consult Orca for this.
+
 ## Derived proof
 
 Nothing about applicability is declared (`skills/pod/proof.py`).

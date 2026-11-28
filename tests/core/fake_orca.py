@@ -87,7 +87,8 @@ def main():
                             option(args, "--base-branch")], check=True, capture_output=True)
             state.setdefault("worktrees", {})[place] = repo
         else:
-            place = where[len("path:"):]
+            folders = {row["address"]: row["path"] for row in state.get("folders", [])}
+            place = folders.get(where) or where[len("path:"):]
         handle = f"term_{dispatch}"
         state["workers"][dispatch] = {"dispatchId": dispatch, "taskId": task, "runId": run["id"], "workerState": "running",
                                       "dispatchStatus": "dispatched", "terminalState": "active",
@@ -171,6 +172,31 @@ def main():
         rows = [{key: value for key, value in row.items() if key not in ("spec", "base_branch", "repo")} for row in state["tasks"].values()
                 if row["run_id"] == option(args, "--run")]
         reply(True, {"tasks": rows})
+    if args[:2] == ["terminal", "show"]:            # the workspace Orca started this terminal in
+        held = state.get("terminals", {}).get(option(args, "--terminal"))
+        if held is None:
+            reply(False, {"code": "terminal_not_found", "message": "no such terminal"})
+        rows = [row for row in state.get("folders", []) if row["id"] == held]
+        reply(True, {"terminal": {"handle": option(args, "--terminal"), "worktreeId": held,
+                                  "worktreePath": rows[0]["path"] if rows else None}})
+    if args[:2] == ["worktree", "show"]:            # folder workspaces only; Git repositories never ask
+        state["shows"] = state.get("shows", 0) + 1
+        wanted = option(args, "--worktree")
+        for row in state.get("folders", []):
+            if wanted in (row["address"], f"id:{row['id']}", f"identity:{row['instanceId']}"):
+                reply(True, {"worktree": {"id": row["id"], "repoId": row["repoId"], "path": row["path"], "branch": "",
+                                          "head": "", "instanceId": row["instanceId"],
+                                          "address": {"environment": "local", "worktree": row["address"]}}}, state)
+        reply(False, {"code": "selector_not_found", "message": f"no workspace {wanted}"}, state)
+    if args[:2] == ["worktree", "list"]:
+        project = option(args, "--repo")[len("id:"):]
+        reply(True, {"worktrees": [{"id": row["id"], "repoId": row["repoId"], "path": row["path"]}
+                                   for row in state.get("folders", []) if row["repoId"] == project]})
+    if args[:2] == ["repo", "show"]:
+        project = option(args, "--repo")[len("id:"):]
+        if project in state.get("repos", {}):
+            reply(True, {"repo": {"id": project, "kind": state["repos"][project]}})
+        reply(False, {"code": "repo_not_found", "message": "no such repo"})
     reply(False, {"code": "unknown_command", "message": " ".join(args)})
 
 

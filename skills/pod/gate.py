@@ -154,8 +154,11 @@ def _settle(writer, state: State, request: dict | None, candidate: str) -> dict 
 
 
 def deliver(cwd: Path, objective: str | None, *, check: bool = False, commit: str | None = None) -> dict:
-    from .commands import locate
+    from .commands import _refuse_in_folder, locate
     target, root, _ = locate(cwd, objective)
+    entries = log.read(target)
+    if entries:
+        _refuse_in_folder(fold(entries), "deliver")
     if commit and not check:
         raise PodError("commit_needs_check", "`pod deliver` merges the branch head; --commit only names a candidate to judge.",
                        fix="add --check to judge that commit, or check it out and deliver without --commit")
