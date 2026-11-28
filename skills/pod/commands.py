@@ -469,8 +469,8 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
         if folder(folded):
             _folder_after(folded, after)
             _folder_worktree(folded, worktree, commit)
-        authors = folded.author_families()
         frozen = None if folder(folded) else _resolved(root, commit)
+        authors = folded.author_families(None if folder(folded) else root, frozen)
         counts = {} if folder(folded) else folded.author_counts(root, frozen)
         notes = _reviewer_note_lines(folded)
     else:
@@ -479,8 +479,8 @@ def _dry_run_dispatch(cwd: Path, objective: str | None, *, role: str | None = No
             entries = log.read(target)
             if entries:
                 folded = guard(fold(entries), here)
-                authors = folded.author_families()
                 frozen = None if folder(folded) else _resolved(root, commit)
+                authors = folded.author_families(None if folder(folded) else root, frozen)
                 counts = {} if folder(folded) else folded.author_counts(root, frozen)
                 notes = _reviewer_note_lines(folded)
         except PodError as exc:
@@ -569,17 +569,17 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         if state.closed:
             raise PodError("objective_closed", f"Objective {state.id} is closed or dropped.", fix="open a new objective")
         if retry:
-            return _settle_start(writer, state, retry)
+            return _settle_start(writer, state, retry, root=root)
         if (role is None and profile is None) or (role is not None and role not in ROLES) or not (title or "").strip() or not spec:
             raise PodError("dispatch_incomplete", "A dispatch needs a role (or profile), a title and the task text.",
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
         preferences = routefile.load()
-        authors = state.author_families()
         in_folder = folder(state)
         if in_folder:
             _folder_after(state, after)
             worktree = _folder_worktree(state, worktree, commit)
         base = None if in_folder else gitio.commit(root, commit or "HEAD")
+        authors = state.author_families(None if in_folder else root, base)    # the families that authored this commit
         counts = {} if in_folder else state.author_counts(root, base)
         notes = _reviewer_note_lines(state)
         excluded = list(exclude_agents or ())
@@ -779,7 +779,7 @@ def _started(writer, ident: str, started: dict, route: str, *, resolution: route
     return result
 
 
-def _settle_start(writer, state: State, ident: str) -> dict:
+def _settle_start(writer, state: State, ident: str, *, root: Path | None = None) -> dict:
     """After a lost reply: learn from Orca whether the worker started. Never start it again here.
 
     Orca's own receipt is read first. Only when Orca holds neither a receipt nor a task for the
@@ -819,7 +819,8 @@ def _settle_start(writer, state: State, ident: str) -> dict:
             result = _started(
                 writer, ident, started_info, row["route"],
                 role=row.get("role"),
-                authors=state.author_families() if row.get("role") == "review" else None,
+                authors=state.author_families(None if folder(state) else root, row.get("base"))
+                if row.get("role") == "review" else None,
                 primary_agent=primary_agent,
                 fallback_reason=row.get("requested_review_fallback_reason"),
             )
@@ -960,7 +961,7 @@ def accept(cwd: Path, objective: str | None, ident: str, *, integrated: str | No
                 reviewer_route = row.get("effective") or row["route"]
                 prefs = routefile.load()
                 primary_agent = prefs.review_agents[0] if prefs.status == "ok" and prefs.review_agents else None
-                authors = sorted(state.author_families())
+                authors = sorted(state.author_families(None if in_folder else root, row["base"]))
                 tag, fallback_reason = _effective_review_proof(
                     row["route"], reviewer_route, set(authors), primary_agent,
                     row.get("requested_review_fallback_reason") or row.get("review_fallback_reason"),

@@ -130,11 +130,7 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   bytes (`preferences_changed`, the edited copy is kept and its path reported), then that the
   result is readable if the original was, and keeps the live file's mode. Known limit: an editor that
   returns but keeps the copy open and writes again after Pod's last check is not detected.
-  **Known limits (0.23.4):** author families for reviewer filtering and the recorded
-  `author_families` still come from the whole objective, not the reviewed commit; only the
-  mixed-author fallback decision and its counts are scoped to integrated work (`contained: true`)
-  in the reviewed commit's history (tracked in pod#348).
-  Also: retry recovery matches Tasks by a marker in the title read back from Orca
+  **Known limit:** retry recovery matches Tasks by a marker in the title read back from Orca
   (truncated to ~80 chars; supported objective ids up to 80 chars can still lose it), may bind a
   Task whose topic quotes another assignment's marker, and does not settle a completed request
   receipt with an unknown start; hardening is tracked in a follow-up issue.
@@ -304,12 +300,16 @@ person changes it, through `pod models` or an editor. Coordination reads it with
   Review independence compares model families (`provider`: `Anthropic`, `OpenAI`, `Google`) rather
   than raw agent names. For automatic and role-only review selection (`--role review` or
   `--profile review-*` without an explicit `--route`), candidates whose model family authored the
-  diff (any accepted `implement` dispatch, including mixed authorship after a handoff) are
-  filtered out rather than merely deprioritized, and the remaining candidates are ordered by
+  reviewed commit are filtered out (an accepted `implement` assignment integrated into that
+  commit's history, including mixed authorship after a handoff; integrated work proven outside
+  that history, `contained: true` at a commit that is not an ancestor, authored none of it, and
+  work whose place is not proven still counts), rather than merely deprioritized, and the remaining candidates are ordered by
   `review_agents`. When every enabled other-family reviewer route in the candidate list is
   unavailable because its agent or quota pool has an active quota hold in `paused_agents` or
   `soft_drained_agents` (unreasoned hold or quota/rate-limit reason, not a non-quota hold
-  such as maintenance, exclusion or unsupported effort), Pod falls back to an eligible non-Claude
+  such as maintenance, exclusion or unsupported effort; a longer reason counts when it contains a
+  specific quota phrase such as `quota exhausted`, `out of quota` or `rate limit`, in any case, and
+  names no non-quota cause), Pod falls back to an eligible non-Claude
   author-family route within `review_agents` (never selecting Claude-family routes, bypassing
   `review_agents` or manual `Pin`, or using a paused/soft-drained route), records
   `review_independence: same_provider_fallback` and `review_fallback_reason` (naming the

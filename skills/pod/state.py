@@ -64,8 +64,12 @@ class State:
         numbers = [int(key[len(prefix):]) for key in existing if key.startswith(prefix) and key[len(prefix):].isdigit()]
         return f"{prefix}{1 + max(numbers or [0])}"
 
-    def author_routes(self) -> set[str]:
-        """Canonical routes with an accepted (integrated) implement assignment on this objective."""
+    def author_routes(self, root=None, commit: str | None = None) -> set[str]:
+        """Canonical routes with an accepted (integrated) implement assignment on this objective.
+
+        With a root and a commit, an assignment whose integrated work is proven outside that commit's
+        history did not author it and is left out; one whose place is not proven still counts."""
+        from . import gitio
         routes = set()
         for row in self.assignments.values():
             if row.get("role") != "implement" or row.get("void"):
@@ -74,6 +78,13 @@ class State:
             if not done or done.get("decision") != "integrated":
                 continue
             route = row.get("effective") or row.get("route") or ""
+            at = done.get("integrated_at")
+            if root is not None and commit and done.get("contained") is True and at and at != commit:
+                try:
+                    if not gitio.is_ancestor(root, at, commit):
+                        continue
+                except Exception:
+                    pass
             if route:
                 routes.add(route)
         return routes
@@ -103,10 +114,11 @@ class State:
                 counts[family] = counts.get(family, 0) + 1
         return counts
 
-    def author_families(self) -> set[str]:
-        """Model families (providers) with an accepted implement assignment on this objective."""
+    def author_families(self, root=None, commit: str | None = None) -> set[str]:
+        """Model families (providers) that authored `commit`: an accepted implement assignment on this
+        objective whose work is in its history, or not proven outside it. Without a commit, all of them."""
         from . import routefile
-        return {routefile.route_family(route) for route in self.author_routes()}
+        return {routefile.route_family(route) for route in self.author_routes(root, commit)}
 
     def implement_dispatches(self) -> set[str]:
         """Dispatch ids of non-void implement assignments on this objective."""

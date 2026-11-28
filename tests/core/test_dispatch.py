@@ -1315,3 +1315,45 @@ class BrowserScopeTests(CoreCase):
                          (True, "full", "investigate+mcp:full codex/sol/high"))
         self.assertEqual(routefile.parse_profile("x", "investigate+mcp codex/sol/high").browser_scope, None)
         self.assertEqual(maintenance.doctor()["preferences"]["browser_scope_missing"]["profiles"], ["look-bare"])
+
+
+class CandidateAuthorTests(CoreCase):
+    """Review independence is judged against the families that authored the reviewed commit."""
+
+    ROUTES = ("schema: pod/v2\nroutes:\n  codex/sol/high: enabled\n  antigravity/gemini-4-neon/high: enabled\n"
+              "preferred: null\npinned: null\nreview_agents: [codex, antigravity]\n"
+              "profiles:\n  review-deep: review antigravity/gemini-4-neon/high codex/sol/high\n"
+              "default_profiles:\n  review: review-deep\n")
+
+    def setUp(self):
+        super().setUp()
+        self.write_routes(self.ROUTES)
+        self.opened()
+
+    def integrated(self, route, files):
+        started = commands.dispatch(self.repo, None, role="implement", title="write", spec="Do it.", route=route,
+                                    reason="test author")
+        commit = self.commit(files)
+        self.finish(started["task"], {"outcome": "succeeded", "commit": commit})
+        commands.accept(self.repo, None, started["assignment"], integrated=commit)
+        return commit
+
+    def test_a_family_whose_work_is_outside_the_reviewed_history_is_not_its_author(self):
+        # The #590 shape: an umbrella objective with Google and OpenAI authors, Gemini drained for quota.
+        self.git(self.repo, "switch", "-q", "-c", "side")
+        self.integrated("codex/sol/high", {"side.py": "s\n"})           # OpenAI's work, on another line of history
+        self.git(self.repo, "switch", "-q", "work")
+        self.integrated("antigravity/gemini-4-neon/high", {"a.py": "a\n"})
+        self.write_routes(self.ROUTES + "soft_drained_agents:\n  agy-gemini: quota exhausted\n")
+        started = commands.dispatch(self.repo, None, role="review", title="review", spec="Review it.")
+        self.assertEqual((started["route"], started["review_independence"]), ("codex/sol/high", "cross_provider"))
+        self.assertNotIn("review_fallback_reason", started)
+        self.finish(started["task"], {"outcome": "succeeded", "verdict": "pass", "findings": []})
+        self.assertEqual(commands.accept(self.repo, None, started["assignment"])["author_families"], ["Google"])
+
+    def test_a_family_whose_work_is_in_the_reviewed_history_still_authored_it(self):
+        self.integrated("codex/sol/high", {"b.py": "b\n"})
+        self.integrated("antigravity/gemini-4-neon/high", {"a.py": "a\n"})
+        started = commands.dispatch(self.repo, None, role="review", title="review", spec="Review it.")
+        self.assertEqual(started["author_families"], ["Google", "OpenAI"])
+        self.assertTrue(started["review_fallback_reason"].startswith("mixed authors: "))
