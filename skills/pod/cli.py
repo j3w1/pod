@@ -124,7 +124,8 @@ def _config(edit: bool) -> dict:
     found = routefile.load(target)
     return {"path": str(target), "capabilities": {"folder_no_delivery": True}, "status": found.status, **({"problem": found.problem} if found.problem else {}),
             "enabled": found.enabled(), "preferred": found.preferred, "pinned": found.pinned,
-            "merge_authorization": found.merge_authorization, "review_agents": found.review_agents,
+            "merge_authorization": found.merge_authorization, "review_cap": found.review_cap,
+            "review_agents": found.review_agents,
             "paused_agents": found.paused_agents,
             **({"paused_meta": {k: routefile.hold_as_dict(v) for k, v in found.paused_meta.items() if v.has_metadata}}
                if any(v.has_metadata for v in found.paused_meta.values()) else {}),

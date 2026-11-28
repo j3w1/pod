@@ -100,6 +100,10 @@ review by a worker that changed nothing.
 - A required finding stays open until a later review of the corrected file passes, or fails
   only over other files, or the person waives it; a second reviewer's pass on the same content
   does not close it: `pod record --waive a2.1 --why "…" --words "what they said"`.
+- After `review_cap` failed review rounds (default 2, shown in `pod status` as `review_rounds`),
+  Pod refuses another review (`review_cap`). Cut the work to the smallest change that meets the
+  person's words and record `pod record --scope "<what was cut>"` (once per issue), or send it to
+  the person as a decision with options and record `pod record --decision "…" --words "…"`.
 - For a correction review, commit the fixes, use `pod dispatch --role review --paths …` on
   the corrected paths, then `pod accept` the new assignment when Orca reports completion.
   The review must cover applicable corrected content and the reviewer must have changed nothing.
