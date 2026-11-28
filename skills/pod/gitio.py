@@ -35,7 +35,8 @@ def root(cwd: Path) -> Path:
 
 def main_checkout(cwd: Path) -> Path:
     """The repository's main checkout, which Orca registers; a linked worktree is not a repository to Orca."""
-    listing = _text(cwd, "worktree", "list", "--porcelain").splitlines()
+    # -z separates fields with NUL, so a path holding a newline is read whole.
+    listing = git(cwd, "worktree", "list", "--porcelain", "-z").stdout.decode().split("\0")
     first = listing[0] if listing else ""
     bare = len(listing) > 1 and listing[1] == "bare"
     return Path(first[len("worktree "):]) if first.startswith("worktree ") and not bare else root(cwd)

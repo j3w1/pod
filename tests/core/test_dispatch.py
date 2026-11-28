@@ -530,6 +530,18 @@ class DispatchTests(CoreCase):
         task = self.orca()["tasks"][started["task"]]
         # Orca resolves `path:` only for a registered repository: the main checkout, never the linked worktree.
         self.assertEqual((task["repo"], task["base_branch"]), (f"path:{self.repo}", "linked"))
+        self.git(linked, "switch", "-q", "-c", "elsewhere")             # the objective's branch, not the current one
+        later = commands.dispatch(linked, "linked", role="implement", title="later", spec="Do it.", paths_=["docs"],
+                                  worktree="new-child")
+        self.assertEqual(self.orca()["tasks"][later["task"]]["base_branch"], "linked")
+
+    def test_the_main_checkout_is_read_whole_when_its_path_holds_a_newline(self):
+        odd = self.tmp / "odd\nname"
+        self.git(self.tmp, "init", "-q", "-b", "main", str(odd))
+        self.git(odd, "commit", "-q", "--allow-empty", "-m", "start")
+        self.git(odd, "worktree", "add", "-q", "-b", "side", str(self.tmp / "side"))
+        from pod import gitio
+        self.assertEqual(gitio.main_checkout(self.tmp / "side"), odd)
 
     def test_a_start_orca_reports_as_failed_is_a_refusal_with_its_reason_and_holds_no_paths(self):
         self.set_orca(start_fails="fatal: invalid reference: work")
