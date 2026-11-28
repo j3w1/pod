@@ -59,6 +59,8 @@ def parser() -> argparse.ArgumentParser:
     one.add_argument("--worktree", default="current", help="Orca worktree selector (default: this worktree)")
     one.add_argument("--name", help="display name for the worker")
     one.add_argument("--retry", metavar="ASSIGNMENT", help="after a lost reply: read from Orca whether it started")
+    one.add_argument("--follow-up", metavar="ASSIGNMENT",
+                     help="send the next step of the same job to that investigate or implement worker (never a review)")
     one.add_argument("--words", help="review exception: the person's own words allowing this agent")
     one.add_argument("--after", metavar="ASSIGNMENT", help="review exception: an earlier failed review of this commit")
     one.add_argument("--why", help="reason for the exception with --after")
@@ -157,7 +159,8 @@ def execute(args: argparse.Namespace, cwd: Path) -> dict:
         return commands.dispatch(cwd, args.objective, role=args.role, profile=args.profile, title=args.title, spec=spec,
                                  route=args.route, reason=args.reason, exclude_agents=args.exclude_agent, dry_run=args.dry_run,
                                  paths_=args.paths, commit=args.commit, context=args.context, worktree=args.worktree,
-                                 retry=args.retry, name=args.name, words=args.words, after=args.after, why=args.why)
+                                 retry=args.retry, name=args.name, words=args.words, after=args.after, why=args.why,
+                                 follow_up=args.follow_up)
     if name == "accept":
         return commands.accept(cwd, args.objective, args.assignment, integrated=args.integrated,
                                discarded=args.discarded, why=args.why)

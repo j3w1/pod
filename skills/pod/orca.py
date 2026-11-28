@@ -169,6 +169,20 @@ def start(*, run: str, spec: str, title: str, worktree: str, route: tuple[str, s
             "effective": launch.get("effective"), "requested": launch.get("requested")}
 
 
+def follow_up(*, run: str, dispatch: str, spec: str, subject: str, request: str) -> dict:
+    """Send the next step to a finished worker's Dispatch. Orca starts it as a follow-up Task with its own
+    Dispatch in the same terminal and its receipt names both; mail to a worker still working names none.
+    Repeating the call with the same request replays the first outcome instead of sending twice."""
+    result = call("orchestration", "send", "--to", f"dispatch:{dispatch}", "--subject", subject, "--body-file", "-",
+                  "--run", run, "--retry-request", request, stdin=spec, timeout=180)
+    if result.get("state") == "outcome_unknown":
+        raise PodError("orca_unknown", "Orca accepted the follow-up and does not know whether the worker took it.", fix=REPEAT)
+    delivery = result.get("delivery")
+    return {"task": result.get("taskId") if delivery else None, "dispatch": result.get("dispatchId") if delivery else None,
+            "state": result.get("state"), "delivery": delivery, "follow_up_of": result.get("followUpOf"),
+            "replayed": bool((result.get("mutation") or {}).get("replayed"))}
+
+
 def _is_default_tab_title(current: str, task_id: str | None = None, task_title: str | None = None,
                           marker: str | None = None) -> bool:
     """True for an empty title, exact `worker-<taskId>`, the exact `task_title` Pod passed, or a daemon's

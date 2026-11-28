@@ -114,6 +114,43 @@ def main():
                 json.dump(state, stream)
             raise SystemExit(1)
         reply(True, {**receipt, "mutation": {"requestId": request, "replayed": False}}, state)
+    if command == "send" and (option(args, "--to") or "").startswith("dispatch:"):
+        # Mail to a working worker joins its turn; to a finished one Orca starts a follow-up Task with its own
+        # Dispatch in the same terminal, and the receipt names both. A repeated request replays its receipt.
+        request = option(args, "--retry-request")
+        body = sys.stdin.read() if option(args, "--body-file") == "-" else option(args, "--body", "")
+        if request in state["requests"]:
+            first = state["requests"][request]
+            if first["spec"] != body:
+                reply(False, {"code": "request_mismatch", "message": "already used with different input"})
+            reply(True, {**first["receipt"], "mutation": {"requestId": request, "replayed": True}})
+        if state.get("send_refuses"):
+            reply(False, {"code": state["send_refuses"], "message": "this Dispatch takes no follow-up"})
+        old = state["workers"].get(option(args, "--to")[len("dispatch:"):])
+        if not old:
+            reply(False, {"code": "dispatch_not_found", "message": "no such Dispatch"})
+        state.setdefault("sends", []).append({"to": old["dispatchId"], "subject": option(args, "--subject"), "body": body})
+        if state["tasks"][old["taskId"]]["status"] not in ("completed", "failed"):
+            receipt = {"message": {"id": f"msg_{len(state['sends'])}"}}
+            state["requests"][request] = {"spec": body, "receipt": receipt}
+            reply(True, receipt, state)
+        number = len(state["tasks"]) + 1
+        task, dispatch = f"task_{number}", f"ctx_{number}"
+        state["tasks"][task] = {"id": task, "run_id": old["runId"], "task_title": option(args, "--subject"),
+                                "status": "dispatched", "result": None, "spec": body}
+        state["workers"][dispatch] = {**json.loads(json.dumps(old)), "dispatchId": dispatch, "taskId": task,
+                                      "workerState": "running", "dispatchStatus": "dispatched", "terminalState": "active"}
+        receipt = {"taskId": task, "dispatchId": dispatch, "runId": old["runId"], "state": "ready",
+                   "delivery": state.get("delivery", "follow_up"), "followUpOf": old["dispatchId"],
+                   "launch": {"requested": {"agent": None, "model": None, "effort": None},
+                              "effective": {"agent": None, "model": None, "effort": None}}}
+        state["requests"][request] = {"spec": body, "receipt": receipt}
+        if state.get("lose_reply"):
+            state["lose_reply"] = False
+            with open(STATE, "w") as stream:
+                json.dump(state, stream)
+            raise SystemExit(1)
+        reply(True, {**receipt, "mutation": {"requestId": request, "replayed": False}}, state)
     if command == "worker-release":
         row = state["workers"][option(args, "--dispatch")]
         if row["terminalState"] not in ("reclaimable", "retained"):      # an explicit release also ends a kept terminal

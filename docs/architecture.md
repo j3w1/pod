@@ -122,7 +122,7 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   plus `fallback_reason` when recorded) and `events` (`kind` is `dispatched`, `accepted` or
   `review_verdict`, `at` is epoch seconds or null, `detail`, in log order; `dispatched` needs a
   recorded Orca dispatch and `effective_route` is null where no launch was observed; both list
-  keys are always present, possibly empty), plus a
+  keys are always present, possibly empty; a follow-up's record also has `follows`), plus a
   top-level `events` list of `merged` events (only on `pod status --json`). All come from the objective log; Pod records no separate "reported" event.
   `pod config edit` edits a copy and saves under the same `.config.lock` as `pod models`: it
   refuses a symlinked or non-regular file, a failed or missing editor and an editor output that is
@@ -138,6 +138,20 @@ request id it has seen. Both were verified on Orca 1.4.251. Pod therefore keeps 
   (truncated to ~80 chars; supported objective ids up to 80 chars can still lose it), may bind a
   Task whose topic quotes another assignment's marker, and does not settle a completed request
   receipt with an unknown start; hardening is tracked in a follow-up issue.
+- `pod dispatch --follow-up aN` sends the next step of an investigate or implement job to aN's
+  Dispatch with `orchestration send --to dispatch:<id>`, under a request id derived like a
+  start's. Orca turns mail to a finished worker into a follow-up Task with its own Dispatch in
+  the same terminal, and its receipt (`delivery`, `taskId`, `dispatchId`, `followUpOf`) names
+  both; `request-show` replays it, so `--retry` settles a lost reply without sending twice. The
+  follow-up is a new assignment with `follows: aN` and aN's role, profile, effective route,
+  worktree, paths and browser scope; an implement follow-up's base is aN's result commit (or
+  `--commit`), so `pod accept` diffs only the new step. Pod refuses a review parent
+  (`follow_up_review`), a parent whose Task has not reported (`follow_up_busy`: mail would join
+  its live turn and make no Task), and flags that would change what it inherits
+  (`follow_up_flags`). A refusal, or a receipt that names no Task, voids the assignment. A
+  `started_fresh` delivery is recorded with a note that the worker's earlier context is gone.
+  The follow-up's Dispatch is an implement Dispatch of the same terminal, so the same-session
+  review check still applies.
 - A merge is at most once because GitHub merges only the exact head Pod names, Pod writes its
   intent first, and every later call reads the pull request before acting.
 

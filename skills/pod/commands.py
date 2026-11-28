@@ -558,7 +558,18 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
              reason: str | None = None, exclude_agents: list[str] | None = None, dry_run: bool = False,
              paths_: list[str] | None = None, commit: str | None = None,
              context: list[str] | None = None, worktree: str = "current", retry: str | None = None,
-             name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None) -> dict:
+             name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None,
+             follow_up: str | None = None) -> dict:
+    if follow_up:
+        others = {"--role": role, "--profile": profile, "--route": route, "--reason": reason, "--exclude-agent": exclude_agents,
+                  "--dry-run": dry_run, "--paths": paths_, "--context": context, "--retry": retry, "--name": name,
+                  "--words": words, "--after": after, "--why": why,
+                  "--worktree": None if worktree == "current" else worktree}
+        given = [flag for flag, value in others.items() if value]
+        if given:
+            raise PodError("follow_up_flags", f"A follow-up keeps {follow_up}'s role, profile, route, worktree and paths; "
+                           f"{', '.join(given)} cannot change them.",
+                           fix="drop those flags, or dispatch fresh work when the job or profile changes")
     if dry_run:
         return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route, reason=reason,
                                  exclude_agents=exclude_agents, commit=commit, words=words, after=after, why=why,
@@ -570,6 +581,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             raise PodError("objective_closed", f"Objective {state.id} is closed or dropped.", fix="open a new objective")
         if retry:
             return _settle_start(writer, state, retry)
+        if follow_up:
+            return _follow_up(writer, target, root, state, follow_up, title=title, spec=spec, commit=commit)
         if (role is None and profile is None) or (role is not None and role not in ROLES) or not (title or "").strip() or not spec:
             raise PodError("dispatch_incomplete", "A dispatch needs a role (or profile), a title and the task text.",
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
@@ -634,19 +647,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                 raise PodError("nothing_to_review", f"Commit {base[:12]} changes none of the named paths against the target.",
                                fix="name the commit and paths that hold the change")
         elif role == "implement":
-            live = _live(state)
-            target_wt = None if worktree.startswith("new-") else (str(root) if worktree in ("current", f"path:{root}") else worktree)
-            for other in state.assignments.values():
-                if other["role"] != "implement" or other["id"] not in live or live.get(other["id"]) is False:
-                    continue
-                if gitio.overlap(paths_, other.get("paths") or []):
-                    raise PodError("paths_overlap", f"Assignment {other['id']} is still running and may change the same files.",
-                                   fix=f"wait for {other['id']}, stop it through Orca, or declare paths that do not overlap")
-                other_raw = other.get("worktree") or "current"
-                other_wt = None if other_raw.startswith("new-") else (str(root) if other_raw in ("current", f"path:{root}") else other_raw)
-                if target_wt is not None and other_wt == target_wt:
-                    raise PodError("worktree_busy", f"Assignment {other['id']} is already implementing in this worktree.",
-                                   fix=f"wait for {other['id']}, stop it through Orca, or pass --worktree new-child")
+            _implement_free(state, root, worktree, paths_)
         run = state.objective.get("run")
         if not run:
             run = orca.run_create(f"{state.id}: {state.objective['source'].get('title') or state.objective['source'].get('text', '')}")
@@ -705,6 +706,91 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         if failed:
             result["note"] = f"the worker tab may keep Orca's title (rename: {failed})"
         return result
+
+
+def _implement_free(state: State, root: Path, worktree: str, paths_: list[str]) -> None:
+    """Refuse an implementer while another one still running may change the same files or works in the same worktree."""
+    live = _live(state)
+    target_wt = None if worktree.startswith("new-") else (str(root) if worktree in ("current", f"path:{root}") else worktree)
+    for other in state.assignments.values():
+        if other["role"] != "implement" or other["id"] not in live or live.get(other["id"]) is False:
+            continue
+        if gitio.overlap(paths_, other.get("paths") or []):
+            raise PodError("paths_overlap", f"Assignment {other['id']} is still running and may change the same files.",
+                           fix=f"wait for {other['id']}, stop it through Orca, or declare paths that do not overlap")
+        other_raw = other.get("worktree") or "current"
+        other_wt = None if other_raw.startswith("new-") else (str(root) if other_raw in ("current", f"path:{root}") else other_raw)
+        if target_wt is not None and other_wt == target_wt:
+            raise PodError("worktree_busy", f"Assignment {other['id']} is already implementing in this worktree.",
+                           fix=f"wait for {other['id']}, stop it through Orca, or pass --worktree new-child")
+
+
+FRESH = "dispatch the next step as fresh work (`pod dispatch --role …` or `--profile …`)"
+
+
+def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *, title: str | None, spec: str | None,
+               commit: str | None) -> dict:
+    """Send the next step of the same job to the worker that did the last one, as a new assignment.
+
+    Orca turns mail to a finished worker's Dispatch into a follow-up Task with its own Dispatch, in the
+    same terminal; its receipt names both. The new assignment keeps the parent's role, profile, route,
+    worktree and paths, and `pod accept` reads it like any other. A review never follows up: a second
+    look by the same reviewer is not an independent read.
+    """
+    parent = state.assignments.get(parent_id)
+    if not parent or parent.get("void") or not parent.get("dispatch"):
+        raise PodError("assignment_unknown", f"There is no started assignment {parent_id} to follow up.",
+                       fix="run `pod status` for the ids")
+    if parent["role"] == "review":
+        raise PodError("follow_up_review", f"{parent_id} is a review; a review never follows up.",
+                       fix="for a correction, commit the fixes and dispatch a fresh review of the changed paths")
+    if not spec:
+        raise PodError("dispatch_incomplete", "A follow-up needs the task text.", fix="pass --spec or --spec-file")
+    run = state.objective["run"]
+    task = orca.tasks(run).get(parent["task"]) or {}
+    if task.get("status") not in ("completed", "failed"):
+        # Mail to a worker that is still working joins its current turn and makes no Task, so nothing could be recorded.
+        raise PodError("follow_up_busy", f"{parent_id} has not reported yet (Orca says {task.get('status')}).",
+                       fix=f"wait for Orca to wake you with {parent_id}'s report, then follow up")
+    role, in_folder = parent["role"], folder(state)
+    done = state.result(parent_id) or {}
+    base = None if in_folder else gitio.commit(root, commit or done.get("commit") or parent["base"])
+    worktree, paths_ = parent.get("worktree") or "current", parent.get("paths") or []
+    if role == "implement":
+        _implement_free(state, root, worktree, paths_)
+    ident = state.next_id("a", state.assignments)
+    route = parent.get("effective") or parent["route"]
+    title = (title or "").strip() or parent["title"]
+    assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
+                  "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
+                  "follows": parent_id,
+                  **({"profile": parent["profile"], "mcp": parent.get("mcp")} if parent.get("profile") else {}),
+                  "browser_scope": parent.get("browser_scope") or "none"}
+    text = packet(state, assignment, spec)
+    assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
+    writer.append(assignment)
+    try:
+        started = orca.follow_up(run=run, dispatch=parent["dispatch"], spec=text,
+                                 subject=_task_title(parent.get("profile"), role, route, state.id, ident, title),
+                                 request=assignment["request"])
+    except PodError as exc:
+        if exc.code == "orca_unknown":
+            exc.fix = f"run `pod dispatch --retry {ident}`; it reads what Orca did and never sends twice"
+        else:
+            writer.append({"kind": "assignment", "id": ident, "void": True, "refused": exc.code})
+            exc.fix = f"{exc.fix}; or {FRESH}"
+        raise
+    if started.get("state") == "failed" or not started.get("task") or not started.get("dispatch"):
+        writer.append({"kind": "assignment", "id": ident, "void": True, "refused": "follow_up_not_started",
+                       **({"task": started["task"]} if started.get("task") else {})})
+        why = ("Orca delivered it as mail, not as a follow-up Task" if not started.get("delivery")
+               else f"Orca reports the follow-up {started.get('state') or 'without a Task'}")
+        raise PodError("follow_up_not_started", f"No follow-up Task started for {ident}: {why}.", fix=FRESH)
+    result = _started(writer, ident, started, route, role=role)
+    result.update(follows=parent_id, delivery=started["delivery"])
+    if started["delivery"] == "started_fresh":
+        result["note"] = f"Orca could not resume {parent_id}'s session and started its agent fresh: its earlier context is gone"
+    return result
 
 
 def _effective_review_proof(
@@ -1201,6 +1287,7 @@ def _assignment_records(state: State) -> tuple[list[dict], list[dict]]:
         seen = row.get("effective") or (row.get("route") if row.get("effective_seen") else None)
         effective = None if (not confirmed or row.get("effective_unknown")) else seen
         records.append({"assignment": row["id"], "role": row.get("role"), "profile": row.get("profile"),
+                        **({"follows": row["follows"]} if row.get("follows") else {}),
                         "title": row.get("title"), "void": bool(row.get("void")),
                         "requested_route": _route_record(row.get("route"), None, row.get("requested_review_fallback_reason")),
                         "effective_route": _route_record(effective, row.get("review_independence"),
@@ -1234,7 +1321,8 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         status = ("void" if row.get("void") else f"accepted ({done['decision']}, {done['outcome']})" if done
                   else "start unknown" if not row.get("dispatch") else "running" if live.get(row["id"]) else
                   "finished, not accepted" if live.get(row["id"]) is False else "not read")
-        rows.append(f"{row['id']} {row['role']} {status}: {row['title'][:80]}")
+        follows = f" (follows {row['follows']})" if row.get("follows") else ""
+        rows.append(f"{row['id']} {row['role']}{follows} {status}: {row['title'][:80]}")
     if rows:
         result["assignments"] = rows
     found = [] if folder(state) else [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}"
