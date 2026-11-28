@@ -103,11 +103,13 @@ review by a worker that changed nothing.
 - For a correction review, commit the fixes, use `pod dispatch --role review --paths …` on
   the corrected paths, then `pod accept` the new assignment when Orca reports completion.
   The review must cover applicable corrected content and the reviewer must have changed nothing.
-- A native Orca follow-up creates a different Task/Dispatch, even for the same reviewer.
-  Re-accepting the original Pod assignment does not import that follow-up's result. Use the
-  Pod correction-review path above; native follow-up intake is unsupported. Recording its
-  PASS with `pod record --carried` cannot close required findings, even when it names the
-  same reviewer and corrected commit.
+- Same investigation (same goal, profile and worker): `pod dispatch --follow-up aN`. Dispatch
+  fresh when the job or profile changes, the worker's context is spent, or you need an
+  independent read. Reviews and implement steps never follow up.
+- A native Orca follow-up sent outside Pod is a different Task/Dispatch that Pod never reads.
+  For a review, use the correction-review path above; recording a native follow-up's PASS with
+  `pod record --carried` cannot close required findings, even when it names the same reviewer
+  and corrected commit.
 
 ## Evidence
 

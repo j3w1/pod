@@ -557,8 +557,19 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
              title: str | None = None, spec: str | None = None, route: str | None = None,
              reason: str | None = None, exclude_agents: list[str] | None = None, dry_run: bool = False,
              paths_: list[str] | None = None, commit: str | None = None,
-             context: list[str] | None = None, worktree: str = "current", retry: str | None = None,
-             name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None) -> dict:
+             context: list[str] | None = None, worktree: str | None = None, retry: str | None = None,
+             name: str | None = None, words: str | None = None, after: str | None = None, why: str | None = None,
+             follow_up: str | None = None) -> dict:
+    if follow_up:
+        others = {"--role": role, "--profile": profile, "--route": route, "--reason": reason, "--exclude-agent": exclude_agents,
+                  "--dry-run": dry_run, "--paths": paths_, "--context": context, "--retry": retry, "--name": name,
+                  "--words": words, "--after": after, "--why": why, "--worktree": worktree}
+        given = [flag for flag, value in others.items() if value]
+        if given:
+            raise PodError("follow_up_flags", f"A follow-up keeps {follow_up}'s role, profile, route, worktree and paths; "
+                           f"{', '.join(given)} cannot change them.",
+                           fix="drop those flags, or dispatch fresh work when the job or profile changes")
+    worktree = worktree or "current"
     if dry_run:
         return _dry_run_dispatch(cwd, objective, role=role, profile=profile, route=route, reason=reason,
                                  exclude_agents=exclude_agents, commit=commit, words=words, after=after, why=why,
@@ -570,6 +581,8 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
             raise PodError("objective_closed", f"Objective {state.id} is closed or dropped.", fix="open a new objective")
         if retry:
             return _settle_start(writer, state, retry)
+        if follow_up:
+            return _follow_up(writer, target, root, state, follow_up, title=title, spec=spec, commit=commit)
         if (role is None and profile is None) or (role is not None and role not in ROLES) or not (title or "").strip() or not spec:
             raise PodError("dispatch_incomplete", "A dispatch needs a role (or profile), a title and the task text.",
                            fix="pass --role implement|review|investigate (or --profile NAME), --title and --spec or --spec-file")
@@ -707,6 +720,105 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         return result
 
 
+FRESH = "dispatch the next step as fresh work (`pod dispatch --role …` or `--profile …`)"
+
+
+def _follow_up(writer, target: Path, root: Path, state: State, parent_id: str, *, title: str | None, spec: str | None,
+               commit: str | None) -> dict:
+    """Send the next step of the same investigation to the worker that did the last one, as a new assignment.
+
+    Orca turns mail to a finished worker's Dispatch into a follow-up Task with its own Dispatch; its receipt
+    names both. The new assignment keeps the parent's role, profile, route and worktree, and `pod accept`
+    reads it like any other. Only investigate work follows up: a review's second look by the same reviewer
+    is not an independent read, and a writer's next step needs a base and attribution a fresh dispatch proves.
+    """
+    parent = state.assignments.get(parent_id)
+    if not parent or parent.get("void") or not parent.get("dispatch"):
+        raise PodError("assignment_unknown", f"There is no started assignment {parent_id} to follow up.",
+                       fix="run `pod status` for the ids")
+    if parent["role"] == "review":
+        raise PodError("follow_up_review", f"{parent_id} is a review; a review never follows up.",
+                       fix="for a correction, commit the fixes and dispatch a fresh review of the changed paths")
+    if parent["role"] != "investigate":
+        # A writer's next step needs its base, its worktree and its attribution proven; a fresh dispatch proves them.
+        raise PodError("follow_up_role", f"{parent_id} is an implement assignment; only investigate work follows up.",
+                       fix="dispatch the next implement step fresh, with --paths and the commit it starts from")
+    if not spec:
+        raise PodError("dispatch_incomplete", "A follow-up needs the task text.", fix="pass --spec or --spec-file")
+    newest = parent_id
+    while True:
+        newer = [row["id"] for row in state.assignments.values() if row.get("follows") == newest and not row.get("void")]
+        if not newer:
+            break
+        newest = newer[-1]
+    if newest != parent_id:
+        # Orca sends mail for an earlier Dispatch of a chain to its newest one, so only the newest step is followed.
+        raise PodError("follow_up_superseded", f"{newest} is a later step of {parent_id}'s job.",
+                       fix=f"follow up the newest step of this job: `pod dispatch --follow-up {newest}`")
+    run = state.objective["run"]
+    task = orca.tasks(run).get(parent["task"]) or {}
+    if task.get("status") not in ("completed", "failed") or not task.get("report"):
+        # Mail to a worker that is still working joins its current turn and makes no Task, so nothing could be recorded.
+        raise PodError("follow_up_busy", f"{parent_id} has not reported yet (Orca says {task.get('status')}"
+                       f"{', with no report' if task.get('status') in ('completed', 'failed') else ''}).",
+                       fix=f"wait for Orca to wake you with {parent_id}'s report, then follow up")
+    role = parent["role"]
+    base = None if folder(state) else gitio.commit(root, commit or "HEAD")
+    worktree, paths_ = parent.get("worktree") or "current", parent.get("paths") or []
+    ident = state.next_id("a", state.assignments)
+    route = parent.get("effective") or parent["route"]
+    title = (title or "").strip() or parent["title"]
+    assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
+                  "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
+                  "follows": parent_id,
+                  **({"profile": parent["profile"], "mcp": parent.get("mcp")} if parent.get("profile") else {}),
+                  "browser_scope": parent.get("browser_scope") or "none"}
+    text = packet(state, assignment, spec)
+    assignment["packet"] = hashlib.sha256(text.encode()).hexdigest()
+    writer.append(assignment)
+    try:
+        got = orca.follow_up(run=run, dispatch=parent["dispatch"], spec=text,
+                             subject=_task_title(parent.get("profile"), role, route, state.id, ident, title),
+                             request=assignment["request"])
+    except PodError as exc:
+        if exc.code == "orca_unknown":
+            exc.fix = f"run `pod dispatch --retry {ident}`; it reads what Orca did and never sends twice"
+        else:
+            writer.append({"kind": "assignment", "id": ident, "void": True, "refused": exc.code})
+            exc.fix = f"{exc.fix}; or {FRESH}"
+        raise
+    return _settle_follow_up(writer, fold(writer.entries), ident, got)
+
+
+def _settle_follow_up(writer, state: State, ident: str, got: dict) -> dict:
+    """Record what Orca's follow-up receipt says, the same way for the first reply and for `--retry`."""
+    row = state.assignments[ident]
+    parent = state.assignments[row["follows"]]
+    if not got.get("delivery") and not got.get("mail"):
+        # Neither a follow-up nor mail: Orca's answer proves nothing, so whether a Task started stays unknown.
+        raise PodError("start_unknown", f"Orca's receipt for {ident} names neither a follow-up Task nor mail.",
+                       fix=f"run `pod dispatch --retry {ident}` once Orca records it, or {FRESH}")
+    if got.get("state") == "failed" or not got.get("task") or not got.get("dispatch"):
+        writer.append({"kind": "assignment", "id": ident, "void": True, "refused": "follow_up_not_started",
+                       **({"task": got["task"]} if got.get("task") else {})})
+        why = ("Orca delivered it as mail, not as a follow-up Task" if not got.get("delivery")
+               else f"Orca reports the follow-up {got.get('state') or 'without a Task'}")
+        raise PodError("follow_up_not_started", f"No follow-up Task started for {ident}: {why}.", fix=FRESH)
+    started = {"task": got["task"], "dispatch": got["dispatch"], "state": got.get("state"),
+               **({"effective": got["effective"]} if got.get("effective") else {})}
+    result = _started(writer, ident, started, row["route"], role=row["role"])
+    result.update(follows=row["follows"], delivery=got["delivery"])
+    notes = []
+    if got.get("follow_up_of") and got["follow_up_of"] != parent["dispatch"]:
+        notes.append(f"Orca followed up Dispatch {got['follow_up_of']}, not {row['follows']}'s {parent['dispatch']}")
+    if got["delivery"] == "started_fresh":
+        notes.append(f"Orca could not resume {row['follows']}'s session and started its agent fresh: its earlier "
+                     "conversation is gone; state the context this step needs, or dispatch fresh")
+    if notes:
+        result["note"] = "; ".join(notes)
+    return result
+
+
 def _effective_review_proof(
     requested_route: str,
     actual_route: str | None,
@@ -790,10 +902,19 @@ def _settle_start(writer, state: State, ident: str) -> dict:
         raise PodError("assignment_unknown", f"There is no assignment {ident}.", fix="run `pod status` for the ids")
     if row.get("dispatch"):
         return {"assignment": ident, "task": row["task"], "dispatch": row["dispatch"], "already": True}
+    if row.get("void") and row.get("follows"):
+        return {"assignment": ident, "void": True, "refused": row.get("refused"), "next": FRESH}
     run = state.objective["run"]
     answer = orca.call("orchestration", "request-show", "--request", row["request"])
     if answer.get("state") == "pending":
         raise PodError("start_pending", f"Orca is still starting {ident}.", fix=f"run `pod dispatch --retry {ident}` again shortly")
+    if row.get("follows"):
+        # Only Orca's own receipt ties a Task to this follow-up; a title proves nothing, and no receipt proves no send.
+        if (answer.get("state") == "completed" and isinstance(answer.get("receipt"), dict)
+                and answer["receipt"].get("state") != "outcome_unknown"):
+            return _settle_follow_up(writer, state, ident, orca.follow_up_receipt(answer["receipt"]))
+        raise PodError("start_unknown", f"Orca holds no receipt for {ident}'s request {row['request']}, so whether the "
+                       "follow-up was sent is unknown.", fix=f"run `pod dispatch --retry {ident}` once Orca records it, or {FRESH}")
     receipt = answer.get("receipt") or {}
     found = receipt.get("taskId") if answer.get("state") == "completed" else None
     markers = (f"· {state.id}:{ident} ", f"[{state.id}:{ident}]")
@@ -1201,6 +1322,7 @@ def _assignment_records(state: State) -> tuple[list[dict], list[dict]]:
         seen = row.get("effective") or (row.get("route") if row.get("effective_seen") else None)
         effective = None if (not confirmed or row.get("effective_unknown")) else seen
         records.append({"assignment": row["id"], "role": row.get("role"), "profile": row.get("profile"),
+                        **({"follows": row["follows"]} if row.get("follows") else {}),
                         "title": row.get("title"), "void": bool(row.get("void")),
                         "requested_route": _route_record(row.get("route"), None, row.get("requested_review_fallback_reason")),
                         "effective_route": _route_record(effective, row.get("review_independence"),
@@ -1234,7 +1356,8 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         status = ("void" if row.get("void") else f"accepted ({done['decision']}, {done['outcome']})" if done
                   else "start unknown" if not row.get("dispatch") else "running" if live.get(row["id"]) else
                   "finished, not accepted" if live.get(row["id"]) is False else "not read")
-        rows.append(f"{row['id']} {row['role']} {status}: {row['title'][:80]}")
+        follows = f" (follows {row['follows']})" if row.get("follows") else ""
+        rows.append(f"{row['id']} {row['role']}{follows} {status}: {row['title'][:80]}")
     if rows:
         result["assignments"] = rows
     found = [] if folder(state) else [f"{row['id']} {row['path'] or ''}: {_line(row['text'])}"
