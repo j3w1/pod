@@ -521,6 +521,28 @@ class DispatchTests(CoreCase):
         self.assertEqual(tasks[custom["task"]]["display_name"], "Custom WT")
         self.assertEqual(tasks[custom["task"]]["name"], "custom-wt")
 
+    def test_a_new_worktree_from_a_linked_worktree_names_the_main_checkout_as_the_repository(self):
+        linked = self.tmp / "linked"
+        self.git(self.repo, "worktree", "add", "-q", "-b", "linked", str(linked))
+        commands.open_(linked, text="Linked work", objective="linked", criteria=["it works"])
+        started = commands.dispatch(linked, None, role="implement", title="child", spec="Do it.", paths_=["src"],
+                                    worktree="new-child")
+        task = self.orca()["tasks"][started["task"]]
+        # Orca resolves `path:` only for a registered repository: the main checkout, never the linked worktree.
+        self.assertEqual((task["repo"], task["base_branch"]), (f"path:{self.repo}", "linked"))
+        self.git(linked, "switch", "-q", "-c", "elsewhere")             # the objective's branch, not the current one
+        later = commands.dispatch(linked, "linked", role="implement", title="later", spec="Do it.", paths_=["docs"],
+                                  worktree="new-child")
+        self.assertEqual(self.orca()["tasks"][later["task"]]["base_branch"], "linked")
+
+    def test_the_main_checkout_is_read_whole_when_its_path_holds_a_newline(self):
+        odd = self.tmp / "odd\nname"
+        self.git(self.tmp, "init", "-q", "-b", "main", str(odd))
+        self.git(odd, "commit", "-q", "--allow-empty", "-m", "start")
+        self.git(odd, "worktree", "add", "-q", "-b", "side", str(self.tmp / "side"))
+        from pod import gitio
+        self.assertEqual(gitio.main_checkout(self.tmp / "side"), odd)
+
     def test_a_start_orca_reports_as_failed_is_a_refusal_with_its_reason_and_holds_no_paths(self):
         self.set_orca(start_fails="fatal: invalid reference: work")
         problem = self.refused("start_failed", self.start, paths_=["src"], worktree="new-child")

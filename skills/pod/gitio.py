@@ -33,6 +33,15 @@ def root(cwd: Path) -> Path:
     return Path(done.stdout.decode().strip())
 
 
+def main_checkout(cwd: Path) -> Path:
+    """The repository's main checkout, which Orca registers; a linked worktree is not a repository to Orca."""
+    # -z separates fields with NUL, so a path holding a newline is read whole.
+    listing = git(cwd, "worktree", "list", "--porcelain", "-z").stdout.decode().split("\0")
+    first = listing[0] if listing else ""
+    bare = len(listing) > 1 and listing[1] == "bare"
+    return Path(first[len("worktree "):]) if first.startswith("worktree ") and not bare else root(cwd)
+
+
 def repository(cwd: Path) -> tuple[str, str | None]:
     """A stable id for this repository's logs, and its GitHub `owner/name` when the origin names one."""
     url = git(cwd, "config", "--get", "remote.origin.url", check=False).stdout.decode().strip()
