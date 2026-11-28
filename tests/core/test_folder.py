@@ -290,3 +290,28 @@ class FolderWorkspaceTests(CoreCase):
                            "delivery": "none"})
         self.refused("objective_unclear", commands.drop, stray, "again", why="x")
         self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path(f"folder-{PROJECT}", "again"))))
+
+    def test_an_empty_local_log_falls_through_and_the_callers_own_objective_wins_over_a_same_id_folder(self):
+        def elsewhere(objective):                                   # a folder objective of another project, same id
+            with log.writer(log.path("folder-second", objective), create=True) as writer:
+                writer.append({"kind": "objective", "id": objective, "repository": "folder-second", "worktree": "/w",
+                               "workspace_kind": "folder", "workspace_id": "folder:z", "workspace_instance_id": "i-z",
+                               "delivery": "none"})
+        repository, _ = commands.gitio.repository(self.repo)
+        empty = log.path(repository, "gone-one")
+        empty.parent.mkdir(parents=True, exist_ok=True)
+        empty.write_bytes(b"")                                      # an empty log here does not hide the folder one
+        elsewhere("gone-one")
+        self.assertEqual(commands.drop(self.repo, "gone-one", why="gone")["state"], "dropped")
+        self.assertTrue(log.read(log.path("folder-second", "gone-one"))[-1].get("workspace_gone"))
+        self.git_log(repository, "mine", str(self.repo))            # the caller's own Git objective
+        elsewhere("mine")
+        commands.drop(self.repo, "mine", why="x")
+        self.assertTrue(log.read(log.path(repository, "mine"))[-1].get("dropped"))
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path("folder-second", "mine"))))
+        self.opened()                                               # the caller's own folder workspace
+        elsewhere("layout")
+        commands.drop(self.folder, "layout", why="x")
+        self.assertTrue(self.folder_entries()[-1].get("dropped"))
+        self.assertNotIn("workspace_gone", self.folder_entries()[-1])
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path("folder-second", "layout"))))
