@@ -223,7 +223,8 @@ def packet(state: State, assignment: dict, spec: str) -> str:
              f"- Folder: {state.objective['worktree']} (an Orca folder workspace with no Git checkout)" if in_folder
              else f"- Base commit: {assignment['base']}"]
     if assignment.get("profile"):
-        lines.append(f"- Profile: {assignment['profile']} (mcp: {'on' if assignment.get('mcp') else 'off'})")
+        lines.append(f"- Profile: {assignment['profile']} (mcp: {'on' if assignment.get('mcp') else 'off'}, "
+                     f"browser: {assignment.get('browser_scope') or 'none'})")
     if role == "implement":
         lines += ["- Change only: " + (", ".join(paths_) if paths_ else "what the task needs"),
                   "- Leave your work in this folder and name what you changed in your summary; there is no Git checkout, "
@@ -649,6 +650,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
         assignment = {"kind": "assignment", "id": ident, "role": role, "title": title, "paths": paths_, "base": base,
                       "route": route, "request": orca.request_id(target.parent.name, state.id, ident, 1), "worktree": worktree,
                       **({"profile": res.profile, "mcp": res.mcp} if res.profile else {}),
+                      "browser_scope": routefile.browser_scope(preferences.profiles.get(res.profile) if res.profile else None),
                       **({"reason": res.reason} if res.reason else {}),
                       **({"context": context} if context else {}),
                       **({"review_exception": exception} if exception else {}),
@@ -1276,7 +1278,9 @@ def listing() -> dict:
         rows.append({"objective": state.id, "repository": info.get("repository") or target.parent.name,
                      "worktree": info.get("worktree"), "branch": info.get("branch"), "run": info.get("run"),
                      "pr": info.get("pr"), "target": "none" if folder(state) else info.get("target"), "opened": info.get("opened"),
-                     "unaccepted": [{"assignment": row["id"], "task": row.get("task"), "dispatch": row.get("dispatch")}
+                     "unaccepted": [{"assignment": row["id"], "task": row.get("task"), "dispatch": row.get("dispatch"),
+                                     "browser_scope": row.get("browser_scope") if row.get("browser_scope") in
+                                     routefile.BROWSER_SCOPES else "none"}
                                     for row in state.assignments.values() if not row.get("void") and not state.result(row["id"])]})
     return {"schema": "pod-objectives/v1", "objectives": rows}
 

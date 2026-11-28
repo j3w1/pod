@@ -270,8 +270,15 @@ person changes it, through `pod models` or an editor. Coordination reads it with
 `skills/pod/routefile.py` and loads nothing else about models.
 
 - **Profiles and role defaults.** An optional flat `profiles:` map defines one line per profile:
-  `<role>[+mcp] <route1> [<route2> ...]`. The first route is the default and the rest are the
-  ordered fallback chain; `+mcp` declares MCP access (default: no MCP). An optional
+  `<role>[+mcp[:none|readonly|full]] <route1> [<route2> ...]`. The first route is the default and the rest are the
+  ordered fallback chain; `+mcp` declares MCP access (default: no MCP), and `+mcp:<scope>` also
+  declares the worker's browser scope. Pod records that scope on the assignment before Orca is asked
+  to start the worker, and publishes it as `browser_scope` on each unaccepted assignment row of
+  `pod status --all --json`, beside its task and dispatch, so a browser MCP inside the worker can read
+  its own scope back through its Orca dispatch. Only a declared scope is forwarded: bare `+mcp`, a
+  profile without `+mcp`, a raw `--route` and an unreadable value all give `none`, and `pod doctor`
+  lists `+mcp` profiles without a scope (`browser_scope_missing`). Orca's worker start carries no
+  environment, so Pod never sets the scope in the worker's environment. An optional
   `default_profiles:` map sets the default profile per role; when absent, Pod reads the shipped
   role mapping (`implement: build-fast`, `review: review-fast`, `investigate: scout`) directly
   from `skills/pod/models/registry.json` whenever those profiles exist in `config.yaml`, so

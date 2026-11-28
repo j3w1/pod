@@ -142,7 +142,7 @@ review by a worker that changed nothing.
 
 Workers run only on routes the person enabled; the Pin, when set, is the only route used.
 `pod dispatch` accepts `--profile NAME` (which sets role, ordered fallback routes and optional
-`+mcp`), `--route` (which requires `--reason TEXT` whenever the route is outside every configured
+`+mcp`, or `+mcp:none|readonly|full` to also give the worker that browser scope; nothing else gives one), `--route` (which requires `--reason TEXT` whenever the route is outside every configured
 profile), `--exclude-agent AGENT`, and `--dry-run` (pure read-only route preview with a
 plain-English skip trace). Without `--profile` or `--route`, it uses the Pin, else the role's
 default profile (`default_profiles`, defaulting to `build-fast`, `review-fast` and `scout` when

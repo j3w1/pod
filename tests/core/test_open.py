@@ -69,7 +69,8 @@ class OpenTests(CoreCase):
         self.assertEqual(listed["objectives"], [{
             "objective": "widget", "repository": "acme/widgets", "worktree": str(self.repo), "branch": "work",
             "run": "run_1", "pr": None, "target": "main", "opened": self.entries("widget")[0]["at"],
-            "unaccepted": [{"assignment": "a1", "task": started["task"], "dispatch": started["dispatch"]}]}])
+            "unaccepted": [{"assignment": "a1", "task": started["task"], "dispatch": started["dispatch"],
+                        "browser_scope": "none"}]}])
         self.assertEqual(len(self.gh().get("calls", [])), calls)
 
     def test_closure_is_derived_and_a_dropped_objective_holds_nothing(self):
