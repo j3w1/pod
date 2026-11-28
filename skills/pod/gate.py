@@ -155,10 +155,11 @@ def _settle(writer, state: State, request: dict | None, candidate: str) -> dict 
 
 def deliver(cwd: Path, objective: str | None, *, check: bool = False, commit: str | None = None) -> dict:
     from .commands import locate, place
-    if place(cwd)[3] is not None:            # a folder workspace has no Git: nothing here can deliver, whatever its logs hold
+    placed = place(cwd)                      # read once: the refusal and the lookup see the same placement
+    if placed[3] is not None:                # a folder workspace has no Git: nothing here can deliver, whatever its logs hold
         raise PodError("folder_no_delivery", "An Orca folder workspace has no Git checkout, so nothing in it can deliver.",
                        fix="record criteria, decisions and notes only; a folder objective closes when no criterion is open")
-    target, root, _, _ = locate(cwd, objective)
+    target, root, _, _ = locate(cwd, objective, placed=placed)
     if commit and not check:
         raise PodError("commit_needs_check", "`pod deliver` merges the branch head; --commit only names a candidate to judge.",
                        fix="add --check to judge that commit, or check it out and deliver without --commit")

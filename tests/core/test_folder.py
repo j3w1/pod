@@ -177,13 +177,17 @@ class FolderWorkspaceTests(CoreCase):
     def test_a_lost_start_is_recovered_only_from_orcas_own_receipt(self):
         self.opened()
         first = commands.dispatch(self.folder, "layout", profile="scout", title="read", spec="Read.")
+        from pod import orca
+        self.assertTrue(orca._says_several("Multiple worktrees found for 'worktrees'.", "worktrees"))
+        self.assertFalse(orca._says_several("no workspace folder:several workspaces", "folder:several workspaces"))
         state = self.orca()
         run = state["tasks"][first["task"]]["run_id"]
         state["tasks"]["task_sibling"] = {"id": "task_sibling", "run_id": run, "task_title": "Follow up [layout:a2]",
                                           "status": "dispatched", "result": None, "spec": "", "worktree": "folder:f-2"}
         state["lose_reply"] = True
         self.set_orca(**state)
-        self.refused("orca_unknown", commands.dispatch, self.folder, "layout", profile="scout", title="again", spec="Again.")
+        self.refused("orca_unknown", commands.dispatch, self.folder, "layout", profile="ui-design", title="again",
+                     spec="Again.", paths_=["map"])
         state = self.orca()
         state["requests"] = {key: value for key, value in state["requests"].items()
                              if value["receipt"]["taskId"] == first["task"]}            # Orca kept no receipt for a2
@@ -192,6 +196,15 @@ class FolderWorkspaceTests(CoreCase):
         rows = [row for row in self.folder_entries() if row.get("id") == "a2"]
         self.assertFalse(any(row.get("void") for row in rows))      # its paths stay held; nothing is started again
         self.assertNotIn("task_sibling", [row.get("task") for row in rows])   # the sibling's marked Task is never a2
+        self.refused("paths_overlap", commands.dispatch, self.folder, "layout", profile="ui-design", title="more",
+                     spec="More.", paths_=["map"])
+
+    def test_delivery_uses_one_placement_for_its_refusal_and_lookup(self):
+        self.opened()
+        placements = [commands.place(self.repo), commands.place(self.folder)]   # Git first, then a folder, if read twice
+        with mock.patch.object(commands, "place", side_effect=lambda cwd: placements.pop(0)):
+            self.refused("objective_unknown", gate.deliver, self.folder, "layout", check=True)
+        self.assertEqual(len(placements), 1)                        # read once; the folder objective is never reached
 
     def test_a_failed_plan_review_never_stands_in_for_another_plan(self):
         self.write_routes(ROUTES + PROFILES + "review_agents: [codex]\n")

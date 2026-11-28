@@ -56,13 +56,13 @@ def _refuse_in_folder(state: State, what: str) -> None:
                        f"so it cannot {what}.", fix="record criteria, decisions and notes only; it closes when no criterion is open")
 
 
-def locate(cwd: Path, objective: str | None) -> tuple[Path, Path, str | None, dict | None]:
+def locate(cwd: Path, objective: str | None, *, placed: tuple | None = None) -> tuple[Path, Path, str | None, dict | None]:
     """The log, the worktree root, the GitHub repository and this terminal's folder workspace, if any.
 
     A folder objective is checked against the workspace with `guard` on the state each command
     actually folds, under its lock, never on an earlier read.
     """
-    root, repository, slug, workspace = place(cwd)
+    root, repository, slug, workspace = placed or place(cwd)       # a caller that already decided on it passes its placement
     if objective:
         return log.path(repository, objective), root, slug, workspace
     here, finished = [], []
@@ -793,8 +793,8 @@ def _settle_start(writer, state: State, ident: str) -> dict:
         # A folder Run can be shared by sibling workspaces, so a title marker proves nothing, and without Orca's own
         # receipt whether this worker started stays unknown: its paths stay held and nothing is started again.
         raise PodError("start_unknown", f"Orca holds no receipt for {ident}'s request {row['request']}, so whether it "
-                       "started is unknown.", fix=f"run `pod dispatch --retry {ident}` once Orca records it; stop any worker "
-                       "Orca shows for it before dispatching the work again under paths that do not overlap")
+                       "started is unknown.", fix=f"run `pod dispatch --retry {ident}` once Orca records it; until then it holds its "
+                       "paths and this workspace")
     if not folder(state):
         found = found or next((key for key, task in orca.tasks(run).items()
                                if any(marker in (task["title"] or "") for marker in markers)), None)

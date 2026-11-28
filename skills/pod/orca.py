@@ -74,6 +74,13 @@ def folder_workspace(path: str) -> dict | None:
 AMBIGUOUS = re.compile(r"(several|multiple|more than one) (folder )?(workspaces|worktrees)|matches several", re.I)
 
 
+def _says_several(message: str, selector: str) -> bool:
+    """Orca's message names several matches somewhere other than inside the selector it echoes."""
+    echoes = [match.span() for match in re.finditer(re.escape(selector), message)] if selector else []
+    return any(not any(start <= found.start() and found.end() <= end for start, end in echoes)
+               for found in AMBIGUOUS.finditer(message))
+
+
 def workspace(selector: str) -> dict | None:
     """The Orca folder workspace an exact selector names, or None when it names none or not a folder.
 
@@ -87,7 +94,7 @@ def workspace(selector: str) -> dict | None:
     except PodError as exc:
         if exc.code == "orca_unknown":
             raise
-        if "ambiguous" in exc.code or AMBIGUOUS.search(str(exc).replace(selector, "")):    # never the echoed selector
+        if "ambiguous" in exc.code or _says_several(str(exc), selector):
             raise PodError("folder_workspace_ambiguous", f"Orca names several folder workspaces for {selector}.",
                            fix="start the coordinator in its own folder workspace, whose terminal names exactly one") from exc
         return None
