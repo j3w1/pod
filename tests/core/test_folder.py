@@ -240,7 +240,7 @@ class FolderWorkspaceTests(CoreCase):
             self.finish(started["task"], {"outcome": "succeeded", "verdict": "fail", "findings": []})
             commands.accept(self.folder, "layout", started["assignment"])
         review("Review plan A.")
-        review("Review plan A.")
+        review("Review plan A.\n")                                  # the reviewer receives the same text
         self.assertEqual(commands.status(self.folder, "layout", remote=False)["review_rounds"]["failed"], 1)
         review("Review plan B.")
         self.refused("review_cap", commands.dispatch, self.folder, "layout", role="review", title="plan",

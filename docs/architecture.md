@@ -277,9 +277,14 @@ Coordination reads it with `skills/pod/routefile.py` and loads nothing else abou
   wrote, shared the implementer's session or did not complete) and a result with no verdict
   never count; a reviewer exception's review counts like any other. The count follows the
   source issue across its objectives in log time order, so dropping and reopening keeps it; an
-  objective with no issue counts alone. At the cap, the first `scope` fact resets it, once per
-  source issue; after that only a `decision` carrying the person's `--words` resets it, and a
-  `scope` before the cap changes nothing. `pod status` shows `review_rounds: {failed, cap,
+  objective with no issue counts alone; the issue's repository name is compared without case.
+  Facts replay in time order, and within one second an earlier-opened objective's facts come
+  first. A `scope` recorded while the count is at the cap and the re-scope is unused carries
+  `review_reset: true` and resets the count, once per source issue; a `scope` recorded below the
+  cap keeps that meaning even if the cap changes later. After that only a `decision` carrying the
+  person's nonblank `--words` resets it. A folder review's plan hash covers the text the reviewer
+  receives; folder reviews recorded before 0.23.14 have no hash, so each failed one counts as its
+  own round in the bootstrap count. `pod status` (open, closed or dropped) shows `review_rounds: {failed, cap,
   rescope_left}`; the `pod status --all` listing does not. At the cap a review dispatch is
   refused with `review_cap`, and its fix says whether a re-scope is still available. A review
   dispatched under a recorded reviewer exception gets `⚑ ` before the role in its tab title.

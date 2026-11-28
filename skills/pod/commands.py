@@ -662,7 +662,7 @@ def dispatch(cwd: Path, objective: str | None, *, role: str | None = None, profi
                       "browser_scope": routefile.browser_scope(preferences.profiles.get(res.profile) if res.profile else None),
                       **({"reason": res.reason} if res.reason else {}),
                       **({"context": context} if context else {}),
-                      **({"plan": hashlib.sha256(spec.encode()).hexdigest()} if role == "review" and in_folder else {}),
+                      **({"plan": hashlib.sha256(spec.strip().encode()).hexdigest()} if role == "review" and in_folder else {}),
                       **({"review_exception": exception} if exception else {}),
                       **({"requested_review_fallback_reason": res.review_fallback_reason}
                          if res.review_fallback_reason else {})}
@@ -726,8 +726,9 @@ def _same_source(state: State) -> list[State]:
         except PodError:
             continue
         theirs = other.objective.get("source") or {} if other.entries else {}
-        if (theirs.get("kind") == "issue" and (theirs.get("repository"), theirs.get("number"))
-                == (source.get("repository"), source.get("number")) and other.entries[0] != state.entries[0]):
+        if (theirs.get("kind") == "issue" and str(theirs.get("repository") or "").lower() == str(
+                source.get("repository") or "").lower() and theirs.get("number") == source.get("number")
+                and other.entries[0] != state.entries[0]):          # GitHub names are case-insensitive
             found.append(other)
     return found
 
@@ -738,22 +739,23 @@ def review_rounds(state: State, cap: int) -> dict:
     A round is a distinct reviewed target (a commit, or a folder review's plan) that a review failed; two
     reviewers failing the same commit are one round. A review that covers nothing (the reviewer wrote, ran in
     the implementer's session or did not complete) never counts, and neither does one with no verdict, which
-    has no review fact at all. Once the cap is reached, the first `scope` record resets the count, once per
-    source issue; after that only a `decision` carrying the person's own words resets it.
+    has no review fact at all. A `scope` recorded at the cap carries `review_reset` and resets the count, once
+    per source issue; after that only a `decision` carrying the person's own words resets it. Facts replay in
+    time order; within one second, an earlier-opened objective's facts come first, each log in its own order.
     """
-    timeline = sorted(((entry.get("at") or "", entry, one) for one in _same_source(state) for entry in one.entries),
-                      key=lambda item: item[0])
+    timeline = sorted(((entry.get("at") or "", one.entries[0].get("at") or "", one.id, entry.get("n", 0), entry, one)
+                       for one in _same_source(state) for entry in one.entries), key=lambda item: item[:4])
     failed, rescoped = set(), False
-    for _, entry, one in timeline:
+    for *_, entry, one in timeline:
         if entry.get("kind") != "fact":
             continue
         if (entry.get("fact") == "review" and entry.get("verdict") == "fail" and not entry.get("wrote")
                 and not entry.get("same_session") and entry.get("completed", True)):
             plan = (one.assignments.get(entry.get("reviewer")) or {}).get("plan")
             failed.add(entry.get("commit") or plan or f"{one.id}:{entry.get('reviewer')}")
-        elif entry.get("fact") == "scope" and len(failed) >= cap and not rescoped:
+        elif entry.get("fact") == "scope" and entry.get("review_reset") and not rescoped:
             failed, rescoped = set(), True
-        elif entry.get("fact") == "decision" and entry.get("words"):
+        elif entry.get("fact") == "decision" and str(entry.get("words") or "").strip():
             failed = set()
     return {"failed": len(failed), "cap": cap, "rescope_left": 0 if rescoped else 1}
 
@@ -1166,8 +1168,13 @@ def record(cwd: Path, objective: str | None, **given) -> dict:
             done.append(f"review carried from {given['carried']}")
         for kind in ("scope", "decision"):
             if given.get(kind):
-                entries.append({"kind": "fact", "fact": kind, "text": given[kind], **_words(given)})
-                done.append(f"{kind} recorded")
+                reset = {}
+                if kind == "scope":            # a re-scope at the cap is the one self-service reset of the review count
+                    rounds = review_rounds(state, routefile.load().review_cap)
+                    if rounds["failed"] >= rounds["cap"] and rounds["rescope_left"]:
+                        reset = {"review_reset": True}
+                entries.append({"kind": "fact", "fact": kind, "text": given[kind], **_words(given), **reset})
+                done.append(f"{kind} recorded" + (" (review rounds reset)" if reset else ""))
         fields = {key: given[key] for key in ("note", "pr", "branch") if given.get(key) is not None}
         if fields:
             entries.append({"kind": "objective", **fields})
@@ -1288,9 +1295,9 @@ def view(root: Path, state: State, *, remote: bool = True, gate: bool = True) ->
         result["note"] = info["note"]
     result["criteria"] = [f"{row['id']} {row['state']}{' (after merge)' if row.get('after_merge') else ''}: {row['text'][:160]}"
                           for row in state.criteria.values()]
+    result["review_rounds"] = review_rounds(state, routefile.load().review_cap)
     if state.closed:
         return result
-    result["review_rounds"] = review_rounds(state, routefile.load().review_cap)
     live = _live(state) if remote else {}
     rows = []
     for row in state.assignments.values():
