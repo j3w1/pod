@@ -105,6 +105,21 @@ def workspace(selector: str) -> dict | None:
     return {"path": path, "workspace_id": address, "instance_id": str(row["instanceId"]), "project": project}
 
 
+def gone(selector: str, instance: str) -> str | None:
+    """How Orca proves the bound workspace instance no longer exists: it names no workspace for the
+    selector, or names one with another instance. None when it does not; any other refusal proves nothing."""
+    try:
+        row = call("worktree", "show", "--worktree", selector).get("worktree") or {}
+    except PodError as exc:
+        if exc.code == "selector_not_found":
+            return "selector_not_found"
+        if exc.code == "orca_unknown":
+            raise
+        return None
+    now = str(row.get("instanceId") or "")
+    return f"instance {now}" if now and now != instance else None
+
+
 def request_id(repository: str, objective: str, assignment: str, attempt: int) -> str:
     """The same assignment and attempt always give the same request, so a retry cannot start twice."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"pod:{repository}:{objective}:{assignment}:{attempt}"))

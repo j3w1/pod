@@ -66,7 +66,8 @@ commit when the tree is clean. Prefer it to describing a run in words.
 Work with no Git checkout, such as an analysis, runs from the terminal of a registered Orca
 folder workspace: `pod open --no-delivery`, then dispatch as usual. Workers start in that
 workspace, a review reviews the plan in its task text, `pod accept` needs no commit, and every
-delivery command refuses. The objective closes when no criterion is open.
+delivery command refuses. The objective closes when no criterion is open. If its workspace was removed,
+`pod drop --objective ID --why …` works from any terminal once Orca no longer lists it.
 
 Repeating `pod accept` for an accepted assignment is idempotent: it returns the recorded
 decision without reading another result or changing the earlier facts and findings.

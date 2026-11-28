@@ -1,7 +1,8 @@
 import os
 from unittest import mock
 
-from pod import cli, commands, gate, log
+from pod import cli, commands, gate, log, orca
+from pod.errors import PodError
 from tests.core.support import CoreCase, ROUTES
 
 PROJECT = "11111111-2222-3333-4444-555555555555"
@@ -223,3 +224,38 @@ class FolderWorkspaceTests(CoreCase):
         commands.dispatch(self.repo, None, role="implement", title="write", spec="Do it.", paths_=["src"])
         self.assertEqual(self.orca().get("shows", 0), 0)
         self.assertEqual(cli._config(False)["capabilities"], {"folder_no_delivery": True})
+
+    def test_an_objective_whose_workspace_orca_no_longer_lists_is_dropped_by_id_from_anywhere(self):
+        self.opened()
+        self.terminal("term_b")                                     # a sibling workspace of the same project
+        self.refused("folder_binding_mismatch", commands.drop, self.folder, "layout", why="x")
+        stray = self.tmp / "stray"
+        stray.mkdir()
+        self.refused("folder_binding_mismatch", commands.drop, stray, "layout", why="x")       # still listed: not gone
+        self.refused("folder_binding_mismatch", commands.drop, self.repo, "layout", why="x")
+        self.refused("objective_unknown", commands.drop, stray, "nothing", why="x")
+        self.set_orca(folders=[self.row("f-2", "i-2")])             # the bound workspace was removed
+        for cwd in (self.repo, stray):
+            with self.subTest(cwd=cwd):
+                done = commands.drop(cwd, "layout", why="its workspace was removed")
+                self.assertEqual(done["state"], "dropped")
+        gone = [entry for entry in self.folder_entries() if entry.get("dropped")]
+        self.assertEqual([entry["workspace_gone"] for entry in gone],
+                         [{"workspace_id": self.address, "instance_id": "i-1", "orca": "selector_not_found"}])     # a second drop adds nothing
+        self.assertNotIn("layout", [row["objective"] for row in commands.listing()["objectives"]])
+
+    def test_a_reused_workspace_address_with_another_instance_is_gone_and_unknown_orca_proves_nothing(self):
+        self.opened()
+        self.terminal("term_b")
+        self.set_orca(folders=[self.row("f-1", "i-9"), self.row("f-2", "i-2")])
+        real = orca.call
+
+        def silent(*args, **options):                               # Orca does not answer for the bound workspace
+            if args[:4] == ("worktree", "show", "--worktree", self.address):
+                raise PodError("orca_unknown", "no answer", fix="repeat")
+            return real(*args, **options)
+        with mock.patch("pod.orca.call", side_effect=silent):
+            self.refused("orca_unknown", commands.drop, self.folder, "layout", why="x")
+        self.assertFalse(any(entry.get("dropped") for entry in self.folder_entries()))
+        commands.drop(self.folder, "layout", why="re-created")
+        self.assertEqual(self.folder_entries()[-1]["workspace_gone"]["orca"], "instance i-9")

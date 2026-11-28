@@ -1301,13 +1301,54 @@ def _target_head(root: Path, state: State) -> str | None:
     return gitio.fetch(root, "origin", target) or gitio.known(root, f"origin/{target}") or gitio.known(root, target)
 
 
+def _folder_log(objective: str) -> Path:
+    """The one folder objective with this id, found from anywhere: its own workspace may be gone."""
+    found = [target for target in log.every() if target.parent.name.startswith("folder-") and target.stem == objective]
+    if len(found) != 1:
+        raise PodError("objective_unknown" if not found else "objective_unclear",
+                       f"There is no objective {objective} here or in any folder project." if not found
+                       else f"Several folder projects have an objective {objective}.",
+                       fix="run `pod status --all`" if not found else "run Pod from the objective's own folder workspace")
+    return found[0]
+
+
+def _gone_workspace(state: State, here: dict | None) -> dict | None:
+    """Proof, read from Orca now, that a folder objective's own workspace no longer exists.
+
+    None when this terminal is in that workspace. A workspace that still exists is refused: the
+    objective is dropped from its own terminal."""
+    if not folder(state) or (here is not None and _same_workspace(state.objective, here)):
+        return None
+    bound, instance = state.objective.get("workspace_id"), state.objective.get("workspace_instance_id")
+    proof = orca.gone(bound, instance) if bound and instance else None
+    if not proof:
+        raise PodError("folder_binding_mismatch", f"Objective {state.id} is bound to workspace {bound} ({instance}), "
+                       "which Orca still lists or cannot rule out.",
+                       fix="run `pod drop` from the Orca terminal of the objective's own folder workspace")
+    return {"workspace_id": bound, "instance_id": instance, "orca": proof}
+
+
 def drop(cwd: Path, objective: str | None, *, why: str) -> dict:
-    """Stop an objective. Its settled workers are released; unfinished or unmerged work is left where it is."""
-    target, root, _, here = locate(cwd, objective)
+    """Stop an objective. Its settled workers are released; unfinished or unmerged work is left where it is.
+
+    A folder objective whose workspace Orca no longer lists can be dropped by id from any terminal;
+    that proof is recorded with the drop."""
+    try:
+        target, root, _, here = locate(cwd, objective)
+        if objective and not target.exists():
+            raise PodError("objective_unknown", f"There is no objective {objective} here.")
+    except PodError as exc:
+        if not objective or exc.code not in ("not_a_repository", "objective_unknown"):
+            raise
+        target, here = _folder_log(objective), None
+        root = Path(fold(log.read(target)).objective.get("worktree") or cwd)
     with log.writer(target) as writer:
-        state = guard(fold(writer.entries), here)
+        state = fold(writer.entries)
+        gone = _gone_workspace(state, here)
+        if gone is None:
+            state = guard(state, here)
         if not state.dropped:
-            writer.append({"kind": "objective", "dropped": True, "why": why})
+            writer.append({"kind": "objective", "dropped": True, "why": why, **({"workspace_gone": gone} if gone else {})})
         state = fold(writer.entries)
         return {"objective": state.id, "state": "dropped",
                 **cleanup.tidy(writer, root, state, target_head=_target_head(root, state),
