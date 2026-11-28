@@ -108,7 +108,7 @@ class DispatchTests(CoreCase):
             (None, "investigate", "Scout"),
             ("build-fast", "implement", "Builder"),
             ("build-deep", "implement", "Builder (deep)"),
-            ("ui-design", "implement", "Builder (UI)"),
+            ("ui-design", "implement", "Designer"),
             ("ui-light", "implement", "Builder (UI)"),
             ("ui-accessibility", "implement", "Builder (UI)"),
             ("ui-analyst", "implement", "Builder (UI)"),

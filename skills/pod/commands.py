@@ -302,7 +302,7 @@ PROFILE_ROLES = {
     "build-fast": "Builder",
     "build-deep": "Builder (deep)",
     "ui-light": "Builder (UI)",
-    "ui-design": "Builder (UI)",
+    "ui-design": "Designer",
     "review-fast": "Reviewer (fast)",
     "review-deep": "Reviewer (deep)",
     "scout": "Scout",
