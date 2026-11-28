@@ -259,3 +259,34 @@ class FolderWorkspaceTests(CoreCase):
         self.assertFalse(any(entry.get("dropped") for entry in self.folder_entries()))
         commands.drop(self.folder, "layout", why="re-created")
         self.assertEqual(self.folder_entries()[-1]["workspace_gone"]["orca"], "instance i-9")
+
+    def git_log(self, repository, objective, worktree):
+        with log.writer(log.path(repository, objective), create=True) as writer:
+            writer.append({"kind": "objective", "id": objective, "repository": repository, "worktree": worktree,
+                           "target": "main", "branch": "work", "pr": None})
+
+    def test_a_drop_by_id_never_picks_a_git_log_an_empty_file_or_one_of_two_same_id_objectives(self):
+        self.opened()
+        self.set_orca(folders=[self.row("f-2", "i-2")])            # its workspace is gone
+        self.terminal("term_b")
+        stray = self.tmp / "stray"
+        stray.mkdir()
+        self.git_log("folder-acct--repo", "layout", "/elsewhere")  # a Git account whose name starts folder-
+        log.path("folder-other", "layout").parent.mkdir(parents=True, exist_ok=True)
+        log.path("folder-other", "layout").write_bytes(b"")        # left by a refused open: no objective
+        self.assertEqual(commands.drop(stray, "layout", why="gone")["state"], "dropped")
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path("folder-acct--repo", "layout"))))
+        commands.open_(self.folder, text="Again", objective="again", criteria=["x"], delivery=False)
+        self.set_orca(folders=[self.row("f-9", "i-9")], terminals={"term_c": "folder:f-9"})
+        self.terminal("term_c")
+        repository, _ = commands.gitio.repository(self.repo)
+        self.git_log(repository, "again", "/another/worktree")      # the same id in the caller's Git repository
+        self.refused("objective_unclear", commands.drop, self.repo, "again", why="x")
+        self.git_log(repository, "again-here", str(self.repo))      # at its own worktree a Git drop is as before
+        self.assertEqual(commands.drop(self.repo, "again-here", why="x")["state"], "dropped")
+        with log.writer(log.path("folder-second", "again"), create=True) as writer:   # a second folder project
+            writer.append({"kind": "objective", "id": "again", "repository": "folder-second", "worktree": "/w",
+                           "workspace_kind": "folder", "workspace_id": "folder:z", "workspace_instance_id": "i-z",
+                           "delivery": "none"})
+        self.refused("objective_unclear", commands.drop, stray, "again", why="x")
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path(f"folder-{PROJECT}", "again"))))
