@@ -43,9 +43,13 @@ opened is merged (or it was opened with `--no-delivery`, or dropped). No command
 workspace of the calling terminal (`ORCA_TERMINAL_HANDLE`): `orca terminal show` names the
 workspace, `orca worktree show` gives its address and instance, and the project must be of kind
 `folder`. Every workspace of a folder project can share one path, so the binding is the
-workspace address (`workspace_id`) and instance (`workspace_instance_id`); the path is checked
-as an attribute and never chooses the objective, and a terminal whose workspace id names more
-than one workspace is refused (`folder_workspace_ambiguous`). Such an objective is opened with
+workspace address (`workspace_id`: `folder:<id>`, or `id:` and the workspace's own Orca id) and
+its native instance (`workspace_instance_id`, required); the path is checked as an attribute and
+never chooses the objective. A selector Orca refuses as naming several workspaces is refused
+(`folder_workspace_ambiguous`). Every command checks the binding on the state it folds under its
+lock, an open of an existing id included, and a lost start is recovered only from Orca's own
+receipt, never from a title marker another workspace in the Run could share. An earlier failed
+plan review never stands in for another (`--after` is refused). Such an objective is opened with
 `--no-delivery`, logs under `folder-<project id>`, and has no branch, pull request, target or
 base. Workers start in that same workspace (`--worktree` must name it exactly; Pod makes no
 worktree for them), a review reviews the plan in its task text, and an implement result is

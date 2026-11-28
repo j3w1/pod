@@ -68,24 +68,28 @@ class FolderWorkspaceTests(CoreCase):
         self.refused("not_a_repository", commands.open_, self.folder, text="Not a folder", delivery=False)
         self.set_orca(repos={PROJECT: "folder"})
         self.opened()
-        for flag in ({"authorize": True, "why": "x"}, {"check": "true"}, {"pr": 7}, {"branch": "b"},
+        for flag in ({"authorize": True, "why": "x"}, {"check": "true"}, {"pr": 7}, {"branch": "b"}, {"pr": 0},
+                     {"branch": ""}, {"after_merge": ["c1"]},
                      {"carried": "x", "commit": "HEAD", "paths": ["a"], "verdict": "pass"}, {"waive": "a1.1", "why": "x"}):
             with self.subTest(flag=flag):
                 self.refused("folder_no_delivery", commands.record, self.folder, None, **flag)
         self.refused("folder_no_delivery", gate.deliver, self.folder, None)
         self.refused("folder_no_delivery", gate.deliver, self.folder, None, check=True)
+        self.refused("folder_no_delivery", gate.deliver, self.folder, "opened-later", check=True)   # whatever the log holds
+        self.assertIsNone(self.folder_entries()[0]["pr"])
 
     def test_profiles_start_in_the_objectives_folder_and_accept_without_git(self):
         self.opened()
         scout = commands.dispatch(self.folder, "layout", profile="scout", title="read the map", spec="Read it.")
         designer = commands.dispatch(self.folder, "layout", profile="ui-design", title="draw the map", spec="Draw it.",
-                                     worktree=self.address, name="Designer")
+                                     worktree=self.address)
         tasks = self.orca()["tasks"]
         self.assertEqual([tasks[row["task"]]["worktree"] for row in (scout, designer)], [self.address, self.address])
         self.assertEqual([tasks[row["task"]]["repo"] for row in (scout, designer)], [None, None])    # Pod makes no worktree
         packet = tasks[designer["task"]]["spec"]
         self.assertIn(f"Folder: {self.folder}", packet)
         self.assertIn("do not create a repository or a commit", packet)
+        self.assertIn("worker_done with what you changed", packet)        # no commit or checks are recorded here
         self.assertNotIn("Base commit", packet)
         self.refused("folder_no_worktree", commands.dispatch, self.folder, "layout", profile="ui-design", title="t",
                      spec="s", worktree="new-child")
@@ -138,10 +142,51 @@ class FolderWorkspaceTests(CoreCase):
         self.assertEqual(commands.status(self.folder, None)["objective"], "layout")
         self.refused("folder_binding_mismatch", commands.dispatch, self.folder, "layout", profile="scout", title="t",
                      spec="s", worktree="folder:f-2")                # a selector never crosses into a sibling
+        self.terminal("term_b")
+        self.refused("folder_binding_mismatch", commands.open_, self.folder, text="Lay out the agent map",
+                     objective="layout", criteria=["a layout"], delivery=False)    # the same id and source from a sibling
+        self.terminal("term_a")
         state = self.orca()
         state["folders"].append(self.row("f-1", "i-3"))              # Orca names two workspaces by this terminal's id
         self.set_orca(folders=state["folders"])
         self.refused("folder_workspace_ambiguous", commands.status, self.folder, "layout")
+
+    def test_a_workspace_needs_a_native_instance_and_a_non_root_id_is_its_own_address(self):
+        ident = f"{PROJECT}::{self.folder}::workspace:u-9"
+        self.set_orca(folders=[{"id": ident, "repoId": PROJECT, "path": str(self.folder), "address": f"id:{ident}",
+                                "instanceId": "u-9"}, {**self.row("f-3", None)}],
+                      terminals={"term_n": ident, "term_x": "folder:f-3"})
+        self.terminal("term_n")
+        view = commands.open_(self.folder, text="Non-root", objective="nonroot", criteria=["x"], delivery=False)
+        self.assertEqual((view["workspace_id"], view["workspace_instance_id"]), (f"id:{ident}", "u-9"))
+        self.terminal("term_x")                                     # Orca gave no instance: nothing can be bound
+        self.refused("not_a_repository", commands.open_, self.folder, text="No instance", objective="n2", delivery=False)
+
+    def test_a_lost_start_is_recovered_only_from_orcas_own_receipt(self):
+        self.opened()
+        first = commands.dispatch(self.folder, "layout", profile="scout", title="read", spec="Read.")
+        state = self.orca()
+        run = state["tasks"][first["task"]]["run_id"]
+        state["tasks"]["task_sibling"] = {"id": "task_sibling", "run_id": run, "task_title": "Follow up [layout:a2]",
+                                          "status": "dispatched", "result": None, "spec": "", "worktree": "folder:f-2"}
+        state["lose_reply"] = True
+        self.set_orca(**state)
+        self.refused("orca_unknown", commands.dispatch, self.folder, "layout", profile="scout", title="again", spec="Again.")
+        state = self.orca()
+        state["requests"] = {key: value for key, value in state["requests"].items()
+                             if value["receipt"]["taskId"] == first["task"]}            # Orca kept no receipt for a2
+        self.set_orca(**state)
+        settled = commands.dispatch(self.folder, "layout", retry="a2")
+        self.assertTrue(settled["void"])                            # the sibling's marked Task is never taken as a2
+        self.assertNotIn("task_sibling", [row.get("task") for row in self.folder_entries()])
+
+    def test_a_failed_plan_review_never_stands_in_for_another_plan(self):
+        self.opened()
+        for call in (dict(), dict(dry_run=True)):
+            with self.subTest(**call):
+                self.refused("review_exception_invalid", commands.dispatch, self.folder, "layout", role="review",
+                             title="r", spec="Review plan B.", route="claude/opus/high", reason="r", after="a1",
+                             why="a1 failed", **call)
 
     def test_git_repositories_never_ask_orca_for_a_folder_and_config_states_the_capability(self):
         commands.open_(self.repo, text="Make the widget", objective="widget", criteria=["it works"])

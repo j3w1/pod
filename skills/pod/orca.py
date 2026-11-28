@@ -53,7 +53,7 @@ def folder_workspace(path: str) -> dict | None:
 
     Every workspace of a folder project can share one path, so the directory never says which one
     this is: the terminal Orca started the caller in does. Pod keeps the workspace's address, its
-    instance and its project, and refuses a terminal workspace that names more than one.
+    instance and its project.
     """
     handle = os.environ.get("ORCA_TERMINAL_HANDLE")
     if not handle:
@@ -67,23 +67,19 @@ def folder_workspace(path: str) -> dict | None:
     held = str(terminal.get("worktreeId") or "")
     if not held:
         return None
-    found = workspace(held if held.startswith(("folder:", "id:", "identity:")) else f"id:{held}")   # `<repo>::<path>` as is
-    if not found or found["path"] != path or terminal.get("worktreePath") not in (None, path):
-        return None
-    try:
-        rows = call("worktree", "list", "--repo", f"id:{found['project']}").get("worktrees") or []
-    except PodError as exc:
-        if exc.code == "orca_unknown":
-            raise
-        rows = []
-    if sum(1 for row in rows if row.get("id") == held) > 1:
-        raise PodError("folder_workspace_ambiguous", f"This terminal's workspace {held} names several Orca folder workspaces.",
-                       fix="start the coordinator in its own folder workspace, whose terminal names exactly one")
-    return found
+    found = workspace(held if held.startswith(("folder:", "id:", "identity:")) else f"id:{held}")   # `<repo>::<path>…` as is
+    return found if found and found["path"] == path and terminal.get("worktreePath") in (None, path) else None
+
+
+AMBIGUOUS = re.compile(r"ambiguous|several|more than one|multiple", re.I)
 
 
 def workspace(selector: str) -> dict | None:
-    """The Orca folder workspace an exact selector names, or None when it names none or not a folder."""
+    """The Orca folder workspace an exact selector names, or None when it names none or not a folder.
+
+    A selector Orca refuses as naming several workspaces is refused here too, never guessed. A
+    workspace without a native instance id cannot be bound, so it is not returned.
+    """
     try:
         row = call("worktree", "show", "--worktree", selector).get("worktree") or {}
         project, path = str(row.get("repoId") or ""), str(row.get("path") or "")
@@ -91,11 +87,15 @@ def workspace(selector: str) -> dict | None:
     except PodError as exc:
         if exc.code == "orca_unknown":
             raise
+        if AMBIGUOUS.search(f"{exc.code} {exc}"):
+            raise PodError("folder_workspace_ambiguous", f"Orca names several folder workspaces for {selector}.",
+                           fix="start the coordinator in its own folder workspace, whose terminal names exactly one") from exc
         return None
-    address = str((row.get("address") or {}).get("worktree") or "")
-    if kind != "folder" or not path or not (address.startswith("folder:") or address == f"id:{project}::{path}"):
+    address, ident = str((row.get("address") or {}).get("worktree") or ""), str(row.get("id") or "")
+    own = ident.startswith(f"{project}::{path}") and address == f"id:{ident}"     # the root, or `…::workspace:<uuid>`
+    if kind != "folder" or not path or not row.get("instanceId") or not (address.startswith("folder:") or own):
         return None
-    return {"path": path, "workspace_id": address, "instance_id": row.get("instanceId") or None, "project": project}
+    return {"path": path, "workspace_id": address, "instance_id": str(row["instanceId"]), "project": project}
 
 
 def request_id(repository: str, objective: str, assignment: str, attempt: int) -> str:

@@ -182,16 +182,14 @@ def main():
     if args[:2] == ["worktree", "show"]:            # folder workspaces only; Git repositories never ask
         state["shows"] = state.get("shows", 0) + 1
         wanted = option(args, "--worktree")
-        for row in state.get("folders", []):
-            if wanted in (row["address"], f"id:{row['id']}", f"identity:{row['instanceId']}"):
-                reply(True, {"worktree": {"id": row["id"], "repoId": row["repoId"], "path": row["path"], "branch": "",
-                                          "head": "", "instanceId": row["instanceId"],
-                                          "address": {"environment": "local", "worktree": row["address"]}}}, state)
+        rows = [row for row in state.get("folders", []) if wanted in (row["address"], f"id:{row['id']}")]
+        if len(rows) > 1:                           # Orca refuses an exact selector shared by several workspaces
+            reply(False, {"code": "selector_ambiguous", "message": f"{wanted} matches several workspaces"}, state)
+        for row in rows:
+            reply(True, {"worktree": {"id": row["id"], "repoId": row["repoId"], "path": row["path"], "branch": "",
+                                      "head": "", **({"instanceId": row["instanceId"]} if row.get("instanceId") else {}),
+                                      "address": {"environment": "local", "worktree": row["address"]}}}, state)
         reply(False, {"code": "selector_not_found", "message": f"no workspace {wanted}"}, state)
-    if args[:2] == ["worktree", "list"]:
-        project = option(args, "--repo")[len("id:"):]
-        reply(True, {"worktrees": [{"id": row["id"], "repoId": row["repoId"], "path": row["path"]}
-                                   for row in state.get("folders", []) if row["repoId"] == project]})
     if args[:2] == ["repo", "show"]:
         project = option(args, "--repo")[len("id:"):]
         if project in state.get("repos", {}):
