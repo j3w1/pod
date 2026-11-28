@@ -78,6 +78,10 @@ def doctor() -> dict:
                   "enabled": len(preferences.enabled()), "preferred": preferences.preferred, "pinned": preferences.pinned,
                   "merge_authorization": preferences.merge_authorization,
                   "authorization_verifier": bool(preferences.authorization_verifier)}
+        unscoped = sorted(name for name, prof in preferences.profiles.items() if prof.mcp and not prof.browser_scope)
+        if unscoped:                    # bare +mcp declares no browser scope, so its workers get none
+            routes["browser_scope_missing"] = {"profiles": unscoped, "fix": "only the person sets it: "
+                                               "`pod models --profile 'NAME=<role>+mcp:none|readonly|full <routes>'`"}
     except PodError as exc:
         routes = {"status": "invalid", "problem": str(exc), "fix": exc.fix}
     return {"version": __version__,

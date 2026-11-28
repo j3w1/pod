@@ -1,7 +1,7 @@
 import os
 import unittest.mock
 
-from pod import cli, commands, orca, state
+from pod import cli, commands, log, maintenance, orca, routefile, state
 from tests.core.support import CoreCase, ROUTES
 
 
@@ -1253,3 +1253,60 @@ class DispatchTests(CoreCase):
         fact5 = [e for e in self.entries("widget") if e.get("fact") == "review"][-1]
         self.assertEqual(fact5["review_independence"], "same_provider")
         self.assertNotIn("review_fallback_reason", fact5)
+
+
+class BrowserScopeTests(CoreCase):
+    """A worker's browser scope is only what its profile declares; everything else is none."""
+
+    PROFILES = ("profiles:\n  look-full: investigate+mcp:full codex/sol/high\n  look-read: investigate+mcp:readonly codex/sol/high\n"
+                "  look-none: investigate+mcp:none codex/sol/high\n  look-bare: investigate+mcp codex/sol/high\n"
+                "  look-cli: investigate codex/sol/high\n")
+
+    def setUp(self):
+        super().setUp()
+        self.write_routes(ROUTES + self.PROFILES)
+        commands.open_(self.repo, text="Look around", objective="look", criteria=["seen"])
+
+    def scopes(self):
+        rows = [row for row in commands.listing()["objectives"] if row["objective"] == "look"]
+        return {item["assignment"]: item["browser_scope"] for item in rows[0]["unaccepted"]} if rows else {}
+
+    def test_each_profile_forwards_exactly_its_declared_scope_and_nothing_else_widens_it(self):
+        started = {name: commands.dispatch(self.repo, None, profile=name, title=name, spec="Read.")
+                   for name in ("look-full", "look-read", "look-none", "look-bare", "look-cli")}
+        made = {name: result["assignment"] for name, result in started.items()}
+        raw = commands.dispatch(self.repo, None, role="investigate", route="claude/opus/high", reason="no profile fits",
+                                title="raw", spec="Read.")["assignment"]
+        plain = commands.dispatch(self.repo, None, role="investigate", title="default", spec="Read.")["assignment"]
+        scopes = self.scopes()
+        self.assertEqual({name: scopes[ident] for name, ident in made.items()},
+                         {"look-full": "full", "look-read": "readonly", "look-none": "none", "look-bare": "none",
+                          "look-cli": "none"})
+        self.assertEqual((scopes[raw], scopes[plain]), ("none", "none"))
+        packets = {name: self.orca()["tasks"][result["task"]]["spec"] for name, result in started.items()}
+        self.assertIn("- Browser scope: full", packets["look-full"])
+        self.assertIn("- Browser scope: none", packets["look-bare"])
+        for other in (raw, plain):                                  # no profile: the packet still says none
+            spec = next(task["spec"] for task in self.orca()["tasks"].values() if f" {other} " in task["spec"].split("\n")[0] + " ")
+            self.assertIn("- Browser scope: none", spec)
+        entries = log.read(log.path(commands.gitio.repository(self.repo)[0], "look"))
+        rows = {entry["id"]: entry for entry in entries if entry.get("kind") == "assignment" and entry.get("role")}
+        self.assertEqual(rows[made["look-full"]]["browser_scope"], "full")      # recorded before the start
+        self.finish(started["look-full"]["task"], {"outcome": "succeeded", "summary": "seen"})
+        commands.accept(self.repo, None, made["look-full"])
+        self.assertNotIn(made["look-full"], self.scopes())                         # a settled assignment publishes nothing
+        target = log.path(commands.gitio.repository(self.repo)[0], "look")
+        with log.writer(target) as writer:                          # an old or damaged value is never passed on
+            writer.append({"kind": "assignment", "id": made["look-read"], "browser_scope": "FULL"})
+            writer.append({"kind": "assignment", "id": made["look-none"], "browser_scope": None})
+        self.assertEqual((self.scopes()[made["look-read"]], self.scopes()[made["look-none"]]), ("none", "none"))
+
+    def test_a_scope_is_parsed_exactly_and_bare_mcp_is_reported_by_doctor(self):
+        for bad in ("investigate+mcp:admin", "investigate+mcp:", "investigate+mcpfull", "investigate+mcp:Full"):
+            with self.subTest(head=bad), self.assertRaises(ValueError):
+                routefile.parse_profile("x", f"{bad} codex/sol/high")
+        full = routefile.parse_profile("x", "investigate+mcp:full codex/sol/high")
+        self.assertEqual((full.mcp, full.browser_scope, routefile.format_profile(full)),
+                         (True, "full", "investigate+mcp:full codex/sol/high"))
+        self.assertEqual(routefile.parse_profile("x", "investigate+mcp codex/sol/high").browser_scope, None)
+        self.assertEqual(maintenance.doctor()["preferences"]["browser_scope_missing"]["profiles"], ["look-bare"])

@@ -36,7 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--ttl", metavar="DURATION",
                         help="optional TTL attached to --pause or --drain (seconds or s/m/h/d such as 30m, 2h)")
     parser.add_argument("--profile", action="append", default=[], metavar="NAME=SPEC",
-                        help="set or update a profile: NAME='<role>[+mcp] <route> ...' (repeatable)")
+                        help="set or update a profile: NAME='<role>[+mcp[:none|readonly|full]] <route> ...' (repeatable)")
     parser.add_argument("--delete-profile", action="append", default=[], metavar="NAME",
                         help="remove a profile from config.yaml (repeatable)")
     parser.add_argument("--default-profile", action="append", default=[], metavar="ROLE=NAME",
@@ -176,12 +176,12 @@ def _edit(args) -> None:
         for item in args.profile:
             if "=" not in item:
                 raise PodError("profile_invalid", f"{item!r} must use NAME=SPEC format.",
-                               fix="pass --profile 'name=role[+mcp] agent/model/effort ...'")
+                               fix="pass --profile 'name=role[+mcp[:none|readonly|full]] agent/model/effort ...'")
             name, spec = item.split("=", 1)
             name, spec = name.strip(), spec.strip()
             if not name or not spec:
                 raise PodError("profile_invalid", f"{item!r} must name both a profile and its spec.",
-                               fix="pass --profile 'name=role[+mcp] agent/model/effort ...'")
+                               fix="pass --profile 'name=role[+mcp[:none|readonly|full]] agent/model/effort ...'")
             parsed_profiles[name] = spec
         overlap = set(parsed_profiles) & set(args.delete_profile)
         if overlap:

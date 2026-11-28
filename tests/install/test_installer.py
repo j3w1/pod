@@ -411,6 +411,29 @@ class PreferenceTests(InstallerCase):
         self.assertEqual(loaded.enabled(), ["codex/model-a/high"])
         self.assertEqual(loaded.default_profiles, {})
 
+    def scoped_install(self, head):
+        from pod import routefile
+        registry = {
+            "schema": "pod-registry/v1",
+            "models": [{"id": "model-a", "name": "Model A", "agent": "codex",
+                        "provider": "OpenAI", "pool": "codex", "efforts": ["high"]}],
+            "defaults": {"schema": "pod/v2", "profiles": {"look": f"{head} codex/model-a/high"},
+                         "default_profiles": {"investigate": "look"}},
+        }
+        source = archive_tree(self.root / "scoped.tar.gz", changes={REGISTRY: json.dumps(registry).encode()})
+        self.assertIn("(created)", self.installed({**self.env, "POD_INSTALL_SOURCE": source.as_uri()}).stdout)
+        loaded = routefile.load(self.config)
+        self.assertEqual(loaded.status, "ok", loaded.problem)
+        return loaded
+
+    def test_installer_keeps_a_shipped_profile_with_a_declared_browser_scope(self):
+        loaded = self.scoped_install("investigate+mcp:full")
+        self.assertEqual((loaded.profiles["look"].browser_scope, loaded.default_profiles), ("full", {"investigate": "look"}))
+
+    def test_installer_skips_shipped_profiles_with_an_unknown_browser_scope(self):
+        loaded = self.scoped_install("investigate+mcp:admin")
+        self.assertEqual((loaded.profiles, loaded.default_profiles), ({}, {}))
+
     def test_installer_quotes_yaml_literal_default_profile_names(self):
         from pod import routefile
         literal_registry = {

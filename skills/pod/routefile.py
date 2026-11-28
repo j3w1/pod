@@ -50,12 +50,21 @@ MAX_BYTES = 256 * 1024
 EDIT = "run `pod models` to choose routes, or `pod config edit` to correct the file"
 
 
+BROWSER_SCOPES = ("none", "readonly", "full")      # what a worker's browser MCP may do; CE_BROWSER_SCOPE takes the same
+
+
+def browser_scope(profile: "Profile | None") -> str:
+    """The scope a worker started from this profile is given: only what the profile declares, else none."""
+    return profile.browser_scope if profile and profile.mcp and profile.browser_scope in BROWSER_SCOPES else "none"
+
+
 @dataclass(frozen=True)
 class Profile:
     name: str
     role: str
     mcp: bool
     routes: tuple[str, ...]
+    browser_scope: str | None = None    # declared with `+mcp:<scope>`; bare `+mcp` declares none
 
 
 @dataclass(frozen=True)
@@ -427,7 +436,7 @@ def _shipped_default_profiles(path: Path | None = None) -> dict[str, str]:
 
 
 def parse_profile(name: str, spec: object) -> Profile:
-    """Parse one flat profile line: `<role>[+mcp] <route1> [<route2> ...]`."""
+    """Parse one flat profile line: `<role>[+mcp[:none|readonly|full]] <route1> [<route2> ...]`."""
     if not valid_profile_name(name):
         raise ValueError(f"profiles.{name!r} must be a lowercase profile name")
     if not isinstance(spec, str) or not spec.strip():
@@ -436,22 +445,28 @@ def parse_profile(name: str, spec: object) -> Profile:
     if len(parts) < 2:
         raise ValueError(f"profiles.{name} must name a role and at least one route")
     head = parts[0]
-    if head.endswith("+mcp"):
-        role, mcp = head[:-4], True
-    else:
-        role, mcp = head, False
+    role, mcp, scope = head, False, None
+    if "+mcp" in head:
+        role, _, rest = head.partition("+mcp")
+        mcp = True
+        if rest:
+            scope = rest[1:] if rest.startswith(":") else None
+            if scope not in BROWSER_SCOPES:
+                raise ValueError(f"profiles.{name} role {head!r}: the browser scope after +mcp: must be one of "
+                                 f"{', '.join(BROWSER_SCOPES)}")
     if role not in ROLES:
-        raise ValueError(f"profiles.{name} role {head!r} must be one of {', '.join(ROLES)} (with optional +mcp)")
+        raise ValueError(f"profiles.{name} role {head!r} must be one of {', '.join(ROLES)} "
+                         f"(with optional +mcp or +mcp:{'|'.join(BROWSER_SCOPES)})")
     routes = tuple(parts[1:])
     if any(not ROUTE.fullmatch(item) for item in routes):
         raise ValueError(f"profiles.{name} routes must be agent/model/effort values")
     if len(set(routes)) != len(routes):
         raise ValueError(f"profiles.{name} lists the same route more than once")
-    return Profile(name=name, role=role, mcp=mcp, routes=routes)
+    return Profile(name=name, role=role, mcp=mcp, routes=routes, browser_scope=scope)
 
 
 def format_profile(profile: Profile) -> str:
-    head = f"{profile.role}+mcp" if profile.mcp else profile.role
+    head = (f"{profile.role}+mcp" + (f":{profile.browser_scope}" if profile.browser_scope else "")) if profile.mcp else profile.role
     return " ".join((head, *profile.routes))
 
 

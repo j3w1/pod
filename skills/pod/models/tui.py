@@ -21,7 +21,7 @@ HELP = ("Tab / 1 2   Switch Models and Profiles & What-If tabs",
         "d drain   Toggle pool in soft_drained_agents",
         "w exclude   Cycle simulated --exclude-agent pool/agent (Profiles tab)",
         "a author   Cycle simulated author family (Profiles tab)",
-        "m mcp   Toggle +mcp on selected profile (Profiles tab)",
+        "m mcp   Toggle +mcp on selected profile (Profiles tab); on again it has no browser scope",
         "R refresh   Fetch public measurements and Antigravity catalog",
         "s sort   Index, cost, time, first answer, name or state", "r reverse   Reverse order",
         "f provider   Cycle providers (Anthropic, Google, OpenAI)", "PgUp/PgDn   Move ten models",
@@ -218,7 +218,7 @@ class Workspace:
         if prof is None:
             self.message = "No profile selected."
             return
-        updated = routefile.Profile(prof.name, prof.role, not prof.mcp, prof.routes)
+        updated = routefile.Profile(prof.name, prof.role, not prof.mcp, prof.routes)   # on again: no scope until one is written
         self._apply(f"Profile {prof.name} mcp is now {'on' if updated.mcp else 'off'}.",
                     profiles={prof.name: routefile.format_profile(updated)})
 
@@ -351,7 +351,7 @@ class Workspace:
 
     def _profile_inspector(self, prof: routefile.Profile, width: int) -> list:
         res = self.preview_profile(prof.name)
-        lines = [(f"{prof.name}  ({prof.role}{'+mcp' if prof.mcp else ''})", "head")]
+        lines = [(f"{prof.name}  ({prof.role}{('+mcp' + (':' + prof.browser_scope if prof.browser_scope else '')) if prof.mcp else ''})", "head")]
         if res.ok and res.route and res.wire:
             lines.append((f"Selected: {res.route}", "good"))
             agent, model, effort = res.wire
