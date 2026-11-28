@@ -1,7 +1,8 @@
 import os
 from unittest import mock
 
-from pod import cli, commands, gate, log
+from pod import cli, commands, gate, log, orca
+from pod.errors import PodError
 from tests.core.support import CoreCase, ROUTES
 
 PROJECT = "11111111-2222-3333-4444-555555555555"
@@ -223,3 +224,94 @@ class FolderWorkspaceTests(CoreCase):
         commands.dispatch(self.repo, None, role="implement", title="write", spec="Do it.", paths_=["src"])
         self.assertEqual(self.orca().get("shows", 0), 0)
         self.assertEqual(cli._config(False)["capabilities"], {"folder_no_delivery": True})
+
+    def test_an_objective_whose_workspace_orca_no_longer_lists_is_dropped_by_id_from_anywhere(self):
+        self.opened()
+        self.terminal("term_b")                                     # a sibling workspace of the same project
+        self.refused("folder_binding_mismatch", commands.drop, self.folder, "layout", why="x")
+        stray = self.tmp / "stray"
+        stray.mkdir()
+        self.refused("folder_binding_mismatch", commands.drop, stray, "layout", why="x")       # still listed: not gone
+        self.refused("folder_binding_mismatch", commands.drop, self.repo, "layout", why="x")
+        self.refused("objective_unknown", commands.drop, stray, "nothing", why="x")
+        self.set_orca(folders=[self.row("f-2", "i-2")])             # the bound workspace was removed
+        for cwd in (self.repo, stray):
+            with self.subTest(cwd=cwd):
+                done = commands.drop(cwd, "layout", why="its workspace was removed")
+                self.assertEqual(done["state"], "dropped")
+        gone = [entry for entry in self.folder_entries() if entry.get("dropped")]
+        self.assertEqual([entry["workspace_gone"] for entry in gone],
+                         [{"workspace_id": self.address, "instance_id": "i-1", "orca": "selector_not_found"}])     # a second drop adds nothing
+        self.assertNotIn("layout", [row["objective"] for row in commands.listing()["objectives"]])
+
+    def test_a_reused_workspace_address_with_another_instance_is_gone_and_unknown_orca_proves_nothing(self):
+        self.opened()
+        self.terminal("term_b")
+        self.set_orca(folders=[self.row("f-1", "i-9"), self.row("f-2", "i-2")])
+        real = orca.call
+
+        def silent(*args, **options):                               # Orca does not answer for the bound workspace
+            if args[:4] == ("worktree", "show", "--worktree", self.address):
+                raise PodError("orca_unknown", "no answer", fix="repeat")
+            return real(*args, **options)
+        with mock.patch("pod.orca.call", side_effect=silent):
+            self.refused("orca_unknown", commands.drop, self.folder, "layout", why="x")
+        self.assertFalse(any(entry.get("dropped") for entry in self.folder_entries()))
+        commands.drop(self.folder, "layout", why="re-created")
+        self.assertEqual(self.folder_entries()[-1]["workspace_gone"]["orca"], "instance i-9")
+
+    def git_log(self, repository, objective, worktree):
+        with log.writer(log.path(repository, objective), create=True) as writer:
+            writer.append({"kind": "objective", "id": objective, "repository": repository, "worktree": worktree,
+                           "target": "main", "branch": "work", "pr": None})
+
+    def test_a_drop_by_id_never_picks_a_git_log_an_empty_file_or_one_of_two_same_id_objectives(self):
+        self.opened()
+        self.set_orca(folders=[self.row("f-2", "i-2")])            # its workspace is gone
+        self.terminal("term_b")
+        stray = self.tmp / "stray"
+        stray.mkdir()
+        self.git_log("folder-acct--repo", "layout", "/elsewhere")  # a Git account whose name starts folder-
+        log.path("folder-other", "layout").parent.mkdir(parents=True, exist_ok=True)
+        log.path("folder-other", "layout").write_bytes(b"")        # left by a refused open: no objective
+        self.assertEqual(commands.drop(stray, "layout", why="gone")["state"], "dropped")
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path("folder-acct--repo", "layout"))))
+        commands.open_(self.folder, text="Again", objective="again", criteria=["x"], delivery=False)
+        self.set_orca(folders=[self.row("f-9", "i-9")], terminals={"term_c": "folder:f-9"})
+        self.terminal("term_c")
+        repository, _ = commands.gitio.repository(self.repo)
+        self.git_log(repository, "again", "/another/worktree")      # the same id in the caller's Git repository
+        self.refused("objective_unclear", commands.drop, self.repo, "again", why="x")
+        self.git_log(repository, "again-here", str(self.repo))      # at its own worktree a Git drop is as before
+        self.assertEqual(commands.drop(self.repo, "again-here", why="x")["state"], "dropped")
+        with log.writer(log.path("folder-second", "again"), create=True) as writer:   # a second folder project
+            writer.append({"kind": "objective", "id": "again", "repository": "folder-second", "worktree": "/w",
+                           "workspace_kind": "folder", "workspace_id": "folder:z", "workspace_instance_id": "i-z",
+                           "delivery": "none"})
+        self.refused("objective_unclear", commands.drop, stray, "again", why="x")
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path(f"folder-{PROJECT}", "again"))))
+
+    def test_an_empty_local_log_falls_through_and_the_callers_own_objective_wins_over_a_same_id_folder(self):
+        def elsewhere(objective):                                   # a folder objective of another project, same id
+            with log.writer(log.path("folder-second", objective), create=True) as writer:
+                writer.append({"kind": "objective", "id": objective, "repository": "folder-second", "worktree": "/w",
+                               "workspace_kind": "folder", "workspace_id": "folder:z", "workspace_instance_id": "i-z",
+                               "delivery": "none"})
+        repository, _ = commands.gitio.repository(self.repo)
+        empty = log.path(repository, "gone-one")
+        empty.parent.mkdir(parents=True, exist_ok=True)
+        empty.write_bytes(b"")                                      # an empty log here does not hide the folder one
+        elsewhere("gone-one")
+        self.assertEqual(commands.drop(self.repo, "gone-one", why="gone")["state"], "dropped")
+        self.assertTrue(log.read(log.path("folder-second", "gone-one"))[-1].get("workspace_gone"))
+        self.git_log(repository, "mine", str(self.repo))            # the caller's own Git objective
+        elsewhere("mine")
+        commands.drop(self.repo, "mine", why="x")
+        self.assertTrue(log.read(log.path(repository, "mine"))[-1].get("dropped"))
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path("folder-second", "mine"))))
+        self.opened()                                               # the caller's own folder workspace
+        elsewhere("layout")
+        commands.drop(self.folder, "layout", why="x")
+        self.assertTrue(self.folder_entries()[-1].get("dropped"))
+        self.assertNotIn("workspace_gone", self.folder_entries()[-1])
+        self.assertFalse(any(entry.get("dropped") for entry in log.read(log.path("folder-second", "layout"))))

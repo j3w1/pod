@@ -56,6 +56,12 @@ base. Workers start in that same workspace (`--worktree` must name it exactly; P
 worktree for them), a review reviews the plan in its task text, and an implement result is
 accepted without a commit. Every delivery command (`deliver`, `record --authorize`, `--check`,
 `--waive`, `--carried`, `--commit`, `--pr`, `--branch`) refuses with `folder_no_delivery`.
+`pod drop --objective ID` also works outside the objective's own workspace, from any terminal,
+when Orca proves that workspace gone: `orca worktree show` on its address answers
+`selector_not_found`, or names another instance. The drop records that proof as
+`workspace_gone`; a workspace Orca still lists, or cannot answer for, is refused. The log of the caller's own place
+is used first, as for every drop; only folder objectives (by their folded kind, never an empty
+file) are found elsewhere, and an id that names more than one candidate is refused (`objective_unclear`).
 `pod config --json` reports `capabilities.folder_no_delivery: true`. Git repositories never
 consult Orca for this.
 

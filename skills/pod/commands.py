@@ -1301,13 +1301,78 @@ def _target_head(root: Path, state: State) -> str | None:
     return gitio.fetch(root, "origin", target) or gitio.known(root, f"origin/{target}") or gitio.known(root, target)
 
 
+def _folder_logs(objective: str, *, besides: Path | None = None) -> list[Path]:
+    """Every other log whose folded objective has this id and is bound to an Orca folder workspace."""
+    found = []
+    for target in log.every():
+        if target.stem != objective or target == besides:
+            continue
+        try:
+            state = fold(log.read(target))
+        except PodError:
+            continue
+        if state.entries and folder(state):         # an empty file left by a refused open is no objective
+            found.append(target)
+    return found
+
+
+def _drop_target(cwd: Path, objective: str | None) -> tuple[Path, Path, dict | None]:
+    """The log `pod drop` changes. Its own place's log comes first, as always; a folder objective
+    whose workspace may be gone is found by id from anywhere, and an id that could mean either is refused."""
+    try:
+        target, root, _, here = locate(cwd, objective)
+    except PodError as exc:
+        if not objective or exc.code != "not_a_repository":
+            raise
+        target, root, here = None, None, None
+    state = fold(log.read(target)) if target is not None and target.exists() else None
+    if objective is None or (state and state.entries and (
+            _same_workspace(state.objective, here) if here and folder(state)
+            else not folder(state) and state.objective.get("worktree") == str(root))):
+        return target, root, here                    # the objective of this very place
+    others = _folder_logs(objective, besides=target)
+    local = bool(state and state.entries)
+    if len(others) + local > 1:
+        raise PodError("objective_unclear", f"More than one objective is called {objective}: "
+                       + ", ".join(str(path.parent.name) for path in ([target] if local else []) + others) + ".",
+                       fix="run `pod drop` from the objective's own worktree or folder workspace")
+    if local:
+        return target, root, here
+    if not others:
+        raise PodError("objective_unknown", f"There is no objective {objective} here or in any folder project.",
+                       fix="run `pod status --all`")
+    return others[0], Path(fold(log.read(others[0])).objective.get("worktree") or cwd), None
+
+
+def _gone_workspace(state: State, here: dict | None) -> dict | None:
+    """Proof, read from Orca now, that a folder objective's own workspace no longer exists.
+
+    None when this terminal is in that workspace. A workspace that still exists is refused: the
+    objective is dropped from its own terminal."""
+    if not folder(state) or (here is not None and _same_workspace(state.objective, here)):
+        return None
+    bound, instance = state.objective.get("workspace_id"), state.objective.get("workspace_instance_id")
+    proof = orca.gone(bound, instance) if bound and instance else None
+    if not proof:
+        raise PodError("folder_binding_mismatch", f"Objective {state.id} is bound to workspace {bound} ({instance}), "
+                       "which Orca still lists or cannot rule out.",
+                       fix="run `pod drop` from the Orca terminal of the objective's own folder workspace")
+    return {"workspace_id": bound, "instance_id": instance, "orca": proof}
+
+
 def drop(cwd: Path, objective: str | None, *, why: str) -> dict:
-    """Stop an objective. Its settled workers are released; unfinished or unmerged work is left where it is."""
-    target, root, _, here = locate(cwd, objective)
+    """Stop an objective. Its settled workers are released; unfinished or unmerged work is left where it is.
+
+    A folder objective whose workspace Orca no longer lists can be dropped by id from any terminal;
+    that proof is recorded with the drop."""
+    target, root, here = _drop_target(cwd, objective)
     with log.writer(target) as writer:
-        state = guard(fold(writer.entries), here)
+        state = fold(writer.entries)
+        gone = _gone_workspace(state, here)
+        if gone is None:
+            state = guard(state, here)
         if not state.dropped:
-            writer.append({"kind": "objective", "dropped": True, "why": why})
+            writer.append({"kind": "objective", "dropped": True, "why": why, **({"workspace_gone": gone} if gone else {})})
         state = fold(writer.entries)
         return {"objective": state.id, "state": "dropped",
                 **cleanup.tidy(writer, root, state, target_head=_target_head(root, state),
