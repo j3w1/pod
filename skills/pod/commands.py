@@ -277,7 +277,13 @@ def _failed_review(state: State, ident: str, base: str, agents: list[str]) -> bo
         return False
     run = state.objective["run"]
     task = orca.tasks(run).get(prior["task"])
-    if not task or task["status"] != "failed":
+    if not task:
+        return False
+    if (state.result(ident) or {}).get("decision") == "discarded" and not task["report"]:
+        # Pod settled it as discarded and its worker never reported (a stopped worker, such as a provider
+        # content-gate refusal): nothing was reviewed, so it is a void attempt. Any report disqualifies it.
+        return True
+    if task["status"] != "failed":
         return False
     if parse_result((task["report"] or {}).get("body")).get("verdict") in ("pass", "fail"):
         return False
